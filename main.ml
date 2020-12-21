@@ -15,8 +15,6 @@
 
 (* The lexer generator. Command-line parsing. *)
 
-open Syntax
-
 let source_name = ref None
 let output_name = ref None
 
@@ -69,9 +67,9 @@ let main () =
     {Lexing.pos_fname = source_name; Lexing.pos_lnum = 1;
      Lexing.pos_bol = 0; Lexing.pos_cnum = 0};
   try
-    let def = Parser.lexer_definition Lexer.main lexbuf in
-    let (_entries, _transitions) = Lexgen.make_dfa def.entrypoints in
-    (*if !ml_automata then begin
+    let _def = Parser.lexer_definition Lexer.main lexbuf in
+    (*let (entries, transitions) = Lexgen.make_dfa def.entrypoints in
+    if !ml_automata then begin
       Outputbis.output_lexdef
         ic oc tr
         def.header def.refill_handler entries transitions def.trailer
@@ -100,12 +98,7 @@ let main () =
         Printf.fprintf stderr
           "File \"%s\", line %d, character %d: %s.\n"
           file line col msg
-      | Lexgen.Memory_overflow ->
-        Printf.fprintf stderr
-          "File \"%s\":\n Position memory overflow, too many bindings\n"
-          source_name
-      | _ ->
-        Printexc.raise_with_backtrace exn bt
+      | _ -> Printexc.raise_with_backtrace exn bt
     end;
     exit 3
 
