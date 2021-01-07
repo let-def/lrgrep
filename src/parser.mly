@@ -21,34 +21,32 @@ open Syntax
 
 %token <string> IDENT
 %token <Syntax.location> ACTION
-%token RULE       "rule"
-       PARSE      "parse"
-       AND        "and"
-       EQUAL      "="
-       END        "end"
-       BAR        "|"
-       UNDERSCORE "_"
-       EOF        "eof"
-       LBRACKET   "["
-       RBRACKET   "]"
-       STAR       "*"
-       MAYBE      "?"
+%token RULE        "rule"
+       PARSE       "parse"
+       AND         "and"
+       EQUAL       "="
+       EOF
+       BAR         "|"
+       UNDERSCORE  "_"
+       LBRACKET    "["
+       RBRACKET    "]"
+       STAR        "*"
+       QUESTION    "?"
        (*PLUS       "+"*)
-       LPAREN     "("
-       RPAREN     ")"
-       CARET      "^"
-       DASH       "-"
-       LET        "let"
-       DOT        "."
+       LPAREN      "("
+       RPAREN      ")"
+       DOT         "."
+       LEFT_ARROW "<-"
+       RIGHT_ARROW  "->"
        (*AS         "as"*)
        (*HASH       "#"*)
 
 (*%right "as"*)
 %left "|"
 %nonassoc prec_CONCAT
-%nonassoc "?" "*" (*"+"*)
+%nonassoc "<-" "?" "*" (*"+"*)
 (*%left "#"*)
-%nonassoc IDENT "_" "eof" "[" "("
+%nonassoc IDENT "_" "[" "("
 
 %start lexer_definition
 %type <Syntax.lexer_definition> lexer_definition
@@ -56,8 +54,8 @@ open Syntax
 %%
 
 lexer_definition:
-| header=header "rule" definition other_definitions trailer=header "end"
-  { {header; entrypoints = $3 :: List.rev $4; trailer } }
+| header "rule" separated_list("and", definition) header EOF
+  { { header = $1; entrypoints = $3; trailer = $4 } }
 ;
 
 header:
@@ -73,62 +71,38 @@ header:
   }
 ;
 
-other_definitions:
-| other_definitions "and" definition
-  { $3::$1 }
-| (*epsilon*)
-  { [] }
-;
-
 definition:
-| name=IDENT args=IDENT* "=" "parse" "|"? clauses=separated_list("|", case)
+| name=IDENT args=IDENT* "=" "parse"
+    "|"? clauses=separated_list("|", case)
   { {name; args; clauses} }
 ;
 
 case:
-| regexp ACTION
-  { ($1,$2) }
+| regexp RIGHT_ARROW ACTION
+  { ($1, Some $3) }
+| regexp RIGHT_ARROW DOT
+  { ($1, None) }
 ;
 
 regexp:
 | "_"
   { Wildcard }
-| "eof"
-  { Eof }
 | IDENT
   { Symbol $1 }
 | "[" prefix=IDENT* "." suffix=IDENT* "]"
-  { Item (prefix, suffix) }
+  { Item {lhs=None; prefix; suffix} }
 | regexp "*"
   { Repetition $1 }
 | regexp "?"
   { Alternative (Epsilon, $1) }
-(*| regexp "+"
-  { Sequence (Repetition (remove_as $1), $1) }*)
-(*| regexp "#" regexp
-  {
-    let s1 = as_cset $1
-    and s2 = as_cset $3 in
-    Characters (Cset.diff s1 s2)
-  }*)
+| regexp "<-"
+  { Reduce $1 }
 | regexp "|" regexp
   { Alternative ($1,$3) }
 | regexp regexp %prec prec_CONCAT
   { Sequence ($1,$2) }
 | "(" regexp ")"
   { $2 }
-(*| regexp "as" ident
-  { let p1 = Parsing.rhs_start_pos 3
-    and p2 = Parsing.rhs_end_pos 3 in
-    let p = {
-      loc_file = p1.Lexing.pos_fname;
-      start_pos = p1.Lexing.pos_cnum;
-      end_pos = p2.Lexing.pos_cnum;
-      start_line = p1.Lexing.pos_lnum;
-      start_col = p1.Lexing.pos_cnum - p1.Lexing.pos_bol;
-    } in
-    Bind ($1, ($3, p))
-  }*)
 ;
 
 %%

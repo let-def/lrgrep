@@ -1,0 +1,38 @@
+(**************************************************************************)
+(*                                                                        *)
+(*                                 OCaml                                  *)
+(*                                                                        *)
+(*             Xavier Leroy, projet Cristal, INRIA Rocquencourt           *)
+(*                                                                        *)
+(*   Copyright 1996 Institut National de Recherche en Informatique et     *)
+(*     en Automatique.                                                    *)
+(*                                                                        *)
+(*   All rights reserved.  This file is distributed under the terms of    *)
+(*   the GNU Lesser General Public License version 2.1, with the          *)
+(*   special exception on linking described in the file LICENSE.          *)
+(*                                                                        *)
+(**************************************************************************)
+
+(* The lexical analyzer for lexer definitions. Bootstrapped! *)
+
+{}
+
+(* struct: pas ambigu,
+   sig: pas ambigu
+   bracketbar: pattern_semi_list ou expr_semi_list
+   brace: record_expr_content, record_pat_content, expr_semi_list,
+          label_declarations index_mod
+   if: ext_attributes seq_expr
+   for: ext_attributes pattern
+   while: ext_attributes seq_expr
+   braceless: object_expr_content
+*)
+
+rule main = parse
+| ([ . module_expr ] & [ . paren_module_expr ]) <-
+  { `Module_expr_struct_paren_module_expr }
+| [ . module_type ] <-
+  { `Sig_or_lparen_module_type }
+| ([ . FOR ] | [ . IF ]) <-
+  { `For_If }
+|

@@ -26,22 +26,27 @@ type location = {
 type regular_expression =
   | Epsilon
   | Symbol of string
-  | Item of string list * string list
+  | Item of {
+      lhs: string option;
+      prefix: string list;
+      suffix: string list;
+    }
   | Wildcard
-  | Eof
   | Sequence of regular_expression * regular_expression
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression
-  | Bind of regular_expression * (string * location)
+  | Reduce of regular_expression
 
 type ('arg,'action) entry = {
-  name     : string;
-  args     : 'arg;
-  clauses  : (regular_expression * 'action) list;
+  name    : string;
+  args    : 'arg;
+  clauses : (regular_expression * 'action) list;
 }
 
 type lexer_definition = {
   header      : location;
-  entrypoints : ((string list, location) entry) list;
+  entrypoints : ((string list, location option) entry) list;
   trailer     : location;
 }
+
+let print_definition {header; entrypoints; trailer} =

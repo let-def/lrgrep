@@ -152,8 +152,6 @@ rule main = parse
     | "rule" -> RULE
     | "parse" -> PARSE
     | "and" -> AND
-    | "eof" -> EOF
-    | "let" -> LET
     | s -> IDENT s
   }
 | '{'
@@ -171,12 +169,14 @@ rule main = parse
 | '[' { LBRACKET }
 | ']' { RBRACKET }
 | '*' { STAR }
-| '?' { MAYBE }
+| '?' { QUESTION }
 (*| '+' { PLUS }*)
+| "<-" { LEFT_ARROW }
+| "<-" { RIGHT_ARROW }
 | '(' { LPAREN }
 | ')' { RPAREN }
 | '.' { DOT }
-| eof { END }
+| eof { EOF }
 | _
   { raise_lexical_error lexbuf
       ("illegal character " ^ String.escaped(Lexing.lexeme lexbuf))
