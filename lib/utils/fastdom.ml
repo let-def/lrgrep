@@ -32,7 +32,7 @@ let is_valid node = node.index >= 0
 
 (* Intersect set of nodes, using the encoding defined in the paper *)
 let rec maximize ~target node =
-  Printf.eprintf "maximize(%d,%d)\n" node.index target;
+  (*Printf.eprintf "maximize(%d,%d)\n" node.index target;*)
   if node.index < target
   then maximize ~target node.dom
   else node
@@ -126,11 +126,11 @@ let postorder (type a) (graph : a graph) (start : a) =
 (* dominance = postorder traversal & dominators fixpoint *)
 let dominance (type a) (graph : a graph) (start : a) =
   let tag_of, postorder = postorder graph start in
-  Printf.eprintf "postorder: %d nodes\n" (Array.length postorder);
+  (*Printf.eprintf "postorder: %d nodes\n" (Array.length postorder);
   Array.iteri (fun i tag ->
       Printf.eprintf "postorder[%d]: node=%d index=%d |predecessors|=%d dominator=%d\n" i (Obj.magic tag.node) tag.index
         (List.length tag.predecessors) tag.dom.index;
-    ) postorder;
+    ) postorder;*)
   dominator_fixpoint postorder (Array.length postorder);
   (postorder, tag_of)
 

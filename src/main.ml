@@ -67,7 +67,8 @@ let main () =
     {Lexing.pos_fname = source_name; Lexing.pos_lnum = 1;
      Lexing.pos_bol = 0; Lexing.pos_cnum = 0};
   try
-    let _def = Parser.lexer_definition Lexer.main lexbuf in
+    let def = Parser.lexer_definition Lexer.main lexbuf in
+    Format.printf "%a" Utils.Cmon.format (Syntax.print_definition def);
     (*let (entries, transitions) = Lexgen.make_dfa def.entrypoints in
     if !ml_automata then begin
       Outputbis.output_lexdef
@@ -88,7 +89,7 @@ let main () =
     Common.close_tracker tr;
     Sys.remove dest_name;
     begin match exn with
-      | Parsing.Parse_error ->
+      | Parser.Error ->
         let p = Lexing.lexeme_start_p lexbuf in
         Printf.fprintf stderr
           "File \"%s\", line %d, character %d: syntax error.\n"

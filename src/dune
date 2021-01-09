@@ -2,4 +2,5 @@
 (ocamllex lexer)
 
 (executable
- (name main))
+ (name main)
+ (libraries utils))

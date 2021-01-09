@@ -21,6 +21,7 @@ open Syntax
 
 %token <string> IDENT
 %token <Syntax.location> ACTION
+%token UNREACHABLE
 %token RULE        "rule"
        PARSE       "parse"
        AND         "and"
@@ -36,17 +37,19 @@ open Syntax
        LPAREN      "("
        RPAREN      ")"
        DOT         "."
-       LEFT_ARROW "<-"
-       RIGHT_ARROW  "->"
+       LEFT_ARROW  "<-"
+       COMMA       ","
+       SEMI        ";"
+       COLON       ":"
        (*AS         "as"*)
        (*HASH       "#"*)
 
 (*%right "as"*)
 %left "|"
-%nonassoc prec_CONCAT
-%nonassoc "<-" "?" "*" (*"+"*)
+%nonassoc "?" "*" (*"+"*)
 (*%left "#"*)
-%nonassoc IDENT "_" "[" "("
+(*%nonassoc IDENT "_" "[" "("*)
+%left "<-" ";"
 
 %start lexer_definition
 %type <Syntax.lexer_definition> lexer_definition
@@ -78,31 +81,46 @@ definition:
 ;
 
 case:
-| regexp RIGHT_ARROW ACTION
-  { ($1, Some $3) }
-| regexp RIGHT_ARROW DOT
-  { ($1, None) }
+| regexp ACTION
+  { {pattern = $1; action = Some $2} }
+| regexp UNREACHABLE
+  { {pattern = $1; action = None} }
 ;
 
-regexp:
+symbol:
+| IDENT
+  { Name $1 }
+| IDENT "(" separated_list(",", symbol) ")"
+  { Apply ($1, $3) }
+;
+
+regterm:
 | "_"
   { Wildcard }
-| IDENT
+| symbol
   { Symbol $1 }
-| "[" prefix=IDENT* "." suffix=IDENT* "]"
+| "[" prefix=symbol* "." suffix=symbol* "]"
   { Item {lhs=None; prefix; suffix} }
+| "[" lhs=symbol ":" prefix=symbol* "." suffix=symbol* "]"
+  { Item {lhs=Some lhs; prefix; suffix} }
 | regexp "*"
   { Repetition $1 }
 | regexp "?"
-  { Alternative (Epsilon, $1) }
-| regexp "<-"
-  { Reduce $1 }
+  { Alternative ([], $1) }
 | regexp "|" regexp
-  { Alternative ($1,$3) }
-| regexp regexp %prec prec_CONCAT
-  { Sequence ($1,$2) }
+  { Alternative ($1, $3) }
+
+regexp:
+| regterm
+  { [$1] }
 | "(" regexp ")"
   { $2 }
+| regexp "<-"
+  { [Reduce $1] }
+| regexp "<-" regexp
+  { Reduce $1 :: $3 }
+| regexp ";" regexp
+  { $1 @ $3 }
 ;
 
 %%

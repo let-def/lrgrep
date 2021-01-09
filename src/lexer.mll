@@ -154,6 +154,8 @@ rule main = parse
     | "and" -> AND
     | s -> IDENT s
   }
+| '{' [' ' '\009']* '.' [' ' '\009']* '}'
+  { UNREACHABLE }
 | '{'
   { let p = Lexing.lexeme_end_p lexbuf in
     let loc_file = p.Lexing.pos_fname in
@@ -172,9 +174,11 @@ rule main = parse
 | '?' { QUESTION }
 (*| '+' { PLUS }*)
 | "<-" { LEFT_ARROW }
-| "<-" { RIGHT_ARROW }
 | '(' { LPAREN }
 | ')' { RPAREN }
+| ':' { COLON }
+| ',' { COMMA }
+| ';' { SEMI }
 | '.' { DOT }
 | eof { EOF }
 | _

@@ -1,5 +1,4 @@
-type id = int
-let id_k = ref 0
+type id = int let id_k = ref 0
 let id = fun () -> incr id_k; !id_k
 let unshared = 0
 
