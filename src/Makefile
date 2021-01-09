@@ -1,5 +1,5 @@
 all: main
-	dune exec ./main.exe test_lexer.mlyl
+	dune exec ./main.exe -- -n -d test_lexer.mlyl
 
 main:
 	dune build main.exe

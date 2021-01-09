@@ -20,3 +20,5 @@ val copy_chunk :
   in_channel -> out_channel -> line_tracker -> Syntax.location -> bool -> unit
 
 val quiet_mode : bool ref
+val dry_run : bool ref
+val dump_parsetree : bool ref

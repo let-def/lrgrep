@@ -35,6 +35,10 @@ let specs = [
   " <file>  Set output file name to <file>";
   "-q", Arg.Set Common.quiet_mode,
   " Do not display informational messages";
+  "-n", Arg.Set Common.dry_run,
+  " Process input but do not generate any file";
+  "-d", Arg.Set Common.dump_parsetree,
+  " Dump parsetree";
   "-v",  Arg.Unit print_version_string,
   " Print version and exit";
   "-version",  Arg.Unit print_version_string,
@@ -44,6 +48,12 @@ let specs = [
 ]
 
 let () = Arg.parse specs (fun name -> source_name := Some name) usage
+
+let maybe_close = function
+  | None -> ()
+  | Some (oc, tr) ->
+    close_out oc;
+    Common.close_tracker tr
 
 let main () =
   let source_name = match !source_name with
@@ -55,20 +65,32 @@ let main () =
   let dest_name = match !output_name with
     | Some name -> name
     | None ->
-      if Filename.check_suffix source_name ".mll"
-      then Filename.chop_suffix source_name ".mll" ^ ".ml"
+      if Filename.check_suffix source_name ".mlyl"
+      then Filename.chop_suffix source_name ".mlyl" ^ ".ml"
       else source_name ^ ".ml"
   in
   let ic = open_in_bin source_name in
-  let oc = open_out dest_name in
-  let tr = Common.open_tracker dest_name oc in
+  let out =
+    if !Common.dry_run then
+      None
+    else
+      let oc = open_out dest_name in
+      let tr = Common.open_tracker dest_name oc in
+      Some (oc, tr)
+  in
   let lexbuf = Lexing.from_channel ic in
   lexbuf.Lexing.lex_curr_p <-
     {Lexing.pos_fname = source_name; Lexing.pos_lnum = 1;
      Lexing.pos_bol = 0; Lexing.pos_cnum = 0};
   try
     let def = Parser.lexer_definition Lexer.main lexbuf in
-    Format.printf "%a" Utils.Cmon.format (Syntax.print_definition def);
+    if !Common.dump_parsetree then
+      Format.eprintf "%a" Utils.Cmon.format (Syntax.print_definition def);
+    List.iter (fun entry ->
+        List.iter (fun clause ->
+            Syntax.check_wellformed clause.Syntax.pattern
+          ) entry.Syntax.clauses
+      ) def.Syntax.entrypoints;
     (*let (entries, transitions) = Lexgen.make_dfa def.entrypoints in
     if !ml_automata then begin
       Outputbis.output_lexdef
@@ -80,14 +102,13 @@ let main () =
          def.header def.refill_handler tables entries def.trailer
     end;*)
     close_in ic;
-    close_out oc;
-    Common.close_tracker tr;
+    maybe_close out;
   with exn ->
     let bt = Printexc.get_raw_backtrace () in
     close_in ic;
-    close_out oc;
-    Common.close_tracker tr;
-    Sys.remove dest_name;
+    maybe_close out;
+    if not !Common.dry_run then
+      Sys.remove dest_name;
     begin match exn with
       | Parser.Error ->
         let p = Lexing.lexeme_start_p lexbuf in
@@ -95,7 +116,11 @@ let main () =
           "File \"%s\", line %d, character %d: syntax error.\n"
           p.Lexing.pos_fname p.Lexing.pos_lnum
           (p.Lexing.pos_cnum - p.Lexing.pos_bol)
-      | Lexer.Lexical_error (msg, file, line, col) ->
+      | Lexer.Lexical_error {msg; file; line; col} ->
+        Printf.fprintf stderr
+          "File \"%s\", line %d, character %d: %s.\n"
+          file line col msg
+      | Syntax.Illformed {msg; file; line; col} ->
         Printf.fprintf stderr
           "File \"%s\", line %d, character %d: %s.\n"
           file line col msg

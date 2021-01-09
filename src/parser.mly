@@ -104,7 +104,7 @@ regterm:
 | "[" lhs=symbol ":" prefix=symbol* "." suffix=symbol* "]"
   { Item {lhs=Some lhs; prefix; suffix} }
 | regexp "*"
-  { Repetition $1 }
+  { Repetition ($1, make_position $startpos($2)) }
 | regexp "?"
   { Alternative ([], $1) }
 | regexp "|" regexp
@@ -112,13 +112,15 @@ regterm:
 
 regexp:
 | regterm
-  { [$1] }
+  { [$1, make_position $endpos] }
 | "(" regexp ")"
   { $2 }
 | regexp "<-"
-  { [Reduce $1] }
+  { [Reduce ($1, make_location $startpos($1) $endpos($1)),
+     make_position $startpos($2)] }
 | regexp "<-" regexp
-  { Reduce $1 :: $3 }
+  { (Reduce ($1, make_location $startpos($1) $endpos($1)),
+     make_position $startpos($2)) :: $3 }
 | regexp ";" regexp
   { $1 @ $3 }
 ;

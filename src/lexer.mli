@@ -15,7 +15,7 @@
 
 val main: Lexing.lexbuf -> Parser.token
 
-exception Lexical_error of string * string * int * int
+exception Lexical_error of {msg: string; file: string; line: int; col: int}
 
 (*n
 val line_num: int ref

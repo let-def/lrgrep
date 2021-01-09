@@ -83,5 +83,7 @@ let copy_chunk ic oc trl loc add_parens =
     update_tracker trl;
   end
 
-(* quiet flag *)
+(* flags *)
 let quiet_mode = ref false
+let dry_run = ref false
+let dump_parsetree = ref false
