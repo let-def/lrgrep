@@ -1,0 +1,3 @@
+(library
+ (name middle)
+ (libraries utils menhirSdk))
