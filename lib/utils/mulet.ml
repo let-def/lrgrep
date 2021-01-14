@@ -100,6 +100,9 @@ module type S = sig
     val ( ^. ) : t -> t -> t
     val ( &. ) : t -> t -> t
     val ( |. ) : t -> t -> t
+    val disjunction : t list -> t
+    val conjunction : t list -> t
+    val concatenation : t list -> t
     val abstract : abstract -> t
     val compl : t -> t
     val label : label -> t
@@ -140,6 +143,9 @@ struct
     val ( ^. ) : t -> t -> t
     val ( &. ) : t -> t -> t
     val ( |. ) : t -> t -> t
+    val disjunction : t list -> t
+    val conjunction : t list -> t
+    val concatenation : t list -> t
     val abstract : abstract -> t
     val compl : t -> t
     val label : label -> t
@@ -256,6 +262,17 @@ struct
       | Concat xs, Concat ys -> Concat (List.fold_right re_seq xs ys)
       | x, Concat ys -> Concat (re_seq x ys)
       | x, y -> Concat (re_seq x [y])
+
+    let disjunction ts =
+      let ts = List.sort compare ts in
+      List.fold_right (|.) ts empty
+
+    let conjunction ts =
+      let ts = List.sort compare ts in
+      List.fold_right (&.) ts (Closure (Set Sigma.full))
+
+    let concatenation ts =
+      List.fold_right (^.) ts epsilon
 
     let abstract a =
       if Abstract.is_empty a then empty else Abstract a

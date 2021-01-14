@@ -67,4 +67,8 @@ struct
           Lr1.Set.iter (fun elt -> Printf.eprintf "%d," (elt :> int)) set;
         ) l;
       raise exn
+
+  let mem x = function
+    | Pos xs -> Lr1.Set.mem x xs
+    | Neg xs -> not (Lr1.Set.mem x xs)
 end

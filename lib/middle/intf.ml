@@ -110,6 +110,9 @@ module type SIGMA = sig
 
   val intersect : t -> t -> bool
   (** Check if two sets intersect *)
+
+  val mem : Lr1.t -> t -> bool
+  (** [mem lr1 t] checks if the state [lr1] is an element of a sigma set [t] *)
 end
 
 (** Construction of the "reduction graph".

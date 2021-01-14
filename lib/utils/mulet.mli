@@ -222,6 +222,15 @@ module type S = sig
     val ( |. ) : t -> t -> t
     (** Disjunction (union or alternative) of two expressions *)
 
+    val disjunction : t list -> t
+    (** Disjunction of a list of expressions *)
+
+    val conjunction : t list -> t
+    (** Conjunction of a list of expressions *)
+
+    val concatenation : t list -> t
+    (** Concatenation of a list of expressions *)
+
     val abstract : abstract -> t
     (** Inject a custom abstract object in the expression *)
 
