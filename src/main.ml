@@ -17,6 +17,7 @@
 
 let source_name = ref None
 let output_name = ref None
+let grammar_file = ref None
 
 let usage = "usage: menhirlex [options] sourcefile"
 
@@ -33,6 +34,8 @@ let print_version_num () =
 let specs = [
   "-o", Arg.String (fun x -> output_name := Some x),
   " <file>  Set output file name to <file>";
+  "-g", Arg.String (fun x -> grammar_file := Some x),
+  " <file.cmly>  Path of the Menhir compiled grammar to analyse (*.cmly)";
   "-q", Arg.Set Common.quiet_mode,
   " Do not display informational messages";
   "-n", Arg.Set Common.dry_run,
@@ -49,11 +52,137 @@ let specs = [
 
 let () = Arg.parse specs (fun name -> source_name := Some name) usage
 
-let maybe_close = function
-  | None -> ()
-  | Some (oc, tr) ->
+let maybe_close lout =
+  if Lazy.is_val lout then (
+    let lazy (oc, tr) = lout in
     close_out oc;
-    Common.close_tracker tr
+    Common.close_tracker tr;
+  )
+
+module Analysis (X : sig val filename : string end)() =
+struct
+  module Grammar = MenhirSdk.Cmly_read.Read(X)
+  module Lr1 = Middle.Lr1.Make(Grammar)
+  module Sigma = Middle.Sigma.Make(Lr1)
+  module Reduction_graph = Middle.Reduction_graph.Make(Sigma)()
+  module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
+  module Transl = Transl.Make(Regex)
+
+  let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
+    Grammar.Lr1.fold begin fun lr1 acc ->
+      let lr0 = Grammar.Lr1.lr0 lr1 in
+      match Grammar.Lr0.incoming lr0 with
+      | Some _ -> acc
+      | None ->
+        (* Initial state *)
+        Format.eprintf "Initial state %d\n%a\n"
+          (Grammar.Lr1.to_int lr1)
+          Grammar.Print.itemset (Grammar.Lr0.items lr0);
+        let (prod, _) = List.hd (Grammar.Lr0.items lr0) in
+        let nt = match (Grammar.Production.rhs prod).(0) with
+          | Grammar.N nt, _, _ -> nt
+          | _ -> assert false
+        in
+        (nt, lr1) :: acc
+    end []
+
+  module Interp = Interp.Make(Grammar)
+
+  let enumerate_productions =
+    let all_gotos =
+      Reduction_graph.Derivation.derive
+        ~step:(fun nt nts -> nt :: nts)
+        ~finish:(fun lr1 stack -> List.fold_left Lr1.goto lr1 stack)
+        []
+    in
+    let follow state lr1 =
+      Reduction_graph.Concrete.Set.fold (fun src acc ->
+          List.fold_left (fun acc (lr1s, dst) ->
+              if Lr1.Set.mem lr1 lr1s
+              then Reduction_graph.Concrete.Set.add dst acc
+              else acc
+            ) acc (Reduction_graph.Concrete.transitions src)
+        ) state Reduction_graph.Concrete.Set.empty
+    in
+    fun stack ->
+      let rec loop acc state stack =
+        let acc = Reduction_graph.Concrete.Set.fold (fun st acc ->
+            Reduction_graph.Derivation.Set.fold
+              (fun d acc -> Lr1.Set.add
+                  (Reduction_graph.Derivation.get all_gotos d) acc)
+              (Reduction_graph.Derivation.reached st)
+              acc
+          ) state acc
+        in
+        match stack with
+        | [] -> acc
+        | hd :: tl -> loop acc (follow state hd) tl
+      in
+      let reachable =
+        match stack with
+        | [] -> assert false
+        | hd :: tl ->
+          let red = Reduction_graph.Concrete.from_lr1 hd in
+          loop (Lr1.Set.singleton hd) (Reduction_graph.Concrete.Set.singleton red) tl
+      in
+      let items =
+        Lr1.Set.fold
+          (fun lr1 acc -> Grammar.Lr0.items (Grammar.Lr1.lr0 lr1) @ acc)
+          reachable []
+      in
+      Format.printf "Items:\n%a%!"
+        Grammar.Print.itemset items
+
+  let rec evaluate (ic, def, dfa as program) state = function
+    | [] -> ()
+    | hd :: tl ->
+      let transitions = Regex.Map.find state dfa in
+      match List.find (fun (sigma, _, _) -> Sigma.mem hd sigma) transitions with
+      | (_, _, state') ->
+        let actions = Regex.Expr.get_label state' in
+        Utils.BitSet.IntSet.iter (fun x ->
+            let entry = List.nth def.Syntax.entrypoints 0 in
+            let clause = List.nth entry.clauses x in
+            begin match clause.action with
+              | Some location ->
+                print_endline
+                  ("Matched action: " ^ Common.read_location ic location)
+              | None ->
+                print_endline
+                  ("Matched unreachable action! ("^string_of_int x ^ ")")
+            end
+
+          ) actions.accept;
+        evaluate program state' tl
+      | exception Not_found -> ()
+
+  let analyse_stack ic def dfa initial stack =
+    Format.printf "Stack:\n%s\n%!"
+      (String.concat " "
+         (List.rev_map (fun lr1 ->
+              match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
+              | None -> "<start>"
+              | Some sym -> Grammar.symbol_name sym
+            ) stack));
+    (*begin match stack with
+      | x :: _ ->
+        Printf.printf "Transitions on: %s\n"
+          (String.concat ", "
+             (List.map (fun (sym, _) -> Grammar.symbol_name sym)
+                (Grammar.Lr1.transitions x)));
+        Printf.printf "Reduce to: %s\n%!"
+          (String.concat ", "
+             (List.map (fun (t, prods) ->
+                  Grammar.Nonterminal.name
+                    (Grammar.Production.lhs (List.hd prods)) ^ " on " ^
+                  Grammar.Terminal.name t
+                )
+                 (Grammar.Lr1.reductions x)))
+      | [] -> ()
+    end;*)
+    enumerate_productions stack;
+    evaluate (ic, def, dfa) initial stack
+end
 
 let main () =
   let source_name = match !source_name with
@@ -70,14 +199,11 @@ let main () =
       else source_name ^ ".ml"
   in
   let ic = open_in_bin source_name in
-  let out =
-    if !Common.dry_run then
-      None
-    else
-      let oc = open_out dest_name in
-      let tr = Common.open_tracker dest_name oc in
-      Some (oc, tr)
-  in
+  let out = lazy (
+    let oc = open_out dest_name in
+    let tr = Common.open_tracker dest_name oc in
+    (oc, tr)
+  ) in
   let lexbuf = Lexing.from_channel ic in
   lexbuf.Lexing.lex_curr_p <-
     {Lexing.pos_fname = source_name; Lexing.pos_lnum = 1;
@@ -85,30 +211,89 @@ let main () =
   try
     let def = Parser.lexer_definition Lexer.main lexbuf in
     if !Common.dump_parsetree then
-      Format.eprintf "%a" Utils.Cmon.format (Syntax.print_definition def);
+      Format.eprintf "Parsetree:\n%a\n"
+        Utils.Cmon.format (Syntax.print_definition def);
     List.iter (fun entry ->
         List.iter (fun clause ->
             Syntax.check_wellformed clause.Syntax.pattern
           ) entry.Syntax.clauses
       ) def.Syntax.entrypoints;
-    (*let (entries, transitions) = Lexgen.make_dfa def.entrypoints in
-    if !ml_automata then begin
-      Outputbis.output_lexdef
-        ic oc tr
-        def.header def.refill_handler entries transitions def.trailer
-    end else begin
-       let tables = Compact.compact_tables transitions in
-       Output.output_lexdef ic oc tr
-         def.header def.refill_handler tables entries def.trailer
-    end;*)
     close_in ic;
+    begin match !grammar_file with
+      | None ->
+        Format.eprintf "No grammar provided (-g), stopping now.\n"
+      | Some path ->
+        let module Analysis = Analysis(struct let filename = path end)() in
+        let linearize_symbol = Transl.linearize_symbol in
+        let open Analysis in
+        let entries, dfa = Transl.translate def in
+        Format.printf "Interpreter. Select an entrypoint using <non-terminal> ':' \
+                       then input sentences using <symbol>* '.' \n%!";
+        let lexbuf = Lexing.from_channel stdin in
+        let entrypoint = ref None in
+        let rec loop () =
+          match
+            let prompt = Parser.prompt_sentence Lexer.main lexbuf in
+            match prompt with
+            | Syntax.Prompt_entrypoint new_entrypoint ->
+              let symbol = Transl.translate_symbol new_entrypoint in
+              let initial =
+                try
+                  match symbol with
+                  | Grammar.N n -> List.assoc n initial_states
+                  | Grammar.T _ -> raise Not_found
+                with Not_found ->
+                  Printf.ksprintf invalid_arg "%s is not an entrypoint"
+                    (linearize_symbol new_entrypoint)
+              in
+              Printf.printf "Selected entrypoint %s\n%!"
+                (Grammar.symbol_name symbol);
+              entrypoint := Some initial
+            | Syntax.Prompt_interpret symbols ->
+              begin match !entrypoint with
+                | None ->
+                  Printf.ksprintf invalid_arg
+                    "Select an entrypoint first using \"<non-terminal>:\"\n\
+                     Known entrypoints:\n\
+                     %s\n"
+                    (String.concat "\n"
+                       (List.map
+                          (fun (nt, _) -> "- " ^ Grammar.Nonterminal.name nt)
+                          initial_states))
+                | Some initial ->
+                  let symbols = List.map Transl.translate_symbol symbols in
+                  begin match Interp.loop [initial] symbols with
+                    | `Accept (_nt, _rest) ->
+                      print_endline "Input accepted"
+                    | `Continue stack ->
+                      print_endline "Stopped in the middle of parse";
+                      analyse_stack ic def dfa (List.hd entries) stack
+                    | `No_transition (stack, _rest) ->
+                      print_endline "Parser stuck";
+                      analyse_stack ic def dfa (List.hd entries) stack
+                  end;
+              end;
+          with
+          | () -> loop ()
+          | exception End_of_file -> ()
+          | exception exn ->
+            let msg = match exn with
+              | Invalid_argument msg -> msg
+              | other -> Printexc.to_string other;
+            in
+            print_endline msg;
+            loop ()
+        in
+        loop ()
+    end;
     maybe_close out;
   with exn ->
     let bt = Printexc.get_raw_backtrace () in
     close_in ic;
-    maybe_close out;
-    if not !Common.dry_run then
+    if Lazy.is_val out then (
+      maybe_close out;
       Sys.remove dest_name;
+    );
     begin match exn with
       | Parser.Error ->
         let p = Lexing.lexeme_start_p lexbuf in
@@ -124,6 +309,8 @@ let main () =
         Printf.fprintf stderr
           "File \"%s\", line %d, character %d: %s.\n"
           file line col msg
+      | Transl.Error str ->
+        Printf.fprintf stderr "Error during translation: %s.\n" str
       | _ -> Printexc.raise_with_backtrace exn bt
     end;
     exit 3

@@ -51,8 +51,8 @@ open Syntax
 (*%nonassoc IDENT "_" "[" "("*)
 %left "<-" ";"
 
-%start lexer_definition
-%type <Syntax.lexer_definition> lexer_definition
+%start <Syntax.lexer_definition> lexer_definition
+%start <Syntax.prompt_sentence> prompt_sentence
 
 %%
 
@@ -94,14 +94,19 @@ symbol:
   { Apply ($1, $3) }
 ;
 
+wild_symbol:
+| "_" { None }
+| symbol { Some $1 }
+;
+
 regterm:
 | "_"
   { Wildcard }
 | symbol
   { Symbol $1 }
-| "[" prefix=symbol* "." suffix=symbol* "]"
+| "[" prefix=wild_symbol* "." suffix=wild_symbol* "]"
   { Item {lhs=None; prefix; suffix} }
-| "[" lhs=symbol ":" prefix=symbol* "." suffix=symbol* "]"
+| "[" lhs=symbol ":" prefix=wild_symbol* "." suffix=wild_symbol* "]"
   { Item {lhs=Some lhs; prefix; suffix} }
 | regexp "*"
   { Repetition ($1, make_position $startpos($2)) }
@@ -123,6 +128,14 @@ regexp:
      make_position $startpos($2)) :: $3 }
 | regexp ";" regexp
   { $1 @ $3 }
+;
+
+prompt_sentence:
+| symbol* DOT
+| symbol* EOF
+  { Syntax.Prompt_interpret $1 }
+| symbol ":"
+  { Syntax.Prompt_entrypoint $1 }
 ;
 
 %%

@@ -33,8 +33,8 @@ type regular_term =
   | Symbol of symbol
   | Item of {
       lhs: symbol option;
-      prefix: symbol list;
-      suffix: symbol list;
+      prefix: symbol option list;
+      suffix: symbol option list;
     }
   | Wildcard
   | Alternative of regular_expression * regular_expression
@@ -107,8 +107,8 @@ let rec print_regular_term = function
   | Item {lhs; prefix; suffix} ->
     Cmon.crecord "Item" [
       "lhs", print_option print_symbol lhs;
-      "prefix", Cmon.list (List.map print_symbol prefix);
-      "suffix", Cmon.list (List.map print_symbol suffix);
+      "prefix", Cmon.list (List.map (print_option print_symbol) prefix);
+      "suffix", Cmon.list (List.map (print_option print_symbol) suffix);
     ]
   | Wildcard -> Cmon.constant "Wildcard"
   | Alternative (re1, re2) ->
@@ -201,3 +201,7 @@ and check_wellformed context = function
     List.iter (fun (re, _) -> check_wellformed_term context re) xs
 
 let check_wellformed x = check_wellformed Reducible x
+
+type prompt_sentence =
+  | Prompt_interpret of symbol list
+  | Prompt_entrypoint of symbol

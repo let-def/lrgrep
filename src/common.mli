@@ -18,6 +18,7 @@ val open_tracker : string -> out_channel -> line_tracker
 val close_tracker : line_tracker -> unit
 val copy_chunk :
   in_channel -> out_channel -> line_tracker -> Syntax.location -> bool -> unit
+val read_location : in_channel -> Syntax.location -> string
 
 val quiet_mode : bool ref
 val dry_run : bool ref
