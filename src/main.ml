@@ -68,6 +68,83 @@ struct
   module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
   module Transl = Transl.Make(Regex)
 
+  let dfa_to_file initial ic def (dfa : Regex.dfa) file =
+    let oc = open_out file in
+    output_string oc "digraph G {\n";
+    output_string oc "  rankdir=LR;\n";
+    let k = ref 0 in
+    let uid_map = ref Regex.Map.empty in
+    let uid expr =
+      match Regex.Map.find expr !uid_map with
+      | k -> k, false
+      | exception Not_found ->
+        let k' = !k in
+        incr k;
+        uid_map := Regex.Map.add expr k' !uid_map;
+        k', true
+    in
+    let rec process expr =
+      let src, todo = uid expr in
+      if todo then (
+        let transitions =
+          Regex.Map.find expr dfa
+          |> List.map (fun (set,_,target) -> set, process target)
+          |> List.sort (fun (_,x1) (_,x2) -> compare x1 x2)
+          |> Utils.Misc.merge_group
+            ~equal:(=)
+            ~group:(fun dst sets -> dst, List.fold_left Sigma.union Sigma.empty sets)
+        in
+        List.iter (fun (dst, set) ->
+            let label = match set with
+              | Sigma.Pos set -> Printf.sprintf "{%d}" (Lr1.Set.cardinal set)
+              | Sigma.Neg set -> Printf.sprintf "{/%d}" (Lr1.Set.cardinal set)
+            in
+            Printf.ksprintf (output_string oc)
+              "  S%d -> S%d [label=%S];\n" src dst label
+          ) transitions
+      );
+      src
+    in
+    ignore (process initial : int);
+    Printf.ksprintf (output_string oc) "  S%d [shape=box];\n"
+      (Regex.Map.find initial !uid_map);
+    Regex.Map.iter (fun expr id ->
+        let rec string_of_expr : Regex.Expr.t -> string = function
+          | Utils.Mulet.Epsilon -> "epsilon"
+          | Utils.Mulet.Set _ -> "#"
+          | Utils.Mulet.Closure e -> string_of_expr e ^ "*"
+          | Utils.Mulet.Not e -> "not " ^ string_of_expr e
+          | Utils.Mulet.Label _ -> "label"
+          | Utils.Mulet.Abstract _ as e  ->
+            if Regex.Expr.nullable e
+            then "abstract?"
+            else "abstract"
+          | Utils.Mulet.Concat xs ->
+            "(" ^ String.concat " . " (List.map string_of_expr xs) ^ ")"
+          | Utils.Mulet.Or xs ->
+            "(" ^ String.concat " | " (List.map string_of_expr xs) ^ ")"
+          | Utils.Mulet.And xs ->
+            "(" ^ String.concat " & " (List.map string_of_expr xs) ^ ")"
+        in
+        let action_to_strings {Regex.Action. accept} =
+          match Utils.BitSet.IntSet.fold (fun x xs -> x :: xs) accept [] with
+          | [] -> []
+          | xs ->
+            let entry = List.hd def.Syntax.entrypoints in
+            List.map (fun x ->
+                match (List.nth entry.clauses x).action with
+                | None -> "."
+                | Some loc -> Common.read_location ic loc
+              ) xs
+        in
+        Printf.ksprintf (output_string oc) "  S%d [label=%S];\n" id
+          (String.concat "\n"
+             (string_of_expr expr ::
+              action_to_strings (Regex.Expr.get_label expr)))
+      ) !uid_map;
+    output_string oc "}\n";
+    close_out oc
+
   let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
     Grammar.Lr1.fold begin fun lr1 acc ->
       let lr0 = Grammar.Lr1.lr0 lr1 in
@@ -181,6 +258,7 @@ struct
       | [] -> ()
     end;*)
     enumerate_productions stack;
+    dfa_to_file initial ic def dfa "test.dot";
     evaluate (ic, def, dfa) initial stack
 end
 
