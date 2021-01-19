@@ -126,6 +126,7 @@ struct
           | Utils.Mulet.And xs ->
             "(" ^ String.concat " & " (List.map string_of_expr xs) ^ ")"
         in
+        ignore string_of_expr;
         let action_to_strings {Regex.Action. accept} =
           match Utils.BitSet.IntSet.fold (fun x xs -> x :: xs) accept [] with
           | [] -> []
@@ -139,7 +140,7 @@ struct
         in
         Printf.ksprintf (output_string oc) "  S%d [label=%S];\n" id
           (String.concat "\n"
-             (string_of_expr expr ::
+             ((*string_of_expr expr ::*)
               action_to_strings (Regex.Expr.get_label expr)))
       ) !uid_map;
     output_string oc "}\n";
@@ -164,6 +165,121 @@ struct
     end []
 
   module Interp = Interp.Make(Grammar)
+
+  let red_graph_to_dot focus =
+    let exception Found of Grammar.nonterminal in
+    match
+      Grammar.Nonterminal.iter
+        (fun nt -> if Grammar.Nonterminal.name nt = focus then raise (Found nt))
+    with
+    | () -> failwith ("Unkown nonterminal " ^ focus)
+    | exception (Found focus) ->
+      let module Fin = Utils.Strong.Finite in
+      let module R = Reduction_graph in
+      let derivations = R.Derivation.derive
+          ~step:(fun nt nts -> nt :: nts)
+          ~finish:(fun _lr1 stack ->
+              if List.mem focus stack then
+                List.rev stack
+              else
+                []
+            )
+          []
+      in
+      let non_empty = R.Derivation.filter (fun x -> x <> []) derivations in
+      let interesting st =
+        let reachable = R.Derivation.reachable st in
+        not (R.Derivation.Set.disjoint non_empty reachable)
+      in
+      let module States = Fin.Set.Gensym() in
+      let states_index = Hashtbl.create 7 in
+      let state_index st =
+        try Hashtbl.find states_index st
+        with Not_found ->
+          let result = States.fresh () in
+          Hashtbl.add states_index st result;
+          result
+      in
+      let transitions_def = ref [] in
+      let states_label = ref [] in
+      Fin.Set.iter R.Concrete.States.n (fun st ->
+          if interesting st then (
+            let id = state_index st in
+            let label =
+              R.Derivation.Set.fold (fun d acc ->
+                  let d' = R.Derivation.get derivations d in
+                  if d' <> [] then d' :: acc else acc
+                ) (R.Derivation.reached st) []
+              |> List.sort_uniq compare
+            in
+            states_label := (id, label) :: !states_label;
+            List.iter (fun (_,tgt) ->
+                if interesting tgt then (
+                  let tgt = state_index tgt in
+                  transitions_def := (id, tgt) :: !transitions_def
+                )
+              ) (R.Concrete.transitions st)
+          )
+        );
+      let module Valmari_DFA = struct
+        type states = States.n
+        let states = States.freeze ()
+        module Transitions =
+          Fin.Array.Of_array(struct
+            type a = (states Fin.elt * states Fin.elt)
+            let table = Array.of_list !transitions_def
+          end)
+        type transitions = Transitions.n
+        let transitions = Transitions.n
+        let source tr = fst Fin.(Transitions.table.(tr))
+        let target tr = snd Fin.(Transitions.table.(tr))
+        let label _ = ()
+        let initials = Fin.Array.(to_array (init states (fun i -> i)))
+        let finals = [||]
+
+        (* refinements : refine:((iter:(elt -> unit) -> unit) -> unit *)
+        let refinements ~refine:_ = ()
+          (*let classes =
+            Utils.Misc.merge_group !states_label
+              ~equal:(=) ~group:(fun _ states -> states)
+          in
+          List.iter (fun classe ->
+              refine (fun ~iter -> List.iter iter classe)
+            ) classes*)
+      end in
+      let module DFA' = Utils.Valmari.Minimize(struct
+          type t = unit
+          let compare _ _ = 0
+        end)(Valmari_DFA) in
+      let oc = open_out "red.dot" in
+      Printf.fprintf oc "digraph G {\n";
+      Fin.Set.iter R.Concrete.States.n (fun st ->
+          if interesting st then (
+            let label =
+              R.Derivation.Set.fold (fun d acc ->
+                  let d' = R.Derivation.get derivations d in
+                  if d' <> [] then
+                    String.concat " " (List.map Grammar.Nonterminal.name d')
+                    :: acc
+                  else
+                    acc
+                ) (R.Derivation.reached st) []
+            in
+            Printf.fprintf oc "  S%d[label=%S];\n"
+              (Fin.Elt.to_int st)
+              (String.concat "\n" label);
+            List.iter (fun (_,tgt) ->
+                if interesting tgt then
+                  Printf.fprintf oc "  S%d -> S%d;\n"
+                    (Fin.Elt.to_int st)
+                    (Fin.Elt.to_int tgt)
+              ) (R.Concrete.transitions st)
+          )
+        );
+      Printf.fprintf oc "}\n";
+      close_out oc
+
+  (*let () = red_graph_to_dot "let_binding_body"*)
 
   let enumerate_productions =
     let all_gotos =
@@ -258,7 +374,6 @@ struct
       | [] -> ()
     end;*)
     enumerate_productions stack;
-    dfa_to_file initial ic def dfa "test.dot";
     evaluate (ic, def, dfa) initial stack
 end
 
@@ -296,7 +411,6 @@ let main () =
             Syntax.check_wellformed clause.Syntax.pattern
           ) entry.Syntax.clauses
       ) def.Syntax.entrypoints;
-    close_in ic;
     begin match !grammar_file with
       | None ->
         Format.eprintf "No grammar provided (-g), stopping now.\n"
@@ -305,6 +419,7 @@ let main () =
         let linearize_symbol = Transl.linearize_symbol in
         let open Analysis in
         let entries, dfa = Transl.translate def in
+        dfa_to_file (List.hd entries) ic def dfa "test.dot";
         Format.printf "Interpreter. Select an entrypoint using <non-terminal> ':' \
                        then input sentences using <symbol>* '.' \n%!";
         let lexbuf = Lexing.from_channel stdin in
@@ -364,6 +479,7 @@ let main () =
         in
         loop ()
     end;
+    close_in ic;
     maybe_close out;
   with exn ->
     let bt = Printexc.get_raw_backtrace () in

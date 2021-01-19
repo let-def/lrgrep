@@ -52,7 +52,7 @@ struct
       with type sigma := Sigma.t
        and type label := Action.t
 
-    val make : Regular.Expr.t -> t
+    val make : Regular.Expr.t -> Regular.Expr.t
   end
   =
   struct
@@ -60,17 +60,23 @@ struct
       uid : int;
       table : Regular.Expr.t Reduction.Derivation.derivations;
       non_empty : Reduction.Derivation.Set.t;
-      nullable : Reduction.Derivation.Set.t;
     }
 
     type t = { state: Reduction.Concrete.Set.t; derivations : derivations }
 
-    let initial =
-      Grammar.Lr1.fold (fun lr1 acc ->
-          Reduction.Concrete.Set.add (Reduction.Concrete.from_lr1 lr1) acc
-        ) Reduction.Concrete.Set.empty
-
     let uid = ref 0
+
+    let is_interesting derivations st = not (
+        Reduction.Derivation.Set.disjoint derivations.non_empty
+          (Reduction.Derivation.reachable st)
+      )
+
+    let fold_derived_exprs t acc f =
+      Reduction.Concrete.Set.fold (fun st acc ->
+          Reduction.Derivation.Set.fold (fun deriv acc ->
+              f acc (Reduction.Derivation.get t.derivations.table deriv)
+            ) (Reduction.Derivation.reached st) acc
+        ) t.state acc
 
     let make expr =
       let singleton lr1 = Sigma.Pos (Lr1.Set.singleton lr1) in
@@ -90,39 +96,28 @@ struct
         let not_empty expr = not (Regular.Expr.is_empty expr) in
         Reduction.Derivation.filter not_empty table
       in
-      let nullable =
-        Reduction.Derivation.filter Regular.Expr.nullable table
-      in
       incr uid;
-      {
-        state = initial;
-        derivations = {table; non_empty; nullable; uid = !uid};
-      }
+      let derivations = {table; non_empty; uid = !uid} in
+      let state =
+        Grammar.Lr1.fold (fun lr1 acc ->
+            let state = Reduction.Concrete.from_lr1 lr1 in
+            if is_interesting derivations state
+            then Reduction.Concrete.Set.add state acc
+            else acc
+          ) Reduction.Concrete.Set.empty
+      in
+      Regular.Expr.(expr |. abstract { state; derivations })
 
     let compare t1 t2 =
-      match Reduction.Concrete.Set.compare t1.state t2.state with
-      | 0 -> Int.compare t1.derivations.uid t2.derivations.uid
+      match Int.compare t1.derivations.uid t2.derivations.uid with
+      | 0 -> Reduction.Concrete.Set.compare t1.state t2.state
       | n -> n
 
     let is_empty _ = false
 
-    let nullable t =
-      Reduction.Concrete.Set.exists (fun st ->
-          not (Reduction.Derivation.Set.disjoint
-                 t.derivations.nullable
-                 (Reduction.Derivation.reached st))
-        ) t.state
+    let nullable _ = false
 
-    let fold_derived_exprs t acc f =
-      Reduction.Concrete.Set.fold (fun st acc ->
-          Reduction.Derivation.Set.fold (fun deriv acc ->
-              f acc (Reduction.Derivation.get t.derivations.table deriv)
-            ) (Reduction.Derivation.reached st) acc
-        ) t.state acc
-
-    let get_label t =
-      fold_derived_exprs t Action.empty @@ fun action expr ->
-      Action.append action (Regular.Expr.get_label expr)
+    let get_label _ = Action.empty
 
     let left_classes t f acc =
       Reduction.Concrete.Set.fold (fun st acc ->
@@ -144,11 +139,7 @@ struct
           ) t.state
           Reduction.Concrete.Set.empty
       in
-      if Reduction.Concrete.Set.exists (fun st ->
-          not (Reduction.Derivation.Set.disjoint
-                 t.derivations.non_empty
-                 (Reduction.Derivation.reachable st))
-        ) state
+      if Reduction.Concrete.Set.exists (is_interesting t.derivations) state
       then
         let t = {t with state} in
         let re = Regular.Expr.abstract t in
@@ -161,6 +152,5 @@ struct
 
   include Regular
 
-  let simulate_reductions expr =
-    Expr.abstract (Reduction_operator.make expr)
+  let simulate_reductions = Reduction_operator.make
 end

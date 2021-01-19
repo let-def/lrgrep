@@ -9,8 +9,6 @@ struct
   module Lr1 = Sigma.Lr1
   module G = Lr1.Grammar
 
-  (*let () = log ["Reduction_graph"; "Graph"]*)
-
   module Graph : sig
     type state =
       | Lr1 of Lr1.t
@@ -93,8 +91,6 @@ struct
       ProdSet.fold (fun prod transitions -> reduce prod :: transitions)
         reducible []
   end
-
-  (*let () = log ["Reduction_graph"; "Concrete"]*)
 
   module Concrete : sig
     module States : Fin.Set.T
@@ -190,8 +186,6 @@ struct
     let transitions id = fst Fin.(table.(id))
     let represent id = snd Fin.(table.(id))
   end
-
-  (*let () = log ["Reduction_graph"; "Concrete"]*)
 
   module Derivation :
   sig
