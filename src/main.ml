@@ -326,7 +326,34 @@ struct
       Format.printf "Items:\n%a%!"
         Grammar.Print.itemset items
 
-  let rec evaluate (ic, def, dfa as program) state = function
+  let rec evaluate (ic, def) expr = function
+    | [] -> ()
+    | hd :: tl ->
+      let _, expr' =
+        Regex.Expr.left_delta expr (Sigma.Pos (Lr1.Set.singleton hd))
+      in
+      Format.printf "Consuming state %s\n@[<2>%a@]\n%!"
+        (match Grammar.Lr0.incoming (Grammar.Lr1.lr0 hd) with
+         | None -> "<start>"
+         | Some sym -> Grammar.symbol_name sym)
+        Utils.Cmon.format (Regex.cmon expr');
+      let actions = Regex.Expr.get_label expr' in
+      Utils.BitSet.IntSet.iter (fun x ->
+          let entry = List.nth def.Syntax.entrypoints 0 in
+          let clause = List.nth entry.clauses x in
+          begin match clause.action with
+            | Some location ->
+              print_endline
+                ("(eval) Matched action: " ^ Common.read_location ic location)
+            | None ->
+              print_endline
+                ("(eval) Matched unreachable action! ("^string_of_int x ^ ")")
+          end
+
+        ) actions.accept;
+      evaluate (ic, def) expr' tl
+
+  let rec interpret (ic, def, dfa as program) state = function
     | [] -> ()
     | hd :: tl ->
       let transitions = Regex.Map.find state dfa in
@@ -339,14 +366,14 @@ struct
             begin match clause.action with
               | Some location ->
                 print_endline
-                  ("Matched action: " ^ Common.read_location ic location)
+                  ("(interp) Matched action: " ^ Common.read_location ic location)
               | None ->
                 print_endline
-                  ("Matched unreachable action! ("^string_of_int x ^ ")")
+                  ("(interp) Matched unreachable action! ("^string_of_int x ^ ")")
             end
 
           ) actions.accept;
-        evaluate program state' tl
+        interpret program state' tl
       | exception Not_found -> ()
 
   let analyse_stack ic def dfa initial stack =
@@ -374,7 +401,8 @@ struct
       | [] -> ()
     end;*)
     enumerate_productions stack;
-    evaluate (ic, def, dfa) initial stack
+    evaluate (ic, def) initial stack;
+    interpret (ic, def, dfa) initial stack
 end
 
 let main () =

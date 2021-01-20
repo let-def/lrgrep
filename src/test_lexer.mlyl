@@ -4,16 +4,14 @@ rule error_message = parse
 | SEMI; LET; ext; list(attribute); rec_flag; val_ident; EQUAL; LIDENT
   { "ok 0 red" }
 
-| [ structure_item . ] <- SEMI; 
+| strict_binding <- SEMI; 
   LET; ext; list(attribute); rec_flag; val_ident; EQUAL; LIDENT
   { "ok 1 red" }
 
-| (*[ structure_item . ] <- SEMI; 
-  LET; ext; list(attribute); rec_flag;*)
-  [ let_binding_body. ] <-
+| structure_item <- SEMI; 
+  LET; ext; list(attribute); rec_flag; let_binding_body<-
   { "ok 2 reds" }
 
-| _* { "wildcard" }
 
 (*rule main = parse
 | ([ . module_expr ] & [ . paren_module_expr ]) <-

@@ -271,6 +271,8 @@ sig
       reductions starting from the current stack rather than matching directly
       againt the current stack.  *)
 
+  val cmon : Expr.t -> Cmon.t
+
   (*module Reduction_operator : sig
     type t = reduction_operator
     val compare : t -> t -> int
