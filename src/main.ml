@@ -68,7 +68,7 @@ struct
   module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
   module Transl = Transl.Make(Regex)
 
-  let dfa_to_file initial ic def (dfa : Regex.dfa) file =
+  (*let dfa_to_file initial ic def (dfa : Regex.dfa) file =
     let oc = open_out file in
     output_string oc "digraph G {\n";
     output_string oc "  rankdir=LR;\n";
@@ -144,7 +144,7 @@ struct
               action_to_strings (Regex.Expr.get_label expr)))
       ) !uid_map;
     output_string oc "}\n";
-    close_out oc
+    close_out oc*)
 
   let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
     Grammar.Lr1.fold begin fun lr1 acc ->
@@ -166,7 +166,7 @@ struct
 
   module Interp = Interp.Make(Grammar)
 
-  let red_graph_to_dot focus =
+  (*let red_graph_to_dot focus =
     let exception Found of Grammar.nonterminal in
     match
       Grammar.Nonterminal.iter
@@ -279,7 +279,7 @@ struct
       Printf.fprintf oc "}\n";
       close_out oc
 
-  (*let () = red_graph_to_dot "let_binding_body"*)
+  let () = red_graph_to_dot "let_binding_body"*)
 
   let enumerate_productions =
     let all_gotos =
@@ -447,7 +447,7 @@ let main () =
         let linearize_symbol = Transl.linearize_symbol in
         let open Analysis in
         let entries, dfa = Transl.translate def in
-        dfa_to_file (List.hd entries) ic def dfa "test.dot";
+        (*dfa_to_file (List.hd entries) ic def dfa "test.dot";*)
         Format.printf "Interpreter. Select an entrypoint using <non-terminal> ':' \
                        then input sentences using <symbol>* '.' \n%!";
         let lexbuf = Lexing.from_channel stdin in

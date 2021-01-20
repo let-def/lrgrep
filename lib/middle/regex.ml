@@ -127,10 +127,10 @@ struct
 
     let uid = ref 0
 
-    let is_interesting _derivations _st = true (*not (
+    let is_interesting derivations st = not (
         Reduction.Derivation.Set.disjoint derivations.non_empty
           (Reduction.Derivation.reachable st)
-      )*)
+      )
 
     let fold_derived_exprs t acc f =
       match t with

@@ -48,7 +48,7 @@ struct
       Neg (Lr1.Set.diff x2 x1)
 
   let partition l =
-    let only_pos = ref false in
+    let only_pos = ref true in
     let project = function Pos x -> x | Neg x -> only_pos := false; x in
     let l = List.map project l in
     let pos x = Pos x in
