@@ -119,6 +119,7 @@ module type S = sig
   type transition = sigma * label * Expr.t
   type dfa = transition list Map.t
 
+  val derive : Expr.t -> transition list
   val add_to_dfa : dfa -> Expr.t list -> dfa
   val make_dfa : Expr.t -> dfa
 end
@@ -390,6 +391,16 @@ struct
   type transition = sigma * label * Expr.t
   type dfa = transition list Map.t
 
+  let derive expr =
+    let class_delta acc sigma =
+      let labels, x' = Expr.left_delta expr sigma in
+      (sigma, labels, x') :: acc
+    in
+    let add_non_empty s ss = if Sigma.is_empty s then ss else s :: ss in
+    let classes = Expr.left_classes expr add_non_empty [] in
+    let partition = Sigma.partition classes in
+    List.fold_left class_delta [] partition
+
   let rec add_to_dfa dfa = function
     | [] -> dfa
     | x :: todo when Map.mem x dfa -> add_to_dfa dfa todo
@@ -401,13 +412,7 @@ struct
            ~label:(fun _ -> Cmon.unit)
            ~abstract:(fun _ -> Cmon.unit)
            x);*)
-      let class_delta acc sigma =
-        let labels, x' = Expr.left_delta x sigma in
-        (sigma, labels, x') :: acc
-      in
-      let classes = Expr.left_classes x (fun s ss -> if Sigma.is_empty s then ss else s :: ss) [] in
-      let partition = Sigma.partition classes in
-      let transitions = List.fold_left class_delta [] partition in
+      let transitions = derive x in
       let dfa = Map.add x transitions dfa in
       let add_todo todo (_, _, x') = x' :: todo in
       let todo = List.fold_left add_todo todo transitions in

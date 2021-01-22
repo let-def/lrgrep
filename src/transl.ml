@@ -30,6 +30,63 @@ module Make(Regex : Middle.Intf.REGEX) = struct
   module Lr1 = Sigma.Lr1
   module Grammar = Lr1.Grammar
 
+  module Derive_modulo = struct
+
+    type state = {
+      mutable scheduled: bool;
+      mutable explored: Lr1.Set.t;
+      transitions: Regex.transition list;
+    }
+
+    let get_state dfa expr =
+      match Regex.Map.find expr dfa with
+      | state -> dfa, state
+      | exception Not_found ->
+        let transitions = Regex.derive expr in
+        let state = {
+          scheduled = false;
+          explored = Lr1.Set.empty;
+          transitions;
+        } in
+        Regex.Map.add expr state dfa, state
+
+    let full = Lr1.Grammar.Lr1.fold Lr1.Set.add Lr1.Set.empty
+
+    let initial dfa expr =
+      let dfa, state = get_state dfa expr in
+      state.scheduled <- true;
+      state.explored <- full;
+      (dfa, [state])
+
+    let rec flush dfa = function
+      | [] -> dfa
+      | state :: states ->
+        assert state.scheduled;
+        state.scheduled <- false;
+        let predecessors = Lr1.predecessors_of_states state.explored in
+        let process_transition (dfa, states) (sigma, _, expr) =
+          let sigma' = match sigma with
+            | Sigma.Pos sigma -> Lr1.Set.inter sigma predecessors
+            | Sigma.Neg sigma -> Lr1.Set.diff sigma predecessors
+          in
+          let dfa, state' = get_state dfa expr in
+          let states =
+            if not (Lr1.Set.subset sigma' state'.explored) then (
+              state'.explored <- Lr1.Set.union sigma' state'.explored;
+              if not state'.scheduled then
+                (state'.scheduled <- true; state' :: states)
+              else
+                states
+            ) else states
+          in
+          (dfa, states)
+        in
+        let dfa, states =
+          List.fold_left process_transition (dfa, states) state.transitions
+        in
+        flush dfa states
+  end
+
   let symbols : (string, Grammar.symbol) Hashtbl.t =
     Hashtbl.create 107
 
@@ -86,6 +143,7 @@ module Make(Regex : Middle.Intf.REGEX) = struct
     Regex.Expr.concatenation terms
 
   let translate (def : Syntax.lexer_definition) =
+    let time0 = Sys.time () in
     let action_counter = ref 0 in
     let entries = List.map (fun entry ->
         let clauses = List.map (fun clause ->
@@ -98,6 +156,26 @@ module Make(Regex : Middle.Intf.REGEX) = struct
         Regex.Expr.disjunction clauses
       ) def.entrypoints
     in
-    let dfa = Regex.add_to_dfa Regex.Map.empty entries in
+    let time1 = Sys.time () in
+    let dfa = ref Regex.Map.empty in
+    let states =
+      List.map (fun expr ->
+          let dfa', state = Derive_modulo.initial !dfa expr in
+          dfa := dfa';
+          state)
+        entries
+      |> List.flatten
+    in
+    let dfa = Derive_modulo.flush !dfa states in
+    let dfa = Regex.Map.filter_map
+        (fun _ {Derive_modulo. explored; transitions; _} ->
+           if Lr1.Set.is_empty explored then None else Some transitions
+        ) dfa
+    in
+    let time2 = Sys.time () in
+    Printf.eprintf "translation time: regexp in %.02fms, dfa in %.02fms, %d states\n%!"
+      ((time1 -. time0) *. 1000.0)
+      ((time2 -. time1) *. 1000.0)
+      (Regex.Map.cardinal dfa);
     entries, dfa
 end

@@ -285,6 +285,12 @@ module type S = sig
       regular expression key.
   *)
 
+  val derive : Expr.t -> transition list
+  (** Compute all transitions of an expression.
+      A DFA can be constructed as the closure of this derivation (repeat
+      derivation on all transitions, until no new expressions are produced).
+  *)
+
   val add_to_dfa : dfa -> Expr.t list -> dfa
   (** [add_to_dfa dfa exprs] adds a few expressions to a DFA:
       - all exprs are bound in the resulting [dfa]
