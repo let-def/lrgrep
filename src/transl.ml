@@ -169,7 +169,19 @@ module Make(Regex : Middle.Intf.REGEX) = struct
     let dfa = Derive_modulo.flush !dfa states in
     let dfa = Regex.Map.filter_map
         (fun _ {Derive_modulo. explored; transitions; _} ->
-           if Lr1.Set.is_empty explored then None else Some transitions
+           if Lr1.Set.is_empty explored then None else
+             Some (
+               let sigma0 = Lr1.predecessors_of_states explored in
+               List.fold_left (fun acc (sigma, label, target) ->
+                   let sigma' = match sigma with
+                       | Sigma.Pos sigma' -> Lr1.Set.inter sigma0 sigma'
+                       | Sigma.Neg sigma' -> Lr1.Set.diff sigma0 sigma'
+                   in
+                   if Lr1.Set.is_empty sigma' then acc
+                   else (Sigma.Pos sigma', label, target) :: acc
+                 )
+                 [] transitions
+             )
         ) dfa
     in
     let time2 = Sys.time () in
@@ -177,5 +189,61 @@ module Make(Regex : Middle.Intf.REGEX) = struct
       ((time1 -. time0) *. 1000.0)
       ((time2 -. time1) *. 1000.0)
       (Regex.Map.cardinal dfa);
+    begin (* Minimization *)
+      let module Fin = Utils.Strong.Finite in
+      let module States = Fin.Set.Gensym() in
+      let dfa_st = Regex.Map.map (fun tr -> States.fresh (), tr) dfa in
+      let states = States.freeze () in
+      let dfa_tr = Regex.Map.fold (fun _expr (source', tr) acc ->
+          List.fold_left (fun acc (sigma, _label, target) ->
+              match Regex.Map.find target dfa_st with
+              | exception Not_found -> acc
+              | (target', _) -> (source', sigma, target') :: acc
+            ) acc tr
+        ) dfa_st []
+      in
+      let module Tr = Fin.Array.Of_array (struct
+          type a = States.n Fin.elt * Sigma.t * States.n Fin.elt
+          let table = Array.of_list dfa_tr
+        end)
+      in
+      let module Valmari_DFA = struct
+        type states = States.n
+        let states = states
+        type transitions = Tr.n
+        let transitions = Tr.n
+        let source x = let (a,_,_) = Fin.(Tr.table.(x)) in a
+        let label x = let (_,a,_) = Fin.(Tr.table.(x)) in a
+        let target x = let (_,_,a) = Fin.(Tr.table.(x)) in a
+
+        let initials =
+          List.map (fun entry -> fst (Regex.Map.find entry dfa_st)) entries
+          |> Array.of_list
+
+        let finals =
+          Regex.Map.fold (fun expr (st, _) acc ->
+              if Regex.Action.compare (Regex.Expr.get_label expr) Regex.Action.empty = 0
+              then acc
+              else st :: acc
+            ) dfa_st []
+          |> Array.of_list
+
+        let refinements ~refine =
+          (* States that have different actions should belong to different
+             classes) *)
+          let classes =
+            Regex.Map.bindings dfa_st
+            |> List.map (fun (expr, (st, _)) -> st, Regex.Expr.get_label expr)
+            |> List.sort (fun (_,g1) (_,g2) -> Regex.Action.compare g1 g2)
+            |> Utils.Misc.merge_group
+              ~equal:(fun g1 g2 -> Regex.Action.compare g1 g2 = 0)
+              ~group:(fun _ sts -> sts)
+          in
+          List.iter (fun classe -> refine ~iter:(fun f -> List.iter f classe))
+            classes
+      end in
+      let module Min = Utils.Valmari.Minimize(Sigma)(Valmari_DFA) in
+      Printf.eprintf "Minimized to %d states\n%!" (Fin.Set.cardinal Min.states)
+    end;
     entries, dfa
 end
