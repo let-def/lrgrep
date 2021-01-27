@@ -66,25 +66,28 @@ module Make(Regex : Middle.Intf.REGEX) = struct
         assert state.scheduled;
         state.scheduled <- false;
         let dfa, states =
-          let predecessors = Lr1.predecessors_of_states state.explored in
-          let process_transition (dfa, states) (sigma, _, expr) =
-            let sigma' = match sigma with
-              | Sigma.Pos sigma -> Lr1.Set.inter sigma predecessors
-              | Sigma.Neg sigma -> Lr1.Set.diff sigma predecessors
+          if Utils.BitSet.IntSet.is_empty state.action.accept then
+            let predecessors = Lr1.predecessors_of_states state.explored in
+            let process_transition (dfa, states) (sigma, _, expr) =
+              let sigma' = match sigma with
+                | Sigma.Pos sigma -> Lr1.Set.inter sigma predecessors
+                | Sigma.Neg sigma -> Lr1.Set.diff sigma predecessors
+              in
+              let dfa, state' = get_state dfa expr in
+              let states =
+                if not (Lr1.Set.subset sigma' state'.explored) then (
+                  state'.explored <- Lr1.Set.union sigma' state'.explored;
+                  if not state'.scheduled then
+                    (state'.scheduled <- true; state' :: states)
+                  else
+                    states
+                ) else states
+              in
+              (dfa, states)
             in
-            let dfa, state' = get_state dfa expr in
-            let states =
-              if not (Lr1.Set.subset sigma' state'.explored) then (
-                state'.explored <- Lr1.Set.union sigma' state'.explored;
-                if not state'.scheduled then
-                  (state'.scheduled <- true; state' :: states)
-                else
-                  states
-              ) else states
-            in
+            List.fold_left process_transition (dfa, states) state.transitions
+          else
             (dfa, states)
-          in
-          List.fold_left process_transition (dfa, states) state.transitions
         in
         flush dfa states
   end
