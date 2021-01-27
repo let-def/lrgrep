@@ -65,12 +65,6 @@ struct
       | Concrete (lookahead, hd, tl) ->
         let targets =
           List.filter_map (fun lr1_parent ->
-              match G.Lr0.incoming (G.Lr1.lr0 lr1_parent) with
-              | None ->
-                (* We reached an initial state: goto transition doesn't exist,
-                   it is an accepting state. *)
-                None
-              | Some _ ->
                 let lr1 = Lr1.goto lr1_parent nt in
                 Some (lr1_parent, Goto {lookahead; lr1; next = Lr1 lr1_parent})
             )
@@ -84,7 +78,11 @@ struct
         |> List.filter_map (fun (lookahead, prod) ->
             match state with
             | Goto t when not (LookaheadSet.mem lookahead t.lookahead) -> None
-            | Goto _ | Lr1 _ -> Some (lookahead, List.hd prod)
+            | Goto _ | Lr1 _ ->
+              let prod = List.hd prod in
+              match G.Nonterminal.kind (G.Production.lhs prod) with
+              | `START -> None
+              | `REGULAR -> Some (lookahead, prod)
           )
         |> List.sort (fun (_, p1) (_, p2) -> compare p1 p2)
         |> Misc.merge_group
