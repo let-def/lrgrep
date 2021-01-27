@@ -120,12 +120,12 @@ regexp:
   { [$1, make_position $endpos] }
 | "(" regexp ")"
   { $2 }
-| regexp "<-"
+| regexp ioption(";") "<-"
   { [Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($2)] }
-| regexp "<-" regexp
+     make_position $startpos($3)] }
+| regexp ioption(";") "<-" regexp
   { (Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($2)) :: $3 }
+     make_position $startpos($3)) :: $4 }
 | regexp ";" regexp
   { $1 @ $3 }
 ;
