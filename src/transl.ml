@@ -244,8 +244,12 @@ module Make(Regex : Middle.Intf.REGEX) = struct
           List.iter (fun classe -> refine ~iter:(fun f -> List.iter f classe))
             classes
       end in
+      let time3 = Sys.time () in
       let module Min = Utils.Valmari.Minimize(Sigma)(Valmari_DFA) in
-      Printf.eprintf "Minimized to %d states\n%!" (Fin.Set.cardinal Min.states)
+      let time4 = Sys.time () in
+      Printf.eprintf "Minimized to %d states in %.02fms\n%!"
+        (Fin.Set.cardinal Min.states)
+        ((time4 -. time3) *. 1000.0)
     end;
     entries, dfa
 end

@@ -8,12 +8,14 @@ struct
   module Sigma = Sigma
   module Lr1 = Sigma.Lr1
   module G = Lr1.Grammar
+  module LookaheadSet = BitSet.Make(G.Terminal)
 
   module Graph : sig
     type state =
       | Lr1 of Lr1.t
       | Goto of {
           lr1: Lr1.t;
+          lookahead: LookaheadSet.t;
           next: state;
         }
 
@@ -28,6 +30,7 @@ struct
       | Lr1 of Lr1.t
       | Goto of {
           lr1: Lr1.t;
+          lookahead: LookaheadSet.t;
           next: state;
         }
 
@@ -36,23 +39,30 @@ struct
       | Epsilon of state
 
     type builder =
-      | Abstract of state
-      | Concrete of Lr1.Set.t * Lr1.Set.t list
+      | Abstract of LookaheadSet.t * state
+      | Concrete of LookaheadSet.t * Lr1.Set.t * Lr1.Set.t list
 
-    let start_from state = Abstract state
+    let start_from lookahead state =
+      begin match state with
+        | Lr1 _ -> ()
+        | Goto t -> assert (LookaheadSet.subset lookahead t.lookahead);
+      end;
+      Abstract (lookahead, state)
 
     let pop = function
-      | Abstract (Goto g) -> Abstract g.next
-      | Abstract (Lr1 lr1) -> Concrete (Lr1.predecessors_of_state lr1, [])
-      | Concrete (hd, tl) -> Concrete (Lr1.predecessors_of_states hd, hd :: tl)
+      | Abstract (lookahead, Goto g) -> Abstract (lookahead, g.next)
+      | Abstract (lookahead, Lr1 lr1) ->
+        Concrete (lookahead, Lr1.predecessors_of_state lr1, [])
+      | Concrete (lookahead, hd, tl) ->
+        Concrete (lookahead, Lr1.predecessors_of_states hd, hd :: tl)
 
     let lr1_state (Goto {lr1; _} | Lr1 lr1) = lr1
 
     let goto nt = function
-      | Abstract next ->
+      | Abstract (lookahead, next) ->
         let lr1 = Lr1.goto (lr1_state next) nt in
-        Epsilon (Goto {lr1; next})
-      | Concrete (hd, tl) ->
+        Epsilon (Goto {lookahead; lr1; next})
+      | Concrete (lookahead, hd, tl) ->
         let targets =
           List.filter_map (fun lr1_parent ->
               match G.Lr0.incoming (G.Lr1.lr0 lr1_parent) with
@@ -62,22 +72,29 @@ struct
                 None
               | Some _ ->
                 let lr1 = Lr1.goto lr1_parent nt in
-                Some (lr1_parent, Goto {lr1; next = Lr1 lr1_parent})
+                Some (lr1_parent, Goto {lookahead; lr1; next = Lr1 lr1_parent})
             )
           (Lr1.Set.elements hd)
         in
         Targets (List.rev tl, targets)
 
-    module ProdSet = BitSet.Make(G.Production)
-
     let transitions state =
       let reducible =
-        List.fold_left (fun acc (_, prod) -> ProdSet.add (List.hd prod) acc)
-          ProdSet.empty
-          (G.Lr1.reductions (lr1_state state))
+        G.Lr1.reductions (lr1_state state)
+        |> List.filter_map (fun (lookahead, prod) ->
+            match state with
+            | Goto t when not (LookaheadSet.mem lookahead t.lookahead) -> None
+            | Goto _ | Lr1 _ -> Some (lookahead, List.hd prod)
+          )
+        |> List.sort (fun (_, p1) (_, p2) -> compare p1 p2)
+        |> Misc.merge_group
+          ~equal:(Int.equal :> G.production -> G.production -> bool)
+          ~group:(fun prod lookahead ->
+              (prod, LookaheadSet.(List.fold_right add lookahead empty))
+            )
       in
-      let reduce prod =
-        let builder = start_from state in
+      let reduce (prod, lookahead) =
+        let builder = start_from lookahead state in
         let builder =
           Array.fold_right
             (fun _ builder -> pop builder)
@@ -86,8 +103,7 @@ struct
         in
         goto (G.Production.lhs prod) builder
       in
-      ProdSet.fold (fun prod transitions -> reduce prod :: transitions)
-        reducible []
+      List.map reduce reducible
   end
 
   module Concrete : sig
