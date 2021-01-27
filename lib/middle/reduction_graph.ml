@@ -1,6 +1,8 @@
 open Utils
 module Fin = Strong.Finite
 
+let consider_lookahead = false
+
 module Make (Sigma : Intf.SIGMA)()
 : Intf.REDUCTION with module Lr1 = Sigma.Lr1
 =
@@ -43,10 +45,11 @@ struct
       | Concrete of LookaheadSet.t * Lr1.Set.t * Lr1.Set.t list
 
     let start_from lookahead state =
-      begin match state with
-        | Lr1 _ -> ()
-        | Goto t -> assert (LookaheadSet.subset lookahead t.lookahead);
-      end;
+      if consider_lookahead then
+        begin match state with
+          | Lr1 _ -> ()
+          | Goto t -> assert (LookaheadSet.subset lookahead t.lookahead);
+        end;
       Abstract (lookahead, state)
 
     let pop = function
@@ -77,7 +80,10 @@ struct
         G.Lr1.reductions (lr1_state state)
         |> List.filter_map (fun (lookahead, prod) ->
             match state with
-            | Goto t when not (LookaheadSet.mem lookahead t.lookahead) -> None
+            | Goto t
+              when consider_lookahead &&
+                   not (LookaheadSet.mem lookahead t.lookahead) ->
+              None
             | Goto _ | Lr1 _ ->
               let prod = List.hd prod in
               match G.Nonterminal.kind (G.Production.lhs prod) with
@@ -88,8 +94,12 @@ struct
         |> Misc.merge_group
           ~equal:(Int.equal :> G.production -> G.production -> bool)
           ~group:(fun prod lookahead ->
-              (prod, LookaheadSet.(List.fold_right add lookahead empty))
-            )
+              let lookahead_set =
+                if consider_lookahead
+                then LookaheadSet.(List.fold_right add lookahead empty)
+                else LookaheadSet.empty
+              in
+              (prod, lookahead_set))
       in
       let reduce (prod, lookahead) =
         let builder = start_from lookahead state in
