@@ -88,7 +88,9 @@ struct
         match List.assq_opt nt goto_transitions with
         | Some target -> target
         | None ->
-          failwith "Internal error: Lr1_utils.goto called from invalid state"
+          Printf.ksprintf failwith
+            "Internal error: Lr1.goto: no transition from #%d on %S"
+            (G.Lr1.to_int lr1) (G.Nonterminal.name nt)
     )
 
   let states_reducing =
