@@ -1,26 +1,18 @@
 {}
 
 rule error_message = parse
-| SEMI; LET; ext; list(attribute); rec_flag; val_ident; EQUAL; LIDENT
+(*| SEMI; LET; ext; list(attribute); rec_flag; val_ident; EQUAL; LIDENT
   { "ok 0 red" }
 
 | strict_binding <- SEMI; 
   LET; ext; list(attribute); rec_flag; val_ident; EQUAL; LIDENT
-  { "ok 1 red" }
+  { "ok 1 red" }*)
 
 | structure_item <- SEMI; 
   LET; ext; list(attribute); rec_flag; let_binding_body<-
-  { "Spurious semi-colon at " ^ loc semi }
+  { "ok 2 reds" }
 
-| expr ; PLUS 
-  { "Unterminated binary application" }
 
-| [ LPAREN _ . RPAREN ] <-
-  { "Unclosed (" }
-
-(*| LPAREN as lp; [ . RPAREN ] <-
-  {  "Unclosed parenthesis " ^ lp }*)
- 
 (*rule main = parse
 | ([ . module_expr ] & [ . paren_module_expr ]) <-
   { `Module_expr_struct_paren_module_expr }
