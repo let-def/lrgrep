@@ -148,7 +148,7 @@ struct
 
     let make expr =
       let singleton lr1 = Sigma.Pos (Lr1.Set.singleton lr1) in
-      let expr = Regular.Expr.(expr ^. set Sigma.full) in
+      let expr = Regular.Expr.(expr ^. star (set Sigma.full)) in
       let table = Reduction.Derivation.derive
           ~step:begin fun lr1 expr ->
             let _, expr = Regular.Expr.left_delta expr (singleton lr1) in
