@@ -284,9 +284,9 @@ struct
   let enumerate_productions =
     let all_gotos =
       Reduction_graph.Derivation.derive
-        ~step:(fun nt nts -> nt :: nts)
-        ~finish:(fun lr1 stack -> List.fold_left Lr1.goto lr1 stack)
-        []
+        ~step:(fun lr1 _ -> Some lr1)
+        ~finish:(fun lr1 stack -> Option.value stack ~default:lr1)
+        None
     in
     let follow state lr1 =
       Reduction_graph.Concrete.Set.fold (fun src acc ->

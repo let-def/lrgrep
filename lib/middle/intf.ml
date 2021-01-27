@@ -198,8 +198,7 @@ module type REDUCTION = sig
     *)
 
     val derive :
-      step:(Lr1.Grammar.nonterminal -> 'a -> 'a) ->
-      finish:(Lr1.t -> 'a -> 'b) ->
+      step:(Lr1.t -> 'a -> 'a) -> finish:(Lr1.t -> 'a -> 'b) ->
       'a -> 'b derivations
     (** A custom representation is built by providing an initial state and two
         functions to simulate the primary actions of transformation:

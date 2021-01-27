@@ -14,7 +14,6 @@ struct
       | Lr1 of Lr1.t
       | Goto of {
           lr1: Lr1.t;
-          nt: G.nonterminal;
           next: state;
         }
 
@@ -29,7 +28,6 @@ struct
       | Lr1 of Lr1.t
       | Goto of {
           lr1: Lr1.t;
-          nt: G.nonterminal;
           next: state;
         }
 
@@ -53,18 +51,18 @@ struct
     let goto nt = function
       | Abstract next ->
         let lr1 = Lr1.goto (lr1_state next) nt in
-        Epsilon (Goto {lr1; nt; next})
+        Epsilon (Goto {lr1; next})
       | Concrete (hd, tl) ->
         let targets =
-          List.filter_map (fun lr1 ->
-              match G.Lr0.incoming (G.Lr1.lr0 lr1) with
+          List.filter_map (fun lr1_parent ->
+              match G.Lr0.incoming (G.Lr1.lr0 lr1_parent) with
               | None ->
                 (* We reached an initial state: goto transition doesn't exist,
                    it is an accepting state. *)
                 None
               | Some _ ->
-                let lr1' = Lr1.goto lr1 nt in
-                Some (lr1, Goto {lr1 = lr1'; nt; next = Lr1 lr1})
+                let lr1 = Lr1.goto lr1_parent nt in
+                Some (lr1_parent, Goto {lr1; next = Lr1 lr1_parent})
             )
           (Lr1.Set.elements hd)
         in
@@ -194,7 +192,7 @@ struct
 
     type 'a derivations
     val derive :
-      step:(G.nonterminal -> 'a -> 'a) ->
+      step:(G.lr1 -> 'a -> 'a) ->
       finish:(G.lr1 -> 'a -> 'b) -> 'a -> 'b derivations
     val get : 'a derivations -> t -> 'a
 
@@ -211,7 +209,7 @@ struct
 
     type trie = {
       mutable derivations: (G.lr1 * t) list;
-      mutable next: (G.nonterminal * trie) list;
+      mutable next: (G.lr1 * trie) list;
     }
 
     let root = {derivations = []; next = []}
@@ -225,12 +223,12 @@ struct
             trie.derivations <- (lr1, id) :: trie.derivations;
             id
         end
-      | Graph.Goto {nt; next; _} ->
+      | Graph.Goto {lr1; next; _} ->
         let trie' =
-          try List.assoc nt trie.next
+          try List.assoc lr1 trie.next
           with Not_found ->
             let trie' = {derivations = []; next = []} in
-            trie.next <- (nt, trie') :: trie.next;
+            trie.next <- (lr1, trie') :: trie.next;
             trie'
         in
         lookup trie' next

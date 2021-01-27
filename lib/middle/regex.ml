@@ -109,7 +109,11 @@ struct
                 "reachable",  (
                   let derivations =
                     Reduction.Derivation.derive
-                      ~step:(fun nt nts -> Grammar.Nonterminal.name nt :: nts)
+                      ~step:(fun lr1 nts ->
+                          match Grammar.(Lr0.incoming (Lr1.lr0 lr1)) with
+                          | None -> assert false
+                          | Some sym -> Grammar.symbol_name sym :: nts
+                        )
                       ~finish:(fun _ nts -> Cmon.list (List.rev_map Cmon.string nts))
                       []
                   in
@@ -146,9 +150,8 @@ struct
       let singleton lr1 = Sigma.Pos (Lr1.Set.singleton lr1) in
       let expr = Regular.Expr.(expr ^. set Sigma.full) in
       let table = Reduction.Derivation.derive
-          ~step:begin fun nt expr ->
-            let sigma = Lr1.by_incoming_symbol (Grammar.N nt) in
-            let _, expr = Regular.Expr.left_delta expr (Sigma.Pos sigma) in
+          ~step:begin fun lr1 expr ->
+            let _, expr = Regular.Expr.left_delta expr (singleton lr1) in
             expr
           end
           ~finish:begin fun lr1 expr ->
