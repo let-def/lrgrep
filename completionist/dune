@@ -1,0 +1,3 @@
+(executable
+ (name completionist)
+ (libraries utils middle))
