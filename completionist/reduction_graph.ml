@@ -34,6 +34,7 @@ module Make (Sigma : Intf.SIGMA)() = struct
       | Goto of { lr1: Lr1.t; next: state; }
 
     val from_lr1 : Lr1.t -> state
+    val stack_top : state -> Lr1.t
 
     type transition =
       | Targets of {pop: int; dispatch: (Lr1.t * state) list}
@@ -65,11 +66,11 @@ module Make (Sigma : Intf.SIGMA)() = struct
       | Concrete (hd, pop) ->
         Concrete (Lr1.predecessors_of_states hd, pop + 1)
 
-    let lr1_state (Goto {lr1; _} | Lr1 lr1) = lr1
+    let stack_top (Goto {lr1; _} | Lr1 lr1) = lr1
 
     let goto nt = function
       | Abstract next ->
-        Epsilon (Goto {lr1 = Lr1.goto (lr1_state next) nt; next})
+        Epsilon (Goto {lr1 = Lr1.goto (stack_top next) nt; next})
       | Concrete (current, pop) ->
         let goto parent =
           (parent, Goto {lr1 = Lr1.goto parent nt; next = Lr1 parent})
@@ -87,31 +88,31 @@ module Make (Sigma : Intf.SIGMA)() = struct
         in
         goto (G.Production.lhs prod) builder
       in
-      List.map reduce (reductions (lr1_state state))
+      List.map reduce (reductions (stack_top state))
   end
+
+  let prepare_transitions transitions =
+    let split (dispatched, epsilons) = function
+      | Graph.Epsilon target -> (dispatched, target :: epsilons)
+      | Graph.Targets {pop; dispatch} ->
+        let add dispatched (lr1,target) = (pop,lr1,target) :: dispatched in
+        (List.fold_left add dispatched dispatch, epsilons)
+    in
+    let dispatched, epsilons = List.fold_left split ([], []) transitions in
+    let dispatched =
+      Misc.group_by
+        ~compare:(fun (pop1,_,_) (pop2,_,_) -> Int.compare pop1 pop2)
+        ~group:(fun (pop,_,_ as first) others ->
+            let prj (_pop, lr1, target) = (lr1, target) in
+            let targets = prj first :: List.map prj others in
+            (pop, List.sort_uniq compare targets)
+          )
+        dispatched
+    in
+    (dispatched, epsilons)
 
   let print_graphviz oc ~iter =
     output_string oc "digraph G {\n";
-    let prepare_transitions transitions =
-      let split (dispatched, epsilons) = function
-        | Graph.Epsilon target -> (dispatched, target :: epsilons)
-        | Graph.Targets {pop; dispatch} ->
-          let add dispatched (lr1,target) = (pop,lr1,target) :: dispatched in
-          (List.fold_left add dispatched dispatch, epsilons)
-      in
-      let dispatched, epsilons = List.fold_left split ([], []) transitions in
-      let dispatched =
-        Misc.group_by
-          ~compare:(fun (pop1,_,_) (pop2,_,_) -> Int.compare pop1 pop2)
-          ~group:(fun (pop,_,_ as first) others ->
-              let prj (_pop, lr1, target) = (lr1, target) in
-              let targets = prj first :: List.map prj others in
-              (pop, List.sort_uniq compare targets)
-            )
-          dispatched
-      in
-      (dispatched, epsilons)
-    in
     let state_index = Hashtbl.create 7 in
     let dispatch_index = Hashtbl.create 7 in
     let rec visit state =
@@ -146,6 +147,59 @@ module Make (Sigma : Intf.SIGMA)() = struct
     in
     iter (fun lr1 -> ignore (visit (Graph.from_lr1 lr1)));
     output_string oc "}\n"
+
+  module Concrete : sig
+    type states
+    val states : states Fin.set
+
+    type state = states Fin.elt
+
+    val from_lr1 : Lr1.t -> state
+    val represent : state -> Graph.state
+
+    val epsilons : state -> state list
+    val transitions : state -> (pop:int -> dispatch:(Lr1.t * state) list -> 'a -> 'a) -> 'a -> 'a
+  end = struct
+    module States = Fin.Set.Gensym()
+    type states = States.n
+    type state = states Fin.elt
+
+    let state_index = Hashtbl.create 7
+    let tr_index = Hashtbl.create 7
+
+    let rec visit state =
+      try Hashtbl.find state_index state
+      with Not_found ->
+        let id = States.fresh () in
+        Hashtbl.add state_index state id;
+        let disp, eps = prepare_transitions (Graph.transitions state) in
+        let eps = List.map visit eps in
+        let disp =
+          let visit_tgt (lr1, tgt) = lr1, visit tgt in
+          let visit_disp (pop, tgts) = pop, List.map visit_tgt tgts in
+          List.map visit_disp disp
+        in
+        Hashtbl.add tr_index id (state, eps, disp);
+        id
+
+    let from_lr1 = G.Lr1.tabulate (fun lr1 -> visit (Graph.from_lr1 lr1))
+
+    let states = States.freeze ()
+    let tr_table = Fin.Array.init states (Hashtbl.find tr_index)
+
+    let epsilons st = let _, eps, _ = Fin.(tr_table.(st)) in eps
+
+    let transitions st f acc =
+      let rec visit acc st =
+        let _, eps, disp = Fin.(tr_table.(st)) in
+        let acc = List.fold_left visit acc eps in
+        List.fold_left (fun acc (pop, dispatch) -> f ~pop ~dispatch acc)
+          acc disp
+      in
+      visit acc st
+
+    let represent st = let st, _, _ = Fin.(tr_table.(st)) in st
+  end
 
   (*let () =
     let oc = open_out "red.dot" in

@@ -324,4 +324,51 @@ struct
     let reachable st = Fin.(reachable.(st))
   end
 
+
+  (*
+  let () =
+    Random.self_init ();
+    G.Lr1.iter (fun start ->
+        let oc = Printf.ksprintf open_out "st%04d.dot" (G.Lr1.to_int start) in
+        output_string oc "digraph G {\n";
+        let start = Concrete.from_lr1 start in
+        let count = ref 0 in
+        let visited = Hashtbl.create 7 in
+        let rec visit st =
+          try Hashtbl.find visited st
+          with Not_found ->
+            let id = !count in
+            incr count;
+            Hashtbl.add visited st id;
+            let name =
+              let rec to_strings = function
+                | Graph.Lr1 lr1 -> ["LR1(" ^ string_of_int (G.Lr1.to_int lr1) ^ ")"]
+                | Graph.Goto {lr1; next; _} ->
+                  let sym = match G.Lr0.incoming (G.Lr1.lr0 lr1) with
+                    | None -> assert false
+                    | Some sym -> sym
+                  in
+                  G.symbol_name sym :: to_strings next
+              in
+              let to_string = function
+                | Graph.Goto _ as st -> String.concat "; " (to_strings st)
+                | Graph.Lr1 lr1 ->
+                  Format.asprintf "LR1(%d)\n%a"
+                    (G.Lr1.to_int lr1)
+                    G.Print.itemset
+                    (G.Lr0.items (G.Lr1.lr0 lr1))
+              in
+              String.concat "\n" (List.map to_string (Concrete.represent st))
+            in
+            Printf.fprintf oc "  S%d[label=%S];\n" id name;
+            List.iter
+              (fun (_, target) -> Printf.fprintf oc "  S%d -> S%d;\n" id (visit target))
+              (Concrete.transitions st);
+            id
+        in
+        ignore (visit start);
+        output_string oc "}\n";
+        close_out oc
+      )
+     *)
 end
