@@ -136,6 +136,14 @@ let rec list_of_cons acc = function
   | Nil -> List.rev acc, None
   | other -> List.rev acc, Some other
 
+let print_record f fields =
+  let add_field acc x =
+    let k, v = f x in
+    PPrint.(acc ^/^ group (group(string k ^/^ char '=') ^^ nest 2 (break 1 ^^ v) ^^ char ';'))
+  in
+  let fields = List.fold_left add_field PPrint.empty fields in
+  PPrint.(group (string "{" ^^ nest 2 fields ^/^ string "}"))
+
 let rec sub_print_as_is =
   let open PPrint in
   function
@@ -161,7 +169,9 @@ let rec sub_print_as_is =
   | Tuple {id=_; data} ->
     true, OCaml.tuple (List.map print_as_is data)
   | Record {id=_; data} ->
-    true, OCaml.record "" (List.map (fun (k,v) -> k, print_as_is v) data)
+    true,
+    (*OCaml.record "" (List.map (fun (k,v) -> k, print_as_is v) data)*)
+    print_record (fun (k,v) -> k, print_as_is v) data
   | Constructor {id=_; tag; data} ->
     let delimited, sub_doc = sub_print_as_is data in
     let doc =
@@ -195,7 +205,7 @@ and print_as_is doc =
   doc
 
 let format_as_is ppf t : unit =
-  PPrint.ToFormatter.pretty 0.9 80 ppf (print_as_is t)
+  Format.fprintf ppf "@[%a@]" (PPrint.ToFormatter.pretty 0.9 80) (print_as_is t)
 
 let print t : PPrint.document = print_as_is (explicit_sharing t)
 let format ppf t : unit = format_as_is ppf (explicit_sharing t)

@@ -158,7 +158,7 @@ module Make (Sigma : Intf.SIGMA)() = struct
     val represent : state -> Graph.state
 
     val epsilons : state -> state list
-    val transitions : state -> (pop:int -> dispatch:(Lr1.t * state) list -> 'a -> 'a) -> 'a -> 'a
+    val immediate_transitions : state -> (int * (Lr1.t * state) list) list
   end = struct
     module States = Fin.Set.Gensym()
     type states = States.n
@@ -189,20 +189,15 @@ module Make (Sigma : Intf.SIGMA)() = struct
 
     let epsilons st = let _, eps, _ = Fin.(tr_table.(st)) in eps
 
-    let transitions st f acc =
-      let rec visit acc st =
-        let _, eps, disp = Fin.(tr_table.(st)) in
-        let acc = List.fold_left visit acc eps in
-        List.fold_left (fun acc (pop, dispatch) -> f ~pop ~dispatch acc)
-          acc disp
-      in
-      visit acc st
+    let immediate_transitions st =
+      let _, _, disp = Fin.(tr_table.(st)) in
+      disp
 
     let represent st = let st, _, _ = Fin.(tr_table.(st)) in st
   end
 
-  (*let () =
+  let () =
     let oc = open_out "red.dot" in
     print_graphviz oc ~iter:G.Lr1.iter;
-    close_out oc*)
+    close_out oc
 end

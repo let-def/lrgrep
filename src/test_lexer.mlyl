@@ -2,12 +2,23 @@
 
 rule error_message = parse
 
+(*
+
+  let x = 5 ;
+  let y = 6 
+  let z = 7
+
+*)
+
 | structure_item; <-; SEMI; 
   LET; ext; list(attribute); rec_flag; let_binding_body;<-
-  { "Spurious semi-colon" }
+  { "Spurious semi-colon at " ^ loc semi }
 
 | LPAREN; [. RPAREN]; <-
   { "Unclosed parenthesis" }
+
+| [. expr ]
+  { "Expecting expression" }
 
 (*rule main = parse
 | ([ . module_expr ] & [ . paren_module_expr ]) <-

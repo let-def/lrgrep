@@ -432,7 +432,7 @@ let main () =
   try
     let def = Parser.lexer_definition Lexer.main lexbuf in
     if !Common.dump_parsetree then
-      Format.eprintf "Parsetree:\n%a\n"
+      Format.eprintf "Parsetree:\n%!%a"
         Utils.Cmon.format (Syntax.print_definition def);
     List.iter (fun entry ->
         List.iter (fun clause ->

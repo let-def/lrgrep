@@ -32,7 +32,7 @@ struct
   module Sigma = Middle.Sigma.Make(Lr1)
   module Red = Reduction_graph.Make(Sigma)()
 
-  module ItemSet = struct
+  (*module ItemSet = struct
     type t = Grammar.item list
     let empty = []
     let compare = compare
@@ -114,7 +114,7 @@ struct
       ([], Regular.Expr.disjunction res)
 
     let compare t1 t2 = Int.compare (t1 : t :> int) (t2 : t :> int)
-  end
+  end*)
 end
 
 let () = match !grammar_file with
@@ -122,7 +122,42 @@ let () = match !grammar_file with
     Format.eprintf "No grammar provided (-g), stopping now.\n"
   | Some path ->
     let module Analysis = Analysis(struct let filename = path end)() in
-    let initial =
+    ()
+    (*Utils.Strong.Finite.Set.iter Analysis.Red.Concrete.states begin fun st ->
+      let items =
+        let lr1 = Analysis.Red.Graph.stack_top
+            (Analysis.Red.Concrete.represent st)
+        in
+        let items = Analysis.Red.G.Lr1.lr0 lr1 in
+
+
+
+
+      let eps =
+        Analysis.Red.Concrete.epsilons st
+        |> List.map (fun st' ->
+            string_of_int (Utils.Strong.Finite.Elt.to_int st'))
+        |> String.concat ";"
+      in
+      let disp =
+        Analysis.Red.Concrete.immediate_transitions st
+        |> List.map (fun (pop, disp) ->
+            let disp = List.map (fun (lr1, st) ->
+                Printf.sprintf "| %d -> st_%d"
+                  (Analysis.Grammar.Lr1.to_int lr1)
+                  (Utils.Strong.Finite.Elt.to_int st)
+              ) disp
+            in
+            Printf.sprintf "(%d, function %s)"
+              pop
+              (String.concat "\n  " (disp @ ["| _ -> raise Not_found"]))
+          )
+        |> String.concat ";\n"
+      in
+      Printf.printf "and st_%d = State ([%s], [%s], [%s])\n" (st :> int) items eps disp;
+    end*)
+
+    (*let initial =
       Analysis.Regular.Expr.disjunction (
         Analysis.Grammar.Lr1.fold
         (fun lr1 acc -> Analysis.Reduction_operator.from_lr1 lr1 :: acc)
@@ -131,4 +166,4 @@ let () = match !grammar_file with
     in
     let dfa = Analysis.Regular.make_dfa initial in
     Printf.printf "completion DFA has %d states\n"
-      (Analysis.Regular.Map.cardinal dfa)
+      (Analysis.Regular.Map.cardinal dfa)*)
