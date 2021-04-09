@@ -125,7 +125,7 @@ module Make(Regex : Middle.Intf.REGEX) = struct
       let lhs = Option.map translate_nonterminal lhs in
       let prefix = translate_producers prefix in
       let suffix = translate_producers suffix in
-      let states = Lr1.states_by_items ?lhs ~prefix ~suffix in
+      let states = Lr1.states_by_items ~lhs ~prefix ~suffix in
       Regex.Expr.set (Sigma.Pos states)
     | Wildcard -> Regex.Expr.set Sigma.full
     | Alternative (re1, re2) ->

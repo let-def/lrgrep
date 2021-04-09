@@ -68,7 +68,7 @@ module type LR1 = sig
   *)
 
   val states_by_items :
-    ?lhs:Grammar.nonterminal ->
+    lhs:Grammar.nonterminal option ->
     prefix:Grammar.symbol option list ->
     suffix:Grammar.symbol option list ->
     Set.t

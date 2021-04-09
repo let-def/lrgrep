@@ -168,7 +168,7 @@ struct
     forall_i (fun i sym -> maybe_match_sym rhs.(pos - i - 1) sym) prefix &&
     forall_i (fun i sym -> maybe_match_sym rhs.(pos + i) sym) suffix
 
-  let states_by_items ?lhs ~prefix ~suffix =
+  let states_by_items ~lhs ~prefix ~suffix =
     let prefix' = List.length prefix, List.rev prefix in
     let suffix' = List.length suffix, suffix in
     let result =
