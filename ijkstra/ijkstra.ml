@@ -39,11 +39,23 @@ struct
     mutable tick: int;
   }
 
+  let () =
+    Printf.printf "predecessors stats\n%!";
+    Grammar.Lr1.iter (fun lr1 ->
+        match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
+        | None | Some (Grammar.T _) -> ()
+        | Some (Grammar.N _) ->
+          Printf.printf "%d predecessors\n%!"
+            (Red.Lr1.Set.cardinal (Red.Lr1.predecessors_of_state lr1));
+    )
+
+
   let table = Hashtbl.create 107
   let by_lr1s = Array.make Grammar.Lr1.count []
 
-  let build () =
-    let clock = let k = ref 0 in fun () -> incr k; !k in
+  let clock = let k = ref 0 in fun () -> incr k; !k
+
+  let g =
     (* Enumerate interesting states, that forces shifting a terminal *)
     let strong_states =
       Grammar.Lr1.fold (fun lr1 acc ->
@@ -109,46 +121,23 @@ struct
             ) predecessors Lr1.Set.empty
       ) strong_states
 
-  module Dijkstra_graph = struct
+  module Lookaheads = Utils.Refine.Make(Red.LookaheadSet)
 
-    type frame = {
-      skip: int;
-      states: Lr1.Set.t;
-    }
-
-    type t = {
-      top: Lr1.t;
-      stack: frame list;
-    }
-
-    let initial top = { top; stack = [] }
-
-    let apply_epsilon source t =
-      match t.stack with
-      | [] -> Some { top = source; stack = [] }
-      | { skip = 0; states } :: stack ->
-        if Lr1.Set.mem source states
-        then Some { top = source; stack }
-        else None
-      | frame :: stack' ->
-        let stack = {frame with skip = frame.skip - 1} :: stack' in
-        Some { top = source; stack }
-
-    let apply_target pop dispatch =
-
-
-
-
-
-    let transitions t =
-      let candidates = by_lr1s t.top in
-      let rec update_stack stack =
-      in
-
-
-
-  end
-
+  let coarse_lookaheads =
+    Array.mapi (fun lr1 sources ->
+        Format.printf "coarse lookahead %d\n%!" lr1;
+        let tick = clock () in
+        let rec all_lookaheads acc state =
+          if state.tick = tick then acc else (
+            state.tick <- tick;
+            List.fold_left (fun acc (la, state') ->
+                all_lookaheads (la :: acc) state'
+              ) acc state.predecessors
+          )
+        in
+        let classes = List.fold_left all_lookaheads [] sources in
+        Lookaheads.partition classes
+      ) by_lr1s
 end
 
 let () = match !grammar_file with
@@ -157,12 +146,25 @@ let () = match !grammar_file with
   | Some path ->
     let module Analysis = Analysis(struct let filename = path end)() in
     let t0 = Sys.time () in
-    let g = Analysis.build () in
     let t1 = Sys.time () in
     Format.eprintf "Built graph in %.02f\n" ((t1 -. t0) *. 1000.0);
     let states, transitions =
       List.fold_left (fun (states, transitions) (_lr1, lr1s) ->
           states + 1, transitions + Analysis.Lr1.Set.cardinal lr1s
-        ) (0, 0) g
+        ) (0, 0) Analysis.g
     in
-    Format.eprintf "%d states, %d transitions\n" states transitions
+    Format.eprintf "%d states, %d transitions\n" states transitions;
+    let total, by_class =
+      Array.fold_left (fun (total, by_class) classes ->
+          let count = List.fold_left
+              (fun sum class' ->
+                 sum + Analysis.Red.LookaheadSet.cardinal class')
+              0 classes
+          in
+          total + count, by_class + List.length classes
+        ) (0, 0) Analysis.coarse_lookaheads
+    in
+    let all_classes = List.sort_uniq Analysis.Red.LookaheadSet.compare
+        (List.flatten (Array.to_list Analysis.coarse_lookaheads))
+    in
+    Format.eprintf "%d transition based on lookaheads\n%d transitions based on lookahead classes,%d unique classes\n" total by_class (List.length all_classes)
