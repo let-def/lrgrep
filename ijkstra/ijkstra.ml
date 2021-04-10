@@ -146,81 +146,133 @@ struct
 
   module Size = struct
     type variable =
-      | Cost_of_prod of Grammar.lr1 * Grammar.production * int
-      | Cost_of_goto of Grammar.lr1 * Grammar.nonterminal
+      | Cost_of_prod of Grammar.lr1 * Grammar.production * int * Red.LookaheadSet.t
+      | Cost_of_goto of Grammar.lr1 * Grammar.nonterminal * Red.LookaheadSet.t
+
+    module TokenMap = Map.Make(struct
+        type t = Grammar.terminal
+        let compare = (Int.compare :> t -> t -> int)
+      end)
+
+    let mini x y : int = if x < y then x else y
 
     module Cost : sig
-      type t = private int
-      val zero : t
-      val one : t
-      val infinite : t
+      type t = private int TokenMap.t
+      val zero : Red.LookaheadSet.t -> t
+      val one : Grammar.terminal -> t -> t
+      val bottom : t
 
       val equal : t -> t -> bool
-      val compare : t -> t -> int
-      val is_zero : t -> bool
-      val is_infinite : t -> bool
 
-      val sum : t -> t -> t
       val min : t -> t -> t
-      val arg_min : ('a -> t) -> 'a -> 'a -> 'a
+
+      val compose : t -> Red.LookaheadSet.t -> t -> t
     end = struct
-      type t = int
-      let zero : t = 0
-      let one : t = 1
-      let infinite : t = max_int
+      type t = int TokenMap.t
 
-      let equal = Int.equal
-      let compare = Int.compare
-      let is_zero x = equal x 0
-      let is_infinite x = equal x infinite
+      let zero ts =
+        let add t acc = TokenMap.add t 0 acc in
+        Red.LookaheadSet.fold add ts TokenMap.empty
 
-      let sum (x : t) (y : t) : t =
-        if is_infinite x || is_infinite y then infinite else x + y
-      let min (x : t) (y : t) : t = if x < y then x else y
-      let arg_min f a b =
-        if f a < f b then a else b
+      let one t ts =
+        let offset =
+          if TokenMap.is_empty ts
+          then 0
+          else TokenMap.fold (fun _ o o' -> mini o o') ts max_int
+      in
+      TokenMap.singleton t (1 + offset)
+
+      let bottom = TokenMap.empty
+
+      let equal = TokenMap.equal Int.equal
+
+
+      let min xs ys = TokenMap.union (fun _ a b -> Some (mini a b)) xs ys
+
+      let compose t1 ts t2 =
+        let offset = Red.LookaheadSet.fold (fun t offset ->
+            match TokenMap.find t t2 with
+            | offset' -> mini offset offset'
+            | exception Not_found -> offset
+          ) ts max_int
+        in
+        if offset = max_int
+        then bottom
+        else TokenMap.map ((+) offset) t1
     end
 
+    let count = ref 0
+
     let compute = function
-      | Cost_of_prod (st, prod, pos) ->
-        begin
-          let rhs = Grammar.Production.rhs prod in
-          if pos = Array.length rhs then
-            fun _sol -> Cost.zero
-          else
-            let sym, _, _ = rhs.(pos) in
-            match List.assoc sym (Grammar.Lr1.transitions st) with
-            | exception Not_found -> fun _sol -> Cost.infinite
-            | st' ->
-              fun solution ->
-                let tail = solution (Cost_of_prod (st', prod, pos + 1)) in
-                if Cost.is_infinite tail then tail else
-                  let head = match sym with
-                    | Grammar.T _ -> Cost.one
-                    | Grammar.N nt -> solution (Cost_of_goto (st, nt))
-                  in
-                  Cost.sum head tail
+      | Cost_of_prod (st, prod, pos, ts) ->
+        incr count;
+        Format.eprintf "#%d = Cost_of_prod (%d, %d, %d, _) : %a%!"
+          (incr count; !count)
+          (Grammar.Lr1.to_int st)
+          (Grammar.Production.to_int prod)
+          pos
+          Grammar.Print.item (prod, pos)
+        ;
+        let rhs = Grammar.Production.rhs prod in
+        if pos = Array.length rhs then
+          let zero = Cost.zero ts in
+          fun _sol -> zero
+        else begin
+          let sym, _, _ = rhs.(pos) in
+          match List.assoc sym (Grammar.Lr1.transitions st) with
+          | exception Not_found -> fun _sol -> Cost.bottom
+          | st' ->
+            match sym with
+            | Grammar.T t -> fun solve ->
+              (*Format.eprintf "Cost_of_prod (%d ,%d, %d, _)\n"
+                (Grammar.Lr1.to_int st)
+                (Grammar.Production.to_int prod)
+                pos;*)
+              Cost.one t (solve (Cost_of_prod (st', prod, pos + 1, ts)))
+            | Grammar.N nt ->
+              let classes = Lookaheads.solve (Classes_of (st, nt)) in
+              fun solve ->
+                (*Format.eprintf "Cost_of_prod (%d ,%d, %d, _)\n"
+                  (Grammar.Lr1.to_int st)
+                  (Grammar.Production.to_int prod)
+                  pos;*)
+                let tail = solve (Cost_of_prod (st', prod, pos + 1, ts)) in
+                List.fold_left (fun cost ts' ->
+                    let candidate =
+                      Cost.compose (solve (Cost_of_goto (st, nt, ts'))) ts' tail
+                    in
+                    Cost.min cost candidate
+                  ) Cost.bottom classes
         end
-      | Cost_of_goto (st, nt) ->
+      | Cost_of_goto (st, nt, ts) ->
         let reductions =
           targeted_by_reducing.((st :> int))
-          |> List.filter (fun (prod, _, _) -> Grammar.Production.lhs prod = nt)
+          |> List.filter_map (fun (prod, ts', _) ->
+              if Grammar.Production.lhs prod = nt then
+                let ts' = Red.LookaheadSet.inter ts ts' in
+                if Red.LookaheadSet.is_empty ts' then
+                  None
+                else
+                  Some (prod, ts')
+              else
+                None
+            )
         in
-        fun solution ->
+        fun solve ->
           let candidates =
-            List.map (fun (prod, _lookahead, _) ->
-                solution (Cost_of_prod (st, prod, 0))
+            List.map (fun (prod, _lookahead) ->
+                solve (Cost_of_prod (st, prod, 0, ts))
               ) reductions
           in
-          List.fold_left Cost.min Cost.infinite candidates
+          List.fold_left Cost.min Cost.bottom candidates
 
     module Fix = Fix.Fix.ForType(struct
         type t = variable
       end)(struct
         type property = Cost.t
-        let bottom = Cost.infinite
+        let bottom = Cost.bottom
         let equal = Cost.equal
-        let is_maximal = Cost.is_zero
+        let is_maximal _ = false
       end)
 
     let solve = Fix.lfp compute
@@ -237,17 +289,24 @@ let () = match !grammar_file with
           (Analysis.Grammar.Lr1.to_int lr1)
           (List.length (Analysis.Lookaheads.solve (Lookaheads_of lr1)))
       );
-    Analysis.Grammar.Lr1.iter (fun lr1 ->
-        let lr0 = Analysis.Grammar.Lr1.lr0 lr1 in
-        List.iter (fun (prod, pos) ->
-            if pos = 1 then
-              Format.printf "cost of prod %d from state %d: %d\n"
-                (Analysis.Grammar.Production.to_int prod)
-                (Analysis.Grammar.Lr1.to_int lr1)
-                (Analysis.Size.solve
-                   (Analysis.Size.Cost_of_prod (lr1, prod, 0)) :> int)
-          ) (Analysis.Grammar.Lr0.items lr0)
-      )
+    Array.iteri (fun lr1 prods ->
+        List.iter (fun (prod, ts, _) ->
+            let solution = Analysis.Size.solve (
+                Cost_of_prod (
+                  Analysis.Grammar.Lr1.of_int lr1,
+                  prod,
+                  0,
+                  ts
+                ))
+            in
+            Format.printf "cost of prod %d from state %d: %d\n%!"
+              (Analysis.Grammar.Production.to_int prod)
+              lr1
+              (Analysis.Size.TokenMap.fold
+                 (fun _ offset cost -> Analysis.Size.mini offset cost)
+                 (solution :> int Analysis.Size.TokenMap.t) max_int)
+          ) prods
+      ) Analysis.targeted_by_reducing
     (*let t0 = Sys.time () in
     let t1 = Sys.time () in
     Format.eprintf "Built graph in %.02f\n" ((t1 -. t0) *. 1000.0);
