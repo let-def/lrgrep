@@ -32,112 +32,125 @@ struct
   module Sigma = Middle.Sigma.Make(Lr1)
   module Red = Reduction_graph.Make(Sigma)()
 
-  type state = {
-    repr: Red.Graph.state;
-    mutable successors: (Red.LookaheadSet.t * state) list;
-    mutable predecessors: (Red.LookaheadSet.t * state) list;
-    mutable tick: int;
-  }
+
+  let targeted_by_reducing = Array.make Grammar.Lr1.count []
 
   let () =
-    Printf.printf "predecessors stats\n%!";
     Grammar.Lr1.iter (fun lr1 ->
-        match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
-        | None | Some (Grammar.T _) -> ()
-        | Some (Grammar.N _) ->
-          Printf.printf "%d predecessors\n%!"
-            (Red.Lr1.Set.cardinal (Red.Lr1.predecessors_of_state lr1));
-    )
-
-
-  let table = Hashtbl.create 107
-  let by_lr1s = Array.make Grammar.Lr1.count []
-
-  let clock = let k = ref 0 in fun () -> incr k; !k
-
-  let g =
-    (* Enumerate interesting states, that forces shifting a terminal *)
-    let strong_states =
-      Grammar.Lr1.fold (fun lr1 acc ->
-          match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
-          | Some (Grammar.N _) -> acc
-          | None | Some (Grammar.T _) -> lr1 :: acc
-        ) []
-    in
-    (* Visit them *)
-    let rec visit repr =
-      match Hashtbl.find table repr with
-      | state -> state
-      | exception Not_found ->
-        let state = {
-          repr;
-          successors = [];
-          predecessors = [];
-          tick = 0;
-        } in
-        Hashtbl.add table repr state;
-        let top = Grammar.Lr1.to_int (Red.Graph.stack_top repr) in
-        by_lr1s.(top) <- state :: by_lr1s.(top);
-        let add_state lookahead repr' =
-          let state' = visit repr' in
-          state.successors <- (lookahead, state') :: state.successors;
-          state'.predecessors <- (lookahead, state) :: state'.predecessors;
-        in
-        List.iter (fun (lookahead, tr) ->
-            match tr with
-            | Red.Graph.Epsilon repr' -> add_state lookahead repr'
-            | Red.Graph.Targets {dispatch; _} ->
-              List.iter (fun (_,repr') -> add_state lookahead repr') dispatch
-          ) (Red.Graph.transitions repr);
-        state
-    in
-    List.iter (fun lr1 -> ignore (visit (Red.Graph.from_lr1 lr1)))
-      strong_states;
-    (* Now reverse them *)
-    List.map (fun lr1 ->
-        lr1,
-        let lr0 = Grammar.Lr1.lr0 lr1 in
-        match Grammar.Lr0.incoming lr0 with
-        | Some (Grammar.N _) -> assert false
-        | None -> Lr1.Set.empty
-        | Some (Grammar.T lookahead) ->
-          let predecessors = Lr1.predecessors_of_state lr1 in
-          let tick = clock () in
-          let rec reachable acc state =
-            match state.repr with
-            | Red.Graph.Lr1 lr1' -> Lr1.Set.add lr1' acc
-            | _ ->
-              List.fold_left (fun acc (lookahead_set, state') ->
-                  if Red.LookaheadSet.mem lookahead lookahead_set &&
-                     state'.tick < tick
-                  then (
-                    state'.tick <- tick;
-                    reachable acc state'
-                  ) else acc
-                ) acc state.predecessors
-          in
-          Lr1.Set.fold (fun lr1 acc ->
-              List.fold_left reachable acc by_lr1s.(Grammar.Lr1.to_int lr1)
-            ) predecessors Lr1.Set.empty
-      ) strong_states
-
-  module Lookaheads = Utils.Refine.Make(Red.LookaheadSet)
-
-  let coarse_lookaheads =
-    Array.mapi (fun lr1 sources ->
-        Format.printf "coarse lookahead %d\n%!" lr1;
-        let tick = clock () in
-        let rec all_lookaheads acc state =
-          if state.tick = tick then acc else (
-            state.tick <- tick;
-            List.fold_left (fun acc (la, state') ->
-                all_lookaheads (la :: acc) state'
-              ) acc state.predecessors
+        Grammar.Lr1.reductions lr1
+        |> (* Remove conflicting productions *)
+        List.map (fun (t, ps) -> t, List.hd ps)
+        |> (* Regroup lookahead tokens by production *)
+        Utils.Misc.group_by
+          ~compare:(fun (_, p1) (_, p2) ->
+              Int.compare
+                (p1 : Grammar.production :> int)
+                (p2 : Grammar.production :> int)
+            )
+          ~group:(fun (t, p) tps ->
+              let set =
+                List.fold_left
+                  (fun set (t, _) -> Red.LookaheadSet.add t set)
+                  (Red.LookaheadSet.singleton t) tps
+              in
+              (p, set)
+            )
+        |> (* Simulate the action of each production *)
+        List.iter (fun (prod, _ as reduction) ->
+            Grammar.Production.rhs prod
+            |> (* Compute states reachable by reduction *)
+            Array.fold_left
+              (fun states _ -> Lr1.predecessors_of_states states)
+              (Lr1.Set.singleton lr1)
+            |> (* Save information in target state *)
+            Lr1.Set.iter (fun target ->
+                targeted_by_reducing.((target :> int)) <-
+                  reduction :: targeted_by_reducing.((target :> int))
+              )
           )
-        in
-        let classes = List.fold_left all_lookaheads [] sources in
-        Lookaheads.partition classes
-      ) by_lr1s
+      )
+
+
+
+  type variable =
+    | Cost_of_prod of Grammar.lr1 * Grammar.production * int
+    | Cost_of_goto of Grammar.lr1 * Grammar.nonterminal
+
+  module Cost : sig
+    type t = private int
+    val zero : t
+    val one : t
+    val infinite : t
+
+    val equal : t -> t -> bool
+    val compare : t -> t -> int
+    val is_zero : t -> bool
+    val is_infinite : t -> bool
+
+    val sum : t -> t -> t
+    val min : t -> t -> t
+    val arg_min : ('a -> t) -> 'a -> 'a -> 'a
+  end = struct
+    type t = int
+    let zero : t = 0
+    let one : t = 1
+    let infinite : t = max_int
+
+    let equal = Int.equal
+    let compare = Int.compare
+    let is_zero x = equal x 0
+    let is_infinite x = equal x infinite
+
+    let sum (x : t) (y : t) : t =
+      if is_infinite x || is_infinite y then infinite else x + y
+    let min (x : t) (y : t) : t = if x < y then x else y
+    let arg_min f a b =
+      if f a < f b then a else b
+  end
+
+  let compute = function
+    | Cost_of_prod (st, prod, pos) ->
+      begin
+        let rhs = Grammar.Production.rhs prod in
+        if pos = Array.length rhs then
+          fun _sol -> Cost.zero
+        else
+          let sym, _, _ = rhs.(pos) in
+          match List.assoc sym (Grammar.Lr1.transitions st) with
+          | exception Not_found -> fun _sol -> Cost.infinite
+          | st' ->
+            fun solution ->
+            let tail = solution (Cost_of_prod (st', prod, pos + 1)) in
+            if Cost.is_infinite tail then tail else
+              let head = match sym with
+                | Grammar.T _ -> Cost.one
+                | Grammar.N nt -> solution (Cost_of_goto (st, nt))
+              in
+              Cost.sum head tail
+      end
+    | Cost_of_goto (st, nt) ->
+      let reductions =
+        targeted_by_reducing.((st :> int))
+        |> List.filter (fun (prod, _) -> Grammar.Production.lhs prod = nt)
+      in
+      fun solution ->
+      let candidates =
+        List.map
+          (fun (prod, _lookahead) -> solution (Cost_of_prod (st, prod, 0)))
+          reductions
+      in
+      List.fold_left Cost.min Cost.infinite candidates
+
+  module Fix = Fix.Fix.ForType(struct
+      type t = variable
+    end)(struct
+      type property = Cost.t
+      let bottom = Cost.infinite
+      let equal = Cost.equal
+      let is_maximal = Cost.is_zero
+    end)
+
+  let solve = Fix.lfp compute
 end
 
 let () = match !grammar_file with
@@ -145,7 +158,17 @@ let () = match !grammar_file with
     Format.eprintf "No grammar provided (-g), stopping now.\n"
   | Some path ->
     let module Analysis = Analysis(struct let filename = path end)() in
-    let t0 = Sys.time () in
+    Analysis.Grammar.Lr1.iter (fun lr1 ->
+        let lr0 = Analysis.Grammar.Lr1.lr0 lr1 in
+        List.iter (fun (prod, pos) ->
+            if pos = 1 then
+              Format.printf "cost of prod %d from state %d: %d\n"
+                (Analysis.Grammar.Production.to_int prod)
+                (Analysis.Grammar.Lr1.to_int lr1)
+                (Analysis.solve (Analysis.Cost_of_prod (lr1, prod, 0)) :> int)
+          ) (Analysis.Grammar.Lr0.items lr0)
+      )
+    (*let t0 = Sys.time () in
     let t1 = Sys.time () in
     Format.eprintf "Built graph in %.02f\n" ((t1 -. t0) *. 1000.0);
     let states, transitions =
@@ -167,4 +190,4 @@ let () = match !grammar_file with
     let all_classes = List.sort_uniq Analysis.Red.LookaheadSet.compare
         (List.flatten (Array.to_list Analysis.coarse_lookaheads))
     in
-    Format.eprintf "%d transition based on lookaheads\n%d transitions based on lookahead classes,%d unique classes\n" total by_class (List.length all_classes)
+    Format.eprintf "%d transition based on lookaheads\n%d transitions based on lookahead classes,%d unique classes\n" total by_class (List.length all_classes)*)
