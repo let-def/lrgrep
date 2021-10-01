@@ -1,6 +1,6 @@
 {}
 
-rule error_message = parse
+rule error_message = parse error
 
 (*
 

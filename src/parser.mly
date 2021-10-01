@@ -24,6 +24,7 @@ open Syntax
 %token UNREACHABLE
 %token RULE        "rule"
        PARSE       "parse"
+       ERROR       "error"
        AND         "and"
        EQUAL       "="
        EOF
@@ -75,9 +76,9 @@ header:
 ;
 
 definition:
-| name=IDENT args=IDENT* "=" "parse"
+| name=IDENT args=IDENT* "=" "parse" error=boption("error")
     "|"? clauses=separated_list("|", case)
-  { {name; args; clauses} }
+  { {error; name; args; clauses} }
 ;
 
 case:

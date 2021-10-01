@@ -50,6 +50,7 @@ type clause = {
 }
 
 type entry = {
+  error   : bool;
   name    : string;
   args    : string list;
   clauses : clause list;
@@ -142,8 +143,9 @@ let print_clause {pattern; action} =
     "action", print_option print_location action;
   ]
 
-let print_entrypoints {name; args; clauses} =
+let print_entrypoints {error; name; args; clauses} =
   Cmon.record [
+    "error", Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list (List.map Cmon.string args);
     "clauses", Cmon.list (List.map print_clause clauses);

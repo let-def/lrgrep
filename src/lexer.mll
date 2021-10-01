@@ -151,6 +151,7 @@ rule main = parse
   { match Lexing.lexeme lexbuf with
     | "rule" -> RULE
     | "parse" -> PARSE
+    | "error" -> ERROR
     | "and" -> AND
     | s -> IDENT s
   }
