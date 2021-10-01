@@ -230,37 +230,6 @@ module type REDUCTION = sig
     (** The set of transformations that are still reachable by looking deeper
         in the stack *)
   end
-
-  module Morphism(Action : sig
-      type t
-      val empty : t
-      val is_empty : t -> bool
-      val union : t -> t -> t
-
-      val compare : t -> t -> int
-      val derivations : t Derivation.derivations
-    end) :
-  sig
-    module States : Finite.Set.T
-    type state = States.n Finite.elt
-    (** States of the graph *)
-
-    val from_lr1: Lr1.t -> state
-    (** Entry points are lr1 state *)
-
-    val transitions : state -> (Lr1.Set.t * state) list
-    (** Get the transitions of a state.
-        The result is list of pairs (lr1_states, new_state) which says that
-        when the state at the top of the parser stack is one of [lr1_states],
-        we can transition to the state [new_state].
-
-        This transition is deterministic, each lr1 state appear in at most one
-        transition.
-    *)
-
-    val action : state -> Action.t
-  end
-
 end
 
 (** Our extended notion of regular expression.
