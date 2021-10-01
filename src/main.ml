@@ -271,6 +271,86 @@ let interpreter grammar lexer =
   in
   loop ()
 
+let compiler _out grammar lexer =
+  let module Analysis = Analysis(struct let filename = grammar end)() in
+  (*let linearize_symbol = Transl.linearize_symbol in*)
+  let open Analysis in
+  let entries, dfa = Transl.translate lexer.def in
+  List.iter2 (fun entry expr ->
+      let number =
+        let count = ref 0 and table = ref Regex.Map.empty in
+        fun expr ->
+          match Regex.Map.find_opt expr !table with
+          | None ->
+            let n = !count in
+            incr count;
+            table := Regex.Map.add expr n !table;
+            n, true
+          | Some n -> n, false
+      in
+      let functions = ref [] in
+      let rec transl_state expr =
+        let id, fresh = number expr in
+        if fresh then (
+          let action = Regex.Expr.get_label expr in
+          let body =
+            match Utils.BitSet.IntSet.elements action.accept with
+            | [] ->
+              let trans =
+                Regex.Map.find expr dfa
+                |> List.map transl_transition
+                |> Utils.Misc.group_by
+                  ~compare:(fun (_,e1) (_,e2) -> Int.compare e1 e2)
+                  ~group:(fun (p,e) ps ->
+                      let p = List.fold_left
+                          (fun p (p', _) -> Lr1.Set.union p p')
+                          p ps
+                      in
+                      (p, e)
+                    )
+              in
+              `Trans trans
+            | n :: _ ->
+              `Action (
+                let clause = List.nth entry.Syntax.clauses n in
+                match clause.action with
+                | None -> "failwith \"Match failure\""
+                | Some location -> Common.read_location lexer.channel location
+              )
+          in
+          functions := (id, body) :: !functions
+        );
+        id
+      and transl_transition (sigma, _, target) =
+        match sigma with
+        | Sigma.Neg _ -> failwith "TODO"
+        | Sigma.Pos lr1s -> (lr1s, transl_state target)
+      in
+      let entry_id = transl_state expr in
+      Printf.printf "let %s =\n" entry.Syntax.name;
+      List.iteri (fun idx (id, body) ->
+          let prefix = if idx = 0 then "let rec" else "and" in
+          match body with
+          | `Trans trans ->
+            Printf.printf
+              "  %s st_%d stack = match state stack with\n" prefix id;
+            let print_transition (sts, target) =
+              let print_st n = string_of_int (Grammar.Lr1.to_int n) in
+              let states =
+                String.concat "|" (List.map print_st (Lr1.Set.elements sts))
+              in
+              Printf.printf "    | %s -> st_%d (next stack)\n" states target
+            in
+            List.iter print_transition trans;
+            Printf.printf "    | _ -> raise No_match\n"
+          | `Action body ->
+            Printf.printf
+              "  %s st_%d stack =    %s\n" prefix id body;
+        ) !functions;
+      Printf.printf "  in\n";
+      Printf.printf "  st_%d" entry_id;
+    ) lexer.def.entrypoints entries
+
 let main () =
   let source_name = match !source_name with
     | None ->
@@ -309,7 +389,9 @@ let main () =
       | None -> Format.eprintf "No grammar provided (-g), stopping now.\n"
       | Some path ->
         let lexer = {channel = ic; def} in
-        interpreter path lexer
+        if !interpret
+        then interpreter path lexer
+        else compiler out path lexer
     end;
     close_in ic;
     ignore (maybe_close out : bool);
