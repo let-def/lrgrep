@@ -1,3 +1,0 @@
-(executable
- (name ijkstra)
- (libraries utils middle fix))
