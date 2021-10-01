@@ -21,6 +21,9 @@ module type LR1 = sig
   val all_states : Set.t
   (** The set of all lr1 states *)
 
+  val incoming_symbol : t -> Grammar.symbol option
+  (** Get the incoming symbol of an lr1 state (or None for initial states) *)
+
   val by_incoming_symbol : Grammar.symbol -> Set.t
   (** Get the set of all lr1 states that have a specific incoming symbol *)
 
@@ -117,32 +120,32 @@ end
 
 (** Construction of the "reduction graph".
 
-    It represents all the transformations that can be applied on an LR1 parser
-    by following as much reductions as possible, without ever shifting (without
-    consuming input).
+    It represents all the sequence of reductions that can be applied on an LR1
+    automaton, without ever shifting (without consuming input).
 
-    A node of the reduction graph is the pair of an lr1 state, the current
-    state of the parser, and an abstract stack.
+    A node of the reduction graph is the pair of an lr1 state (the current
+    state of the parser) and an abstract stack.
     The abstract stack is a list of non-terminals that we know would sit at the
     top of a concrete stack if we were to execute these reductions on a
     concrete parser.
 
     For a non-cyclic grammar, there is only a finite number of such stacks, so
-    the reduction graph is finite. However it can be cyclic.
+    the reduction graph is finite.
+    In practice, grammars are cyclic, and so is the reduction graph.
 
     For instance, if there is a right recursion in the grammar:
-      s:
-      | x C {}
+      S:
+      | X c {}
 
-      x:
+      X:
       | (* empty *) { }
-      | A x         { }
+      | a X         { }
 
-    When reading many A, they are all pushed on the stack.
-    Reading a C will trigger the reduction of all the xs.
+    When reading many "a", they are all pushed on the stack.
+    Reading a "c" will trigger the reduction of all the a's to X's.
     Therefore in the reduction graph, there will be a loop in some state
-    (sA, [x]) which represents abstract parsers in a certain lr1 state sA for
-    which we know that we have an x at the top of the stack.
+    (s_a, [X]) which represents abstract parsers in a certain lr1 state s_a for
+    which we know that we have an X at the top of the stack.
 *)
 module type REDUCTION = sig
   module Lr1 : LR1
@@ -164,7 +167,7 @@ module type REDUCTION = sig
         we can transition to the state [new_state].
 
         This transition is non-deterministic: the same lr1 state can appear in
-        transitions.
+        multiple transitions.
     *)
 
     module Set : BitSet.S with type element = state
@@ -272,16 +275,6 @@ sig
 
   val cmon : Expr.t -> Cmon.t
 
-  (*module Reduction_operator : sig
-    type t = reduction_operator
-    val compare : t -> t -> int
-    val is_empty : t -> bool
-    val nullable : t -> bool
-    val get_label : t -> Action.t
-    val left_classes : t -> (Sigma.t -> 'a -> 'a) -> 'a -> 'a
-    val left_delta : t -> Sigma.t -> Action.t * Expr.t
-    val make : Expr.t -> t
-  end*)
 end
 
 (* WIP DSLs for going from the surface syntax to a DFA

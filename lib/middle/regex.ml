@@ -147,18 +147,13 @@ struct
           ) state acc
 
     let make expr =
-      let singleton lr1 = Sigma.Pos (Lr1.Set.singleton lr1) in
+      let delta lr1 expr =
+        snd (Regular.Expr.left_delta expr
+               (Sigma.Pos (Lr1.Set.singleton lr1)))
+      in
       let expr = Regular.Expr.(expr ^. star (set Sigma.full)) in
-      let table = Reduction.Derivation.derive
-          ~step:begin fun lr1 expr ->
-            let _, expr = Regular.Expr.left_delta expr (singleton lr1) in
-            expr
-          end
-          ~finish:begin fun lr1 expr ->
-            let _, expr = Regular.Expr.left_delta expr (singleton lr1) in
-            expr
-          end
-          expr
+      let table =
+        Reduction.Derivation.derive ~step:delta ~finish:delta expr
       in
       let non_empty =
         let not_empty expr = not (Regular.Expr.is_empty expr) in

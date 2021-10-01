@@ -76,9 +76,9 @@ header:
 ;
 
 definition:
-| name=IDENT args=IDENT* "=" "parse" error=boption("error")
-    "|"? clauses=separated_list("|", case)
-  { {error; name; args; clauses} }
+| name=IDENT args=IDENT* "=" "parse" startsymbols=IDENT* error=boption("error")
+    "|" clauses=separated_list("|", case)
+  { {startsymbols; error; name; args; clauses} }
 ;
 
 case:

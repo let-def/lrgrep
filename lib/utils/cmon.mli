@@ -84,3 +84,5 @@ val print: t -> PPrint.document
 val format: Format.formatter -> t -> unit
 (** Format the value with explicit sharing to a [Format.formatter].
     [format t == format_as_is (explicit_sharing t)]. *)
+
+val list_map : ('a -> t) -> 'a list -> t

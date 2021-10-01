@@ -209,3 +209,5 @@ let format_as_is ppf t : unit =
 
 let print t : PPrint.document = print_as_is (explicit_sharing t)
 let format ppf t : unit = format_as_is ppf (explicit_sharing t)
+
+let list_map f l = list (List.map f l)

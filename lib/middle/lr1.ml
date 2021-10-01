@@ -64,6 +64,9 @@ struct
       G.Nonterminal.iter (fun n -> f (G.N n))
   end
 
+  let incoming_symbol lr1 =
+    G.Lr0.incoming (G.Lr1.lr0 lr1)
+
   let by_incoming_symbol =
     (* Compute lr1 predecessor relation *)
     reverse_index
