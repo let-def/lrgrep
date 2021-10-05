@@ -24,16 +24,16 @@ module type DFA = sig
 
   val target : transitions elt -> states elt
   (** Get the target state of the transition *)
-
-  val initials : states elt array
-  (** All initial states *)
-
-  val finals : states elt array
-  (** All final states *)
 end
 
 module type INPUT = sig
   include DFA
+
+  val initials : (states elt -> unit) -> unit
+  (** Iterate on initial states *)
+
+  val finals : (states elt -> unit) -> unit
+  (** Iterate final states *)
 
   val refinements :
     refine:(iter:((states elt -> unit) -> unit) -> unit) -> unit
@@ -62,6 +62,9 @@ module Minimize
     (In: INPUT with type label := Label.t) :
 sig
   include DFA with type label = Label.t
+
+  val initials : states elt array
+  val finals : states elt array
 
   val transport_state : In.states elt -> states elt option
   val transport_transition : In.transitions elt -> transitions elt option

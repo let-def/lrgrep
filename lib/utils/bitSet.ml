@@ -127,21 +127,21 @@ module type S = sig
   (* [compare_minimum l r] order two sets by comparing their least element *)
   val compare_minimum : t -> t -> int
 
-  (* [extract_prefix l r] split l in two sets (l_min, l_rest) such that:
+  (* [extract_unique_prefix l r] split l in two sets (l_min, l_rest) such that:
      - l_min contains elements strictly smaller than the all elements of [r]
      - l_rest contains other elements
   *)
-   val extract_prefix : t -> t -> t * t
+   val extract_unique_prefix : t -> t -> t * t
 
-  (* [extract_common l r] decomposes l and r in (min, l', r') such that :
+  (* [extract_shared_prefix l r] decomposes l and r in (min, l', r') such that:
      - [min] is the set of minimal elements that are part of both [l] and [r]
      - [l = min U l'] and [r = min U r']
   *)
-  val extract_common : t -> t -> t * (t * t)
+  val extract_shared_prefix : t -> t -> t * (t * t)
 
-  (* [interval_union l] computes the union of an ordered list of intervals.
+  (* [sorted_union l] computes the union of an ordered list of intervals.
      This is an optimized special case of union *)
-  val interval_union : t list -> t
+  val sorted_union : t list -> t
 end
 
 module IntSet = struct
@@ -414,13 +414,13 @@ module IntSet = struct
         end
       | n -> n
 
-  let interval_union xs = List.fold_right union xs empty
+  let sorted_union xs = List.fold_right union xs empty
 
-  let rec extract_prefix addr2 ss2 = function
+  let rec extract_unique_prefix addr2 ss2 = function
     | N -> N, N
     | C (addr1, ss1, qs1) as self ->
       if addr1 < addr2 then
-        let prefix, suffix = extract_prefix addr2 ss2 qs1 in
+        let prefix, suffix = extract_unique_prefix addr2 ss2 qs1 in
         C (addr1, ss1, prefix), suffix
       else if addr1 > addr2 || ss1 = ss2 || compare_lsb ss1 ss2 >= 0 then
         N, self
@@ -436,17 +436,17 @@ module IntSet = struct
         else
           (C (addr1, ss0, N), C (addr1, ss1, qs1))
 
-  let extract_prefix l r =
+  let extract_unique_prefix l r =
     match l, r with
     | N, _ -> N, N
-    | _, N -> invalid_arg "extract_prefix: r < l"
-    | l, C (addr2, ss2, _) -> extract_prefix addr2 ss2 l
+    | _, N -> invalid_arg "extract_unique_prefix: r < l"
+    | l, C (addr2, ss2, _) -> extract_unique_prefix addr2 ss2 l
 
-  let rec extract_common = function
+  let rec extract_shared_prefix = function
     | C (addr1, ss1, qs1), C (addr2, ss2, qs2)
       when addr1 = addr2 ->
       if ss1 = ss2 then
-        let common, rest = extract_common (qs1, qs2) in
+        let common, rest = extract_shared_prefix (qs1, qs2) in
         (C (addr1, ss1, common), rest)
       else
         let ss1' = ss1 land lnot ss2 in
@@ -468,7 +468,7 @@ module IntSet = struct
         common, (qs1', qs2')
     | (l, r) -> N, (l, r)
 
-  let extract_common l r = extract_common (l, r)
+  let extract_shared_prefix l r = extract_shared_prefix (l, r)
 end
 
 module Make (Element : sig
@@ -500,9 +500,9 @@ struct
   let subset       = IntSet.subset
   let diff         = IntSet.diff
 
-  let interval_union  = IntSet.interval_union
+  let sorted_union  = IntSet.sorted_union
   let compare_minimum = IntSet.compare_minimum
-  let extract_prefix  = IntSet.extract_prefix
-  let extract_common  = IntSet.extract_common
+  let extract_unique_prefix  = IntSet.extract_unique_prefix
+  let extract_shared_prefix  = IntSet.extract_shared_prefix
 end
 

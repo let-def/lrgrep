@@ -12,6 +12,12 @@ struct
   let is_empty = function Pos x -> Lr1.Set.is_empty x | Neg _ -> false
   let is_full = function Neg x -> Lr1.Set.is_empty x | Pos _ -> false
 
+  let singleton lr1 = Pos (Lr1.Set.singleton lr1)
+
+  let to_lr1set = function
+    | Pos xs -> xs
+    | Neg xs -> Lr1.Set.diff Lr1.all_states xs
+
   let is_subset_of x1 x2 =
     match x1, x2 with
     | Pos x1, Pos x2 -> Lr1.Set.subset x1 x2

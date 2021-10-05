@@ -125,21 +125,21 @@ module type S = sig
   (* [compare_minimum l r] order two sets by comparing their least element *)
   val compare_minimum : t -> t -> int
 
-  (* [extract_prefix l r] split l in two sets (l_min, l_rest) such that:
+  (* [extract_unique_prefix l r] split l in two sets (l_min, l_rest) such that:
      - l_min contains elements strictly smaller than the all elements of [r]
      - l_rest contains other elements
   *)
-   val extract_prefix : t -> t -> t * t
+   val extract_unique_prefix : t -> t -> t * t
 
-  (* [extract_common l r] decomposes l and r in (min, l', r') such that :
+  (* [extract_shared_prefix l r] decomposes l and r in (min, l', r') such that:
      - [min] is the set of minimal elements that are part of both [l] and [r]
      - [l = min U l'] and [r = min U r']
   *)
-  val extract_common : t -> t -> t * (t * t)
+  val extract_shared_prefix : t -> t -> t * (t * t)
 
-  (* [interval_union l] computes the union of an ordered list of intervals.
+  (* [sorted_union l] computes the union of an ordered list of intervals.
      This is an optimized special case of union *)
-  val interval_union : t list -> t
+  val sorted_union : t list -> t
 end
 
 module IntSet : S with type element = int

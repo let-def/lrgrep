@@ -4,21 +4,22 @@ module type DECOMPOSABLE = sig
   type t
   val is_empty : t -> bool
   val compare_minimum : t -> t -> int
-  val interval_union : t list -> t
-  val extract_prefix : t -> t -> t * t
-  val extract_common : t -> t -> t * (t * t)
+  val sorted_union : t list -> t
+  val extract_unique_prefix : t -> t -> t * t
+  val extract_shared_prefix : t -> t -> t * (t * t)
 end
 
 module type S = sig
   type t
   val partition : t list -> t list
+  val annotated_partition : (t * 'a) list -> (t * 'a list) list
   val partition_and_total : t list -> t list * t
 end
 
 module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
   type leftist =
-  | Leaf
-  | Node of leftist * Set.t * IntSet.t * leftist * int
+    | Leaf
+    | Node of leftist * Set.t * IntSet.t * leftist * int
 
   let singleton k v = Node (Leaf, k, v, Leaf, 1)
   let rank = function Leaf -> 0 | Node (_,_,_,_,r) -> r
@@ -66,8 +67,8 @@ module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
     let rec aux parts heap =
       match heap_pop2 heap with
       | Head (s1, k1, s2, k2, heap) ->
-        let sp, s1 = Set.extract_prefix s1 s2 in
-        let sc, (s1, s2) = Set.extract_common s1 s2 in
+        let sp, s1 = Set.extract_unique_prefix s1 s2 in
+        let sc, (s1, s2) = Set.extract_shared_prefix s1 s2 in
         let parts =
           if not (Set.is_empty sp) then (sp, k1) :: parts else parts
         in
@@ -93,12 +94,12 @@ module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
     | [] -> []
     | (s1, k1) :: rest ->
       let rec merge acc ss key = function
-        | [] -> Set.interval_union ss :: acc
+        | [] -> Set.sorted_union ss :: acc
         | (s, key') :: rest ->
           if IntSet.equal key key' then
             merge acc (s :: ss) key rest
           else
-            merge (Set.interval_union ss :: acc) [s] key' rest
+            merge (Set.sorted_union ss :: acc) [s] key' rest
       in
       merge [] [s1] k1 rest
 
@@ -106,7 +107,30 @@ module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
 
   let partition_and_total xs =
     let parts = compute_parts xs in
-    let total = Set.interval_union (List.rev_map fst parts) in
+    let total = Set.sorted_union (List.rev_map fst parts) in
     let union = union_parts parts in
     union, total
+  let keyed_union_parts parts =
+    match List.sort (fun (_, k1) (_, k2) -> IntSet.compare k1 k2) parts with
+    | [] -> []
+    | (s1, k1) :: rest ->
+      let rec merge acc ss key = function
+        | [] -> (Set.sorted_union ss, key) :: acc
+        | (s, key') :: rest ->
+          if IntSet.equal key key' then
+            merge acc (s :: ss) key rest
+          else
+            merge ((Set.sorted_union ss, key) :: acc) [s] key' rest
+      in
+      merge [] [s1] k1 rest
+
+  let annotated_partition xs =
+    let sets, annotations = List.split xs in
+    let annotations = Array.of_list annotations in
+    let parts = compute_parts sets in
+    let union = keyed_union_parts parts in
+    let annotate key =
+      IntSet.fold (fun i acc -> annotations.(i) :: acc) key []
+    in
+    List.map (fun (set, key) -> set, annotate key) union
 end

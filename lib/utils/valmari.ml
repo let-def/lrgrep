@@ -11,13 +11,13 @@ module type DFA = sig
   val label  : transitions Fin.elt -> label
   val source : transitions Fin.elt -> states Fin.elt
   val target : transitions Fin.elt -> states Fin.elt
-
-  val initials : states Fin.elt array
-  val finals : states Fin.elt array
 end
 
 module type INPUT = sig
   include DFA
+
+  val initials : (states Fin.elt -> unit) -> unit
+  val finals : (states Fin.elt -> unit) -> unit
 
   val refinements :
     refine:(iter:((states Fin.elt -> unit) -> unit) -> unit) -> unit
@@ -69,6 +69,9 @@ module Minimize
 sig
   include DFA with type label = Label.t
 
+  val initials : states Fin.elt array
+  val finals : states Fin.elt array
+
   val transport_state :
     In.states Fin.elt -> states Fin.elt option
   val transport_transition :
@@ -85,7 +88,7 @@ end = struct
 
   (* Remove states unreachable from initial state *)
   let () =
-    Array.iter (Partition.mark blocks) In.initials;
+    In.initials (Partition.mark blocks);
     let transitions_source =
       index_transitions In.states In.transitions In.source in
     discard_unreachable blocks transitions_source In.target
@@ -96,12 +99,12 @@ end = struct
 
   (* Remove states unreachable from final states *)
   let () =
-    Array.iter (Partition.mark blocks) In.finals;
+    In.finals (Partition.mark blocks);
     discard_unreachable blocks transitions_targeting In.source
 
   (* Split final states *)
   let () =
-    Array.iter (Partition.mark blocks) In.finals;
+    In.finals (Partition.mark blocks);
     Partition.split blocks
 
   (* Split explicitely refined states *)
@@ -193,10 +196,13 @@ end = struct
     transport_state_unsafe (In.target (represent_transition transition))
 
   let initials =
-    Array.map transport_state_unsafe In.initials
+    In.initials (Partition.mark blocks);
+    let sets = Partition.marked_sets blocks in
+    Partition.clear_marks blocks;
+    Array.map (Fin.Elt.of_int states) (Array.of_list sets)
 
   let finals =
-    Array.iter (Partition.mark blocks) In.finals;
+    In.finals (Partition.mark blocks);
     let sets = Partition.marked_sets blocks in
     Partition.clear_marks blocks;
     Array.map (Fin.Elt.of_int states) (Array.of_list sets)

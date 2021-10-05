@@ -70,6 +70,8 @@ module type LR1 = sig
       well.
   *)
 
+  val annotated_partition : (Set.t * 'a) list -> (Set.t * 'a list) list
+
   val states_by_items :
     lhs:Grammar.nonterminal option ->
     prefix:Grammar.symbol option list ->
@@ -105,6 +107,9 @@ module type SIGMA = sig
   type t =
     | Pos of Lr1.Set.t
     | Neg of Lr1.Set.t
+
+  val singleton : Lr1.t -> t
+  val to_lr1set : t -> Lr1.Set.t
 
   include Mulet.SIGMA with type t := t
 
@@ -232,6 +237,20 @@ module type REDUCTION = sig
   end
 end
 
+module type MINIMIZED_DFA = sig
+  open Strong.Finite
+
+  type regex
+  type sigma
+
+  include Valmari.DFA with type label := sigma
+
+  val initial : states elt option
+  val finals : states elt array
+
+  val transport_state : regex -> states elt option
+end
+
 (** Our extended notion of regular expression.
 
     The base definition of regular expressions is an instance [Mulet] toolkit,
@@ -275,6 +294,9 @@ sig
 
   val cmon : Expr.t -> Cmon.t
 
+  val minimize : dfa:dfa -> initials:Expr.t list ->
+    (module MINIMIZED_DFA with type regex = Expr.t
+                           and type sigma = Sigma.Lr1.Set.t)
 end
 
 (* WIP DSLs for going from the surface syntax to a DFA

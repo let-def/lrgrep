@@ -242,9 +242,142 @@ struct
 
   type reduction_operator = Reduction_operator.t
 
+  module SigmaActionMap = Map.Make(struct
+      type t = Sigma.t * Action.t
+      let compare (s1,a1) (s2,a2) =
+        match Sigma.compare s1 s2 with
+        | 0 -> Action.compare a1 a2
+        | n -> n
+    end)
+
   include Regular
 
   let simulate_reductions = Reduction_operator.make
 
   let cmon = Reduction_operator.cmon
+
+  let group_by_outgoing_class dfa =
+    Map.fold (fun expr transitions acc ->
+        let classe =
+          List.fold_left (fun classe (sigma, _, _ : transition) ->
+              Sigma.union classe sigma
+            ) Sigma.empty transitions,
+          Expr.get_label expr
+        in
+        match SigmaActionMap.find_opt classe acc with
+        | Some states ->
+          states := (expr, transitions) :: !states;
+          acc
+        | None ->
+          let states = ref [expr, transitions] in
+          SigmaActionMap.add classe states acc
+      ) dfa SigmaActionMap.empty
+  |> SigmaActionMap.map (!)
+
+  let group_transitions ~numbering exprs =
+    let number expr : _ Strong.Finite.elt = Map.find expr numbering in
+    let prepare_transition source (sigma, _label, target) =
+      match number target with
+      | exception Not_found -> None
+      | target -> Some (Sigma.to_lr1set sigma, (source, target))
+    in
+    let prepare_state (source, transitions) =
+      let source = number source in
+      List.filter_map (prepare_transition source) transitions
+    in
+    List.flatten (List.map prepare_state exprs)
+
+  let refine_transitions trans =
+    let partition = Lr1.annotated_partition trans in
+    let prepare (sigma, transitions) =
+      Array.map
+        (fun (source, target) -> (source, sigma, target))
+        (Array.of_list transitions)
+    in
+    Array.concat (List.map prepare partition)
+
+  let group_and_refine_transitions ~numbering exprs =
+    refine_transitions (group_transitions ~numbering exprs)
+
+  let is_final expr =
+    let action = Expr.get_label expr in
+    not (BitSet.IntSet.is_empty action.Action.accept)
+
+  let minimize ~dfa ~initials =
+    let (module States) = Strong.Natural.nth (Map.cardinal dfa) in
+    let numbering =
+      let count = ref 0 in
+      Map.map (fun _ ->
+          let id = !count in
+          incr count;
+          Strong.Finite.Elt.of_int States.n id
+        ) dfa
+    in
+    let out_classes = group_by_outgoing_class dfa in
+    let transition_map =
+      SigmaActionMap.map (group_and_refine_transitions ~numbering) out_classes
+    in
+    let transitions =
+      transition_map
+      |> SigmaActionMap.bindings
+      |> List.map snd
+      |> Array.concat
+    in
+    let (module Transitions) =
+      Strong.Finite.Array.module_of_array transitions in
+    let module In = struct
+      type states = States.n
+      let states = States.n
+
+      type transitions = Transitions.n
+      let transitions = Transitions.n
+
+      let initials =
+        let initials = List.map (fun x -> Map.find x numbering) initials in
+        fun f -> List.iter (fun x -> f x) initials
+
+      let finals =
+        let finals = Map.filter (fun expr _id -> is_final expr) numbering in
+        fun f -> Map.iter (fun _expr id -> f id) finals
+
+      let source tr =
+        let source, _label, _target =
+          Strong.Finite.Array.get Transitions.table tr
+        in
+        source
+
+      let label tr =
+        let _source, label, _target =
+          Strong.Finite.Array.get Transitions.table tr
+        in
+        label
+
+      let target tr =
+        let _source, _label, target =
+          Strong.Finite.Array.get Transitions.table tr
+        in
+        target
+
+      let refinements ~refine =
+        SigmaActionMap.iter (fun (_,action) transitions ->
+            if not (BitSet.IntSet.is_empty action.Action.accept) then
+              let iter f = Array.iter (fun (src,_,_) -> f src) transitions in
+              refine ~iter
+          ) transition_map
+    end in
+    let module V = Valmari.Minimize(Lr1.Set)(In) in
+    (module struct
+      include V
+      type regex = Expr.t
+      type sigma = Lr1.Set.t
+
+      let initial = match V.initials with
+        | [||] -> None
+        | [|x|] -> Some x
+        | _ -> assert false
+
+      let transport_state expr =
+        V.transport_state (Map.find expr numbering)
+    end : Intf.MINIMIZED_DFA with type regex = Expr.t
+                              and type sigma = Lr1.Set.t)
 end
