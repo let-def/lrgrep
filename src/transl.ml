@@ -191,13 +191,13 @@ module Make(Regex : Middle.Intf.REGEX) = struct
       ((time1 -. time0) *. 1000.0)
       ((time2 -. time1) *. 1000.0)
       (Regex.Map.cardinal dfa);
-    begin (* Minimization *)
-      let time3 = Sys.time () in
-      let (module Min) = Regex.minimize ~dfa ~initials:entries in
-      let time4 = Sys.time () in
-      Printf.eprintf "Minimized to %d states in %.02fms\n%!"
-        (Utils.Strong.Finite.Set.cardinal Min.states)
-        ((time4 -. time3) *. 1000.0)
-    end;
-    entries, dfa
+    (* Minimization *)
+    let time3 = Sys.time () in
+    let min = Regex.minimize ~dfa ~initials:entries in
+    let time4 = Sys.time () in
+    let (module Min) = min in
+    Printf.eprintf "Minimized to %d states in %.02fms\n%!"
+      (Utils.Strong.Finite.Set.cardinal Min.states)
+      ((time4 -. time3) *. 1000.0);
+    dfa, min
 end

@@ -97,7 +97,7 @@ end = struct
   let transitions_targeting =
     index_transitions In.states In.transitions In.target
 
-  (* Remove states unreachable from final states *)
+  (* Remove states which cannot reach any final state *)
   let () =
     In.finals (Partition.mark blocks);
     discard_unreachable blocks transitions_targeting In.source
@@ -149,6 +149,30 @@ end = struct
   type states = States.n
   let states = States.n
 
+  let oc = open_out_bin "raw.dot"
+
+  let () =
+    (*let mo = ref 0 in*)
+    Fin.Set.iter In.transitions
+      (fun t ->
+         if Partition.is_first blocks (In.source t) &&
+            Partition.set_of blocks (In.target t) > -1
+         then
+           Printf.fprintf oc "  %d - #%s -> %d\n"
+             (Partition.set_of blocks (In.source t))
+             (Digest.to_hex (Digest.string (Marshal.to_string (In.label t) [])))
+             (Partition.set_of blocks (In.target t))
+      )
+    (*let fo = ref 0 in
+    for i = 0 to Partition.set_count blocks = 1 do
+      if
+
+    done*)
+
+  let () = close_out oc
+
+  let oc = open_out_bin "minimized.dot"
+
   module Transitions = Fin.Array.Of_array(struct
       type a = In.transitions Fin.elt
       let table =
@@ -157,18 +181,34 @@ end = struct
         | count ->
           let count' = ref 0 in
           for i = 0 to count - 1 do
-            let elt = Partition.choose cords i in
-            if Partition.set_of blocks (In.target elt) > -1 then
-              incr count';
+            match Partition.choose_opt cords i with
+            | None -> ()
+            | Some elt ->
+              if Partition.set_of blocks (In.target elt) > -1 then
+                incr count'
+              else
+                Partition.iter_elements cords i (fun elt' ->
+                    assert (Partition.set_of blocks (In.target elt') = -1))
           done;
           let table = Array.make !count' (Partition.choose cords 0) in
           let count' = ref 0 in
           for i = 0 to count - 1 do
-            let elt = Partition.choose cords i in
-            if Partition.set_of blocks (In.target elt) > -1 then (
-              table.(!count') <- elt;
-              incr count';
-            )
+            match Partition.choose_opt cords i with
+            | None -> ()
+            | Some elt ->
+              if Partition.set_of blocks (In.target elt) > -1 then (
+                Printf.fprintf oc "cord %d mapped to out transition %d\n" i !count';
+                if i = 610 then (
+                  Printf.fprintf oc "representative is in transition in%d: (%d -> %d) = (%d -> %d)\n"
+                    (elt :> int)
+                    (In.source elt :> int)
+                    (In.target elt :> int)
+                    (Partition.set_of blocks (In.source elt))
+                    (Partition.set_of blocks (In.target elt))
+                );
+                table.(!count') <- elt;
+                incr count';
+              )
           done;
           table
     end)
@@ -177,11 +217,18 @@ end = struct
 
   type label = Label.t
 
-  let transport_state_unsafe state =
-    Fin.Elt.of_int states (Partition.set_of blocks state)
+  let transport_state_unsafe =
+    let table =
+      Fin.Array.init In.states (Partition.set_of blocks)
+    in
+    Fin.Array.get table
 
-  let represent_state state =
-    Partition.choose blocks (state : states Fin.elt :> int)
+  let represent_state =
+    let table =
+      Fin.Array.init states
+        (fun st -> Partition.choose blocks (st : states Fin.elt :> int))
+    in
+    Fin.Array.get table
 
   let represent_transition transition =
     Fin.(Transitions.table.(transition))
@@ -190,10 +237,12 @@ end = struct
     In.label (represent_transition transition)
 
   let source transition =
-    transport_state_unsafe (In.source (represent_transition transition))
+    Fin.Elt.of_int states
+      (transport_state_unsafe (In.source (represent_transition transition)))
 
   let target transition =
-    transport_state_unsafe (In.target (represent_transition transition))
+    Fin.Elt.of_int states
+      (transport_state_unsafe (In.target (represent_transition transition)))
 
   let initials =
     In.initials (Partition.mark blocks);
@@ -208,13 +257,60 @@ end = struct
     Array.map (Fin.Elt.of_int states) (Array.of_list sets)
 
   let transport_state state =
-    match Partition.set_of blocks state with
+    match transport_state_unsafe state with
     | -1 -> None
     | n -> Some (Fin.Elt.of_int states n)
 
-  let transport_transition transition =
-    match Partition.set_of cords transition with
-    | -1 -> None
-    | n -> Some (Fin.Elt.of_int transitions n)
+  let transport_transition =
+    let table = Fin.Array.make In.transitions None in
+    Fin.Array.iteri (fun tr trin ->
+        assert (Fin.Array.get table trin = None);
+        Fin.Array.set table trin (Some tr);
+      ) Transitions.table;
+    Fin.Array.get table
+
+  let () =
+    output_string oc "digraph {\n";
+    Fin.Set.iter In.transitions (fun tr ->
+        match
+          transport_state (In.source tr),
+          transport_state (In.target tr)
+        with
+        | Some src, Some dst ->
+          (*begin match transport_transition tr with
+            | None ->
+              Printf.fprintf oc
+                "# ERROR: (%d -> %d) is missing transportation to (st%d -> st%d)\n"
+                (In.source tr :> int) (In.target tr :> int)
+                (src :> int) (dst :> int)
+              ;
+            | Some tr' ->
+              let src' = source tr' and dst' = target tr' in
+              if src' <> src || dst' <> dst then
+              Printf.fprintf oc
+                "# ERROR: (%d -> %d) incorrectly transported to \
+                 (st%d -> st%d) rather than (st%d -> st%d)\n"
+                (In.source tr :> int) (In.target tr :> int)
+                (src' :> int) (dst' :> int)
+                (src :> int) (dst :> int)
+          end;*)
+          if src = Fin.Elt.of_int states 345 then (
+            let set = Partition.set_of cords tr in
+            let repr = Partition.choose cords set in
+            Printf.fprintf oc
+              "# Transition in%d with source 345 belongs to cord %d, \
+               with representative in%d targetting block %d\n"
+              (tr :> int) set (repr :> int)
+              (Partition.set_of blocks (In.target repr))
+            ;
+          );
+          Printf.fprintf oc "  st%d -> st%d [label=\"%d -> %d\"]\n"
+            (src :> int) (dst :> int)
+            (In.source tr :> int) (In.target tr :> int);
+        | None, _ | _, None -> ()
+      );
+    output_string oc "}\n";
+    Printf.fprintf oc "# is 345 final? %b\n" (Array.exists ((=) (Fin.Elt.of_int states 345)) finals);
+    close_out oc
 
 end

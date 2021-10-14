@@ -207,16 +207,17 @@ struct
     interpret lexer dfa initial stack
 end
 
-let interpreter grammar lexer =
-  let module Analysis = Analysis(struct let filename = grammar end)() in
-  let linearize_symbol = Transl.linearize_symbol in
-  let open Analysis in
-  let entries, dfa = Transl.translate lexer.def in
-  Format.printf "Interpreter. Select an entrypoint using <non-terminal> ':' \
+let interpreter _grammar _lexer =
+  ()
+  (*let module Analysis = Analysis(struct let filename = grammar end)() in
+    let linearize_symbol = Transl.linearize_symbol in
+    let open Analysis in
+    let entries, dfa = Transl.translate lexer.def in
+    Format.printf "Interpreter. Select an entrypoint using <non-terminal> ':' \
                  then input sentences using <symbol>* '.' \n%!";
-  let lexbuf = Lexing.from_channel stdin in
-  let entrypoint = ref None in
-  let rec loop () =
+    let lexbuf = Lexing.from_channel stdin in
+    let entrypoint = ref None in
+    let rec loop () =
     match
       let prompt = Parser.prompt_sentence Lexer.main lexbuf in
       match prompt with
@@ -268,88 +269,64 @@ let interpreter grammar lexer =
       in
       print_endline msg;
       loop ()
-  in
-  loop ()
+    in
+    loop ()
+  *)
 
 let compiler _out grammar lexer =
   let module Analysis = Analysis(struct let filename = grammar end)() in
   (*let linearize_symbol = Transl.linearize_symbol in*)
   let open Analysis in
-  let entries, dfa = Transl.translate lexer.def in
-  List.iter2 (fun entry expr ->
-      let number =
-        let count = ref 0 and table = ref Regex.Map.empty in
-        fun expr ->
-          match Regex.Map.find_opt expr !table with
-          | None ->
-            let n = !count in
-            incr count;
-            table := Regex.Map.add expr n !table;
-            n, true
-          | Some n -> n, false
-      in
-      let functions = ref [] in
-      let rec transl_state expr =
-        let id, fresh = number expr in
-        if fresh then (
-          let action = Regex.Expr.get_label expr in
-          let body =
-            match Utils.BitSet.IntSet.elements action.accept with
-            | [] ->
-              let trans =
-                Regex.Map.find expr dfa
-                |> List.map transl_transition
-                |> Utils.Misc.group_by
-                  ~compare:(fun (_,e1) (_,e2) -> Int.compare e1 e2)
-                  ~group:(fun (p,e) ps ->
-                      let p = List.fold_left
-                          (fun p (p', _) -> Lr1.Set.union p p')
-                          p ps
-                      in
-                      (p, e)
-                    )
-              in
-              `Trans trans
-            | n :: _ ->
-              `Action (
-                let clause = List.nth entry.Syntax.clauses n in
-                match clause.action with
-                | None -> "failwith \"Match failure\""
-                | Some location -> Common.read_location lexer.channel location
+  let _, (module DFA) = Transl.translate lexer.def in
+  Printf.printf "let %s =\n"
+    (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
+  let st_fun st =
+    "st_" ^ string_of_int (Utils.Strong.Finite.Elt.to_int st)
+  in
+  Utils.Strong.Finite.Set.iter DFA.states (fun st ->
+      Printf.printf "  %s %s stack = match current_state stack with\n"
+        (if Utils.Strong.Finite.Elt.to_int st = 0 then "let rec" else "and")
+        (st_fun st);
+      let expr = DFA.represent_state st in
+      let action = Regex.Expr.get_label expr in
+        let transitions =
+          Utils.Misc.group_by ~compare:(fun tr1 tr2 ->
+              let tgt1 = DFA.target tr1 and tgt2 = DFA.target tr2 in
+              Int.compare
+                (Utils.Strong.Finite.Elt.to_int tgt1)
+                (Utils.Strong.Finite.Elt.to_int tgt2)
+            )
+            ~group:(fun tr trs ->
+                DFA.target tr,
+                List.fold_left
+                  (fun sg tr -> Lr1.Set.union sg (DFA.label tr))
+                  (DFA.label tr) trs
               )
-          in
-          functions := (id, body) :: !functions
-        );
-        id
-      and transl_transition (sigma, _, target) =
-        match sigma with
-        | Sigma.Neg _ -> failwith "TODO"
-        | Sigma.Pos lr1s -> (lr1s, transl_state target)
-      in
-      let entry_id = transl_state expr in
-      Printf.printf "let %s =\n" entry.Syntax.name;
-      List.iteri (fun idx (id, body) ->
-          let prefix = if idx = 0 then "let rec" else "and" in
-          match body with
-          | `Trans trans ->
-            Printf.printf
-              "  %s st_%d stack = match state stack with\n" prefix id;
-            let print_transition (sts, target) =
-              let print_st n = string_of_int (Grammar.Lr1.to_int n) in
-              let states =
-                String.concat "|" (List.map print_st (Lr1.Set.elements sts))
-              in
-              Printf.printf "    | %s -> st_%d (next stack)\n" states target
-            in
-            List.iter print_transition trans;
-            Printf.printf "    | _ -> raise No_match\n"
-          | `Action body ->
-            Printf.printf
-              "  %s st_%d stack =    %s\n" prefix id body;
-        ) !functions;
-      Printf.printf "  in\n";
-      Printf.printf "  st_%d" entry_id;
-    ) lexer.def.entrypoints entries
+            (DFA.transitions_from st)
+        in
+        List.iter (fun (target, sigma) ->
+            Printf.printf "    | %s -> %s (next stack)\n"
+              (String.concat "|"
+                 (List.map
+                    (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
+                    (Lr1.Set.elements sigma)))
+              (st_fun target)
+          ) transitions;
+        Printf.printf "    | _ -> failwith \"Match failure\"\n";
+      if Utils.BitSet.IntSet.is_empty action.Regex.Action.accept then (
+      ) else (
+        let index = Utils.BitSet.IntSet.choose action.Regex.Action.accept in
+        let entry = List.hd lexer.def.entrypoints in
+        let clause = List.nth entry.clauses index in
+        match clause.action with
+        | None -> failwith "Reached unreachable case!"
+        | Some loc ->
+          let body = Common.read_location lexer.channel loc in
+          print_endline body
+      )
+    );
+  Printf.printf "  %s\n"
+    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)))
 
 let main () =
   let source_name = match !source_name with

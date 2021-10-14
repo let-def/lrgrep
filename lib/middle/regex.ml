@@ -304,13 +304,16 @@ struct
     not (BitSet.IntSet.is_empty action.Action.accept)
 
   let minimize ~dfa ~initials =
-    let (module States) = Strong.Natural.nth (Map.cardinal dfa) in
+    let (module States) =
+      Strong.Finite.Array.module_of_array
+        (Array.make (Map.cardinal dfa) Regular.Expr.empty) in
     let numbering =
       let count = ref 0 in
-      Map.map (fun _ ->
-          let id = !count in
+      Map.mapi (fun expr _transitions ->
+          let id = Strong.Finite.Elt.of_int States.n !count in
           incr count;
-          Strong.Finite.Elt.of_int States.n id
+          Strong.Finite.Array.set States.table id expr;
+          id
         ) dfa
     in
     let out_classes = group_by_outgoing_class dfa in
@@ -364,6 +367,7 @@ struct
               let iter f = Array.iter (fun (src,_,_) -> f src) transitions in
               refine ~iter
           ) transition_map
+
     end in
     let module V = Valmari.Minimize(Lr1.Set)(In) in
     (module struct
@@ -371,13 +375,22 @@ struct
       type regex = Expr.t
       type sigma = Lr1.Set.t
 
-      let initial = match V.initials with
-        | [||] -> None
-        | [|x|] -> Some x
-        | _ -> assert false
+      let initial = V.initials
 
       let transport_state expr =
         V.transport_state (Map.find expr numbering)
+
+      let represent_state st =
+        Strong.Finite.Array.get States.table (V.represent_state st)
+
+      let transitions_from =
+        let table = Strong.Finite.Array.make V.states [] in
+        Utils.Strong.Finite.Set.iter V.transitions (fun tr ->
+            let source = V.source tr in
+            Utils.Strong.Finite.Array.set table source
+              (tr :: Utils.Strong.Finite.Array.get table source)
+          );
+        fun st -> Utils.Strong.Finite.Array.get table st
     end : Intf.MINIMIZED_DFA with type regex = Expr.t
                               and type sigma = Lr1.Set.t)
 end

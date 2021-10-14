@@ -245,10 +245,12 @@ module type MINIMIZED_DFA = sig
 
   include Valmari.DFA with type label := sigma
 
-  val initial : states elt option
+  val initial : states elt array
   val finals : states elt array
 
   val transport_state : regex -> states elt option
+  val represent_state : states elt -> regex
+  val transitions_from : states elt -> transitions elt list
 end
 
 (** Our extended notion of regular expression.

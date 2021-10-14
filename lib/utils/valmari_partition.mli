@@ -64,6 +64,11 @@ val choose : 'n t -> set -> 'n Finite.elt
     [set] must be between [0] and [set_of part - 1].
 *)
 
+val choose_opt : 'n t -> set -> 'n Finite.elt option
+(** [choose part set] returns an arbitrary element that belongs to set [set].
+    [set] must be between [0] and [set_of part - 1].
+*)
+
 val iter_elements : 'n t -> set -> ('n Finite.elt -> unit) -> unit
 (** [iter_elements part set f] applies function [f] to each element that
     currently belongs to set [set].
@@ -79,3 +84,5 @@ val clear_marks : 'n t -> unit
 
 val marked_sets : 'n t -> set list
 (** Returns all sets that have marked elements. *)
+
+val is_first : 'n t -> 'n Finite.elt -> bool
