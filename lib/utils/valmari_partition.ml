@@ -168,9 +168,4 @@ let is_first t n =
   let n = (n : 'n Finite.elt :> int) in
   let s = t.set_of.(n) in
   let loc = t.location.(n) in
-  let result = s > -1 && loc = t.first.(s) && loc < t.past.(s) in
-  if result then
-    Printf.eprintf "element %d has location %d and belongs to set %d\n  \
-                    first element of set has location %d, set ends at location %d\n"
-      n loc s t.first.(s) t.past.(s);
-  result
+  (s > -1 && loc = t.first.(s) && loc < t.past.(s))

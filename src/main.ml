@@ -326,7 +326,55 @@ let compiler _out grammar lexer =
       )
     );
   Printf.printf "  %s\n"
-    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)))
+    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)));
+  let table = ref [|-1|] in
+  let grow_table () =
+    let table0 = !table in
+    let length = Array.length table0 in
+    table := Array.make (length * 2) (-1);
+    Array.blit table0 0 !table 0 length
+  in
+  let add_state st =
+    let sigma =
+      List.fold_left
+        (fun acc tr -> Lr1.Set.union acc (DFA.label tr))
+        Lr1.Set.empty (DFA.transitions_from st)
+    in
+    if not (Lr1.Set.is_empty sigma) then
+      let exception Found in
+      let base = Lr1.Set.choose sigma in
+      let check_symbol offset symbol =
+        let index = offset + (symbol : Grammar.lr1 :> int) - (base :> int) in
+        if Array.length !table <= index
+        then (grow_table (); raise Found)
+        else (!table).(index) > -1
+      in
+      let find_offset () =
+        let offset = ref 0 in
+        begin try
+            while Lr1.Set.exists (check_symbol !offset) sigma
+            do incr offset; done
+          with Found -> ()
+        end;
+        !offset
+      in
+      let commit_offset st offset =
+        Lr1.Set.iter (fun symbol ->
+            let index = offset + (symbol : Grammar.lr1 :> int) - (base :> int) in
+            while Array.length !table <= index do grow_table () done;
+            (!table).(index) <- (st : _ Utils.Strong.Finite.elt :> int);
+          ) sigma
+      in
+      commit_offset st (find_offset ())
+  in
+  Utils.Strong.Finite.Set.iter DFA.states add_state;
+  let maxi = ref 0 in
+  Array.iteri (fun index n -> if n <> -1 then maxi := index) !table;
+  let unoccupied = ref 0 in
+  for i = 0 to !maxi - 1 do
+    if (!table).(i) = -1 then incr unoccupied;
+  done;
+  Printf.eprintf "compact table has %d cells, %d unoccupied ones\n" !maxi !unoccupied
 
 let main () =
   let source_name = match !source_name with
