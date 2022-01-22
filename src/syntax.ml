@@ -63,8 +63,6 @@ type lexer_definition = {
   trailer     : location;
 }
 
-open Utils
-
 let make_position {Lexing. pos_lnum; pos_cnum; pos_bol; _} =
   {line = pos_lnum; col = pos_cnum - pos_bol + 1}
 
@@ -99,7 +97,7 @@ let print_option f = function
 
 let rec print_symbol = function
   | Name sym -> Cmon.constructor "Name" (Cmon.string sym)
-  | Apply (sym, args) -> Cmon.ctuple "Apply" [
+  | Apply (sym, args) -> Cmon.construct "Apply" [
       Cmon.string sym;
       Cmon.list (List.map print_symbol args);
     ]
@@ -114,17 +112,17 @@ let rec print_regular_term = function
     ]
   | Wildcard -> Cmon.constant "Wildcard"
   | Alternative (re1, re2) ->
-    Cmon.ctuple "Alternative" [
+    Cmon.construct "Alternative" [
       print_regular_expression re1;
       print_regular_expression re2;
     ]
   | Repetition (re, pos) ->
-    Cmon.ctuple "Repetition" [
+    Cmon.construct "Repetition" [
       print_regular_expression re;
       print_position pos;
     ]
   | Reduce (re, loc) ->
-    Cmon.ctuple "Reduce" [
+    Cmon.construct "Reduce" [
       print_regular_expression re;
       print_location loc;
     ]

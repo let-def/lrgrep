@@ -42,14 +42,14 @@ let cmon_re (type s l a)
   : Cmon.t =
   let traverse sub = function
     | Set s   -> Cmon.constructor "Set" (set s)
-    | Epsilon -> Cmon.ctuple "Epsilon" []
+    | Epsilon -> Cmon.constant "Epsilon"
     | Closure e -> Cmon.constructor "Closure" (sub e)
     | Not     e -> Cmon.constructor "Not" (sub e)
-    | Concat  es -> Cmon.ctuple "Concat" (List.map sub es)
-    | Or      es -> Cmon.ctuple "Or" (List.map sub es)
-    | And     es -> Cmon.ctuple "And" (List.map sub es)
-    | Label   l -> Cmon.ctuple "Label" [label l]
-    | Abstract a -> Cmon.ctuple "Abstract" [abstract a]
+    | Concat  es -> Cmon.construct "Concat" [Cmon.list_map sub es]
+    | Or      es -> Cmon.construct "Or" [Cmon.list_map sub es]
+    | And     es -> Cmon.construct "And" [Cmon.list_map sub es]
+    | Label   l -> Cmon.construct "Label" [label l]
+    | Abstract a -> Cmon.construct "Abstract" [abstract a]
   in
   match compare with
   | None -> let rec fix expr = traverse fix expr in fix expr

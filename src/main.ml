@@ -72,142 +72,146 @@ type lexer = {
   def: Syntax.lexer_definition;
 }
 
-module Analysis (X : sig val filename : string end)() =
-struct
-  module Grammar = MenhirSdk.Cmly_read.Read(X)
-  module Lr1 = Middle.Lr1.Make(Grammar)
-  module Sigma = Middle.Sigma.Make(Lr1)
-  module Reduction_graph = Middle.Reduction_graph.Make(Sigma)()
-  module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
-  module Transl = Transl.Make(Regex)
-
-  let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
-    Grammar.Lr1.fold begin fun lr1 acc ->
-      let lr0 = Grammar.Lr1.lr0 lr1 in
-      match Grammar.Lr0.incoming lr0 with
-      | Some _ -> acc
+module Grammar = MenhirSdk.Cmly_read.Read (struct
+    let filename = match !grammar_file with
+      | Some filename -> filename
       | None ->
-        (* Initial state *)
-        Format.eprintf "Initial state %d\n%a\n"
-          (Grammar.Lr1.to_int lr1)
-          Grammar.Print.itemset (Grammar.Lr0.items lr0);
-        let (prod, _) = List.hd (Grammar.Lr0.items lr0) in
-        let nt = match (Grammar.Production.rhs prod).(0) with
-          | Grammar.N nt, _, _ -> nt
-          | _ -> assert false
-        in
-        (nt, lr1) :: acc
-    end []
+        Format.eprintf "No grammar provided (-g), stopping now.\n";
+        exit 1
+  end)
 
-  module Interp = Interp.Make(Grammar)
+module Lr1 = Middle.Lr1.Make(Grammar)
+module Sigma = Middle.Sigma.Make(Lr1)
+module Reduction_graph = Middle.Reduction_graph.Make(Sigma)()
+module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
+module TranslR = Transl.Make(Regex)
 
-    let enumerate_productions =
-    let all_gotos =
-      Reduction_graph.Derivation.derive
-        ~step:(fun lr1 _ -> Some lr1)
-        ~finish:(fun lr1 stack -> Option.value stack ~default:lr1)
-        None
+let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
+  Grammar.Lr1.fold begin fun lr1 acc ->
+    let lr0 = Grammar.Lr1.lr0 lr1 in
+    match Grammar.Lr0.incoming lr0 with
+    | Some _ -> acc
+    | None ->
+      (* Initial state *)
+      Format.eprintf "Initial state %d\n%a\n"
+        (Grammar.Lr1.to_int lr1)
+        Grammar.Print.itemset (Grammar.Lr0.items lr0);
+      let (prod, _) = List.hd (Grammar.Lr0.items lr0) in
+      let nt = match (Grammar.Production.rhs prod).(0) with
+        | Grammar.N nt, _, _ -> nt
+        | _ -> assert false
+      in
+      (nt, lr1) :: acc
+  end []
+
+module Interp = Interp.Make(Grammar)
+
+let enumerate_productions =
+  let all_gotos =
+    Reduction_graph.Derivation.derive
+      ~step:(fun lr1 _ -> Some lr1)
+      ~finish:(fun lr1 stack -> Option.value stack ~default:lr1)
+      None
+  in
+  let follow state lr1 =
+    Reduction_graph.Concrete.Set.fold (fun src acc ->
+        List.fold_left (fun acc (lr1s, dst) ->
+            if Lr1.Set.mem lr1 lr1s
+            then Reduction_graph.Concrete.Set.add dst acc
+            else acc
+          ) acc (Reduction_graph.Concrete.transitions src)
+      ) state Reduction_graph.Concrete.Set.empty
+  in
+  fun stack ->
+    let rec loop acc state stack =
+      let acc = Reduction_graph.Concrete.Set.fold (fun st acc ->
+          Reduction_graph.Derivation.Set.fold
+            (fun d acc -> Lr1.Set.add
+                (Reduction_graph.Derivation.get all_gotos d) acc)
+            (Reduction_graph.Derivation.reached st)
+            acc
+        ) state acc
+      in
+      match stack with
+      | [] -> acc
+      | hd :: tl -> loop acc (follow state hd) tl
     in
-    let follow state lr1 =
-      Reduction_graph.Concrete.Set.fold (fun src acc ->
-          List.fold_left (fun acc (lr1s, dst) ->
-              if Lr1.Set.mem lr1 lr1s
-              then Reduction_graph.Concrete.Set.add dst acc
-              else acc
-            ) acc (Reduction_graph.Concrete.transitions src)
-        ) state Reduction_graph.Concrete.Set.empty
+    let reachable =
+      match stack with
+      | [] -> assert false
+      | hd :: tl ->
+        let red = Reduction_graph.Concrete.from_lr1 hd in
+        loop (Lr1.Set.singleton hd) (Reduction_graph.Concrete.Set.singleton red) tl
     in
-    fun stack ->
-      let rec loop acc state stack =
-        let acc = Reduction_graph.Concrete.Set.fold (fun st acc ->
-            Reduction_graph.Derivation.Set.fold
-              (fun d acc -> Lr1.Set.add
-                  (Reduction_graph.Derivation.get all_gotos d) acc)
-              (Reduction_graph.Derivation.reached st)
-              acc
-          ) state acc
-        in
-        match stack with
-        | [] -> acc
-        | hd :: tl -> loop acc (follow state hd) tl
-      in
-      let reachable =
-        match stack with
-        | [] -> assert false
-        | hd :: tl ->
-          let red = Reduction_graph.Concrete.from_lr1 hd in
-          loop (Lr1.Set.singleton hd) (Reduction_graph.Concrete.Set.singleton red) tl
-      in
-      let items =
-        Lr1.Set.fold
-          (fun lr1 acc -> Grammar.Lr0.items (Grammar.Lr1.lr0 lr1) @ acc)
-          reachable []
-      in
-      Format.printf "Items:\n%a%!"
-        Grammar.Print.itemset items
+    let items =
+      Lr1.Set.fold
+        (fun lr1 acc -> Grammar.Lr0.items (Grammar.Lr1.lr0 lr1) @ acc)
+        reachable []
+    in
+    Format.printf "Items:\n%a%!"
+      Grammar.Print.itemset items
 
-  let rec evaluate lexer expr = function
-    | [] -> ()
-    | hd :: tl ->
-      let _, expr' =
-        Regex.Expr.left_delta expr (Sigma.Pos (Lr1.Set.singleton hd))
-      in
-      Format.printf "Consuming state %s\n@[<2>%a@]\n%!"
-        (match Grammar.Lr0.incoming (Grammar.Lr1.lr0 hd) with
-         | None -> "<start>"
-         | Some sym -> Grammar.symbol_name sym)
-        Utils.Cmon.format (Regex.cmon expr');
-      let actions = Regex.Expr.get_label expr' in
+let rec evaluate lexer expr = function
+  | [] -> ()
+  | hd :: tl ->
+    let _, expr' =
+      Regex.Expr.left_delta expr (Sigma.Pos (Lr1.Set.singleton hd))
+    in
+    Format.printf "Consuming state %s\n@[<2>%a@]\n%!"
+      (match Grammar.Lr0.incoming (Grammar.Lr1.lr0 hd) with
+       | None -> "<start>"
+       | Some sym -> Grammar.symbol_name sym)
+      Cmon.format (Regex.cmon expr');
+    let actions = Regex.Expr.get_label expr' in
+    Utils.BitSet.IntSet.iter (fun x ->
+        let entry = List.nth lexer.def.Syntax.entrypoints 0 in
+        let clause = List.nth entry.clauses x in
+        begin match clause.action with
+          | Some location ->
+            let body = Common.read_location lexer.channel location in
+            Printf.printf "(eval) Matched action: %s\n" body
+          | None ->
+            Printf.printf "(eval) Matched unreachable action! (%d)\n" x
+        end
+
+      ) actions.accept;
+    evaluate lexer expr' tl
+
+let rec interpret_loop lexer dfa state = function
+  | [] -> ()
+  | hd :: tl ->
+    let transitions = Regex.Map.find state dfa in
+    match List.find (fun (sigma, _, _) -> Sigma.mem hd sigma) transitions with
+    | (_, _, state') ->
+      let actions = Regex.Expr.get_label state' in
       Utils.BitSet.IntSet.iter (fun x ->
           let entry = List.nth lexer.def.Syntax.entrypoints 0 in
           let clause = List.nth entry.clauses x in
           begin match clause.action with
             | Some location ->
               let body = Common.read_location lexer.channel location in
-              Printf.printf "(eval) Matched action: %s\n" body
+              Printf.printf "(interp) Matched action: %s\n" body
             | None ->
               Printf.printf "(eval) Matched unreachable action! (%d)\n" x
           end
 
         ) actions.accept;
-      evaluate lexer expr' tl
+      interpret_loop lexer dfa state' tl
+    | exception Not_found -> ()
 
-  let rec interpret lexer dfa state = function
-    | [] -> ()
-    | hd :: tl ->
-      let transitions = Regex.Map.find state dfa in
-      match List.find (fun (sigma, _, _) -> Sigma.mem hd sigma) transitions with
-      | (_, _, state') ->
-        let actions = Regex.Expr.get_label state' in
-        Utils.BitSet.IntSet.iter (fun x ->
-            let entry = List.nth lexer.def.Syntax.entrypoints 0 in
-            let clause = List.nth entry.clauses x in
-            begin match clause.action with
-              | Some location ->
-                let body = Common.read_location lexer.channel location in
-                Printf.printf "(interp) Matched action: %s\n" body
-              | None ->
-                Printf.printf "(eval) Matched unreachable action! (%d)\n" x
-            end
+let analyse_stack lexer dfa initial stack =
+  Format.printf "Stack:\n%s\n%!"
+    (String.concat " "
+       (List.rev_map (fun lr1 ->
+            match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
+            | None -> "<start>"
+            | Some sym -> Grammar.symbol_name sym
+          ) stack));
+  enumerate_productions stack;
+  evaluate lexer initial stack;
+  interpret_loop lexer dfa initial stack
 
-          ) actions.accept;
-        interpret lexer dfa state' tl
-      | exception Not_found -> ()
-
-  let analyse_stack lexer dfa initial stack =
-    Format.printf "Stack:\n%s\n%!"
-      (String.concat " "
-         (List.rev_map (fun lr1 ->
-              match Grammar.Lr0.incoming (Grammar.Lr1.lr0 lr1) with
-              | None -> "<start>"
-              | Some sym -> Grammar.symbol_name sym
-            ) stack));
-    enumerate_productions stack;
-    evaluate lexer initial stack;
-    interpret lexer dfa initial stack
-end
-
-let interpreter _grammar _lexer =
+let interpreter _lexer =
   ()
   (*let module Analysis = Analysis(struct let filename = grammar end)() in
     let linearize_symbol = Transl.linearize_symbol in
@@ -273,11 +277,8 @@ let interpreter _grammar _lexer =
     loop ()
   *)
 
-let compiler _out grammar lexer =
-  let module Analysis = Analysis(struct let filename = grammar end)() in
-  (*let linearize_symbol = Transl.linearize_symbol in*)
-  let open Analysis in
-  let _, (module DFA) = Transl.translate lexer.def in
+let compiler _out lexer =
+  let _, (module DFA) = TranslR.translate lexer.def in
   Printf.printf "let %s =\n"
     (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
   let st_fun st =
@@ -397,27 +398,27 @@ let main () =
     (oc, tr)
   ) in
   let lexbuf = Lexing.from_channel ic in
-  lexbuf.Lexing.lex_curr_p <-
-    {Lexing.pos_fname = source_name; Lexing.pos_lnum = 1;
-     Lexing.pos_bol = 0; Lexing.pos_cnum = 0};
+  lexbuf.Lexing.lex_curr_p <- {
+    Lexing.pos_fname = source_name;
+    Lexing.pos_lnum = 1;
+    Lexing.pos_bol = 0;
+    Lexing.pos_cnum = 0;
+  };
   try
     let def = Parser.lexer_definition Lexer.main lexbuf in
     if !Common.dump_parsetree then
       Format.eprintf "Parsetree:\n%!%a"
-        Utils.Cmon.format (Syntax.print_definition def);
+        Cmon.format (Syntax.print_definition def);
     List.iter (fun entry ->
         List.iter (fun clause ->
             Syntax.check_wellformed clause.Syntax.pattern
           ) entry.Syntax.clauses
       ) def.Syntax.entrypoints;
-    begin match !grammar_file with
-      | None -> Format.eprintf "No grammar provided (-g), stopping now.\n"
-      | Some path ->
-        let lexer = {channel = ic; def} in
-        if !interpret
-        then interpreter path lexer
-        else compiler out path lexer
-    end;
+    let lexer = {channel = ic; def} in
+    if !interpret then
+      interpreter lexer
+    else
+      compiler out lexer;
     close_in ic;
     ignore (maybe_close out : bool);
   with exn ->
