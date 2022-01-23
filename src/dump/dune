@@ -1,0 +1,3 @@
+(executable
+ (name dump)
+ (libraries menhirSdk))
