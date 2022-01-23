@@ -357,7 +357,8 @@ let set_of_predecessors =
         Lr1Set.empty transitions
     )
 
-module Redgraph = struct
+module Redgraph =
+struct
   type state =
     | Goto of Lr1C.n index * state
     | Lr1 of Lr1C.n index
@@ -396,6 +397,10 @@ module Redgraph = struct
           lr1s Lr1Set.empty
       )
 
+  type transition =
+    | Virtual of state
+    | Real of Lr1C.n index
+
   let rec pop_many states = function
     | 0 -> states
     | n ->
@@ -403,15 +408,22 @@ module Redgraph = struct
       pop_many (pop states) (n - 1)
 
   let goto_target lr1 nt =
-    Transition.(target (of_goto (find_goto lr1 nt)))
+    match Transition.(target (of_goto (find_goto lr1 nt))) with
+    | exception Not_found -> None
+    | result -> Some result
 
   let goto nt acc = function
     | Abstract lr1s ->
       Lr1Set.fold (fun lr1 acc ->
-          Goto (goto_target lr1 nt, Lr1 lr1) :: acc
+          match goto_target lr1 nt with
+          | None -> acc
+          | Some st -> Real st :: acc
         ) lr1s acc
     | Concrete st ->
-      Goto (goto_target (lr1 st) nt, st) :: acc
+      begin match goto_target (lr1 st) nt with
+        | None -> acc
+        | Some tgt -> Virtual (Goto (tgt, st)) :: acc
+      end
 
   let transitions state =
     let rec follow states depth acc = function
@@ -424,51 +436,81 @@ module Redgraph = struct
     in
     follow (Concrete state) 0 [] (Vector.get productions (lr1 state))
 
-  let visited_states = Hashtbl.create 7
-  let to_visit = ref []
+  let rec close_transitions state acc =
+    List.fold_left (fun (rs, vs) -> function
+        | Real st -> ((st :: rs), vs)
+        | Virtual st -> close_transitions st (rs, (st :: vs))
+      ) acc (transitions state)
 
-  let index_of state =
-    match Hashtbl.find_opt visited_states state with
-    | Some (i, _) -> i
-    | None ->
-      let i = Hashtbl.length visited_states in
-      let transitions = ref [] in
-      Hashtbl.add visited_states state (i, transitions);
-      to_visit := (state, transitions) :: !to_visit;
-      i
+  module Derivations = struct
+    include Gensym()
 
-  let visit (state, rtrans) =
-    rtrans := List.map index_of (transitions state)
+    type node = {
+      index: n index;
+      state: Lr1C.n index;
+      mutable derivations: node list;
+    }
 
-  let initial = index_of (Lr1 (Index.of_int Lr1C.n 509))
+    let table = Hashtbl.create 7
 
-  let rec loop () =
-    match !to_visit with
-    | [] -> ()
-    | xs ->
-      to_visit := [];
-      List.iter visit xs;
-      loop ()
+    let roots = ref []
 
-  let state_to_string state =
-    let rec aux = function
-      | Goto (lr1, st) ->
-        string_of_int (lr1 :> int) :: aux st
-      | Lr1 lr1 ->
-        [string_of_int (lr1 :> int)]
-    in
-    String.concat "::" (aux state)
+    let rec register state =
+      match Hashtbl.find_opt table state with
+      | Some node -> node
+      | None ->
+        let node =
+          match state with
+          | Lr1 state ->
+            let node = { index = fresh (); state; derivations = [] } in
+            roots := node :: !roots;
+            node
+          | Goto (state, next) ->
+            let node' = register next in
+            let node = { index = fresh (); state; derivations = [] } in
+            node'.derivations <- node :: node'.derivations;
+            node
+        in
+        Hashtbl.add table state node;
+        node
+
+    let register state = (register state).index
+
+    let freeze () =
+      let vector = Vector.make' n (fun () -> List.hd !roots) in
+      let set_node _ node = Vector.set vector node.index node in
+      Hashtbl.iter set_node table;
+      vector
+  end
+
+  let transitions =
+    Vector.init Lr1C.n (fun lr1 ->
+      let rs, vs = close_transitions (Lr1 lr1) ([], []) in
+      let compare_index =
+        (Int.compare
+         : int -> int -> int
+         :> _ index -> _ index -> int)
+      in
+      let vs = List.map Derivations.register vs in
+      (List.sort_uniq compare_index rs,
+       List.sort_uniq compare_index vs)
+    )
+
+  let derivations = Derivations.freeze ()
 
   let () =
-    loop ();
     print_endline "digraph G {";
-    Hashtbl.iter (fun state (index, transitions) ->
+    Index.iter Lr1C.n (fun src ->
+        let targets, _derivations = Vector.get transitions src in
         Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
-          index (state_to_string state ^ Format.asprintf "\n%a" Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g (lr1 state)))));
-        List.iter (fun index' ->
-            Printf.printf "  ST%d -> ST%d\n" index index'
-          ) !transitions
-      ) visited_states;
+          (src :> int)
+          (Format.asprintf "%d\n%a" (src :> int)
+             Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
+        List.iter (fun tgt ->
+            Printf.printf "  ST%d -> ST%d\n"
+              (src :> int) (tgt : _ index :> int)
+          ) targets
+      );
     print_endline "}";
 
 end
