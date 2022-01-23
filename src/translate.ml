@@ -199,5 +199,5 @@ module Make(Regex : Middle.Intf.REGEX) = struct
     Printf.eprintf "Minimized to %d states in %.02fms\n%!"
       (Utils.Strong.Finite.Set.cardinal Min.states)
       ((time4 -. time3) *. 1000.0);
-    dfa, min
+    (entries, dfa), min
 end

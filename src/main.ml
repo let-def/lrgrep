@@ -13,6 +13,10 @@
 (*                                                                        *)
 (**************************************************************************)
 
+open Utils
+open BitSet
+open Strong
+
 (* The lexer generator. Command-line parsing. *)
 
 let source_name = ref None
@@ -84,7 +88,7 @@ module Lr1 = Middle.Lr1.Make(Grammar)
 module Sigma = Middle.Sigma.Make(Lr1)
 module Reduction_graph = Middle.Reduction_graph.Make(Sigma)()
 module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
-module TranslR = Transl.Make(Regex)
+module Transl = Translate.Make(Regex)
 
 let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
   Grammar.Lr1.fold begin fun lr1 acc ->
@@ -104,46 +108,100 @@ let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
       (nt, lr1) :: acc
   end []
 
-let compiler _out lexer =
-  let _, (module DFA) = TranslR.translate lexer.def in
+let compiler_raw lexer (entries, dfa)
+  =
+  Printf.printf "let %s =\n"
+    (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
+  let numbers =
+    let k = ref 0 in
+    Regex.Map.map (fun _ -> let result = !k in incr k; result) dfa
+  in
+  let st_fun st = "st_" ^ string_of_int (Regex.Map.find st numbers) in
+  let first = ref true in
+  Regex.Map.iter begin fun st transitions ->
+    Printf.printf "  %s %s stack =\n"
+      (if !first then (first := false; "let rec") else "and")
+      (st_fun st);
+    let action = Regex.Expr.get_label st in
+    begin match IntSet.minimum action.accept with
+      | None -> ()
+      | Some elt -> Printf.printf "    %d ::\n" elt
+    end;
+    Printf.printf "    match current_state stack with\n";
+    let transitions =
+      Misc.group_by
+        ~compare:(fun (_,_,e1) (_,_,e2) -> Regex.Expr.compare e1 e2)
+        ~group:(fun (sg,_,e) trs ->
+            e,
+            List.fold_left
+              (fun sg (sg',_,_) -> Lr1.Set.union sg (Sigma.to_lr1set sg'))
+              (Sigma.to_lr1set sg) trs
+          )
+        transitions
+    in
+    List.iter (fun (target, sigma) ->
+        match st_fun target with
+        | exception Not_found -> ()
+        | st_fun ->
+        Printf.printf "    | %s -> %s (next stack)\n"
+          (String.concat "|"
+             (List.map
+                (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
+                (Lr1.Set.elements sigma)))
+          st_fun
+      ) transitions;
+    Printf.printf "    | _ -> []\n";
+  end dfa;
+  Printf.printf "  in %s\n"
+    (String.concat ", " (List.map st_fun entries))
+
+let compiler_min
+    _out lexer
+    (module DFA: Middle.Intf.MINIMIZED_DFA with type regex = Regex.Expr.t and type sigma = Lr1.Set.t)
+  =
   Printf.printf "let %s =\n"
     (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
   let st_fun st =
-    "st_" ^ string_of_int (Utils.Strong.Finite.Elt.to_int st)
+    "st_" ^ string_of_int (Finite.Elt.to_int st)
   in
-  Utils.Strong.Finite.Set.iter DFA.states (fun st ->
-      Printf.printf "  %s %s stack = match current_state stack with\n"
-        (if Utils.Strong.Finite.Elt.to_int st = 0 then "let rec" else "and")
+  Finite.Set.iter DFA.states (fun st ->
+      Printf.printf "  %s %s stack =\n"
+        (if Finite.Elt.to_int st = 0 then "let rec" else "and")
         (st_fun st);
       let expr = DFA.represent_state st in
       let action = Regex.Expr.get_label expr in
-        let transitions =
-          Utils.Misc.group_by ~compare:(fun tr1 tr2 ->
-              let tgt1 = DFA.target tr1 and tgt2 = DFA.target tr2 in
-              Int.compare
-                (Utils.Strong.Finite.Elt.to_int tgt1)
-                (Utils.Strong.Finite.Elt.to_int tgt2)
+      begin match IntSet.minimum action.accept with
+        | None -> ()
+        | Some elt -> Printf.printf "    %d ::\n" elt
+      end;
+      Printf.printf "    match current_state stack with\n";
+      let transitions =
+        Misc.group_by ~compare:(fun tr1 tr2 ->
+            let tgt1 = DFA.target tr1 and tgt2 = DFA.target tr2 in
+            Int.compare
+              (Finite.Elt.to_int tgt1)
+              (Finite.Elt.to_int tgt2)
+          )
+          ~group:(fun tr trs ->
+              DFA.target tr,
+              List.fold_left
+                (fun sg tr -> Lr1.Set.union sg (DFA.label tr))
+                (DFA.label tr) trs
             )
-            ~group:(fun tr trs ->
-                DFA.target tr,
-                List.fold_left
-                  (fun sg tr -> Lr1.Set.union sg (DFA.label tr))
-                  (DFA.label tr) trs
-              )
-            (DFA.transitions_from st)
-        in
-        List.iter (fun (target, sigma) ->
-            Printf.printf "    | %s -> %s (next stack)\n"
-              (String.concat "|"
-                 (List.map
-                    (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
-                    (Lr1.Set.elements sigma)))
-              (st_fun target)
-          ) transitions;
-        Printf.printf "    | _ -> failwith \"Match failure\"\n";
-      if Utils.BitSet.IntSet.is_empty action.Regex.Action.accept then (
+          (DFA.transitions_from st)
+      in
+      List.iter (fun (target, sigma) ->
+          Printf.printf "    | %s -> %s (next stack)\n"
+            (String.concat "|"
+               (List.map
+                  (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
+                  (Lr1.Set.elements sigma)))
+            (st_fun target)
+        ) transitions;
+      Printf.printf "    | _ -> []\n";
+      (*if IntSet.is_empty action.Regex.Action.accept then (
       ) else (
-        let index = Utils.BitSet.IntSet.choose action.Regex.Action.accept in
+        let index = IntSet.choose action.Regex.Action.accept in
         let entry = List.hd lexer.def.entrypoints in
         let clause = List.nth entry.clauses index in
         match clause.action with
@@ -151,58 +209,10 @@ let compiler _out lexer =
         | Some loc ->
           let body = Common.read_location lexer.channel loc in
           print_endline body
-      )
+      )*)
     );
-  Printf.printf "  %s\n"
-    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)));
-  let table = ref [|-1|] in
-  let grow_table () =
-    let table0 = !table in
-    let length = Array.length table0 in
-    table := Array.make (length * 2) (-1);
-    Array.blit table0 0 !table 0 length
-  in
-  let add_state st =
-    let sigma =
-      List.fold_left
-        (fun acc tr -> Lr1.Set.union acc (DFA.label tr))
-        Lr1.Set.empty (DFA.transitions_from st)
-    in
-    if not (Lr1.Set.is_empty sigma) then
-      let exception Found in
-      let base = Lr1.Set.choose sigma in
-      let check_symbol offset symbol =
-        let index = offset + (symbol : Grammar.lr1 :> int) - (base :> int) in
-        if Array.length !table <= index
-        then (grow_table (); raise Found)
-        else (!table).(index) > -1
-      in
-      let find_offset () =
-        let offset = ref 0 in
-        begin try
-            while Lr1.Set.exists (check_symbol !offset) sigma
-            do incr offset; done
-          with Found -> ()
-        end;
-        !offset
-      in
-      let commit_offset st offset =
-        Lr1.Set.iter (fun symbol ->
-            let index = offset + (symbol : Grammar.lr1 :> int) - (base :> int) in
-            while Array.length !table <= index do grow_table () done;
-            (!table).(index) <- (st : _ Utils.Strong.Finite.elt :> int);
-          ) sigma
-      in
-      commit_offset st (find_offset ())
-  in
-  Utils.Strong.Finite.Set.iter DFA.states add_state;
-  let maxi = ref 0 in
-  Array.iteri (fun index n -> if n <> -1 then maxi := index) !table;
-  let unoccupied = ref 0 in
-  for i = 0 to !maxi - 1 do
-    if (!table).(i) = -1 then incr unoccupied;
-  done;
-  Printf.eprintf "compact table has %d cells, %d unoccupied ones\n" !maxi !unoccupied
+  Printf.printf "  in %s\n"
+    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)))
 
 let main () =
   let source_name = match !source_name with
@@ -234,7 +244,7 @@ let main () =
   try
     let def = Parser.lexer_definition Lexer.main lexbuf in
     if !Common.dump_parsetree then
-      Format.eprintf "Parsetree:\n%!%a"
+      Format.eprintf "Parsetree:\n%a\n%!"
         Cmon.format (Syntax.print_definition def);
     List.iter (fun entry ->
         List.iter (fun clause ->
@@ -242,10 +252,30 @@ let main () =
           ) entry.Syntax.clauses
       ) def.Syntax.entrypoints;
     let lexer = {channel = ic; def} in
-    if !interpret then
-      () (*interpreter lexer*)
-    else
-      compiler out lexer;
+    Format.printf "module Make(Stack : sig\n\
+                  \  type t\n\
+                  \  val current_state : t -> int\n\
+                  \  val next : t -> t\n\
+                   end) : sig\n\
+                  \  val error_message : Stack.t -> int list\n\
+                  \  val messages : int -> string option\n\
+                   end = struct\n\
+                  \  open Stack\n\
+                  ";
+    let dfa_raw, dfa_min = Transl.translate lexer.def in
+    compiler_raw lexer dfa_raw;
+    compiler_min out lexer dfa_min;
+    let entry = List.hd lexer.def.entrypoints in
+    Format.printf "let messages = function\n";
+    List.iteri (fun index clause ->
+        match clause.Syntax.action with
+        | None -> Format.printf "  | %d -> None\n" index
+        | Some action ->
+          Format.printf "  | %d -> Some %S\n"
+            index (Common.read_location ic action)
+      ) entry.clauses;
+    Format.printf "  | _ -> failwith \"Unknown action\"\n\
+                   end\n%!";
     close_in ic;
     ignore (maybe_close out : bool);
   with exn ->
@@ -268,7 +298,7 @@ let main () =
         Printf.fprintf stderr
           "File \"%s\", line %d, character %d: %s.\n"
           file line col msg
-      | Transl.Error str ->
+      | Translate.Error str ->
         Printf.fprintf stderr "Error during translation: %s.\n" str
       | _ -> Printexc.raise_with_backtrace exn bt
     end;

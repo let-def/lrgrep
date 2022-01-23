@@ -48,6 +48,8 @@ module type S = sig
 
   val choose: t -> element
 
+  val minimum: t -> element option
+
   (* [mem x s] returns [true] if and only if [x] appears in the set
      [s]. *)
 

@@ -4,3 +4,4 @@
 (executable
  (name main)
  (libraries utils middle menhirSdk))
+

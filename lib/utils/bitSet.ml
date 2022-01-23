@@ -50,6 +50,8 @@ module type S = sig
 
   val choose: t -> element
 
+  val minimum: t -> element option
+
   (* [mem x s] returns [true] if and only if [x] appears in the set
      [s]. *)
 
@@ -348,6 +350,15 @@ module IntSet = struct
     with Found x ->
       x
 
+  let minimum s =
+    try
+      iter (fun x ->
+          raise (Found x)
+        ) s;
+      None
+    with Found x ->
+      Some x
+
   let rec compare s1 s2 =
     match s1, s2 with
       N, N ->  0
@@ -484,6 +495,9 @@ struct
   let is_singleton = IntSet.is_singleton
   let cardinal     = IntSet.cardinal
   let choose t     = Element.of_int (IntSet.choose t)
+  let minimum t = match IntSet.minimum t with
+    | None -> None
+    | Some x -> Some (Element.of_int x)
   let mem          = (IntSet.mem :> element -> t -> bool)
   let add          = (IntSet.add :> element -> t -> t)
   let remove       = (IntSet.remove :> element -> t -> t)
