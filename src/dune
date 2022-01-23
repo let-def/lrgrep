@@ -3,5 +3,5 @@
 
 (executable
  (name main)
- (libraries utils middle menhirSdk))
+ (libraries fix utils middle menhirSdk))
 

@@ -20,7 +20,7 @@ open Syntax
 %}
 
 %token <string> IDENT
-%token <Syntax.location> ACTION
+%token <Syntax.ocaml_code> ACTION
 %token UNREACHABLE
 %token RULE        "rule"
        PARSE       "parse"
@@ -71,7 +71,7 @@ header:
       end_pos = 0;
       start_line = 1;
       start_col = 0;
-    }
+    }, ""
   }
 ;
 

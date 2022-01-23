@@ -1,18 +1,3 @@
-(**************************************************************************)
-(*                                                                        *)
-(*                                 OCaml                                  *)
-(*                                                                        *)
-(*             Xavier Leroy, projet Cristal, INRIA Rocquencourt           *)
-(*                                                                        *)
-(*   Copyright 1996 Institut National de Recherche en Informatique et     *)
-(*     en Automatique.                                                    *)
-(*                                                                        *)
-(*   All rights reserved.  This file is distributed under the terms of    *)
-(*   the GNU Lesser General Public License version 2.1, with the          *)
-(*   special exception on linking described in the file LICENSE.          *)
-(*                                                                        *)
-(**************************************************************************)
-
 (* The shallow abstract syntax *)
 
 type location = {
@@ -22,6 +7,8 @@ type location = {
   start_line : int;
   start_col : int;
 }
+
+type ocaml_code = location * string
 
 type position = {line: int; col: int}
 
@@ -48,7 +35,7 @@ and regular_expression =
 
 type clause = {
   pattern: regular_expression;
-  action: location option;
+  action: ocaml_code option;
 }
 
 type entry = {
@@ -60,9 +47,9 @@ type entry = {
 }
 
 type lexer_definition = {
-  header      : location;
+  header      : ocaml_code;
   entrypoints : entry list;
-  trailer     : location;
+  trailer     : ocaml_code;
 }
 
 let make_position {Lexing. pos_lnum; pos_cnum; pos_bol; _} =
@@ -89,6 +76,12 @@ let print_location {
     "start_line", int start_line;
     "start_col" , int start_col;
   ])
+
+let print_ocamlcode (location, code) =
+  Cmon.tuple [
+    print_location location;
+    Cmon.string code;
+  ]
 
 let print_position {line; col} =
   Cmon.(record ["line", int line; "col", int col])
@@ -140,7 +133,7 @@ and print_regular_expression re =
 let print_clause {pattern; action} =
   Cmon.record [
     "pattern", print_regular_expression pattern;
-    "action", print_option print_location action;
+    "action", print_option print_ocamlcode action;
   ]
 
 let print_entrypoints {error; startsymbols; name; args; clauses} =
@@ -154,9 +147,9 @@ let print_entrypoints {error; startsymbols; name; args; clauses} =
 
 let print_definition {header; entrypoints; trailer} : Cmon.t =
   Cmon.record [
-    "header", print_location header;
+    "header", print_ocamlcode header;
     "entrypoints", Cmon.list (List.map print_entrypoints entrypoints);
-    "trailer", print_location trailer;
+    "trailer", print_ocamlcode trailer;
   ]
 
 type prompt_sentence =

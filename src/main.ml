@@ -14,8 +14,6 @@
 (**************************************************************************)
 
 open Utils
-open BitSet
-open Strong
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -59,36 +57,50 @@ let specs = [
 
 let () = Arg.parse specs (fun name -> source_name := Some name) usage
 
-let maybe_close lout =
-  let result = Lazy.is_val lout in
-  if result then (
-    let lazy (oc, tr) = lout in
-    close_out oc;
-    Common.close_tracker tr;
-  );
-  result
-
-(* Specification of a "parser lexer", an .mlyl file *)
-type lexer = {
-  (* The channel that reads in the file *)
-  channel: in_channel;
-  (* AST corresponding to the source *)
-  def: Syntax.lexer_definition;
-}
-
 module Grammar = MenhirSdk.Cmly_read.Read (struct
     let filename = match !grammar_file with
       | Some filename -> filename
       | None ->
         Format.eprintf "No grammar provided (-g), stopping now.\n";
+        Arg.usage specs usage;
         exit 1
   end)
 
-module Lr1 = Middle.Lr1.Make(Grammar)
-module Sigma = Middle.Sigma.Make(Lr1)
-module Reduction_graph = Middle.Reduction_graph.Make(Sigma)()
-module Regex = Middle.Regex.Make(Sigma)(Reduction_graph)
-module Transl = Translate.Make(Regex)
+let source_file = match !source_name with
+  | None ->
+    Format.eprintf "No specification, stopping now.\n";
+    Arg.usage specs usage;
+    exit 1
+  | Some name -> name
+
+let print_parse_error_and_exit lexbuf exn =
+  let bt = Printexc.get_raw_backtrace () in
+  begin match exn with
+    | Parser.Error ->
+      let p = Lexing.lexeme_start_p lexbuf in
+      Printf.fprintf stderr
+        "File \"%s\", line %d, character %d: syntax error.\n"
+        p.Lexing.pos_fname p.Lexing.pos_lnum
+        (p.Lexing.pos_cnum - p.Lexing.pos_bol)
+    | Lexer.Lexical_error {msg; file; line; col} ->
+      Printf.fprintf stderr
+        "File \"%s\", line %d, character %d: %s.\n"
+        file line col msg
+    | _ -> Printexc.raise_with_backtrace exn bt
+  end;
+  exit 3
+
+let lexer_definition =
+  let ic = open_in_bin source_file in
+  Lexer.ic := Some ic;
+  let lexbuf = Lexing.from_channel ~with_positions:true ic in
+  Lexing.set_filename lexbuf source_file;
+  let result =
+    try Parser.lexer_definition Lexer.main lexbuf
+    with exn -> print_parse_error_and_exit lexbuf exn
+  in
+  Lexer.ic := None;
+  result
 
 let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
   Grammar.Lr1.fold begin fun lr1 acc ->
@@ -108,202 +120,464 @@ let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
       (nt, lr1) :: acc
   end []
 
-let compiler_raw lexer (entries, dfa)
-  =
-  Printf.printf "let %s =\n"
-    (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
-  let numbers =
-    let k = ref 0 in
-    Regex.Map.map (fun _ -> let result = !k in incr k; result) dfa
-  in
-  let st_fun st = "st_" ^ string_of_int (Regex.Map.find st numbers) in
-  let first = ref true in
-  Regex.Map.iter begin fun st transitions ->
-    Printf.printf "  %s %s stack =\n"
-      (if !first then (first := false; "let rec") else "and")
-      (st_fun st);
-    let action = Regex.Expr.get_label st in
-    begin match IntSet.minimum action.accept with
-      | None -> ()
-      | Some elt -> Printf.printf "    %d ::\n" elt
-    end;
-    Printf.printf "    match current_state stack with\n";
-    let transitions =
-      Misc.group_by
-        ~compare:(fun (_,_,e1) (_,_,e2) -> Regex.Expr.compare e1 e2)
-        ~group:(fun (sg,_,e) trs ->
-            e,
-            List.fold_left
-              (fun sg (sg',_,_) -> Lr1.Set.union sg (Sigma.to_lr1set sg'))
-              (Sigma.to_lr1set sg) trs
-          )
-        transitions
-    in
-    List.iter (fun (target, sigma) ->
-        match st_fun target with
-        | exception Not_found -> ()
-        | st_fun ->
-        Printf.printf "    | %s -> %s (next stack)\n"
-          (String.concat "|"
-             (List.map
-                (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
-                (Lr1.Set.elements sigma)))
-          st_fun
-      ) transitions;
-    Printf.printf "    | _ -> []\n";
-  end dfa;
-  Printf.printf "  in %s\n"
-    (String.concat ", " (List.map st_fun entries))
+open Fix.Indexing
+open Grammar
 
-let compiler_min
-    _out lexer
-    (module DFA: Middle.Intf.MINIMIZED_DFA with type regex = Regex.Expr.t and type sigma = Lr1.Set.t)
-  =
-  Printf.printf "let %s =\n"
-    (String.concat ", " (List.map (fun e -> e.Syntax.name) lexer.def.entrypoints));
-  let st_fun st =
-    "st_" ^ string_of_int (Finite.Elt.to_int st)
-  in
-  Finite.Set.iter DFA.states (fun st ->
-      Printf.printf "  %s %s stack =\n"
-        (if Finite.Elt.to_int st = 0 then "let rec" else "and")
-        (st_fun st);
-      let expr = DFA.represent_state st in
-      let action = Regex.Expr.get_label expr in
-      begin match IntSet.minimum action.accept with
-        | None -> ()
-        | Some elt -> Printf.printf "    %d ::\n" elt
-      end;
-      Printf.printf "    match current_state stack with\n";
-      let transitions =
-        Misc.group_by ~compare:(fun tr1 tr2 ->
-            let tgt1 = DFA.target tr1 and tgt2 = DFA.target tr2 in
+module TerminalSet = BitSet.Make(Terminal)
+
+let all_terminals =
+  let acc = ref TerminalSet.empty in
+  for i = Terminal.count - 1 downto 0
+  do acc := TerminalSet.add (Terminal.of_int i) !acc done;
+  !acc
+
+(*module Lr1C = struct
+  include Fix.Indexing.Const(struct let cardinal = Grammar.Lr1.count end)
+  let to_g lr1 = Grammar.Lr1.of_int (Index.to_int lr1)
+  let of_g lr1 = Index.of_int n (Grammar.Lr1.to_int lr1)
+end
+
+let symbols = Vector.init Lr1C.n
+    (fun lr1 -> Grammar.Lr0.incoming (Grammar.Lr1.lr0 (Lr1C.to_g lr1)))
+
+let predecessors = Vector.make Lr1C.n []
+
+let () = Grammar.Lr1.iter begin fun lr1 ->
+    let src = Lr1C.of_g lr1 in
+    List.iter (fun (_sym, tgt) ->
+        Vector.set_cons predecessors (Lr1C.of_g tgt) src
+      ) (Grammar.Lr1.transitions lr1)
+  end*)
+
+(* ---------------------------------------------------------------------- *)
+
+(* [Lr1C] represents Lr1 states as elements of a [Numbering.Typed] set *)
+module Lr1C = struct
+  include (val const Lr1.count)
+  let of_g lr1 = Index.of_int n (Lr1.to_int lr1)
+  let to_g lr1 = Lr1.of_int (Index.to_int lr1)
+end
+
+module Lr1Set = BitSet.Make(struct
+    type t = Lr1C.n index
+    let of_int i = Index.of_int Lr1C.n i
+  end)
+
+(* ---------------------------------------------------------------------- *)
+
+(* Transitions are represented as finite sets with auxiliary functions
+   to get the predecessors, successors and labels. *)
+module Transition : sig
+  (* Abstract types used as index to represent the different sets of
+     transitions.
+     For instance, [goto] represents the finite set of goto transition:
+     - the value [goto : goto cardinal] is the cardinal of this set
+     - any value of type [goto index] is a member of this set
+       (representing a goto transition)
+  *)
+  type goto and shift and any
+
+  (* The set of goto transitions *)
+  val goto : goto cardinal
+  (* The set of all transitions = goto U shift *)
+  val any : any cardinal
+  (* The set of shift transitions *)
+  val shift : shift cardinal
+
+  (* Building the isomorphism between any and goto U shift *)
+
+  (* Inject goto into any *)
+  val of_goto : goto index -> any index
+
+  (* Inject shift into any *)
+  val of_shift : shift index -> any index
+
+  (* Project a transition into a goto or a shift transition *)
+  val split : any index -> (goto index, shift index) either
+
+  (* [find_goto s nt] finds the goto transition originating from [s] and
+     labelled by [nt], or raise [Not_found].  *)
+  val find_goto : Lr1C.n index -> Nonterminal.t -> goto index
+
+  (* Get the source state of a transition *)
+  val source : any index -> Lr1C.n index
+
+  (* Get the target state of a transition *)
+  val target : any index -> Lr1C.n index
+
+  (* Symbol that labels a transition *)
+  val symbol : any index -> symbol
+
+  (* Symbol that labels a goto transition *)
+  val goto_symbol : goto index -> Nonterminal.t
+
+  (* Symbol that labels a shift transition *)
+  val shift_symbol : shift index -> Terminal.t
+
+  (* [successors s] returns all the transitions [tr] such that
+     [source tr = s] *)
+  val successors : Lr1C.n index -> any index list
+
+  (* [predecessors s] returns all the transitions [tr] such that
+     [target tr = s] *)
+  val predecessors : Lr1C.n index -> any index list
+end =
+struct
+
+  (* Pre-compute all information, such that functions of this module
+     always operate in O(1) *)
+
+  (* Create two fresh finite sets that will be populated with goto and shift
+     transitions *)
+  module Goto = Gensym()
+  module Shift = Gensym()
+
+  let () =
+    (* Count goto and shift transitions by iterating on all states and
+       transitions *)
+    Lr1.iter begin fun lr1 ->
+      List.iter begin fun (sym, _) ->
+        match sym with
+        | T _t ->
+          (*if Terminal.real t then*)
+            ignore (Shift.fresh ())
+        | N _ ->
+          ignore (Goto.fresh ())
+      end (Lr1.transitions lr1)
+    end
+
+  type goto = Goto.n
+  let goto = Goto.n
+
+  type shift = Shift.n
+  let shift = Shift.n
+
+  (* Any is the disjoint sum of goto and shift transitions *)
+  module Any = (val sum goto shift)
+  type any = Any.n
+  let any = Any.n
+
+  let of_goto = Any.inj_l
+  let of_shift = Any.inj_r
+  let split = Any.prj
+
+  (* Vectors to store information on states and transitions.
+
+     We allocate a bunch of data structures (sources, targets, t_symbols,
+     nt_symbols and predecessors vectors, t_table and nt_table hash tables),
+     and then populate them by iterating over all transitions.
+  *)
+
+  let sources = Vector.make' any (fun () -> Index.of_int Lr1C.n 0)
+  let targets = Vector.make' any (fun () -> Index.of_int Lr1C.n 0)
+
+  let t_symbols = Vector.make' shift (fun () -> Terminal.of_int 0)
+  let nt_symbols = Vector.make' goto (fun () -> Nonterminal.of_int 0)
+
+  (* Hash tables to associate information to the pair of
+     a transition and a symbol.
+  *)
+
+  let nt_table = Hashtbl.create 7
+
+  let nt_pack lr1 goto =
+    (* Custom function to key into nt_table: compute a unique integer from
+       an lr1 state and a non-terminal. *)
+    Index.to_int lr1 * Nonterminal.count + Nonterminal.to_int goto
+
+  let t_table = Hashtbl.create 7
+
+  let t_pack lr1 t =
+    (* Custom function to key into t_table: compute a unique integer from
+       an lr1 state and a terminal. *)
+    Index.to_int lr1 * Terminal.count + Terminal.to_int t
+
+  (* A vector to store the predecessors of an lr1 state.
+     We cannot compute them directly, we discover them by exploring the
+     successor relation below. *)
+  let predecessors = Vector.make Lr1C.n []
+
+  let successors =
+    (* We populate all the data structures allocated above, i.e.
+       the vectors t_sources, t_symbols, t_targets, nt_sources, nt_symbols,
+       nt_targets and predecessors, as well as the tables t_table and
+       nt_table, by iterating over all successors. *)
+    let next_goto = Index.enumerate goto in
+    let next_shift = Index.enumerate shift in
+    Vector.init Lr1C.n begin fun source ->
+      List.fold_left begin fun acc (sym, target) ->
+        match sym with
+        (*| T t when not (Terminal.real t) ->
+          (* Ignore pseudo-terminals *)
+          acc*)
+        | _ ->
+          let target = Lr1C.of_g target in
+          let index = match sym with
+            | T t ->
+              let index = next_shift () in
+              Vector.set t_symbols index t;
+              Hashtbl.add t_table (t_pack source t) index;
+              of_shift index
+            | N nt ->
+              let index = next_goto () in
+              Vector.set nt_symbols index nt;
+              Hashtbl.add nt_table (nt_pack source nt) index;
+              of_goto index
+          in
+          Vector.set sources index source;
+          Vector.set targets index target;
+          Vector.set_cons predecessors target index;
+          index :: acc
+      end [] (Lr1.transitions (Lr1C.to_g source))
+    end
+
+  let successors lr1 = Vector.get successors lr1
+  let predecessors lr1 = Vector.get predecessors lr1
+
+  let find_goto source nt = Hashtbl.find nt_table (nt_pack source nt)
+
+  let source i = Vector.get sources i
+
+  let symbol i =
+    match split i with
+    | L i -> N (Vector.get nt_symbols i)
+    | R i -> T (Vector.get t_symbols i)
+
+  let goto_symbol i = Vector.get nt_symbols i
+  let shift_symbol i = Vector.get t_symbols i
+
+  let target i = Vector.get targets i
+end
+
+let set_of_predecessors =
+  Vector.init Lr1C.n (fun lr1 ->
+      let transitions = Transition.predecessors lr1 in
+      List.fold_left
+        (fun set tr -> Lr1Set.add (Transition.source tr) set)
+        Lr1Set.empty transitions
+    )
+
+module Redgraph = struct
+  type state =
+    | Goto of Lr1C.n index * state
+    | Lr1 of Lr1C.n index
+
+  let lr1 (Goto (lr1, _) | Lr1 lr1) = lr1
+
+  let productions =
+    Vector.init Lr1C.n (fun lr1 ->
+        let order p1 p2 =
+          let c =
             Int.compare
-              (Finite.Elt.to_int tgt1)
-              (Finite.Elt.to_int tgt2)
-          )
-          ~group:(fun tr trs ->
-              DFA.target tr,
-              List.fold_left
-                (fun sg tr -> Lr1.Set.union sg (DFA.label tr))
-                (DFA.label tr) trs
-            )
-          (DFA.transitions_from st)
+              (Array.length (Production.rhs p1))
+              (Array.length (Production.rhs p2))
+          in
+          if c = 0
+          then Int.compare (p1 :> int) (p2 :> int)
+          else c
+        in
+        Lr1.reductions (Lr1C.to_g lr1)
+        |> List.map (fun (_, ps) -> List.hd ps)
+        |> List.sort_uniq order
+      )
+
+  type states =
+    | Concrete of state
+    | Abstract of Lr1Set.t
+
+  let pop = function
+    | Concrete (Goto (_, s)) -> Concrete s
+    | Concrete (Lr1 lr1) ->
+      Abstract (Vector.get set_of_predecessors lr1)
+    | Abstract lr1s ->
+      Abstract (
+        Lr1Set.fold
+          (fun lr1 acc -> Lr1Set.union (Vector.get set_of_predecessors lr1) acc)
+          lr1s Lr1Set.empty
+      )
+
+  let rec pop_many states = function
+    | 0 -> states
+    | n ->
+      assert (n > 0);
+      pop_many (pop states) (n - 1)
+
+  let goto_target lr1 nt =
+    Transition.(target (of_goto (find_goto lr1 nt)))
+
+  let goto nt acc = function
+    | Abstract lr1s ->
+      Lr1Set.fold (fun lr1 acc ->
+          Goto (goto_target lr1 nt, Lr1 lr1) :: acc
+        ) lr1s acc
+    | Concrete st ->
+      Goto (goto_target (lr1 st) nt, st) :: acc
+
+  let transitions state =
+    let rec follow states depth acc = function
+      | [] -> acc
+      | p :: ps ->
+        let depth' = Array.length (Production.rhs p) in
+        let states = pop_many states (depth' - depth) in
+        let acc = goto (Production.lhs p) acc states in
+        follow states depth' acc ps
+    in
+    follow (Concrete state) 0 [] (Vector.get productions (lr1 state))
+
+  let visited_states = Hashtbl.create 7
+  let to_visit = ref []
+
+  let index_of state =
+    match Hashtbl.find_opt visited_states state with
+    | Some (i, _) -> i
+    | None ->
+      let i = Hashtbl.length visited_states in
+      let transitions = ref [] in
+      Hashtbl.add visited_states state (i, transitions);
+      to_visit := (state, transitions) :: !to_visit;
+      i
+
+  let visit (state, rtrans) =
+    rtrans := List.map index_of (transitions state)
+
+  let initial = index_of (Lr1 (Index.of_int Lr1C.n 509))
+
+  let rec loop () =
+    match !to_visit with
+    | [] -> ()
+    | xs ->
+      to_visit := [];
+      List.iter visit xs;
+      loop ()
+
+  let state_to_string state =
+    let rec aux = function
+      | Goto (lr1, st) ->
+        string_of_int (lr1 :> int) :: aux st
+      | Lr1 lr1 ->
+        [string_of_int (lr1 :> int)]
+    in
+    String.concat "::" (aux state)
+
+  let () =
+    loop ();
+    print_endline "digraph G {";
+    Hashtbl.iter (fun state (index, transitions) ->
+        Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
+          index (state_to_string state ^ Format.asprintf "\n%a" Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g (lr1 state)))));
+        List.iter (fun index' ->
+            Printf.printf "  ST%d -> ST%d\n" index index'
+          ) !transitions
+      ) visited_states;
+    print_endline "}";
+
+end
+
+(*module Unreduce : sig
+
+  type t = {
+    (* The production that is being reduced *)
+    production: Production.t;
+
+    (* The set of lookahead terminals that allow this reduction to happen *)
+    lookahead: TerminalSet.t;
+
+    (* The shape of the stack, all the transitions that are replaced by the
+       goto transition when the reduction is performed *)
+    steps: Transition.any index list;
+
+    (* The lr1 state at the top of the stack before reducing.
+       That is [state] can reduce [production] when the lookahead terminal
+       is in [lookahead]. *)
+    state: Lr1C.n index;
+  }
+
+  (* [goto_transition tr] lists all the reductions that ends up
+     following [tr]. *)
+  val goto_transition: Transition.goto index -> t list
+end = struct
+
+  type t = {
+    production: Production.t;
+    lookahead: TerminalSet.t;
+    steps: Transition.any index list;
+    state: Lr1C.n index;
+  }
+
+  let table = Vector.make Transition.goto []
+
+  (* [add_reduction lr1 (production, lookahead)] populates [table] by
+     simulating the reduction [production], starting from [lr1] when
+     lookahead is in [lookahead] *)
+  let add_reduction lr1 (production, lookahead) =
+    if not (Production.kind production = `START) then begin
+      let lhs = Production.lhs production in
+      let rhs = Production.rhs production in
+      let states =
+        Array.fold_right (fun _ states ->
+            let expand acc (state, steps) =
+              List.fold_left (fun acc tr ->
+                  (Transition.source tr, tr :: steps) :: acc
+                ) acc (Transition.predecessors state)
+            in
+            List.fold_left expand [] states
+          ) rhs [lr1, []]
       in
-      List.iter (fun (target, sigma) ->
-          Printf.printf "    | %s -> %s (next stack)\n"
-            (String.concat "|"
-               (List.map
-                  (fun lr1 -> string_of_int (lr1 : Grammar.lr1 :> int))
-                  (Lr1.Set.elements sigma)))
-            (st_fun target)
-        ) transitions;
-      Printf.printf "    | _ -> []\n";
-      (*if IntSet.is_empty action.Regex.Action.accept then (
-      ) else (
-        let index = IntSet.choose action.Regex.Action.accept in
-        let entry = List.hd lexer.def.entrypoints in
-        let clause = List.nth entry.clauses index in
-        match clause.action with
-        | None -> failwith "Reached unreachable case!"
-        | Some loc ->
-          let body = Common.read_location lexer.channel loc in
-          print_endline body
-      )*)
-    );
-  Printf.printf "  in %s\n"
-    (String.concat ", " (List.map st_fun (Array.to_list DFA.initial)))
+      List.iter (fun (source, steps) ->
+          Vector.set_cons table (Transition.find_goto source lhs)
+            { production; lookahead; steps; state=lr1 }
+        ) states
+    end
 
-let main () =
-  let source_name = match !source_name with
-    | None ->
-      Arg.usage specs usage;
-      exit 2
-    | Some name -> name
-  in
-  let dest_name = match !output_name with
-    | Some name -> name
-    | None ->
-      if Filename.check_suffix source_name ".mlyl"
-      then Filename.chop_suffix source_name ".mlyl" ^ ".ml"
-      else source_name ^ ".ml"
-  in
-  let ic = open_in_bin source_name in
-  let out = lazy (
-    let oc = open_out dest_name in
-    let tr = Common.open_tracker dest_name oc in
-    (oc, tr)
-  ) in
-  let lexbuf = Lexing.from_channel ic in
-  lexbuf.Lexing.lex_curr_p <- {
-    Lexing.pos_fname = source_name;
-    Lexing.pos_lnum = 1;
-    Lexing.pos_bol = 0;
-    Lexing.pos_cnum = 0;
-  };
-  try
-    let def = Parser.lexer_definition Lexer.main lexbuf in
-    if !Common.dump_parsetree then
-      Format.eprintf "Parsetree:\n%a\n%!"
-        Cmon.format (Syntax.print_definition def);
-    List.iter (fun entry ->
-        List.iter (fun clause ->
-            Syntax.check_wellformed clause.Syntax.pattern
-          ) entry.Syntax.clauses
-      ) def.Syntax.entrypoints;
-    let lexer = {channel = ic; def} in
-    Format.printf "module Make(Stack : sig\n\
-                  \  type t\n\
-                  \  val current_state : t -> int\n\
-                  \  val next : t -> t\n\
-                   end) : sig\n\
-                  \  val error_message : Stack.t -> int list\n\
-                  \  val messages : int -> string option\n\
-                   end = struct\n\
-                  \  open Stack\n\
-                  ";
-    let dfa_raw, dfa_min = Transl.translate lexer.def in
-    compiler_raw lexer dfa_raw;
-    compiler_min out lexer dfa_min;
-    let entry = List.hd lexer.def.entrypoints in
-    Format.printf "let messages = function\n";
-    List.iteri (fun index clause ->
-        match clause.Syntax.action with
-        | None -> Format.printf "  | %d -> None\n" index
-        | Some action ->
-          Format.printf "  | %d -> Some %S\n"
-            index (Common.read_location ic action)
-      ) entry.clauses;
-    Format.printf "  | _ -> failwith \"Unknown action\"\n\
-                   end\n%!";
-    close_in ic;
-    ignore (maybe_close out : bool);
-  with exn ->
-    let bt = Printexc.get_raw_backtrace () in
-    close_in ic;
-    if maybe_close out then
-      Sys.remove dest_name;
-    begin match exn with
-      | Parser.Error ->
-        let p = Lexing.lexeme_start_p lexbuf in
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: syntax error.\n"
-          p.Lexing.pos_fname p.Lexing.pos_lnum
-          (p.Lexing.pos_cnum - p.Lexing.pos_bol)
-      | Lexer.Lexical_error {msg; file; line; col} ->
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: %s.\n"
-          file line col msg
-      | Syntax.Illformed {msg; file; line; col} ->
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: %s.\n"
-          file line col msg
-      | Translate.Error str ->
-        Printf.fprintf stderr "Error during translation: %s.\n" str
-      | _ -> Printexc.raise_with_backtrace exn bt
-    end;
-    exit 3
+  let has_default_reduction lr1 =
+    match Lr1.transitions lr1 with
+    | _ :: _ -> None
+    | [] ->
+      match Lr1.reductions lr1 with
+      | [] -> None
+      | (_, [p]) :: ps when List.for_all (fun (_, p') -> p' = [p]) ps ->
+        Some p
+      | _ -> None
 
-let () =
-  main ();
-  exit 0
+  (* [get_reductions lr1] returns the list of productions and the lookahead
+     sets that allow reducing them from state [lr1] *)
+  let get_reductions lr1 =
+    let lr1 = Lr1C.to_g lr1 in
+    match has_default_reduction lr1 with
+    | Some prod ->
+      (* State has a default reduction, the lookahead can be any terminal *)
+      [prod, all_terminals]
+    | None ->
+      let raw =
+        let add acc (t, ps) = (t, List.hd ps) :: acc in
+        List.fold_left add [] (Lr1.reductions lr1)
+      in
+      (* Regroup lookahead tokens by production *)
+      Utils.Misc.group_by raw
+        ~compare:(fun (_, p1) (_, p2) ->
+            Int.compare (Production.to_int p1) (Production.to_int p2)
+          )
+        ~group:(fun (t, p) tps ->
+            let set = List.fold_left
+                (fun set (t, _) -> TerminalSet.add t set)
+                (TerminalSet.singleton t) tps
+            in
+            (p, set)
+          )
+
+  let () =
+    (* Populate [table] with the reductions of all state *)
+    Index.iter Lr1C.n
+      (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1))
+
+  let goto_transition tr = Vector.get table tr
+end
+
+module Sigma = Middle.Sigma.Make(Lr1)
+module Regex = Mulet.Make(Sigma)
+    (struct
+      type t = unit
+      let compare () () = 0
+      let empty = ()
+      let plus () () = ()
+    end)*)

@@ -10,12 +10,12 @@ rule error_message = parse error
 
 *)
 
-| structure_item; <-; SEMI; 
-  LET; ext; list(attribute); rec_flag; let_binding_body;<-
+| structure_item<-; SEMI; 
+  LET; ext; list(attribute); rec_flag; let_binding_body<-
   { "Spurious semi-colon at " ^ loc semi }
 
-| LPAREN; [. RPAREN]; <-
-  { "Unclosed parenthesis" }
+(*| LPAREN; [. RPAREN]; <-
+  { "Unclosed parenthesis" }*)
 
 | [. expr ]
   { "Expecting expression" }

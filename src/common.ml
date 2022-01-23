@@ -50,11 +50,13 @@ let update_tracker tr =
 let copy_buffer = Bytes.create 1024
 
 let read_location ic loc =
+  let pos = pos_in ic in
   let start = loc.start_pos and stop = loc.end_pos in
   seek_in ic start;
   let n = (stop - start) in
   let b = Buffer.create n in
   Buffer.add_channel b ic n;
+  seek_in ic pos;
   Buffer.contents b
 
 let copy_chars_unix ic oc start stop =

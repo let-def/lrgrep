@@ -24,6 +24,8 @@ open Parser
 let brace_depth = ref 0
 and comment_depth = ref 0
 
+let ic = ref None
+
 let in_pattern () = !brace_depth = 0 && !comment_depth = 0
 
 exception Lexical_error of {msg: string; file: string; line: int; col: int}
@@ -165,7 +167,13 @@ rule main = parse
     let start_col = start_pos - p.Lexing.pos_bol in
     brace_depth := 1;
     let end_pos = handle_lexical_error action lexbuf in
-    ACTION { loc_file; start_pos; end_pos; start_line; start_col }
+    let location = { loc_file; start_pos; end_pos; start_line; start_col } in
+    let code =
+      match !ic with
+      | None -> assert false
+      | Some ic -> Common.read_location ic location
+    in
+    ACTION (location, code)
   }
 | '=' { EQUAL }
 | '|' { BAR }
