@@ -50,7 +50,7 @@ open Syntax
 %nonassoc "?" "*" (*"+"*)
 (*%left "#"*)
 (*%nonassoc IDENT "_" "[" "("*)
-%left "<-" ";"
+%left ";"
 
 %start <Syntax.lexer_definition> lexer_definition
 %start <Syntax.prompt_sentence> prompt_sentence
@@ -103,8 +103,10 @@ wild_symbol:
 regterm:
 | "_"
   { Wildcard }
-| symbol
-  { Symbol $1 }
+| symbol=symbol
+  { Symbol {symbol; reduce=false} }
+| symbol=symbol "<-"
+  { Symbol {symbol; reduce=true} }
 | "[" prefix=wild_symbol* "." suffix=wild_symbol* "]"
   { Item {lhs=None; prefix; suffix} }
 | "[" lhs=symbol ":" prefix=wild_symbol* "." suffix=wild_symbol* "]"
@@ -121,12 +123,6 @@ regexp:
   { [$1, make_position $endpos] }
 | "(" regexp ")"
   { $2 }
-| regexp ioption(";") "<-"
-  { [Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($3)] }
-| regexp ioption(";") "<-" regexp
-  { (Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($3)) :: $4 }
 | regexp ";" regexp
   { $1 @ $3 }
 ;

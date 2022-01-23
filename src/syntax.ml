@@ -30,7 +30,10 @@ type symbol =
   | Apply of string * symbol list
 
 type regular_term =
-  | Symbol of symbol
+  | Symbol of {
+      symbol: symbol;
+      reduce: bool;
+    }
   | Item of {
       lhs: symbol option;
       prefix: symbol option list;
@@ -39,7 +42,6 @@ type regular_term =
   | Wildcard
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression * position
-  | Reduce of regular_expression * location
 
 and regular_expression =
   (regular_term * position) list
@@ -103,7 +105,11 @@ let rec print_symbol = function
     ]
 
 let rec print_regular_term = function
-  | Symbol sym -> Cmon.constructor "Symbol" (print_symbol sym)
+  | Symbol {symbol; reduce} ->
+    Cmon.crecord "Symbol" [
+      "symbol", print_symbol symbol;
+      "reduce", Cmon.bool reduce;
+    ]
   | Item {lhs; prefix; suffix} ->
     Cmon.crecord "Item" [
       "lhs", print_option print_symbol lhs;
@@ -120,11 +126,6 @@ let rec print_regular_term = function
     Cmon.construct "Repetition" [
       print_regular_expression re;
       print_position pos;
-    ]
-  | Reduce (re, loc) ->
-    Cmon.construct "Reduce" [
-      print_regular_expression re;
-      print_location loc;
     ]
 
 and print_regular_expression re =
@@ -157,52 +158,6 @@ let print_definition {header; entrypoints; trailer} : Cmon.t =
     "entrypoints", Cmon.list (List.map print_entrypoints entrypoints);
     "trailer", print_location trailer;
   ]
-
-exception Illformed of {msg: string; file: string; line: int; col: int}
-
-let illformed loc fmt =
-  Printf.ksprintf (fun msg -> raise (Illformed {
-      msg;
-      file = loc.loc_file;
-      line = loc.start_line;
-      col = loc.start_col;
-    })) fmt
-
-type context =
-  | Reducible
-  | Inside_repetition of position
-  | Inside_sequence of position
-
-let rec check_wellformed_term context = function
-  | (Symbol _ | Item _ | Wildcard) -> ()
-  | Alternative (re1, re2) ->
-    check_wellformed context re1;
-    check_wellformed context re2
-  | Repetition (re, pos) ->
-    check_wellformed (Inside_repetition pos) re
-  | Reduce (re, loc) ->
-    begin match context with
-      | Reducible -> check_wellformed Reducible re
-      | Inside_repetition {line; col} ->
-        illformed loc
-          "Reduce operator cannot appear inside \
-           repetition (started at line %d, character %d)"
-          line col
-      | Inside_sequence {line; col} ->
-        illformed loc
-          "Reduce operator cannot appear inside a sequence \
-           (started at line %d, character %d)"
-          line col
-    end
-
-and check_wellformed context = function
-  | [] -> ()
-  | (x, {line; col}) :: xs ->
-    check_wellformed_term context x;
-    let context = Inside_sequence {line; col} in
-    List.iter (fun (re, _) -> check_wellformed_term context re) xs
-
-let check_wellformed x = check_wellformed Reducible x
 
 type prompt_sentence =
   | Prompt_interpret of symbol list
