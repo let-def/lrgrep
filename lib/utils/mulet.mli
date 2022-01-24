@@ -181,7 +181,7 @@ module type DERIVABLE = sig
   (** Compute the derivative of the object with respect to a specific subset
       of the alphabet.
       It returns the labels that were consumed in this process as well as the
-      regular expression represents the regular language after derivation. *)
+      regular expression that represents the derived language. *)
 end
 
 (** The signature of instantiated regular expression deriver. *)

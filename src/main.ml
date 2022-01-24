@@ -131,24 +131,6 @@ let all_terminals =
   do acc := TerminalSet.add (Terminal.of_int i) !acc done;
   !acc
 
-(*module Lr1C = struct
-  include Fix.Indexing.Const(struct let cardinal = Grammar.Lr1.count end)
-  let to_g lr1 = Grammar.Lr1.of_int (Index.to_int lr1)
-  let of_g lr1 = Index.of_int n (Grammar.Lr1.to_int lr1)
-end
-
-let symbols = Vector.init Lr1C.n
-    (fun lr1 -> Grammar.Lr0.incoming (Grammar.Lr1.lr0 (Lr1C.to_g lr1)))
-
-let predecessors = Vector.make Lr1C.n []
-
-let () = Grammar.Lr1.iter begin fun lr1 ->
-    let src = Lr1C.of_g lr1 in
-    List.iter (fun (_sym, tgt) ->
-        Vector.set_cons predecessors (Lr1C.of_g tgt) src
-      ) (Grammar.Lr1.transitions lr1)
-  end*)
-
 (* ---------------------------------------------------------------------- *)
 
 (* [Lr1C] represents Lr1 states as elements of a [Numbering.Typed] set *)
@@ -359,11 +341,17 @@ let set_of_predecessors =
 
 module Redgraph =
 struct
-  type state =
-    | Goto of Lr1C.n index * state
-    | Lr1 of Lr1C.n index
+  type parent_state = {
+    lr1: Lr1C.n index;
+    mutable goto: Lr1C.n index list;
+    mutable parents: parent_state list;
+  }
 
-  let lr1 (Goto (lr1, _) | Lr1 lr1) = lr1
+  type state =
+    | Goto of {lr1: Lr1C.n index; parent: state}
+    | Lr1 of {lr1: Lr1C.n index; parents: parent_state list ref}
+
+  let lr1 (Goto {lr1; _} | Lr1 {lr1; _}) = lr1
 
   let productions =
     Vector.init Lr1C.n (fun lr1 ->
@@ -382,24 +370,30 @@ struct
         |> List.sort_uniq order
       )
 
+
   type states =
     | Concrete of state
-    | Abstract of Lr1Set.t
+    | Abstract of parent_state list
+
+  let parent_states lr1 =
+    List.map
+      (fun tr -> {lr1 = Transition.source tr; goto = []; parents = []})
+      (Transition.predecessors lr1)
 
   let pop = function
-    | Concrete (Goto (_, s)) -> Concrete s
-    | Concrete (Lr1 lr1) ->
-      Abstract (Vector.get set_of_predecessors lr1)
-    | Abstract lr1s ->
+    | Concrete (Goto {parent; _}) -> Concrete parent
+    | Concrete (Lr1 {lr1; parents}) ->
+      if !parents = [] then
+        parents := parent_states lr1;
+      Abstract !parents
+    | Abstract states ->
       Abstract (
-        Lr1Set.fold
-          (fun lr1 acc -> Lr1Set.union (Vector.get set_of_predecessors lr1) acc)
-          lr1s Lr1Set.empty
+        List.fold_left (fun states state ->
+            if state.parents = [] then
+              state.parents <- parent_states state.lr1;
+            state.parents @ states
+          ) [] states
       )
-
-  type transition =
-    | Virtual of state
-    | Real of Lr1C.n index
 
   let rec pop_many states = function
     | 0 -> states
@@ -413,16 +407,17 @@ struct
     | result -> Some result
 
   let goto nt acc = function
-    | Abstract lr1s ->
-      Lr1Set.fold (fun lr1 acc ->
-          match goto_target lr1 nt with
-          | None -> acc
-          | Some st -> Real st :: acc
-        ) lr1s acc
+    | Abstract states ->
+      List.iter (fun state ->
+          match goto_target state.lr1 nt with
+          | None -> ()
+          | Some st -> state.goto <- st :: state.goto
+        ) states;
+      acc
     | Concrete st ->
       begin match goto_target (lr1 st) nt with
         | None -> acc
-        | Some tgt -> Virtual (Goto (tgt, st)) :: acc
+        | Some tgt -> Goto {lr1=tgt; parent=st} :: acc
       end
 
   let transitions state =
@@ -436,11 +431,10 @@ struct
     in
     follow (Concrete state) 0 [] (Vector.get productions (lr1 state))
 
-  let rec close_transitions state acc =
-    List.fold_left (fun (rs, vs) -> function
-        | Real st -> ((st :: rs), vs)
-        | Virtual st -> close_transitions st (rs, (st :: vs))
-      ) acc (transitions state)
+  let rec close_transitions acc state =
+    let new_transitions = transitions state in
+    let acc = new_transitions @ acc in
+    List.fold_left close_transitions acc new_transitions
 
   module Derivations = struct
     include Gensym()
@@ -461,12 +455,12 @@ struct
       | None ->
         let node =
           match state with
-          | Lr1 state ->
+          | Lr1 {lr1=state; _} ->
             let node = { index = fresh (); state; derivations = [] } in
             roots := node :: !roots;
             node
-          | Goto (state, next) ->
-            let node' = register next in
+          | Goto {lr1=state; parent} ->
+            let node' = register parent in
             let node = { index = fresh (); state; derivations = [] } in
             node'.derivations <- node :: node'.derivations;
             node
@@ -481,22 +475,37 @@ struct
       let set_node _ node = Vector.set vector node.index node in
       Hashtbl.iter set_node table;
       vector
+
+    let derive
+        ~(root : 'a)
+        ~(step : 'a -> Lr1C.n index -> 'a)
+      =
+      let vector = Vector.make n root in
+      let rec init_node derived node =
+        let derived = step derived node.state in
+        Vector.set vector node.index derived;
+        List.iter (init_node derived) node.derivations
+      in
+      List.iter (init_node root) !roots;
+      vector
   end
 
   let transitions =
     Vector.init Lr1C.n (fun lr1 ->
-      let rs, vs = close_transitions (Lr1 lr1) ([], []) in
-      let compare_index =
-        (Int.compare
-         : int -> int -> int
-         :> _ index -> _ index -> int)
-      in
-      let vs = List.map Derivations.register vs in
-      (List.sort_uniq compare_index rs,
-       List.sort_uniq compare_index vs)
-    )
+        let rs = ref [] in
+        let vs = close_transitions [] (Lr1 {lr1; parents=rs})  in
+        let compare_index =
+          (Int.compare
+           : int -> int -> int
+           :> _ index -> _ index -> int)
+        in
+        let vs = List.map Derivations.register vs in
+        (!rs, List.sort_uniq compare_index vs)
+      )
 
   let derivations = Derivations.freeze ()
+
+  let derive = Derivations.derive
 
   let () =
     print_endline "digraph G {";
@@ -506,12 +515,137 @@ struct
           (src :> int)
           (Format.asprintf "%d\n%a" (src :> int)
              Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
-        List.iter (fun tgt ->
-            Printf.printf "  ST%d -> ST%d\n"
+        let tgt_table = Hashtbl.create 7 in
+        let rec visit_target pst =
+          List.iter (fun tgt ->
+              let lbl = string_of_int (pst.lr1 :> int) in
+              match Hashtbl.find tgt_table tgt with
+              | exception Not_found ->
+                Hashtbl.add tgt_table tgt (ref [lbl])
+              | lst -> lst := lbl :: !lst
+            ) pst.goto;
+          List.iter visit_target pst.parents
+        in
+        List.iter visit_target targets;
+        Hashtbl.iter (fun tgt srcs ->
+            Printf.printf "  ST%d -> ST%d [label=%S]\n"
               (src :> int) (tgt : _ index :> int)
-          ) targets
+              (String.concat "|" !srcs)
+          ) tgt_table
       );
     print_endline "}";
+
+end
+
+module Sigma : sig
+  (** The set of states is represented either as positive occurrences (all
+      states that are contained) or negative occurrences (all states that are
+      not contained).
+
+      This makes complement a cheap operation.  *)
+  type t =
+    | Pos of Lr1Set.t
+    | Neg of Lr1Set.t
+
+  val singleton : Lr1.t -> t
+  val to_lr1set : t -> Lr1Set.t
+
+  include Mulet.SIGMA with type t := t
+
+  val union : t -> t -> t
+  (** Compute union of two sets *)
+
+  val intersect : t -> t -> bool
+  (** Check if two sets intersect *)
+
+  val mem : Lr1.t -> t -> bool
+  (** [mem lr1 t] checks if the state [lr1] is an element of a sigma set [t] *)
+end = struct
+  type t =
+    | Pos of Lr1Set.t
+    | Neg of Lr1Set.t
+
+  let empty = Pos Lr1Set.empty
+  let full = Neg Lr1Set.empty
+  let compl = function Pos x -> Neg x | Neg x -> Pos x
+  let is_empty = function Pos x -> Lr1Set.is_empty x | Neg _ -> false
+  let is_full = function Neg x -> Lr1Set.is_empty x | Pos _ -> false
+
+  let singleton lr1 = Pos (Lr1Set.singleton lr1)
+
+  let to_lr1set = function
+    | Pos xs -> xs
+    | Neg xs -> Lr1Set.diff Lr1.all_states xs
+
+  let is_subset_of x1 x2 =
+    match x1, x2 with
+    | Pos x1, Pos x2 -> Lr1.Set.subset x1 x2
+    | Neg x1, Neg x2 -> Lr1.Set.subset x2 x1
+    | Pos x1, Neg x2 -> Lr1.Set.disjoint x1 x2
+    | Neg _ , Pos _ -> false
+
+  let inter x1 x2 =
+    match x1, x2 with
+    | Pos x1, Pos x2 -> Pos (Lr1.Set.inter x1 x2)
+    | Neg x1, Neg x2 -> Neg (Lr1.Set.union x1 x2)
+    | (Pos x1, Neg x2) | (Neg x2, Pos x1) ->
+      Pos (Lr1.Set.diff x1 x2)
+
+  let intersect x1 x2 =
+    match x1, x2 with
+    | Pos x1, Pos x2 -> not (Lr1.Set.disjoint x1 x2)
+    | Neg _, Neg _ -> true
+    | Pos x1, Neg x2 | Neg x2, Pos x1 ->
+      not (Lr1.Set.is_empty (Lr1.Set.diff x1 x2))
+
+  let compare x1 x2 =
+    match x1, x2 with
+    | Pos x1, Pos x2 -> Lr1.Set.compare x1 x2
+    | Neg x1, Neg x2 -> Lr1.Set.compare x2 x1
+    | Pos _ , Neg _ -> -1
+    | Neg _ , Pos _ -> 1
+
+  let union x1 x2 =
+    match x1, x2 with
+    | Neg x1, Neg x2 -> Neg (Lr1.Set.inter x1 x2)
+    | Pos x1, Pos x2 -> Pos (Lr1.Set.union x1 x2)
+    | Pos x1, Neg x2 | Neg x2, Pos x1 ->
+      Neg (Lr1.Set.diff x2 x1)
+
+  let partition l =
+    let only_pos = ref true in
+    let project = function Pos x -> x | Neg x -> only_pos := false; x in
+    let l = List.map project l in
+    let pos x = Pos x in
+    try
+      if !only_pos
+      then List.map pos (Lr1.partition l)
+      else
+        let parts, total = Lr1.partition_and_total l in
+        Neg total :: List.map pos parts
+    with exn ->
+      Printf.eprintf
+        "Partition failed with %d inputs (strictly positive: %b):\n"
+        (List.length l) !only_pos;
+      List.iter (fun set ->
+          Printf.eprintf "- cardinal=%d, set={" (Lr1.Set.cardinal set);
+          Lr1.Set.iter (fun elt -> Printf.eprintf "%d," (elt :> int)) set;
+        ) l;
+      raise exn
+
+  let mem x = function
+    | Pos xs -> Lr1.Set.mem x xs
+    | Neg xs -> not (Lr1.Set.mem x xs)
+end
+
+
+module Re :
+module Derivable_red = struct
+  let from_re re =
+    Redgraph.derive
+      ~root:re
+      ~step(fun re state -> Mulet.Make
+
 
 end
 
