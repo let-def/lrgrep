@@ -145,6 +145,14 @@ module Lr1Set = BitSet.Make(struct
     let of_int i = Index.of_int Lr1C.n i
   end)
 
+module Lr1Refine = Refine.Make(Lr1Set)
+
+let all_states =
+  let acc = ref Lr1Set.empty in
+  for i = (cardinal Lr1C.n) - 1 downto 0
+  do acc := Lr1Set.add (Index.of_int Lr1C.n i) !acc done;
+  !acc
+
 (* ---------------------------------------------------------------------- *)
 
 (* Transitions are represented as finite sets with auxiliary functions
@@ -575,42 +583,42 @@ end = struct
 
   let to_lr1set = function
     | Pos xs -> xs
-    | Neg xs -> Lr1Set.diff Lr1.all_states xs
+    | Neg xs -> Lr1Set.diff all_states xs
 
   let is_subset_of x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Lr1.Set.subset x1 x2
-    | Neg x1, Neg x2 -> Lr1.Set.subset x2 x1
-    | Pos x1, Neg x2 -> Lr1.Set.disjoint x1 x2
+    | Pos x1, Pos x2 -> Lr1Set.subset x1 x2
+    | Neg x1, Neg x2 -> Lr1Set.subset x2 x1
+    | Pos x1, Neg x2 -> Lr1Set.disjoint x1 x2
     | Neg _ , Pos _ -> false
 
   let inter x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Pos (Lr1.Set.inter x1 x2)
-    | Neg x1, Neg x2 -> Neg (Lr1.Set.union x1 x2)
+    | Pos x1, Pos x2 -> Pos (Lr1Set.inter x1 x2)
+    | Neg x1, Neg x2 -> Neg (Lr1Set.union x1 x2)
     | (Pos x1, Neg x2) | (Neg x2, Pos x1) ->
-      Pos (Lr1.Set.diff x1 x2)
+      Pos (Lr1Set.diff x1 x2)
 
   let intersect x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> not (Lr1.Set.disjoint x1 x2)
+    | Pos x1, Pos x2 -> not (Lr1Set.disjoint x1 x2)
     | Neg _, Neg _ -> true
     | Pos x1, Neg x2 | Neg x2, Pos x1 ->
-      not (Lr1.Set.is_empty (Lr1.Set.diff x1 x2))
+      not (Lr1Set.is_empty (Lr1Set.diff x1 x2))
 
   let compare x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Lr1.Set.compare x1 x2
-    | Neg x1, Neg x2 -> Lr1.Set.compare x2 x1
+    | Pos x1, Pos x2 -> Lr1Set.compare x1 x2
+    | Neg x1, Neg x2 -> Lr1Set.compare x2 x1
     | Pos _ , Neg _ -> -1
     | Neg _ , Pos _ -> 1
 
   let union x1 x2 =
     match x1, x2 with
-    | Neg x1, Neg x2 -> Neg (Lr1.Set.inter x1 x2)
-    | Pos x1, Pos x2 -> Pos (Lr1.Set.union x1 x2)
+    | Neg x1, Neg x2 -> Neg (Lr1Set.inter x1 x2)
+    | Pos x1, Pos x2 -> Pos (Lr1Set.union x1 x2)
     | Pos x1, Neg x2 | Neg x2, Pos x1 ->
-      Neg (Lr1.Set.diff x2 x1)
+      Neg (Lr1Set.diff x2 x1)
 
   let partition l =
     let only_pos = ref true in
@@ -619,25 +627,24 @@ end = struct
     let pos x = Pos x in
     try
       if !only_pos
-      then List.map pos (Lr1.partition l)
+      then List.map pos (Lr1Refine.partition l)
       else
-        let parts, total = Lr1.partition_and_total l in
+        let parts, total = Lr1Refine.partition_and_total l in
         Neg total :: List.map pos parts
     with exn ->
       Printf.eprintf
         "Partition failed with %d inputs (strictly positive: %b):\n"
         (List.length l) !only_pos;
       List.iter (fun set ->
-          Printf.eprintf "- cardinal=%d, set={" (Lr1.Set.cardinal set);
-          Lr1.Set.iter (fun elt -> Printf.eprintf "%d," (elt :> int)) set;
+          Printf.eprintf "- cardinal=%d, set={" (Lr1Set.cardinal set);
+          Lr1Set.iter (fun elt -> Printf.eprintf "%d," (elt :> int)) set;
         ) l;
       raise exn
 
   let mem x = function
-    | Pos xs -> Lr1.Set.mem x xs
-    | Neg xs -> not (Lr1.Set.mem x xs)
+    | Pos xs -> Lr1Set.mem x xs
+    | Neg xs -> not (Lr1Set.mem x xs)
 end
-
 
 module Re :
 module Derivable_red = struct
@@ -648,112 +655,3 @@ module Derivable_red = struct
 
 
 end
-
-(*module Unreduce : sig
-
-  type t = {
-    (* The production that is being reduced *)
-    production: Production.t;
-
-    (* The set of lookahead terminals that allow this reduction to happen *)
-    lookahead: TerminalSet.t;
-
-    (* The shape of the stack, all the transitions that are replaced by the
-       goto transition when the reduction is performed *)
-    steps: Transition.any index list;
-
-    (* The lr1 state at the top of the stack before reducing.
-       That is [state] can reduce [production] when the lookahead terminal
-       is in [lookahead]. *)
-    state: Lr1C.n index;
-  }
-
-  (* [goto_transition tr] lists all the reductions that ends up
-     following [tr]. *)
-  val goto_transition: Transition.goto index -> t list
-end = struct
-
-  type t = {
-    production: Production.t;
-    lookahead: TerminalSet.t;
-    steps: Transition.any index list;
-    state: Lr1C.n index;
-  }
-
-  let table = Vector.make Transition.goto []
-
-  (* [add_reduction lr1 (production, lookahead)] populates [table] by
-     simulating the reduction [production], starting from [lr1] when
-     lookahead is in [lookahead] *)
-  let add_reduction lr1 (production, lookahead) =
-    if not (Production.kind production = `START) then begin
-      let lhs = Production.lhs production in
-      let rhs = Production.rhs production in
-      let states =
-        Array.fold_right (fun _ states ->
-            let expand acc (state, steps) =
-              List.fold_left (fun acc tr ->
-                  (Transition.source tr, tr :: steps) :: acc
-                ) acc (Transition.predecessors state)
-            in
-            List.fold_left expand [] states
-          ) rhs [lr1, []]
-      in
-      List.iter (fun (source, steps) ->
-          Vector.set_cons table (Transition.find_goto source lhs)
-            { production; lookahead; steps; state=lr1 }
-        ) states
-    end
-
-  let has_default_reduction lr1 =
-    match Lr1.transitions lr1 with
-    | _ :: _ -> None
-    | [] ->
-      match Lr1.reductions lr1 with
-      | [] -> None
-      | (_, [p]) :: ps when List.for_all (fun (_, p') -> p' = [p]) ps ->
-        Some p
-      | _ -> None
-
-  (* [get_reductions lr1] returns the list of productions and the lookahead
-     sets that allow reducing them from state [lr1] *)
-  let get_reductions lr1 =
-    let lr1 = Lr1C.to_g lr1 in
-    match has_default_reduction lr1 with
-    | Some prod ->
-      (* State has a default reduction, the lookahead can be any terminal *)
-      [prod, all_terminals]
-    | None ->
-      let raw =
-        let add acc (t, ps) = (t, List.hd ps) :: acc in
-        List.fold_left add [] (Lr1.reductions lr1)
-      in
-      (* Regroup lookahead tokens by production *)
-      Utils.Misc.group_by raw
-        ~compare:(fun (_, p1) (_, p2) ->
-            Int.compare (Production.to_int p1) (Production.to_int p2)
-          )
-        ~group:(fun (t, p) tps ->
-            let set = List.fold_left
-                (fun set (t, _) -> TerminalSet.add t set)
-                (TerminalSet.singleton t) tps
-            in
-            (p, set)
-          )
-
-  let () =
-    (* Populate [table] with the reductions of all state *)
-    Index.iter Lr1C.n
-      (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1))
-
-  let goto_transition tr = Vector.get table tr
-end
-
-module Sigma = Middle.Sigma.Make(Lr1)
-module Regex = Mulet.Make(Sigma)
-    (struct
-      type t = unit
-      let compare () () = 0
-      let empty = ()
-      let plus () () = ()
-    end)*)
