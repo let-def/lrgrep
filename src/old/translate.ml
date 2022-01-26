@@ -132,6 +132,8 @@ module Make(Regex : Middle.Intf.REGEX) = struct
       Regex.Expr.(|.) (translate_expression re1) (translate_expression re2)
     | Repetition (re, _) ->
       Regex.Expr.star (translate_expression re)
+    | Reduce (re, _) ->
+      Regex.simulate_reductions (translate_expression re)
 
   and translate_expression (terms : Syntax.regular_expression) : Regex.Expr.t =
     let terms =
