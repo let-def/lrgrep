@@ -117,6 +117,8 @@ module type S = sig
 
   val subset: t -> t -> bool
 
+  val quick_subset : t -> t -> bool
+
   val diff : t -> t -> t
 
   (** {1 Decomposing sets}
@@ -292,6 +294,23 @@ module IntSet = struct
           subset qs1 qs2
       else
         subset s1 qs2
+
+  let rec quick_subset a1 ss1 = function
+    | N -> false
+    | C (a2, ss2, qs2) ->
+      if a1 = a2 then
+        ss1 land ss2 <> 0
+      else
+        (a1 > a2 && quick_subset a1 ss1 qs2)
+
+  let quick_subset s1 s2 =
+    match s1 with
+    | N -> true
+    | C (a1, ss1, _) ->
+      (* We know that, by construction, ss1 is not empty.
+         It suffices to test s2 also has elements in common with ss1 at address
+         a1 to determine the quick_subset relation. *)
+      quick_subset a1 ss1 s2
 
   let mem i s =
     subset (singleton i) s
@@ -512,6 +531,7 @@ struct
   let compare      = IntSet.compare
   let equal        = IntSet.equal
   let subset       = IntSet.subset
+  let quick_subset = IntSet.quick_subset
   let diff         = IntSet.diff
 
   let sorted_union  = IntSet.sorted_union

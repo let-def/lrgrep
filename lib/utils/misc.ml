@@ -2,6 +2,14 @@ let array_last arr = match Array.length arr with
   | 0 -> None
   | n -> Some (arr.(n - 1))
 
+let rec array_findi f i arr =
+  if i >= Array.length arr then
+    raise Not_found
+  else if f i arr.(i) then
+    i
+  else
+    array_findi f (i + 1) arr
+
 let group_by
     ~(compare:'a -> 'a -> int)
     ~(group:'a -> 'a list -> 'b)

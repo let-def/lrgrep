@@ -57,7 +57,7 @@ let specs = [
 
 let () = Arg.parse specs (fun name -> source_name := Some name) usage
 
-module Grammar = MenhirSdk.Cmly_read.Read (struct
+module Input = MenhirSdk.Cmly_read.Read (struct
     let filename = match !grammar_file with
       | Some filename -> filename
       | None ->
@@ -102,26 +102,26 @@ let lexer_definition =
   Lexer.ic := None;
   result
 
-let initial_states : (Grammar.nonterminal * Grammar.lr1) list =
-  Grammar.Lr1.fold begin fun lr1 acc ->
-    let lr0 = Grammar.Lr1.lr0 lr1 in
-    match Grammar.Lr0.incoming lr0 with
+open Fix.Indexing
+open Input
+
+let initial_states : (nonterminal * lr1) list =
+  Lr1.fold begin fun lr1 acc ->
+    let lr0 = Lr1.lr0 lr1 in
+    match Lr0.incoming lr0 with
     | Some _ -> acc
     | None ->
       (* Initial state *)
       Format.eprintf "Initial state %d\n%a\n"
-        (Grammar.Lr1.to_int lr1)
-        Grammar.Print.itemset (Grammar.Lr0.items lr0);
-      let (prod, _) = List.hd (Grammar.Lr0.items lr0) in
-      let nt = match (Grammar.Production.rhs prod).(0) with
-        | Grammar.N nt, _, _ -> nt
+        (Lr1.to_int lr1)
+        Print.itemset (Lr0.items lr0);
+      let (prod, _) = List.hd (Lr0.items lr0) in
+      let nt = match (Production.rhs prod).(0) with
+        | N nt, _, _ -> nt
         | _ -> assert false
       in
       (nt, lr1) :: acc
   end []
-
-open Fix.Indexing
-open Grammar
 
 module TerminalSet = BitSet.Make(Terminal)
 
@@ -152,6 +152,11 @@ let all_states =
   for i = (cardinal Lr1C.n) - 1 downto 0
   do acc := Lr1Set.add (Index.of_int Lr1C.n i) !acc done;
   !acc
+
+module LRijkstra =
+  LRijkstraFast.Make(Input)(TerminalSet)(Lr1C)
+    (struct let all_terminals = all_terminals end)
+    ()
 
 (* ---------------------------------------------------------------------- *)
 
@@ -555,7 +560,7 @@ module Sigma : sig
     | Pos of Lr1Set.t
     | Neg of Lr1Set.t
 
-  val singleton : Lr1.t -> t
+  val singleton : Lr1C.n index -> t
   val to_lr1set : t -> Lr1Set.t
 
   include Mulet.SIGMA with type t := t
@@ -566,7 +571,7 @@ module Sigma : sig
   val intersect : t -> t -> bool
   (** Check if two sets intersect *)
 
-  val mem : Lr1.t -> t -> bool
+  val mem : Lr1C.n index -> t -> bool
   (** [mem lr1 t] checks if the state [lr1] is an element of a sigma set [t] *)
 end = struct
   type t =
@@ -646,12 +651,11 @@ end = struct
     | Neg xs -> not (Lr1Set.mem x xs)
 end
 
-module Re :
-module Derivable_red = struct
+(*module Derivable_red = struct
   let from_re re =
     Redgraph.derive
       ~root:re
       ~step(fun re state -> Mulet.Make
 
 
-end
+end*)
