@@ -15,10 +15,10 @@ rule error_message = parse error
   { "Spurious semi-colon at " ^ loc semi }
 
 (*| LPAREN; [. RPAREN]; <-
-  { "Unclosed parenthesis" }*)
+  { "Unclosed parenthesis" }
 
 | [. expr ]
-  { "Expecting expression" }
+  { "Expecting expression" }*)
 
 (*rule main = parse
 | ([ . module_expr ] & [ . paren_module_expr ]) <-

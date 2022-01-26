@@ -153,6 +153,10 @@ let all_states =
   do acc := Lr1Set.add (Index.of_int Lr1C.n i) !acc done;
   !acc
 
+let lr1set_bind : Lr1Set.t -> (Lr1Set.element -> Lr1Set.t) -> Lr1Set.t =
+  fun s f ->
+  Lr1Set.fold (fun lr1 acc -> Lr1Set.union acc (f lr1)) s Lr1Set.empty
+
 module LRijkstra =
   LRijkstraFast.Make(Input)(TerminalSet)(Lr1C)
     (struct let all_terminals = all_terminals end)
@@ -651,11 +655,280 @@ end = struct
     | Neg xs -> not (Lr1Set.mem x xs)
 end
 
-(*module Derivable_red = struct
-  let from_re re =
-    Redgraph.derive
-      ~root:re
-      ~step(fun re state -> Mulet.Make
+module Label = struct
+  type t =
+    | Nothing
+    | Action of { priority: int; action_desc: action_desc }
 
+  and action_desc =
+    | Unreachable
+    | Code of string
 
-end*)
+  let empty = Nothing
+  let compare : t -> t -> int = compare
+  let append t1 t2 =
+    match t1, t2 with
+    | Nothing, x | x, Nothing -> x
+    | Action {priority=p1; _}, Action {priority=p2; _} ->
+      if p1 <= p2
+      then t1
+      else t2
+end
+
+module Reg = Mulet.Make(Sigma)(Label)(Mulet.Null_derivable)
+
+module State_indices =
+struct
+
+  (* Precompute states associated to symbols *)
+
+  let array_set_add arr index value =
+    arr.(index) <- Lr1Set.add value arr.(index)
+
+  let states_of_terminals =
+    Array.make Terminal.count Lr1Set.empty
+
+  let states_of_nonterminals =
+    Array.make Nonterminal.count Lr1Set.empty
+
+  let () =
+    Index.iter Lr1C.n (fun lr1 ->
+        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
+        | None -> ()
+        | Some (T t) -> array_set_add states_of_terminals (t :> int) lr1
+        | Some (N n) -> array_set_add states_of_nonterminals (n :> int) lr1
+      )
+
+  let states_of_symbol = function
+    | T t -> states_of_terminals.((t :> int))
+    | N n -> states_of_nonterminals.((n :> int))
+
+  (* Map symbol names to actual symbols *)
+
+  let linearize_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Syntax.Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Syntax.Name s -> Buffer.add_string buffer s
+        | Syntax.Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
+
+  let find_symbol =
+    let table = Hashtbl.create 7 in
+    let add_symbol s = Hashtbl.add table (symbol_name ~mangled:false s) s in
+    Terminal.iter (fun t -> add_symbol (T t));
+    Nonterminal.iter (fun n -> add_symbol (N n));
+    fun name -> Hashtbl.find_opt table (linearize_symbol name)
+end
+
+module Match_item = struct
+  let maybe_has_lhs prod = function
+    | None -> true
+    | Some lhs -> lhs = Production.lhs prod
+
+  let maybe_match_sym (sym, _, _) = function
+    | None -> true
+    | Some sym' -> sym = sym'
+
+  let forall_i f l =
+    match List.iteri (fun i x -> if not (f i x) then raise Exit) l with
+    | () -> true
+    | exception Exit -> false
+
+  let item_match lhs (lp, prefix) (ls, suffix) (prod, pos) =
+    maybe_has_lhs prod lhs &&
+    pos >= lp &&
+    let rhs = Production.rhs prod in
+    Array.length rhs >= pos + ls &&
+    forall_i (fun i sym -> maybe_match_sym rhs.(pos - i - 1) sym) prefix &&
+    forall_i (fun i sym -> maybe_match_sym rhs.(pos + i) sym) suffix
+
+  let states_by_items ~lhs ~prefix ~suffix =
+    let prefix' = List.length prefix, List.rev prefix in
+    let suffix' = List.length suffix, suffix in
+    let result =
+      Lr1.fold (fun lr1 acc ->
+          if List.exists
+              (item_match lhs prefix' suffix')
+              (Lr0.items (Lr1.lr0 lr1))
+          then Lr1Set.add (Lr1C.of_g lr1) acc
+          else acc
+        ) Lr1Set.empty
+    in
+    (*let lhs = match lhs with
+      | None -> ""
+      | Some nt -> Nonterminal.name nt ^ ": "
+    in
+    let sym_list l = String.concat " " (List.map (function
+        | Some sym -> symbol_name sym
+        | None -> "_"
+      ) l)
+    in
+    Printf.eprintf "[%s%s . %s] = %d states\n"
+      lhs (sym_list prefix) (sym_list suffix) (Set.cardinal result);*)
+    result
+end
+
+let translate_symbol name =
+  match State_indices.find_symbol name with
+  | None ->
+    prerr_endline
+      ("Unknown symbol " ^ State_indices.linearize_symbol name);
+    exit 1
+  | Some symbol -> symbol
+
+let translate_nonterminal sym =
+  match translate_symbol sym with
+  | N n -> n
+  | T t ->
+    Printf.eprintf "Expecting a non-terminal but %s is a terminal\n%!"
+      (Terminal.name t);
+    exit 1
+
+let translate_producers list =
+  List.map (Option.map translate_symbol) list
+
+let rec translate_term = function
+  | Syntax.Symbol name ->
+    let symbol = translate_symbol name in
+    let states = State_indices.states_of_symbol symbol in
+    Reg.Expr.set (Sigma.Pos states)
+  | Syntax.Item {lhs; prefix; suffix} ->
+    let lhs = Option.map translate_nonterminal lhs in
+    let prefix = translate_producers prefix in
+    let suffix = translate_producers suffix in
+    let states = Match_item.states_by_items ~lhs ~prefix ~suffix in
+    Reg.Expr.set (Sigma.Pos states)
+  | Syntax.Wildcard ->
+    Reg.Expr.set Sigma.full
+  | Syntax.Alternative (e1, e2) ->
+    Reg.Expr.disjunction [translate_expr e1; translate_expr e2]
+  | Syntax.Repetition (e1, _) ->
+    Reg.Expr.star (translate_expr e1)
+  | Syntax.Reduce (e1, _) ->
+    let e1 = translate_expr e1 in
+    ignore e1;
+    assert false
+
+and translate_expr terms =
+  let terms = List.map (fun (term, _) -> translate_term term) terms in
+  Reg.Expr.concatenation terms
+
+let translate_clause priority {Syntax. pattern; action} =
+  let action_desc = match action with
+    | None -> Label.Unreachable
+    | Some (_, code) -> Label.Code code
+  in
+  Reg.Expr.(translate_expr pattern ^. label (Action {priority; action_desc}))
+
+let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
+  (* TODO *)
+  ignore (startsymbols, error, name, args);
+  let clauses = List.mapi translate_clause clauses in
+  ignore clauses
+
+(* Derive DFA with naive intersection *)
+
+module DFA = struct
+  let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
+      List.fold_left
+        (fun acc tr -> Lr1Set.add (Transition.source tr) acc)
+        (Lr1Set.empty)
+        (Transition.predecessors lr1)
+    )
+
+  let lr1set_predecessors lr1s =
+    lr1set_bind lr1s (fun lr1 -> Vector.get lr1_predecessors lr1)
+
+  let sigma_predecessors sg =
+    Sigma.Pos (lr1set_predecessors (Sigma.to_lr1set sg))
+
+  type state = {
+    index: int;
+    expr: Reg.Expr.t;
+    mutable visited: Sigma.t;
+    mutable scheduled: Sigma.t;
+    mutable unvisited: Sigma.t list;
+    mutable transitions: (Sigma.t * state) list;
+  }
+
+  let translate expr =
+    let count = ref 0 in
+    let dfa = ref Reg.Map.empty in
+    let todo = ref [] in
+    let make_state expr =
+      let index = !count in
+      incr count;
+      let state = {
+        index; expr;
+        unvisited = Reg.Expr.left_classes expr (fun sg sgs -> sg :: sgs) [];
+        visited = Sigma.empty;
+        scheduled = Sigma.empty;
+        transitions = []
+      } in
+      dfa := Reg.Map.add expr state !dfa;
+      state
+    in
+    let schedule state sigma =
+      let unvisited = Sigma.inter sigma (Sigma.compl state.visited) in
+      if not (Sigma.is_empty unvisited) then (
+        if Sigma.is_empty state.scheduled then
+          todo := state :: !todo;
+        state.scheduled <- Sigma.union state.scheduled sigma
+      )
+    in
+    let update_transition sigma (sigma', state') =
+      let inter = Sigma.inter sigma sigma' in
+      if not (Sigma.is_empty inter) then
+        schedule state' inter
+    in
+    let discover_transition sigma state sigma' =
+      let inter = Sigma.inter sigma sigma' in
+      if Sigma.is_empty inter then
+        Either.Left sigma'
+      else (
+        let _, expr' = Reg.Expr.left_delta state.expr sigma' in
+        let state' = match Reg.Map.find_opt expr' !dfa with
+          | None -> make_state expr'
+          | Some state' -> state'
+        in
+        schedule state' inter;
+        Either.Right (sigma', state')
+      )
+    in
+    let process state =
+      state.visited <- Sigma.union state.visited state.scheduled;
+      let sigma = sigma_predecessors state.scheduled in
+      state.scheduled <- Sigma.empty;
+      List.iter (update_transition sigma) state.transitions;
+      let unvisited, new_transitions =
+        List.partition_map (discover_transition sigma state) state.unvisited
+      in
+      state.unvisited <- unvisited;
+      state.transitions <- new_transitions @ state.transitions
+    in
+    let rec loop () =
+      match List.rev !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter process todo';
+        loop ()
+    in
+    let initial = make_state expr in
+    schedule initial Sigma.full;
+    loop ();
+    (!dfa, initial)
+end
