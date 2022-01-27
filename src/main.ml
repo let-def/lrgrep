@@ -105,6 +105,9 @@ let lexer_definition =
 open Fix.Indexing
 open Input
 
+let compare_index =
+  (Int.compare : int -> int -> int :> _ index -> _ index -> int)
+
 let initial_states : (nonterminal * lr1) list =
   Lr1.fold begin fun lr1 acc ->
     let lr0 = Lr1.lr0 lr1 in
@@ -145,6 +148,10 @@ module Lr1Set = BitSet.Make(struct
     let of_int i = Index.of_int Lr1C.n i
   end)
 
+module Lr1Map = Map.Make(struct
+    type t = Lr1C.n index
+    let compare = compare_index
+  end)
 module Lr1Refine = Refine.Make(Lr1Set)
 
 let all_states =
@@ -437,7 +444,7 @@ struct
         | Some tgt -> Goto {lr1=tgt; parent=st} :: acc
       end
 
-  let transitions state =
+  let follow_transitions state =
     let rec follow states depth acc = function
       | [] -> acc
       | p :: ps ->
@@ -449,7 +456,7 @@ struct
     follow (Concrete state) 0 [] (Vector.get productions (lr1 state))
 
   let rec close_transitions acc state =
-    let new_transitions = transitions state in
+    let new_transitions = follow_transitions state in
     let acc = new_transitions @ acc in
     List.fold_left close_transitions acc new_transitions
 
@@ -458,40 +465,33 @@ struct
 
     type node = {
       index: n index;
-      state: Lr1C.n index;
-      mutable derivations: node list;
+      mutable children: node Lr1Map.t;
     }
 
-    let table = Hashtbl.create 7
+    let fresh_node () = {index = fresh (); children = Lr1Map.empty}
 
-    let roots = ref []
+    let root_node = fresh_node ()
 
-    let rec register state =
-      match Hashtbl.find_opt table state with
-      | Some node -> node
+    let delta lr1 node =
+      match Lr1Map.find_opt lr1 node.children with
+      | Some node' -> node'
       | None ->
-        let node =
-          match state with
-          | Lr1 {lr1=state; _} ->
-            let node = { index = fresh (); state; derivations = [] } in
-            roots := node :: !roots;
-            node
-          | Goto {lr1=state; parent} ->
-            let node' = register parent in
-            let node = { index = fresh (); state; derivations = [] } in
-            node'.derivations <- node :: node'.derivations;
-            node
-        in
-        Hashtbl.add table state node;
-        node
+        let node' = fresh_node () in
+        node.children <- Lr1Map.add lr1 node' node.children;
+        node'
 
-    let register state = (register state).index
+    let compare_node n1 n2 = compare_index n1.index n2.index
+    let get_index n = n.index
 
-    let freeze () =
-      let vector = Vector.make' n (fun () -> List.hd !roots) in
-      let set_node _ node = Vector.set vector node.index node in
-      Hashtbl.iter set_node table;
-      vector
+    let register state =
+      let rec loop node state =
+        let (Lr1 {lr1; _} | Goto {lr1; _}) = state in
+        let node' = delta lr1 node in
+        match state with
+        | Lr1 _ -> node'
+        | Goto {parent; _} -> loop node' parent
+      in
+      loop root_node state
 
     let derive
         ~(root : 'a)
@@ -499,35 +499,41 @@ struct
       =
       let vector = Vector.make n root in
       let rec init_node derived node =
-        let derived = step derived node.state in
         Vector.set vector node.index derived;
-        List.iter (init_node derived) node.derivations
+        let sub_node lr1 node' = init_node (step derived lr1) node' in
+        Lr1Map.iter sub_node node.children;
       in
-      List.iter (init_node root) !roots;
+      init_node root root_node;
       vector
   end
 
-  let transitions =
-    Vector.init Lr1C.n (fun lr1 ->
-        let rs = ref [] in
-        let vs = close_transitions [] (Lr1 {lr1; parents=rs})  in
-        let compare_index =
-          (Int.compare
-           : int -> int -> int
-           :> _ index -> _ index -> int)
-        in
-        let vs = List.map Derivations.register vs in
-        (!rs, List.sort_uniq compare_index vs)
-      )
+  type state_transitions = {
+    parent_states: parent_state list;
+    child_derivations: Derivations.n index list;
+    self_derivations: Derivations.n index list;
+  }
 
-  let derivations = Derivations.freeze ()
+  let transitions =
+    Vector.init Lr1C.n @@ fun lr1 ->
+    let rs = ref [] in
+    let vs = close_transitions [] (Lr1 {lr1; parents=rs})  in
+    let vs = List.map Derivations.register vs in
+    let cd = List.sort_uniq Derivations.compare_node vs in
+    let sd = List.map (Derivations.delta lr1) cd in
+    {
+      parent_states     = !rs;
+      child_derivations = List.map Derivations.get_index cd;
+      self_derivations  = List.map Derivations.get_index sd;
+    }
+
+  let () = ignore (cardinal Derivations.n)
 
   let derive = Derivations.derive
 
   let () =
     print_endline "digraph G {";
     Index.iter Lr1C.n (fun src ->
-        let targets, _derivations = Vector.get transitions src in
+        let stt = Vector.get transitions src in
         Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
           (src :> int)
           (Format.asprintf "%d\n%a" (src :> int)
@@ -543,7 +549,7 @@ struct
             ) pst.goto;
           List.iter visit_target pst.parents
         in
-        List.iter visit_target targets;
+        List.iter visit_target stt.parent_states;
         Hashtbl.iter (fun tgt srcs ->
             Printf.printf "  ST%d -> ST%d [label=%S]\n"
               (src :> int) (tgt : _ index :> int)
