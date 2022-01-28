@@ -406,24 +406,26 @@ struct
       incr k;
       {lr1; goto = Lr1Set.empty; parents = []; uid}
 
-  let make_parent_nodes lr1 =
-    List.map
-      (fun tr -> make_node (Transition.source tr))
-      (Transition.predecessors lr1)
+  let get_parent_nodes node =
+    match node.parents with
+    | [] ->
+      let parents =
+        List.map
+          (fun tr -> make_node (Transition.source tr))
+          (Transition.predecessors node.lr1)
+      in
+      node.parents <- parents;
+      parents
+    | parents -> parents
 
   let pop = function
     | Concrete (Goto {parent; _}) -> Concrete parent
     | Concrete (Lr1 t) ->
-      if t.parents = [] then
-        t.parents <- make_parent_nodes t.lr1;
-      Abstract t.parents
+      Abstract (get_parent_nodes t)
     | Abstract states ->
       Abstract (
-        List.fold_left (fun states state ->
-            if state.parents = [] then
-              state.parents <- make_parent_nodes state.lr1;
-            state.parents @ states
-          ) [] states
+        List.fold_left
+          (fun states state -> get_parent_nodes state @ states) [] states
       )
 
   let rec pop_many states = function
@@ -515,13 +517,13 @@ struct
 
   module DerivationSet = IndexSet(Derivations)
 
-  type state_transitions = {
-    node : node;
-    child_derivations : DerivationSet.t;
-    self_derivations  : DerivationSet.t;
+  type node_derivations = {
+    node: node;
+    child: DerivationSet.t;
+    self: DerivationSet.t;
   }
 
-  let transitions =
+  let roots =
     Vector.init Lr1C.n @@ fun lr1 ->
     let root = make_node lr1 in
     let vs = close_transitions [] (Lr1 root)  in
@@ -533,11 +535,7 @@ struct
         (fun acc node -> DerivationSet.add node.Derivations.index acc)
         DerivationSet.empty nodes
     in
-    {
-      node = root;
-      child_derivations = derivation_set cd;
-      self_derivations  = derivation_set sd;
-    }
+    { node = root; child = derivation_set cd; self = derivation_set sd }
 
   let () = ignore (cardinal Derivations.n)
 
@@ -546,16 +544,16 @@ struct
   let reachable =
     let vector = Vector.map (fun t ->
         let rec visit acc ps =
-          let acc = Lr1Set.fold (fun lr1' acc ->
-              DerivationSet.union
-                (Vector.get transitions lr1').self_derivations
-                acc
-            ) ps.goto acc
+          let acc =
+            Lr1Set.fold
+              (fun lr1' acc ->
+                 DerivationSet.union (Vector.get roots lr1').self acc)
+              ps.goto acc
           in
           List.fold_left visit acc ps.parents
         in
-        List.fold_left visit t.child_derivations t.node.parents
-      ) transitions
+        List.fold_left visit t.child t.node.parents
+      ) roots
     in
     let reverse_deps = Vector.make Lr1C.n Lr1Set.empty in
     Index.iter Lr1C.n (fun lr1 ->
@@ -566,8 +564,7 @@ struct
             ) ps.goto;
           List.iter visit ps.parents
         in
-        let transitions = Vector.get transitions lr1 in
-        List.iter visit transitions.node.parents
+        List.iter visit (Vector.get roots lr1).node.parents
       );
     let module Property = struct
       type property = DerivationSet.t
@@ -598,7 +595,7 @@ struct
   let () =
     print_endline "digraph G {";
     Index.iter Lr1C.n (fun src ->
-        let stt = Vector.get transitions src in
+        let stt = Vector.get roots src in
         Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
           (src :> int)
           (Format.asprintf "%d\n%a" (src :> int)
@@ -749,8 +746,8 @@ module rec
   Reg
   : Mulet.S with type sigma = Sigma.t
              and type label = Label.t
-             (*and type abstract*)
-  = Mulet.Make(Sigma)(Label)(Mulet.Null_derivable)
+             and type abstract = Redgraph_derivation.t
+  = Mulet.Make(Sigma)(Label)(Redgraph_derivation)
 
 and Redgraph_derivation :
 sig
@@ -761,7 +758,7 @@ sig
   type compiled
   val compile : Reg.Expr.t -> compiled
 
-  val make : compiled -> Lr1Set.t -> t
+  val make : compiled -> Lr1Set.t -> Reg.Expr.t
 end =
 struct
   type compiled = {
@@ -817,8 +814,33 @@ struct
          f (Sigma.Pos (Lr1Set.singleton parent.lr1)) acc)
       acc t.node.parents
 
-  let left_delta _t _sigma =
-    (*t.node.*) ()
+  let empty_delta = (Label.empty, Reg.Expr.empty)
+
+  let make_one compiled node =
+    let reachable = Vector.get Redgraph.reachable node.Redgraph.lr1 in
+    if Redgraph.DerivationSet.disjoint compiled.non_empty reachable then
+      Reg.Expr.empty
+    else
+      Reg.Expr.abstract { node; compiled }
+
+  let left_delta (t : t) = function
+    | Sigma.Pos s when Lr1Set.is_singleton s ->
+      let lr1 = Lr1Set.choose s in
+      let node_with_state lr1 node = lr1 = node.Redgraph.lr1 in
+      begin match List.find_opt (node_with_state lr1) t.node.parents with
+        | None -> empty_delta
+        | Some node' -> (Label.empty, make_one t.compiled node')
+      end
+    | _ -> empty_delta
+
+  let make compiled states =
+    Reg.Expr.disjunction (
+      Lr1Set.fold (fun lr1 acc ->
+          let node = Vector.get Redgraph.roots lr1 in
+          make_one compiled node.node :: acc
+        ) states []
+    )
+
 end
 
 module State_indices =
@@ -961,10 +983,9 @@ let rec translate_term = function
     Reg.Expr.disjunction [translate_expr e1; translate_expr e2]
   | Syntax.Repetition (e1, _) ->
     Reg.Expr.star (translate_expr e1)
-  | Syntax.Reduce (e1, _) ->
-    let e1 = translate_expr e1 in
-    ignore e1;
-    assert false
+  | Syntax.Reduce (expr, _) ->
+    let compiled = Redgraph_derivation.compile (translate_expr expr) in
+    Redgraph_derivation.make compiled all_states
 
 and translate_expr terms =
   let terms = List.map (fun (term, _) -> translate_term term) terms in
