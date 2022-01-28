@@ -108,6 +108,9 @@ open Input
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
+module IndexSet(I : CARDINAL): BitSet.S with type element = I.n index =
+  BitSet.Make(struct type t = I.n index let of_int i = Index.of_int I.n i end)
+
 let initial_states : (nonterminal * lr1) list =
   Lr1.fold begin fun lr1 acc ->
     let lr0 = Lr1.lr0 lr1 in
@@ -143,10 +146,7 @@ module Lr1C = struct
   let to_g lr1 = Lr1.of_int (Index.to_int lr1)
 end
 
-module Lr1Set = BitSet.Make(struct
-    type t = Lr1C.n index
-    let of_int i = Index.of_int Lr1C.n i
-  end)
+module Lr1Set = IndexSet(Lr1C)
 
 module Lr1Map = Map.Make(struct
     type t = Lr1C.n index
@@ -365,15 +365,16 @@ let set_of_predecessors =
 
 module Redgraph =
 struct
-  type parent_state = {
+  type node = {
+    uid: int;
     lr1: Lr1C.n index;
-    mutable goto: Lr1C.n index list;
-    mutable parents: parent_state list;
+    mutable goto: Lr1Set.t;
+    mutable parents: node list;
   }
 
-  type state =
-    | Goto of {lr1: Lr1C.n index; parent: state}
-    | Lr1 of {lr1: Lr1C.n index; parents: parent_state list ref}
+  type stack =
+    | Goto of {lr1: Lr1C.n index; parent: stack}
+    | Lr1 of node
 
   let lr1 (Goto {lr1; _} | Lr1 {lr1; _}) = lr1
 
@@ -394,27 +395,33 @@ struct
         |> List.sort_uniq order
       )
 
-
   type states =
-    | Concrete of state
-    | Abstract of parent_state list
+    | Concrete of stack
+    | Abstract of node list
 
-  let parent_states lr1 =
+  let make_node =
+    let k = ref 0 in
+    fun lr1 ->
+      let uid = !k in
+      incr k;
+      {lr1; goto = Lr1Set.empty; parents = []; uid}
+
+  let make_parent_nodes lr1 =
     List.map
-      (fun tr -> {lr1 = Transition.source tr; goto = []; parents = []})
+      (fun tr -> make_node (Transition.source tr))
       (Transition.predecessors lr1)
 
   let pop = function
     | Concrete (Goto {parent; _}) -> Concrete parent
-    | Concrete (Lr1 {lr1; parents}) ->
-      if !parents = [] then
-        parents := parent_states lr1;
-      Abstract !parents
+    | Concrete (Lr1 t) ->
+      if t.parents = [] then
+        t.parents <- make_parent_nodes t.lr1;
+      Abstract t.parents
     | Abstract states ->
       Abstract (
         List.fold_left (fun states state ->
             if state.parents = [] then
-              state.parents <- parent_states state.lr1;
+              state.parents <- make_parent_nodes state.lr1;
             state.parents @ states
           ) [] states
       )
@@ -435,7 +442,7 @@ struct
       List.iter (fun state ->
           match goto_target state.lr1 nt with
           | None -> ()
-          | Some st -> state.goto <- st :: state.goto
+          | Some st -> state.goto <- Lr1Set.add st state.goto
         ) states;
       acc
     | Concrete st ->
@@ -481,8 +488,6 @@ struct
         node'
 
     let compare_node n1 n2 = compare_index n1.index n2.index
-    let get_index n = n.index
-
     let register state =
       let rec loop node state =
         let (Lr1 {lr1; _} | Goto {lr1; _}) = state in
@@ -505,30 +510,90 @@ struct
       in
       init_node root root_node;
       vector
+
   end
 
+  module DerivationSet = IndexSet(Derivations)
+
   type state_transitions = {
-    parent_states: parent_state list;
-    child_derivations: Derivations.n index list;
-    self_derivations: Derivations.n index list;
+    node : node;
+    child_derivations : DerivationSet.t;
+    self_derivations  : DerivationSet.t;
   }
 
   let transitions =
     Vector.init Lr1C.n @@ fun lr1 ->
-    let rs = ref [] in
-    let vs = close_transitions [] (Lr1 {lr1; parents=rs})  in
+    let root = make_node lr1 in
+    let vs = close_transitions [] (Lr1 root)  in
     let vs = List.map Derivations.register vs in
     let cd = List.sort_uniq Derivations.compare_node vs in
     let sd = List.map (Derivations.delta lr1) cd in
+    let derivation_set nodes =
+      List.fold_left
+        (fun acc node -> DerivationSet.add node.Derivations.index acc)
+        DerivationSet.empty nodes
+    in
     {
-      parent_states     = !rs;
-      child_derivations = List.map Derivations.get_index cd;
-      self_derivations  = List.map Derivations.get_index sd;
+      node = root;
+      child_derivations = derivation_set cd;
+      self_derivations  = derivation_set sd;
     }
 
   let () = ignore (cardinal Derivations.n)
 
   let derive = Derivations.derive
+
+  let reachable =
+    let vector = Vector.map (fun t ->
+        let rec visit acc ps =
+          let acc = Lr1Set.fold (fun lr1' acc ->
+              DerivationSet.union
+                (Vector.get transitions lr1').self_derivations
+                acc
+            ) ps.goto acc
+          in
+          List.fold_left visit acc ps.parents
+        in
+        List.fold_left visit t.child_derivations t.node.parents
+      ) transitions
+    in
+    let reverse_deps = Vector.make Lr1C.n Lr1Set.empty in
+    Index.iter Lr1C.n (fun lr1 ->
+        let rec visit ps =
+          Lr1Set.iter (fun lr1' ->
+              let states = Vector.get reverse_deps lr1' in
+              Vector.set reverse_deps lr1' (Lr1Set.add lr1 states)
+            ) ps.goto;
+          List.iter visit ps.parents
+        in
+        let transitions = Vector.get transitions lr1 in
+        List.iter visit transitions.node.parents
+      );
+    let module Property = struct
+      type property = DerivationSet.t
+      let leq_join = DerivationSet.union
+    end in
+    let module Graph = struct
+      type variable = Lr1C.n index
+      let foreach_root f =
+        Index.iter Lr1C.n (fun lr1 -> f lr1 (Vector.get vector lr1))
+      let foreach_successor lr1 reachable f =
+        Lr1Set.iter (fun lr1' -> f lr1' reachable)
+          (Vector.get reverse_deps lr1)
+    end in
+    let module Store = struct
+      let get = Vector.get vector
+      let set = Vector.set vector
+    end in
+    let module Marks = struct
+      let vector = Vector.make Lr1C.n false
+      let get = Vector.get vector
+      let set = Vector.set vector
+    end in
+    let module _ =
+      Fix.DataFlow.ForCustomMaps(Property)(Graph)(Store)(Marks)
+    in
+    vector
 
   let () =
     print_endline "digraph G {";
@@ -540,7 +605,7 @@ struct
              Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
         let tgt_table = Hashtbl.create 7 in
         let rec visit_target pst =
-          List.iter (fun tgt ->
+          Lr1Set.iter (fun tgt ->
               let lbl = string_of_int (pst.lr1 :> int) in
               match Hashtbl.find tgt_table tgt with
               | exception Not_found ->
@@ -549,7 +614,7 @@ struct
             ) pst.goto;
           List.iter visit_target pst.parents
         in
-        List.iter visit_target stt.parent_states;
+        List.iter visit_target stt.node.parents;
         Hashtbl.iter (fun tgt srcs ->
             Printf.printf "  ST%d -> ST%d [label=%S]\n"
               (src :> int) (tgt : _ index :> int)
@@ -557,7 +622,6 @@ struct
           ) tgt_table
       );
     print_endline "}";
-
 end
 
 module Sigma : sig
@@ -681,7 +745,81 @@ module Label = struct
       else t2
 end
 
-module Reg = Mulet.Make(Sigma)(Label)(Mulet.Null_derivable)
+module rec
+  Reg
+  : Mulet.S with type sigma = Sigma.t
+             and type label = Label.t
+             (*and type abstract*)
+  = Mulet.Make(Sigma)(Label)(Mulet.Null_derivable)
+
+and Redgraph_derivation :
+sig
+  include Mulet.DERIVABLE
+    with type sigma := Sigma.t
+     and type label := Label.t
+
+  type compiled
+  val compile : Reg.Expr.t -> compiled
+
+  val make : compiled -> Lr1Set.t -> t
+end =
+struct
+  type compiled = {
+    source: Reg.Expr.t;
+    derivations: (Redgraph.Derivations.n, Reg.Expr.t) vector;
+    non_empty: Redgraph.DerivationSet.t;
+  }
+
+  let compare_compilation t1 t2 =
+    Reg.Expr.compare t1.source t2.source
+
+  let compile source =
+    let derivations =
+      Redgraph.derive
+        ~root:source
+        ~step:(fun re lr1 ->
+            let _label, re' =
+              Reg.Expr.left_delta re (Sigma.Pos (Lr1Set.singleton lr1))
+            in
+            (*TODO: what to do with the label?*)
+            re')
+    in
+    let non_empty =
+      (*t.node.*)
+      let acc = ref Redgraph.DerivationSet.empty in
+      Index.iter Redgraph.Derivations.n (fun i ->
+          if not (Reg.Expr.is_empty (Vector.get derivations i)) then
+            acc := Redgraph.DerivationSet.add i !acc
+        );
+      !acc
+    in
+    { source; derivations; non_empty }
+
+  type t = {
+    node: Redgraph.node;
+    compiled: compiled;
+  }
+
+  let compare t1 t2 =
+    let c = Int.compare t1.node.uid t2.node.uid in
+    if c <> 0 then c else
+      compare_compilation t1.compiled t2.compiled
+
+  let is_empty _ = false
+
+  let nullable _ = false
+
+  let get_label _ = Label.empty
+
+  let left_classes t f acc =
+    List.fold_left
+      (fun acc (parent : Redgraph.node) ->
+         f (Sigma.Pos (Lr1Set.singleton parent.lr1)) acc)
+      acc t.node.parents
+
+  let left_delta _t _sigma =
+    (*t.node.*) ()
+end
 
 module State_indices =
 struct
