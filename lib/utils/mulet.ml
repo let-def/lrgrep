@@ -260,9 +260,24 @@ struct
     let (^.) a b = match a, b with
       | Epsilon, x | x, Epsilon -> x
       | x, y when is_empty x || is_empty y -> empty
-      | Concat xs, Concat ys -> Concat (List.fold_right re_seq xs ys)
+      | Concat xs, Concat ys ->
+        Concat (List.fold_right re_seq xs ys)
       | x, Concat ys -> Concat (re_seq x ys)
       | x, y -> Concat (re_seq x [y])
+
+    (*let (^.) a b =
+      let cmon_unit _ = Cmon.unit in
+      let cmon_re ppf re =
+        Cmon.format ppf (cmon_re
+                           ~set:(fun sg -> if Sigma.is_empty sg
+                                  then Cmon.constant "0"
+                                  else Cmon.unit)
+                           ~label:cmon_unit ~abstract:cmon_unit re)
+      in
+      let result = a ^. b in
+      Format.eprintf "(@[%a@]) ^. (@[%a@]) = (@[%a@])\n%!"
+        cmon_re a cmon_re b cmon_re result;
+      result*)
 
     let disjunction ts =
       let ts = List.sort compare ts in

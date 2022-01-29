@@ -169,6 +169,64 @@ module LRijkstra =
     (struct let all_terminals = all_terminals end)
     ()
 
+(* State indices *)
+
+module State_indices =
+struct
+
+  (* Precompute states associated to symbols *)
+
+  let array_set_add arr index value =
+    arr.(index) <- Lr1Set.add value arr.(index)
+
+  let states_of_terminals =
+    Array.make Terminal.count Lr1Set.empty
+
+  let states_of_nonterminals =
+    Array.make Nonterminal.count Lr1Set.empty
+
+  let () =
+    Index.iter Lr1C.n (fun lr1 ->
+        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
+        | None -> ()
+        | Some (T t) -> array_set_add states_of_terminals (t :> int) lr1
+        | Some (N n) -> array_set_add states_of_nonterminals (n :> int) lr1
+      )
+
+  let states_of_symbol = function
+    | T t -> states_of_terminals.((t :> int))
+    | N n -> states_of_nonterminals.((n :> int))
+
+  (* Map symbol names to actual symbols *)
+
+  let linearize_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Syntax.Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Syntax.Name s -> Buffer.add_string buffer s
+        | Syntax.Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
+
+  let find_symbol =
+    let table = Hashtbl.create 7 in
+    let add_symbol s = Hashtbl.add table (symbol_name ~mangled:false s) s in
+    Terminal.iter (fun t -> add_symbol (T t));
+    Nonterminal.iter (fun n -> add_symbol (N n));
+    fun name -> Hashtbl.find_opt table (linearize_symbol name)
+end
+
 (* ---------------------------------------------------------------------- *)
 
 (* Transitions are represented as finite sets with auxiliary functions
@@ -517,6 +575,12 @@ struct
 
   module DerivationSet = IndexSet(Derivations)
 
+  let subset_derivations d p =
+    let acc = ref DerivationSet.empty in
+    Index.iter Derivations.n
+      (fun i -> if p (Vector.get d i) then acc := DerivationSet.add i !acc);
+    !acc
+
   type node_derivations = {
     node: node;
     child: DerivationSet.t;
@@ -529,11 +593,10 @@ struct
     let vs = close_transitions [] (Lr1 root)  in
     let vs = List.map Derivations.register vs in
     let cd = List.sort_uniq Derivations.compare_node vs in
-    let sd = List.map (Derivations.delta lr1) cd in
+    let sd = Derivations.register (Lr1 root) :: List.map (Derivations.delta lr1) cd in
     let derivation_set nodes =
-      List.fold_left
-        (fun acc node -> DerivationSet.add node.Derivations.index acc)
-        DerivationSet.empty nodes
+      let add_index acc node = DerivationSet.add node.Derivations.index acc in
+      List.fold_left add_index DerivationSet.empty nodes
     in
     { node = root; child = derivation_set cd; self = derivation_set sd }
 
@@ -542,19 +605,14 @@ struct
   let derive = Derivations.derive
 
   let reachable =
-    let vector = Vector.map (fun t ->
-        let rec visit acc ps =
-          let acc =
-            Lr1Set.fold
-              (fun lr1' acc ->
-                 DerivationSet.union (Vector.get roots lr1').self acc)
-              ps.goto acc
-          in
-          List.fold_left visit acc ps.parents
-        in
-        List.fold_left visit t.child t.node.parents
-      ) roots
+    let rec visit acc ps =
+      let get_root lr1 = Vector.get roots lr1 in
+      let add_self lr1 acc = DerivationSet.union (get_root lr1).self acc in
+      let acc = Lr1Set.fold add_self ps.goto acc in
+      List.fold_left visit acc ps.parents
     in
+    let visit_parents t = visit t.child t.node in
+    let vector = Vector.map visit_parents roots in
     let reverse_deps = Vector.make Lr1C.n Lr1Set.empty in
     Index.iter Lr1C.n (fun lr1 ->
         let rec visit ps =
@@ -592,33 +650,94 @@ struct
     in
     vector
 
-  let () =
+  let () = (
+    let visited = Vector.make Lr1C.n false in
+    let should_visit lr1 =
+      let result = not (Vector.get visited lr1) in
+      Vector.set visited lr1 true;
+      result
+    in
     print_endline "digraph G {";
-    Index.iter Lr1C.n (fun src ->
-        let stt = Vector.get roots src in
-        Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
-          (src :> int)
-          (Format.asprintf "%d\n%a" (src :> int)
-             Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
-        let tgt_table = Hashtbl.create 7 in
-        let rec visit_target pst =
-          Lr1Set.iter (fun tgt ->
-              let lbl = string_of_int (pst.lr1 :> int) in
-              match Hashtbl.find tgt_table tgt with
-              | exception Not_found ->
-                Hashtbl.add tgt_table tgt (ref [lbl])
-              | lst -> lst := lbl :: !lst
-            ) pst.goto;
-          List.iter visit_target pst.parents
-        in
-        List.iter visit_target stt.node.parents;
-        Hashtbl.iter (fun tgt srcs ->
-            Printf.printf "  ST%d -> ST%d [label=%S]\n"
-              (src :> int) (tgt : _ index :> int)
-              (String.concat "|" !srcs)
-          ) tgt_table
-      );
+    (*let derivation_of_interests =
+      let states =
+        Syntax.Name "let_binding_body"
+        |> State_indices.find_symbol
+        |> Option.get
+        |> State_indices.states_of_symbol
+      in
+      subset_derivations
+        (Derivations.derive ~root:false
+           ~step:(fun _ lr1 -> Lr1Set.mem lr1 states))
+        (fun x -> x)
+    in*)
+    let rec visit lr1 =
+      (*if DerivationSet.disjoint derivation_of_interests
+          (Vector.get reachable lr1)
+      then false
+      else*) (
+        if should_visit lr1 then (
+          let rec traverse path node =
+            let path = (node.lr1 : _ index :> int) :: path in
+            List.iter (traverse path) node.parents;
+            Lr1Set.iter (fun lr1' ->
+                if visit lr1' then (
+                  Printf.printf "  ST%d -> ST%d [label=%S]\n"
+                    (lr1 : _ index :> int)
+                    (lr1' : _ index :> int)
+                    (String.concat " -> " (List.rev_map string_of_int path))
+                )
+              ) node.goto
+          in
+          traverse [] (Vector.get roots lr1).node
+        );
+        true
+      )
+    in
+    ignore (visit (Index.of_int Lr1C.n 509) : bool);
     print_endline "}";
+  )
+
+  (*let () =
+    print_endline "digraph G {";
+    let reachable = Vector.make Lr1C.n false in
+    let rec reach lr1 =
+      if not (Vector.get reachable lr1) then (
+        Vector.set reachable lr1 true;
+        let rec visit node =
+          Lr1Set.iter reach node.goto;
+          List.iter visit node.parents
+        in
+        visit (Vector.get roots lr1).node
+      )
+    in
+    reach (Index.of_int Lr1C.n 509);
+    Index.iter Lr1C.n (fun src ->
+        if Vector.get reachable src then (
+          let stt = Vector.get roots src in
+          Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
+            (src :> int)
+            (Format.asprintf "%d\n%a" (src :> int)
+               Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
+          let tgt_table = Hashtbl.create 7 in
+          let rec visit_target pst =
+            Lr1Set.iter (fun tgt ->
+                let lbl = string_of_int (pst.lr1 :> int) in
+                match Hashtbl.find tgt_table tgt with
+                | exception Not_found ->
+                  Hashtbl.add tgt_table tgt (ref [lbl])
+                | lst -> lst := lbl :: !lst
+              ) pst.goto;
+            List.iter visit_target pst.parents
+          in
+          List.iter visit_target stt.node.parents;
+          Hashtbl.iter (fun tgt srcs ->
+              Printf.printf "  ST%d -> ST%d [label=%S]\n"
+                (src :> int) (tgt : _ index :> int)
+                (String.concat "|" !srcs)
+            ) tgt_table
+        )
+      );
+    print_endline "}";*)
 end
 
 module Sigma : sig
@@ -644,6 +763,8 @@ module Sigma : sig
 
   val mem : Lr1C.n index -> t -> bool
   (** [mem lr1 t] checks if the state [lr1] is an element of a sigma set [t] *)
+
+  val cmon : t -> Cmon.t
 end = struct
   type t =
     | Pos of Lr1Set.t
@@ -720,6 +841,10 @@ end = struct
   let mem x = function
     | Pos xs -> Lr1Set.mem x xs
     | Neg xs -> not (Lr1Set.mem x xs)
+
+  let cmon = function
+    | Pos _ -> Cmon.construct "Pos" [Cmon.constant "_"]
+    | Neg _ -> Cmon.construct "Neg" [Cmon.constant "_"]
 end
 
 module Label = struct
@@ -771,6 +896,7 @@ struct
     Reg.Expr.compare t1.source t2.source
 
   let compile source =
+    let source = Reg.Expr.(source ^. star (set Sigma.full)) in
     let derivations =
       Redgraph.derive
         ~root:source
@@ -782,14 +908,11 @@ struct
             re')
     in
     let non_empty =
-      (*t.node.*)
-      let acc = ref Redgraph.DerivationSet.empty in
-      Index.iter Redgraph.Derivations.n (fun i ->
-          if not (Reg.Expr.is_empty (Vector.get derivations i)) then
-            acc := Redgraph.DerivationSet.add i !acc
-        );
-      !acc
+      Redgraph.subset_derivations derivations
+        (fun expr -> not (Reg.Expr.is_empty expr))
     in
+    Printf.printf "%d non empty derivations\n%!"
+      (Redgraph.DerivationSet.cardinal non_empty);
     { source; derivations; non_empty }
 
   type t = {
@@ -808,30 +931,13 @@ struct
 
   let get_label _ = Label.empty
 
-  let left_classes t f acc =
-    List.fold_left
-      (fun acc (parent : Redgraph.node) ->
-         f (Sigma.Pos (Lr1Set.singleton parent.lr1)) acc)
-      acc t.node.parents
-
-  let empty_delta = (Label.empty, Reg.Expr.empty)
-
   let make_one compiled node =
     let reachable = Vector.get Redgraph.reachable node.Redgraph.lr1 in
-    if Redgraph.DerivationSet.disjoint compiled.non_empty reachable then
+    let empty = Redgraph.DerivationSet.disjoint compiled.non_empty reachable in
+    if empty then
       Reg.Expr.empty
     else
       Reg.Expr.abstract { node; compiled }
-
-  let left_delta (t : t) = function
-    | Sigma.Pos s when Lr1Set.is_singleton s ->
-      let lr1 = Lr1Set.choose s in
-      let node_with_state lr1 node = lr1 = node.Redgraph.lr1 in
-      begin match List.find_opt (node_with_state lr1) t.node.parents with
-        | None -> empty_delta
-        | Some node' -> (Label.empty, make_one t.compiled node')
-      end
-    | _ -> empty_delta
 
   let make compiled states =
     Reg.Expr.disjunction (
@@ -841,62 +947,37 @@ struct
         ) states []
     )
 
-end
+  let left_classes t f acc =
+    List.fold_left
+      (fun acc (parent : Redgraph.node) ->
+         f (Sigma.Pos (Lr1Set.singleton parent.lr1)) acc)
+      acc t.node.parents
 
-module State_indices =
-struct
+  let empty_delta = (Label.empty, Reg.Expr.empty)
 
-  (* Precompute states associated to symbols *)
+  let left_delta (t : t) = function
+    | Sigma.Pos s as sigma when Lr1Set.is_singleton s ->
+      let lr1 = Lr1Set.choose s in
+      let node_with_state lr1 node = lr1 = node.Redgraph.lr1 in
+      begin match List.find_opt (node_with_state lr1) t.node.parents with
+        | None -> empty_delta
+        | Some node' ->
+          let derivations =
+            Lr1Set.fold (fun elt acc ->
+                Redgraph.DerivationSet.fold (fun elt acc ->
+                    let re = Vector.get t.compiled.derivations elt in
+                    let _, re = Reg.Expr.left_delta re sigma in
+                    if Reg.Expr.is_empty re
+                    then acc
+                    else re :: acc
+                  ) (Vector.get Redgraph.roots elt).self acc
+              ) node'.goto []
+          in
+          (Label.empty,
+           Reg.Expr.disjunction (make_one t.compiled node' :: derivations))
+      end
+    | _ -> empty_delta
 
-  let array_set_add arr index value =
-    arr.(index) <- Lr1Set.add value arr.(index)
-
-  let states_of_terminals =
-    Array.make Terminal.count Lr1Set.empty
-
-  let states_of_nonterminals =
-    Array.make Nonterminal.count Lr1Set.empty
-
-  let () =
-    Index.iter Lr1C.n (fun lr1 ->
-        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
-        | None -> ()
-        | Some (T t) -> array_set_add states_of_terminals (t :> int) lr1
-        | Some (N n) -> array_set_add states_of_nonterminals (n :> int) lr1
-      )
-
-  let states_of_symbol = function
-    | T t -> states_of_terminals.((t :> int))
-    | N n -> states_of_nonterminals.((n :> int))
-
-  (* Map symbol names to actual symbols *)
-
-  let linearize_symbol =
-    let buffer = Buffer.create 32 in
-    function
-    | Syntax.Name s -> s
-    | sym ->
-      Buffer.reset buffer;
-      let rec aux = function
-        | Syntax.Name s -> Buffer.add_string buffer s
-        | Syntax.Apply (s, args) ->
-          Buffer.add_string buffer s;
-          Buffer.add_char buffer '(';
-          List.iteri (fun i sym ->
-              if i > 0 then Buffer.add_char buffer ',';
-              aux sym
-            ) args;
-          Buffer.add_char buffer ')'
-      in
-      aux sym;
-      Buffer.contents buffer
-
-  let find_symbol =
-    let table = Hashtbl.create 7 in
-    let add_symbol s = Hashtbl.add table (symbol_name ~mangled:false s) s in
-    Terminal.iter (fun t -> add_symbol (T t));
-    Nonterminal.iter (fun n -> add_symbol (N n));
-    fun name -> Hashtbl.find_opt table (linearize_symbol name)
 end
 
 module Match_item = struct
@@ -980,15 +1061,16 @@ let rec translate_term = function
   | Syntax.Wildcard ->
     Reg.Expr.set Sigma.full
   | Syntax.Alternative (e1, e2) ->
-    Reg.Expr.disjunction [translate_expr e1; translate_expr e2]
+    Reg.Expr.(translate_expr e1 |. translate_expr e2)
   | Syntax.Repetition (e1, _) ->
     Reg.Expr.star (translate_expr e1)
   | Syntax.Reduce (expr, _) ->
-    let compiled = Redgraph_derivation.compile (translate_expr expr) in
-    Redgraph_derivation.make compiled all_states
+    let expr = translate_expr expr in
+    let compiled = Redgraph_derivation.compile expr in
+    Reg.Expr.(|.) expr (Redgraph_derivation.make compiled all_states)
 
 and translate_expr terms =
-  let terms = List.map (fun (term, _) -> translate_term term) terms in
+  let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
   Reg.Expr.concatenation terms
 
 let translate_clause priority {Syntax. pattern; action} =
@@ -996,13 +1078,15 @@ let translate_clause priority {Syntax. pattern; action} =
     | None -> Label.Unreachable
     | Some (_, code) -> Label.Code code
   in
-  Reg.Expr.(translate_expr pattern ^. label (Action {priority; action_desc}))
+  let pattern = translate_expr pattern in
+  let label = Reg.Expr.label (Action {priority; action_desc}) in
+  Reg.Expr.(^.) pattern label (*(pattern ^. label)*)
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
   ignore (startsymbols, error, name, args);
   let clauses = List.mapi translate_clause clauses in
-  ignore clauses
+  clauses
 
 (* Derive DFA with naive intersection *)
 
@@ -1097,3 +1181,19 @@ module DFA = struct
     loop ();
     (!dfa, initial)
 end
+
+let cmon_re re =
+  Mulet.cmon_re re
+    ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
+    ~abstract:(fun _ -> Cmon.unit)
+
+let () =
+  let entry = List.hd lexer_definition.entrypoints in
+  Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
+  let clauses = translate_entry entry in
+  let re = Reg.Expr.disjunction clauses in
+  let cmon = Cmon.list_map cmon_re clauses in
+  Format.printf "%a\n%!" Cmon.format cmon;
+  let dfa, _initial = DFA.translate re in
+  let count = Reg.Map.cardinal dfa in
+  prerr_endline (string_of_int count ^ " states")
