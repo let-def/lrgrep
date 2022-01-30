@@ -112,7 +112,7 @@ let vector_iter v f =
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
-let initial_states : (nonterminal * lr1) list =
+(*let initial_states : (nonterminal * lr1) list =
   Lr1.fold begin fun lr1 acc ->
     let lr0 = Lr1.lr0 lr1 in
     match Lr0.incoming lr0 with
@@ -128,7 +128,7 @@ let initial_states : (nonterminal * lr1) list =
         | _ -> assert false
       in
       (nt, lr1) :: acc
-  end []
+  end []*)
 
 module TerminalSet = BitSet.Make(Terminal)
 
@@ -1222,11 +1222,9 @@ let cmon_re re =
 
 let () =
   let entry = List.hd lexer_definition.entrypoints in
-  Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
+  (*Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);*)
   let clauses = translate_entry entry in
   let re = Reg.Expr.disjunction clauses in
-  let cmon = Cmon.list_map cmon_re clauses in
-  Format.printf "%a\n%!" Cmon.format cmon;
   let dfa, _initial = DFA.translate re in
   let count = Reg.Map.cardinal dfa in
   prerr_endline (string_of_int count ^ " states")
