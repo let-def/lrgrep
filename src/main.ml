@@ -106,6 +106,9 @@ let lexer_definition =
 open Fix.Indexing
 open Input
 
+let vector_iter v f =
+  Index.iter (Vector.length v) (fun i -> f (Vector.get v i ))
+
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
@@ -419,12 +422,20 @@ let set_of_predecessors =
 
 module Redgraph =
 struct
+  module Node_id = Gensym()
+
   type node = {
-    uid: int;
+    id: Node_id.n index;
     lr1: Lr1C.n index;
+    ancestor : ancestor;
+    mutable next: node list;
     mutable goto: Lr1C.n IndexSet.t;
-    mutable parents: node list;
+    mutable next_goto_closure: Lr1C.n IndexSet.t;
   }
+
+  and ancestor =
+    | Node_next_of of node
+    | Node_goto_from of {mutable nodes: node list}
 
   type stack =
     | Goto of {lr1: Lr1C.n index; parent: stack}
@@ -453,24 +464,26 @@ struct
     | Concrete of stack
     | Abstract of node list
 
-  let make_node =
-    let k = ref 0 in
-    fun lr1 ->
-      let uid = !k in
-      incr k;
-      {lr1; goto = IndexSet.empty; parents = []; uid}
+  let make_node lr1 ancestor = {
+    id = Node_id.fresh ();
+    lr1;
+    ancestor;
+    goto = IndexSet.empty;
+    next = [];
+    next_goto_closure = IndexSet.empty;
+  }
 
   let get_parent_nodes node =
-    match node.parents with
+    match node.next with
     | [] ->
-      let parents =
-        List.map
-          (fun tr -> make_node (Transition.source tr))
+      let ancestor = Node_next_of node in
+      let next = List.map
+          (fun tr -> make_node (Transition.source tr) ancestor)
           (Transition.predecessors node.lr1)
       in
-      node.parents <- parents;
-      parents
-    | parents -> parents
+      node.next <- next;
+      next
+    | next -> next
 
   let pop = function
     | Concrete (Goto {parent; _}) -> Concrete parent
@@ -523,28 +536,25 @@ struct
     let acc = new_transitions @ acc in
     List.fold_left close_transitions acc new_transitions
 
-  module Derivations = struct
-    include Gensym()
-
+  module Closed_derivation = struct
     type node = {
-      index: n index;
       mutable children: node Lr1Map.t;
+      mutable sources: Lr1C.n IndexSet.t;
     }
 
-    let fresh_node () = {index = fresh (); children = Lr1Map.empty}
+    let fresh () = {children = Lr1Map.empty; sources = IndexSet.empty}
 
-    let root_node = fresh_node ()
+    let root_node = fresh ()
 
     let delta lr1 node =
       match Lr1Map.find_opt lr1 node.children with
       | Some node' -> node'
       | None ->
-        let node' = fresh_node () in
+        let node' = fresh () in
         node.children <- Lr1Map.add lr1 node' node.children;
         node'
 
-    let compare_node n1 n2 = compare_index n1.index n2.index
-    let register state =
+    let register source state =
       let rec loop node state =
         let (Lr1 {lr1; _} | Goto {lr1; _}) = state in
         let node' = delta lr1 node in
@@ -552,100 +562,92 @@ struct
         | Lr1 _ -> node'
         | Goto {parent; _} -> loop node' parent
       in
-      loop root_node state
+      let node = loop root_node state in
+      node.sources <- IndexSet.add source node.sources
 
-    let derive
-        ~(root : 'a)
-        ~(step : 'a -> Lr1C.n index -> 'a)
-      =
-      let vector = Vector.make n root in
-      let rec init_node derived node =
-        Vector.set vector node.index derived;
-        let sub_node lr1 node' = init_node (step derived lr1) node' in
-        Lr1Map.iter sub_node node.children;
+    let derive ~root ~step ~join =
+      let rmap = ref Lr1Map.empty in
+      let register derivation source =
+        match Lr1Map.find_opt source !rmap with
+        | None -> rmap := Lr1Map.add source (ref derivation) !rmap
+        | Some rderiv -> rderiv := join !rderiv derivation
       in
-      init_node root root_node;
-      vector
-
+      let rec visit derivation node =
+        IndexSet.iter (register derivation) node.sources;
+        Lr1Map.iter (fun lr1 node' -> visit (step derivation lr1) node')
+          node.children
+      in
+      visit root root_node;
+      Lr1Map.map (!) !rmap
   end
-
-  let subset_derivations d p =
-    let acc = ref IndexSet.empty in
-    Index.iter Derivations.n
-      (fun i -> if p (Vector.get d i) then acc := IndexSet.add i !acc);
-    !acc
-
-  type node_derivations = {
-    node: node;
-    child: Derivations.n IndexSet.t;
-    self: Derivations.n IndexSet.t;
-  }
 
   let roots =
     Vector.init Lr1C.n @@ fun lr1 ->
-    let root = make_node lr1 in
+    let root = make_node lr1 (Node_goto_from {nodes=[]}) in
     let vs = close_transitions [] (Lr1 root)  in
-    let vs = List.map Derivations.register vs in
-    let cd = List.sort_uniq Derivations.compare_node vs in
-    let sd = Derivations.register (Lr1 root) :: List.map (Derivations.delta lr1) cd in
-    let derivation_set nodes =
-      let add_index acc node = IndexSet.add node.Derivations.index acc in
-      List.fold_left add_index IndexSet.empty nodes
+    List.iter (Closed_derivation.register lr1) vs;
+    root
+
+  let () =
+    (* Compute the "goto_from" relation *)
+    let register_goto ~from target =
+      let target = Vector.get roots target in
+      match target.ancestor with
+      | Node_next_of _ -> assert false
+      | Node_goto_from t -> t.nodes <- from :: t.nodes
     in
-    { node = root; child = derivation_set cd; self = derivation_set sd }
-
-  let () = ignore (cardinal Derivations.n)
-
-  let derive = Derivations.derive
-
-  let node_reverse_deps =
-    let vector = Vector.make Lr1C.n IndexSet.empty in
-    Index.iter Lr1C.n (fun lr1 ->
-        let rec visit ps =
-          IndexSet.iter (fun lr1' ->
-              let states = Vector.get vector lr1' in
-              Vector.set vector lr1' (IndexSet.add lr1 states)
-            ) ps.goto;
-          List.iter visit ps.parents
-        in
-        List.iter visit (Vector.get roots lr1).node.parents
-      );
-    vector
-
-  let reachable =
-    let rec visit acc ps =
-      let get_root lr1 = Vector.get roots lr1 in
-      let add_self lr1 acc = IndexSet.union (get_root lr1).self acc in
-      let acc = IndexSet.fold add_self ps.goto acc in
-      List.fold_left visit acc ps.parents
+    let rec visit node =
+      IndexSet.iter (register_goto ~from:node) node.goto;
+      List.iter visit node.next
     in
-    let visit_parents t = visit t.child t.node in
-    let vector = Vector.map visit_parents roots in
+    vector_iter roots visit
+
+  let nodes =
+    let dummy () = Vector.get roots (Index.of_int Lr1C.n 0) in
+    Vector.make' Node_id.n dummy
+
+  let () =
+    (* Initialize ndoes and compute "next_goto_closure" relation *)
     let module Property = struct
-      type property = Derivations.n IndexSet.t
+      type property = Lr1C.n IndexSet.t
       let leq_join = IndexSet.union
     end in
     let module Graph = struct
-      type variable = Lr1C.n index
+      type variable = Node_id.n index
+
       let foreach_root f =
-        Index.iter Lr1C.n (fun lr1 -> f lr1 (Vector.get vector lr1))
-      let foreach_successor lr1 reachable f =
-        IndexSet.iter (fun lr1' -> f lr1' reachable)
-          (Vector.get node_reverse_deps lr1)
+        let rec populate node =
+          Vector.set nodes node.id node;
+          let acc = List.fold_left visit_next IndexSet.empty node.next in
+          f node.id acc;
+          acc
+        and visit_next acc node =
+          IndexSet.union (IndexSet.union node.goto (populate node)) acc
+        in
+        let populate' node = ignore (populate node) in
+        vector_iter roots populate'
+
+      let foreach_successor id reachable f =
+        let self = Vector.get nodes id in
+        let reachable = IndexSet.union reachable self.goto in
+        match self.ancestor with
+        | Node_next_of node -> f node.id reachable
+        | Node_goto_from {nodes} ->
+          List.iter (fun node -> f node.id reachable) nodes
     end in
     let module Store = struct
-      let get = Vector.get vector
-      let set = Vector.set vector
+      let get id = (Vector.get nodes id).next_goto_closure
+      let set id closure = (Vector.get nodes id).next_goto_closure <- closure
     end in
     let module Marks = struct
-      let vector = Vector.make Lr1C.n false
+      let vector = Vector.make Node_id.n false
       let get = Vector.get vector
       let set = Vector.set vector
     end in
     let module _ =
       Fix.DataFlow.ForCustomMaps(Property)(Graph)(Store)(Marks)
     in
-    vector
+    ()
 
   let hashtbl_find_or_ref table key value =
     match Hashtbl.find table key with
@@ -655,7 +657,7 @@ struct
       Hashtbl.add table key r;
       r
 
-  let () = (
+  (*let () = (
     print_endline "digraph G {";
     print_endline "  overlap=false";
     let visited = Vector.make Lr1C.n false in
@@ -700,14 +702,14 @@ struct
           let tgt_table = Hashtbl.create 7 in
           let rec traverse path node =
             let path = (node.lr1 : _ index :> int) :: path in
-            List.iter (traverse path) node.parents;
+            List.iter (traverse path) node.next;
             IndexSet.iter (fun lr1' ->
                 if visit lr1' then
                   let r = hashtbl_find_or_ref tgt_table lr1' [] in
                   r := path :: !r
               ) node.goto
           in
-          List.iter (traverse []) (Vector.get roots lr1).node.parents;
+          List.iter (traverse []) (Vector.get roots lr1).node.next;
           Hashtbl.iter (fun lr1' paths ->
               let path = List.hd !paths in
               Printf.printf "  ST%d -> ST%d //[label=%S]\n"
@@ -721,7 +723,7 @@ struct
     in
     ignore (visit (Index.of_int Lr1C.n 509) : bool);
     print_endline "}";
-  )
+  )*)
 
   (*let () =
     print_endline "digraph G {";
@@ -914,8 +916,8 @@ end =
 struct
   type compiled = {
     source: Reg.Expr.t;
-    derivations: (Redgraph.Derivations.n, Reg.Expr.t) vector;
-    non_empty: Redgraph.Derivations.n IndexSet.t;
+    derivations: (Label.t * Reg.Expr.t) Lr1Map.t;
+    domain: Lr1C.n IndexSet.t;
   }
 
   let compare_compilation t1 t2 =
@@ -923,23 +925,36 @@ struct
 
   let compile source =
     let source = Reg.Expr.(source ^. star (set Sigma.full)) in
-    let derivations =
-      Redgraph.derive
+    let closed_derivations =
+      Redgraph.Closed_derivation.derive
         ~root:source
         ~step:(fun re lr1 ->
-            let _label, re' =
-              Reg.Expr.left_delta re (Sigma.Pos (IndexSet.singleton lr1))
-            in
+            let _label, re' = Reg.Expr.left_delta re (Sigma.singleton lr1) in
             (*TODO: what to do with the label?*)
             re')
+        ~join:Reg.Expr.(|.)
     in
-    let non_empty =
-      Redgraph.subset_derivations derivations
-        (fun expr -> not (Reg.Expr.is_empty expr))
+    let derivations = ref Lr1Map.empty in
+    let domain = ref IndexSet.empty in
+    let visit lr1 =
+      (* Can do a bit better: group states that are "classes of interest" for
+         source re, so that derivation is shared *)
+      let re = match Lr1Map.find_opt lr1 closed_derivations with
+        | None -> source
+        | Some re -> Reg.Expr.(|.) re source
+      in
+      let lbl, re = Reg.Expr.left_delta re (Sigma.singleton lr1) in
+      if not (Reg.Expr.is_empty re) then (
+        derivations := Lr1Map.add lr1 (lbl, re) !derivations;
+        domain := IndexSet.add lr1 !domain;
+      )
     in
+    Index.iter Lr1C.n visit;
+    let derivations = !derivations in
+    let domain = !domain in
     Printf.printf "%d non empty derivations\n%!"
-      (IndexSet.cardinal non_empty);
-    { source; derivations; non_empty }
+      (IndexSet.cardinal domain);
+    { source; derivations; domain }
 
   type t = {
     node: Redgraph.node;
@@ -947,7 +962,7 @@ struct
   }
 
   let compare t1 t2 =
-    let c = Int.compare t1.node.uid t2.node.uid in
+    let c = compare_index t1.node.id t2.node.id in
     if c <> 0 then c else
       compare_compilation t1.compiled t2.compiled
 
@@ -958,18 +973,14 @@ struct
   let get_label _ = Label.empty
 
   let make_one compiled node =
-    let reachable = Vector.get Redgraph.reachable node.Redgraph.lr1 in
-    let empty = IndexSet.disjoint compiled.non_empty reachable in
-    if empty then
-      Reg.Expr.empty
-    else
-      Reg.Expr.abstract { node; compiled }
+    if IndexSet.disjoint compiled.domain node.Redgraph.next_goto_closure
+    then Reg.Expr.empty
+    else Reg.Expr.abstract { node; compiled }
 
   let make compiled states =
     Reg.Expr.disjunction (
       IndexSet.fold (fun lr1 acc ->
-          let node = Vector.get Redgraph.roots lr1 in
-          make_one compiled node.node :: acc
+          make_one compiled (Vector.get Redgraph.roots lr1) :: acc
         ) states []
     )
 
@@ -977,30 +988,26 @@ struct
     List.fold_left
       (fun acc (parent : Redgraph.node) ->
          f (Sigma.Pos (IndexSet.singleton parent.lr1)) acc)
-      acc t.node.parents
+      acc t.node.next
 
   let empty_delta = (Label.empty, Reg.Expr.empty)
 
   let left_delta (t : t) = function
-    | Sigma.Pos s as sigma when IndexSet.is_singleton s ->
+    | Sigma.Pos s when IndexSet.is_singleton s ->
       let lr1 = IndexSet.choose s in
       let node_with_state lr1 node = lr1 = node.Redgraph.lr1 in
-      begin match List.find_opt (node_with_state lr1) t.node.parents with
+      begin match List.find_opt (node_with_state lr1) t.node.next with
         | None -> empty_delta
         | Some node' ->
-          let derivations =
-            IndexSet.fold (fun lr1 acc ->
-                IndexSet.fold (fun deriv acc ->
-                    let re = Vector.get t.compiled.derivations deriv in
-                    let _, re = Reg.Expr.left_delta re sigma in
-                    if Reg.Expr.is_empty re
-                    then acc
-                    else re :: acc
-                  ) (Vector.get Redgraph.roots lr1).self acc
-              ) node'.goto []
+          let lbls, res =
+            IndexSet.fold (fun lr1 (lbls, res as acc) ->
+                match Lr1Map.find_opt lr1 t.compiled.derivations with
+                | None -> acc
+                | Some (lbl, re) -> (lbl :: lbls, re :: res)
+              ) node'.goto ([], [])
           in
-          (Label.empty,
-           Reg.Expr.disjunction (make_one t.compiled node' :: derivations))
+          (List.fold_left Label.append Label.empty lbls,
+           Reg.Expr.disjunction (make_one t.compiled node' :: res))
       end
     | _ -> empty_delta
 
