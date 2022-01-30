@@ -604,6 +604,20 @@ struct
 
   let derive = Derivations.derive
 
+  let node_reverse_deps =
+    let vector = Vector.make Lr1C.n Lr1Set.empty in
+    Index.iter Lr1C.n (fun lr1 ->
+        let rec visit ps =
+          Lr1Set.iter (fun lr1' ->
+              let states = Vector.get vector lr1' in
+              Vector.set vector lr1' (Lr1Set.add lr1 states)
+            ) ps.goto;
+          List.iter visit ps.parents
+        in
+        List.iter visit (Vector.get roots lr1).node.parents
+      );
+    vector
+
   let reachable =
     let rec visit acc ps =
       let get_root lr1 = Vector.get roots lr1 in
@@ -613,17 +627,6 @@ struct
     in
     let visit_parents t = visit t.child t.node in
     let vector = Vector.map visit_parents roots in
-    let reverse_deps = Vector.make Lr1C.n Lr1Set.empty in
-    Index.iter Lr1C.n (fun lr1 ->
-        let rec visit ps =
-          Lr1Set.iter (fun lr1' ->
-              let states = Vector.get reverse_deps lr1' in
-              Vector.set reverse_deps lr1' (Lr1Set.add lr1 states)
-            ) ps.goto;
-          List.iter visit ps.parents
-        in
-        List.iter visit (Vector.get roots lr1).node.parents
-      );
     let module Property = struct
       type property = DerivationSet.t
       let leq_join = DerivationSet.union
@@ -634,7 +637,7 @@ struct
         Index.iter Lr1C.n (fun lr1 -> f lr1 (Vector.get vector lr1))
       let foreach_successor lr1 reachable f =
         Lr1Set.iter (fun lr1' -> f lr1' reachable)
-          (Vector.get reverse_deps lr1)
+          (Vector.get node_reverse_deps lr1)
     end in
     let module Store = struct
       let get = Vector.get vector
@@ -650,45 +653,74 @@ struct
     in
     vector
 
+  let hashtbl_find_or_ref table key value =
+    match Hashtbl.find table key with
+    | ref -> ref
+    | exception Not_found ->
+      let r = ref value in
+      Hashtbl.add table key r;
+      r
+
   let () = (
+    print_endline "digraph G {";
+    print_endline "  overlap=false";
     let visited = Vector.make Lr1C.n false in
     let should_visit lr1 =
       let result = not (Vector.get visited lr1) in
       Vector.set visited lr1 true;
       result
     in
-    print_endline "digraph G {";
-    (*let derivation_of_interests =
-      let states =
-        Syntax.Name "let_binding_body"
-        |> State_indices.find_symbol
-        |> Option.get
-        |> State_indices.states_of_symbol
+    let target_states =
+      Syntax.Name "let_binding_body"
+      |> State_indices.find_symbol
+      |> Option.get
+      |> State_indices.states_of_symbol
+    in
+    let target_closure =
+      let closure = ref Lr1Set.empty in
+      let rec expand states =
+        if not (Lr1Set.is_empty states) then
+          expand (
+            Lr1Set.fold (fun lr1 acc ->
+                if Lr1Set.mem lr1 !closure then
+                  acc
+                else (
+                  closure := Lr1Set.add lr1 !closure;
+                  Lr1Set.union (Vector.get node_reverse_deps lr1) acc
+                )
+              ) states Lr1Set.empty
+          )
       in
-      subset_derivations
-        (Derivations.derive ~root:false
-           ~step:(fun _ lr1 -> Lr1Set.mem lr1 states))
-        (fun x -> x)
-    in*)
+      expand target_states;
+      !closure
+    in
     let rec visit lr1 =
-      (*if DerivationSet.disjoint derivation_of_interests
-          (Vector.get reachable lr1)
-      then false
-      else*) (
+      if not (Lr1Set.mem lr1 target_closure) then
+        false
+      else (
         if should_visit lr1 then (
+          Printf.printf "  ST%d[label=%S]\n"
+            (lr1 : _ index :> int)
+            (Format.asprintf "%d: %a" (lr1 :> int) Print.itemset
+               (Lr0.items (Lr1.lr0 (Lr1C.to_g lr1))));
+          let tgt_table = Hashtbl.create 7 in
           let rec traverse path node =
             let path = (node.lr1 : _ index :> int) :: path in
             List.iter (traverse path) node.parents;
             Lr1Set.iter (fun lr1' ->
-                if visit lr1' then (
-                  Printf.printf "  ST%d -> ST%d [label=%S]\n"
-                    (lr1 : _ index :> int)
-                    (lr1' : _ index :> int)
-                    (String.concat " -> " (List.rev_map string_of_int path))
-                )
+                if visit lr1' then
+                  let r = hashtbl_find_or_ref tgt_table lr1' [] in
+                  r := path :: !r
               ) node.goto
           in
-          traverse [] (Vector.get roots lr1).node
+          List.iter (traverse []) (Vector.get roots lr1).node.parents;
+          Hashtbl.iter (fun lr1' paths ->
+              let path = List.hd !paths in
+              Printf.printf "  ST%d -> ST%d //[label=%S]\n"
+                (lr1 : _ index :> int)
+                (lr1' : _ index :> int)
+                (String.concat " -> " (List.rev_map string_of_int path));
+            ) tgt_table;
         );
         true
       )
