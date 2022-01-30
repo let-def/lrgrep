@@ -1,25 +1,25 @@
 module IntSet = BitSet.IntSet
 
 module type DECOMPOSABLE = sig
-  type t
-  val is_empty : t -> bool
-  val compare_minimum : t -> t -> int
-  val sorted_union : t list -> t
-  val extract_unique_prefix : t -> t -> t * t
-  val extract_shared_prefix : t -> t -> t * (t * t)
+  type 'a t
+  val is_empty : 'a t -> bool
+  val compare_minimum : 'a t -> 'a t -> int
+  val sorted_union : 'a t list -> 'a t
+  val extract_unique_prefix : 'a t -> 'a t -> 'a t * 'a t
+  val extract_shared_prefix : 'a t -> 'a t -> 'a t * ('a t * 'a t)
 end
 
 module type S = sig
-  type t
-  val partition : t list -> t list
-  val annotated_partition : (t * 'a) list -> (t * 'a list) list
-  val partition_and_total : t list -> t list * t
+  type 'a t
+  val partition : 'a t list -> 'a t list
+  val annotated_partition : ('a t * 'b) list -> ('a t * 'b list) list
+  val partition_and_total : 'a t list -> 'a t list * 'a t
 end
 
-module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
-  type leftist =
+module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
+  type 'a leftist =
     | Leaf
-    | Node of leftist * Set.t * IntSet.t * leftist * int
+    | Node of 'a leftist * 'a Set.t * IntSet.t * 'a leftist * int
 
   let singleton k v = Node (Leaf, k, v, Leaf, 1)
   let rank = function Leaf -> 0 | Node (_,_,_,_,r) -> r
@@ -38,9 +38,9 @@ module Make (Set : DECOMPOSABLE) : S with type t := Set.t = struct
 
   let heap_insert k v t = merge (singleton k v) t
 
-  type pop =
-    | Head of Set.t * IntSet.t * Set.t * IntSet.t * leftist
-    | Tail of Set.t * IntSet.t
+  type 'a pop =
+    | Head of 'a Set.t * IntSet.t * 'a Set.t * IntSet.t * 'a leftist
+    | Tail of 'a Set.t * IntSet.t
     | Done
 
   let heap_pop2 = function

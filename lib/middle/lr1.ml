@@ -148,7 +148,10 @@ struct
       let prods = List.fold_left filter_production prods guess in
       prods
 
-  include Refine.Make(Set)
+  include Refine.Make(struct
+      type 'a t = Set.t
+      include (Set : BitSet.S0 with type t := Set.t)
+    end)
 
   let maybe_has_lhs prod = function
     | None -> true

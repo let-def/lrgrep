@@ -15,7 +15,7 @@ module type LR1 = sig
   type t = Grammar.lr1
   (** Type of an lr1 state *)
 
-  module Set : BitSet.S with type element = t
+  module Set : BitSet.S0 with type element = t
   (** Type of a set of lr1 states *)
 
   val all_states : Set.t
@@ -175,7 +175,7 @@ module type REDUCTION = sig
         multiple transitions.
     *)
 
-    module Set : BitSet.S with type element = state
+    module Set : BitSet.S0 with type element = state
     (** For convenience, a datastructure to manipulate set of states *)
   end
 
@@ -219,7 +219,7 @@ module type REDUCTION = sig
     val get : 'a derivations -> t -> 'a
     (** Access a specific transformation from a custom representation *)
 
-    module Set : BitSet.S with type element = t
+    module Set : BitSet.S0 with type element = t
     (** A set of transformations *)
 
     val filter : ('a -> bool) -> 'a derivations -> Set.t

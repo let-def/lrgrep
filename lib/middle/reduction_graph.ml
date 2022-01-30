@@ -117,7 +117,7 @@ struct
   module Concrete : sig
     module States : Fin.Set.T
     type state = States.n Fin.elt
-    module Set : BitSet.S with type element = state
+    module Set : BitSet.S0 with type element = state
 
     type transition = Lr1.Set.t * state
 
@@ -220,7 +220,7 @@ struct
       finish:(G.lr1 -> 'a -> 'b) -> 'a -> 'b derivations
     val get : 'a derivations -> t -> 'a
 
-    module Set : BitSet.S with type element = t
+    module Set : BitSet.S0 with type element = t
 
     val filter : ('a -> bool) -> 'a derivations -> Set.t
     val reachable : Concrete.state -> Set.t

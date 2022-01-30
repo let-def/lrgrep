@@ -14,6 +14,7 @@
 (**************************************************************************)
 
 open Utils
+module IndexSet = BitSet.IndexSet
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -108,9 +109,6 @@ open Input
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
-module IndexSet(I : CARDINAL): BitSet.S with type element = I.n index =
-  BitSet.Make(struct type t = I.n index let of_int i = Index.of_int I.n i end)
-
 let initial_states : (nonterminal * lr1) list =
   Lr1.fold begin fun lr1 acc ->
     let lr0 = Lr1.lr0 lr1 in
@@ -146,23 +144,21 @@ module Lr1C = struct
   let to_g lr1 = Lr1.of_int (Index.to_int lr1)
 end
 
-module Lr1Set = IndexSet(Lr1C)
-
 module Lr1Map = Map.Make(struct
     type t = Lr1C.n index
     let compare = compare_index
   end)
-module Lr1Refine = Refine.Make(Lr1Set)
+module IndexRefine = Refine.Make(Utils.BitSet.IndexSet)
 
 let all_states =
-  let acc = ref Lr1Set.empty in
+  let acc = ref IndexSet.empty in
   for i = (cardinal Lr1C.n) - 1 downto 0
-  do acc := Lr1Set.add (Index.of_int Lr1C.n i) !acc done;
+  do acc := IndexSet.add (Index.of_int Lr1C.n i) !acc done;
   !acc
 
-let lr1set_bind : Lr1Set.t -> (Lr1Set.element -> Lr1Set.t) -> Lr1Set.t =
+let lr1set_bind : Lr1C.n IndexSet.t -> (Lr1C.n index -> Lr1C.n IndexSet.t) -> Lr1C.n IndexSet.t =
   fun s f ->
-  Lr1Set.fold (fun lr1 acc -> Lr1Set.union acc (f lr1)) s Lr1Set.empty
+  IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
 
 module LRijkstra =
   LRijkstraFast.Make(Input)(TerminalSet)(Lr1C)
@@ -177,13 +173,13 @@ struct
   (* Precompute states associated to symbols *)
 
   let array_set_add arr index value =
-    arr.(index) <- Lr1Set.add value arr.(index)
+    arr.(index) <- IndexSet.add value arr.(index)
 
   let states_of_terminals =
-    Array.make Terminal.count Lr1Set.empty
+    Array.make Terminal.count IndexSet.empty
 
   let states_of_nonterminals =
-    Array.make Nonterminal.count Lr1Set.empty
+    Array.make Nonterminal.count IndexSet.empty
 
   let () =
     Index.iter Lr1C.n (fun lr1 ->
@@ -417,8 +413,8 @@ let set_of_predecessors =
   Vector.init Lr1C.n (fun lr1 ->
       let transitions = Transition.predecessors lr1 in
       List.fold_left
-        (fun set tr -> Lr1Set.add (Transition.source tr) set)
-        Lr1Set.empty transitions
+        (fun set tr -> IndexSet.add (Transition.source tr) set)
+        IndexSet.empty transitions
     )
 
 module Redgraph =
@@ -426,7 +422,7 @@ struct
   type node = {
     uid: int;
     lr1: Lr1C.n index;
-    mutable goto: Lr1Set.t;
+    mutable goto: Lr1C.n IndexSet.t;
     mutable parents: node list;
   }
 
@@ -462,7 +458,7 @@ struct
     fun lr1 ->
       let uid = !k in
       incr k;
-      {lr1; goto = Lr1Set.empty; parents = []; uid}
+      {lr1; goto = IndexSet.empty; parents = []; uid}
 
   let get_parent_nodes node =
     match node.parents with
@@ -502,7 +498,7 @@ struct
       List.iter (fun state ->
           match goto_target state.lr1 nt with
           | None -> ()
-          | Some st -> state.goto <- Lr1Set.add st state.goto
+          | Some st -> state.goto <- IndexSet.add st state.goto
         ) states;
       acc
     | Concrete st ->
@@ -573,18 +569,16 @@ struct
 
   end
 
-  module DerivationSet = IndexSet(Derivations)
-
   let subset_derivations d p =
-    let acc = ref DerivationSet.empty in
+    let acc = ref IndexSet.empty in
     Index.iter Derivations.n
-      (fun i -> if p (Vector.get d i) then acc := DerivationSet.add i !acc);
+      (fun i -> if p (Vector.get d i) then acc := IndexSet.add i !acc);
     !acc
 
   type node_derivations = {
     node: node;
-    child: DerivationSet.t;
-    self: DerivationSet.t;
+    child: Derivations.n IndexSet.t;
+    self: Derivations.n IndexSet.t;
   }
 
   let roots =
@@ -595,8 +589,8 @@ struct
     let cd = List.sort_uniq Derivations.compare_node vs in
     let sd = Derivations.register (Lr1 root) :: List.map (Derivations.delta lr1) cd in
     let derivation_set nodes =
-      let add_index acc node = DerivationSet.add node.Derivations.index acc in
-      List.fold_left add_index DerivationSet.empty nodes
+      let add_index acc node = IndexSet.add node.Derivations.index acc in
+      List.fold_left add_index IndexSet.empty nodes
     in
     { node = root; child = derivation_set cd; self = derivation_set sd }
 
@@ -605,12 +599,12 @@ struct
   let derive = Derivations.derive
 
   let node_reverse_deps =
-    let vector = Vector.make Lr1C.n Lr1Set.empty in
+    let vector = Vector.make Lr1C.n IndexSet.empty in
     Index.iter Lr1C.n (fun lr1 ->
         let rec visit ps =
-          Lr1Set.iter (fun lr1' ->
+          IndexSet.iter (fun lr1' ->
               let states = Vector.get vector lr1' in
-              Vector.set vector lr1' (Lr1Set.add lr1 states)
+              Vector.set vector lr1' (IndexSet.add lr1 states)
             ) ps.goto;
           List.iter visit ps.parents
         in
@@ -621,22 +615,22 @@ struct
   let reachable =
     let rec visit acc ps =
       let get_root lr1 = Vector.get roots lr1 in
-      let add_self lr1 acc = DerivationSet.union (get_root lr1).self acc in
-      let acc = Lr1Set.fold add_self ps.goto acc in
+      let add_self lr1 acc = IndexSet.union (get_root lr1).self acc in
+      let acc = IndexSet.fold add_self ps.goto acc in
       List.fold_left visit acc ps.parents
     in
     let visit_parents t = visit t.child t.node in
     let vector = Vector.map visit_parents roots in
     let module Property = struct
-      type property = DerivationSet.t
-      let leq_join = DerivationSet.union
+      type property = Derivations.n IndexSet.t
+      let leq_join = IndexSet.union
     end in
     let module Graph = struct
       type variable = Lr1C.n index
       let foreach_root f =
         Index.iter Lr1C.n (fun lr1 -> f lr1 (Vector.get vector lr1))
       let foreach_successor lr1 reachable f =
-        Lr1Set.iter (fun lr1' -> f lr1' reachable)
+        IndexSet.iter (fun lr1' -> f lr1' reachable)
           (Vector.get node_reverse_deps lr1)
     end in
     let module Store = struct
@@ -677,25 +671,25 @@ struct
       |> State_indices.states_of_symbol
     in
     let target_closure =
-      let closure = ref Lr1Set.empty in
+      let closure = ref IndexSet.empty in
       let rec expand states =
-        if not (Lr1Set.is_empty states) then
+        if not (IndexSet.is_empty states) then
           expand (
-            Lr1Set.fold (fun lr1 acc ->
-                if Lr1Set.mem lr1 !closure then
+            IndexSet.fold (fun lr1 acc ->
+                if IndexSet.mem lr1 !closure then
                   acc
                 else (
-                  closure := Lr1Set.add lr1 !closure;
-                  Lr1Set.union (Vector.get node_reverse_deps lr1) acc
+                  closure := IndexSet.add lr1 !closure;
+                  IndexSet.union (Vector.get node_reverse_deps lr1) acc
                 )
-              ) states Lr1Set.empty
+              ) states IndexSet.empty
           )
       in
       expand target_states;
       !closure
     in
     let rec visit lr1 =
-      if not (Lr1Set.mem lr1 target_closure) then
+      if not (IndexSet.mem lr1 target_closure) then
         false
       else (
         if should_visit lr1 then (
@@ -707,7 +701,7 @@ struct
           let rec traverse path node =
             let path = (node.lr1 : _ index :> int) :: path in
             List.iter (traverse path) node.parents;
-            Lr1Set.iter (fun lr1' ->
+            IndexSet.iter (fun lr1' ->
                 if visit lr1' then
                   let r = hashtbl_find_or_ref tgt_table lr1' [] in
                   r := path :: !r
@@ -736,7 +730,7 @@ struct
       if not (Vector.get reachable lr1) then (
         Vector.set reachable lr1 true;
         let rec visit node =
-          Lr1Set.iter reach node.goto;
+          IndexSet.iter reach node.goto;
           List.iter visit node.parents
         in
         visit (Vector.get roots lr1).node
@@ -752,7 +746,7 @@ struct
                Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
           let tgt_table = Hashtbl.create 7 in
           let rec visit_target pst =
-            Lr1Set.iter (fun tgt ->
+            IndexSet.iter (fun tgt ->
                 let lbl = string_of_int (pst.lr1 :> int) in
                 match Hashtbl.find tgt_table tgt with
                 | exception Not_found ->
@@ -779,11 +773,11 @@ module Sigma : sig
 
       This makes complement a cheap operation.  *)
   type t =
-    | Pos of Lr1Set.t
-    | Neg of Lr1Set.t
+    | Pos of Lr1C.n IndexSet.t
+    | Neg of Lr1C.n IndexSet.t
 
   val singleton : Lr1C.n index -> t
-  val to_lr1set : t -> Lr1Set.t
+  val to_lr1set : t -> Lr1C.n IndexSet.t
 
   include Mulet.SIGMA with type t := t
 
@@ -799,55 +793,55 @@ module Sigma : sig
   val cmon : t -> Cmon.t
 end = struct
   type t =
-    | Pos of Lr1Set.t
-    | Neg of Lr1Set.t
+    | Pos of Lr1C.n IndexSet.t
+    | Neg of Lr1C.n IndexSet.t
 
-  let empty = Pos Lr1Set.empty
-  let full = Neg Lr1Set.empty
+  let empty = Pos IndexSet.empty
+  let full = Neg IndexSet.empty
   let compl = function Pos x -> Neg x | Neg x -> Pos x
-  let is_empty = function Pos x -> Lr1Set.is_empty x | Neg _ -> false
-  let is_full = function Neg x -> Lr1Set.is_empty x | Pos _ -> false
+  let is_empty = function Pos x -> IndexSet.is_empty x | Neg _ -> false
+  let is_full = function Neg x -> IndexSet.is_empty x | Pos _ -> false
 
-  let singleton lr1 = Pos (Lr1Set.singleton lr1)
+  let singleton lr1 = Pos (IndexSet.singleton lr1)
 
   let to_lr1set = function
     | Pos xs -> xs
-    | Neg xs -> Lr1Set.diff all_states xs
+    | Neg xs -> IndexSet.diff all_states xs
 
   let is_subset_of x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Lr1Set.subset x1 x2
-    | Neg x1, Neg x2 -> Lr1Set.subset x2 x1
-    | Pos x1, Neg x2 -> Lr1Set.disjoint x1 x2
+    | Pos x1, Pos x2 -> IndexSet.subset x1 x2
+    | Neg x1, Neg x2 -> IndexSet.subset x2 x1
+    | Pos x1, Neg x2 -> IndexSet.disjoint x1 x2
     | Neg _ , Pos _ -> false
 
   let inter x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Pos (Lr1Set.inter x1 x2)
-    | Neg x1, Neg x2 -> Neg (Lr1Set.union x1 x2)
+    | Pos x1, Pos x2 -> Pos (IndexSet.inter x1 x2)
+    | Neg x1, Neg x2 -> Neg (IndexSet.union x1 x2)
     | (Pos x1, Neg x2) | (Neg x2, Pos x1) ->
-      Pos (Lr1Set.diff x1 x2)
+      Pos (IndexSet.diff x1 x2)
 
   let intersect x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> not (Lr1Set.disjoint x1 x2)
+    | Pos x1, Pos x2 -> not (IndexSet.disjoint x1 x2)
     | Neg _, Neg _ -> true
     | Pos x1, Neg x2 | Neg x2, Pos x1 ->
-      not (Lr1Set.is_empty (Lr1Set.diff x1 x2))
+      not (IndexSet.is_empty (IndexSet.diff x1 x2))
 
   let compare x1 x2 =
     match x1, x2 with
-    | Pos x1, Pos x2 -> Lr1Set.compare x1 x2
-    | Neg x1, Neg x2 -> Lr1Set.compare x2 x1
+    | Pos x1, Pos x2 -> IndexSet.compare x1 x2
+    | Neg x1, Neg x2 -> IndexSet.compare x2 x1
     | Pos _ , Neg _ -> -1
     | Neg _ , Pos _ -> 1
 
   let union x1 x2 =
     match x1, x2 with
-    | Neg x1, Neg x2 -> Neg (Lr1Set.inter x1 x2)
-    | Pos x1, Pos x2 -> Pos (Lr1Set.union x1 x2)
+    | Neg x1, Neg x2 -> Neg (IndexSet.inter x1 x2)
+    | Pos x1, Pos x2 -> Pos (IndexSet.union x1 x2)
     | Pos x1, Neg x2 | Neg x2, Pos x1 ->
-      Neg (Lr1Set.diff x2 x1)
+      Neg (IndexSet.diff x2 x1)
 
   let partition l =
     let only_pos = ref true in
@@ -856,23 +850,23 @@ end = struct
     let pos x = Pos x in
     try
       if !only_pos
-      then List.map pos (Lr1Refine.partition l)
+      then List.map pos (IndexRefine.partition l)
       else
-        let parts, total = Lr1Refine.partition_and_total l in
+        let parts, total = IndexRefine.partition_and_total l in
         Neg total :: List.map pos parts
     with exn ->
       Printf.eprintf
         "Partition failed with %d inputs (strictly positive: %b):\n"
         (List.length l) !only_pos;
       List.iter (fun set ->
-          Printf.eprintf "- cardinal=%d, set={" (Lr1Set.cardinal set);
-          Lr1Set.iter (fun elt -> Printf.eprintf "%d," (elt :> int)) set;
+          Printf.eprintf "- cardinal=%d, set={" (IndexSet.cardinal set);
+          IndexSet.iter (fun elt -> Printf.eprintf "%d," (elt : _ index :> int)) set;
         ) l;
       raise exn
 
   let mem x = function
-    | Pos xs -> Lr1Set.mem x xs
-    | Neg xs -> not (Lr1Set.mem x xs)
+    | Pos xs -> IndexSet.mem x xs
+    | Neg xs -> not (IndexSet.mem x xs)
 
   let cmon = function
     | Pos _ -> Cmon.construct "Pos" [Cmon.constant "_"]
@@ -915,13 +909,13 @@ sig
   type compiled
   val compile : Reg.Expr.t -> compiled
 
-  val make : compiled -> Lr1Set.t -> Reg.Expr.t
+  val make : compiled -> Lr1C.n IndexSet.t -> Reg.Expr.t
 end =
 struct
   type compiled = {
     source: Reg.Expr.t;
     derivations: (Redgraph.Derivations.n, Reg.Expr.t) vector;
-    non_empty: Redgraph.DerivationSet.t;
+    non_empty: Redgraph.Derivations.n IndexSet.t;
   }
 
   let compare_compilation t1 t2 =
@@ -934,7 +928,7 @@ struct
         ~root:source
         ~step:(fun re lr1 ->
             let _label, re' =
-              Reg.Expr.left_delta re (Sigma.Pos (Lr1Set.singleton lr1))
+              Reg.Expr.left_delta re (Sigma.Pos (IndexSet.singleton lr1))
             in
             (*TODO: what to do with the label?*)
             re')
@@ -944,7 +938,7 @@ struct
         (fun expr -> not (Reg.Expr.is_empty expr))
     in
     Printf.printf "%d non empty derivations\n%!"
-      (Redgraph.DerivationSet.cardinal non_empty);
+      (IndexSet.cardinal non_empty);
     { source; derivations; non_empty }
 
   type t = {
@@ -965,7 +959,7 @@ struct
 
   let make_one compiled node =
     let reachable = Vector.get Redgraph.reachable node.Redgraph.lr1 in
-    let empty = Redgraph.DerivationSet.disjoint compiled.non_empty reachable in
+    let empty = IndexSet.disjoint compiled.non_empty reachable in
     if empty then
       Reg.Expr.empty
     else
@@ -973,7 +967,7 @@ struct
 
   let make compiled states =
     Reg.Expr.disjunction (
-      Lr1Set.fold (fun lr1 acc ->
+      IndexSet.fold (fun lr1 acc ->
           let node = Vector.get Redgraph.roots lr1 in
           make_one compiled node.node :: acc
         ) states []
@@ -982,27 +976,27 @@ struct
   let left_classes t f acc =
     List.fold_left
       (fun acc (parent : Redgraph.node) ->
-         f (Sigma.Pos (Lr1Set.singleton parent.lr1)) acc)
+         f (Sigma.Pos (IndexSet.singleton parent.lr1)) acc)
       acc t.node.parents
 
   let empty_delta = (Label.empty, Reg.Expr.empty)
 
   let left_delta (t : t) = function
-    | Sigma.Pos s as sigma when Lr1Set.is_singleton s ->
-      let lr1 = Lr1Set.choose s in
+    | Sigma.Pos s as sigma when IndexSet.is_singleton s ->
+      let lr1 = IndexSet.choose s in
       let node_with_state lr1 node = lr1 = node.Redgraph.lr1 in
       begin match List.find_opt (node_with_state lr1) t.node.parents with
         | None -> empty_delta
         | Some node' ->
           let derivations =
-            Lr1Set.fold (fun elt acc ->
-                Redgraph.DerivationSet.fold (fun elt acc ->
-                    let re = Vector.get t.compiled.derivations elt in
+            IndexSet.fold (fun lr1 acc ->
+                IndexSet.fold (fun deriv acc ->
+                    let re = Vector.get t.compiled.derivations deriv in
                     let _, re = Reg.Expr.left_delta re sigma in
                     if Reg.Expr.is_empty re
                     then acc
                     else re :: acc
-                  ) (Vector.get Redgraph.roots elt).self acc
+                  ) (Vector.get Redgraph.roots lr1).self acc
               ) node'.goto []
           in
           (Label.empty,
@@ -1042,9 +1036,9 @@ module Match_item = struct
           if List.exists
               (item_match lhs prefix' suffix')
               (Lr0.items (Lr1.lr0 lr1))
-          then Lr1Set.add (Lr1C.of_g lr1) acc
+          then IndexSet.add (Lr1C.of_g lr1) acc
           else acc
-        ) Lr1Set.empty
+        ) IndexSet.empty
     in
     (*let lhs = match lhs with
       | None -> ""
@@ -1125,8 +1119,8 @@ let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
 module DFA = struct
   let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
       List.fold_left
-        (fun acc tr -> Lr1Set.add (Transition.source tr) acc)
-        (Lr1Set.empty)
+        (fun acc tr -> IndexSet.add (Transition.source tr) acc)
+        (IndexSet.empty)
         (Transition.predecessors lr1)
     )
 

@@ -12,7 +12,7 @@ open Fix.Indexing
 
 module Make
     (Grammar : MenhirSdk.Cmly_api.GRAMMAR)
-    (TerminalSet : Utils.BitSet.S with type element = Grammar.terminal)
+    (TerminalSet : Utils.BitSet.S0 with type element = Grammar.terminal)
     (Lr1C : sig
        include CARDINAL
        val of_g : Grammar.lr1 -> n index
@@ -33,7 +33,10 @@ struct
 
   (* Partition refinement algorithm for sets of terminals *)
   let terminal_partition =
-    let module TerminalPartition = Utils.Refine.Make(TerminalSet) in
+    let module TerminalPartition = Utils.Refine.Make(struct
+        type 'a t = TerminalSet.t
+        include (TerminalSet : Utils.BitSet.S0 with type t := TerminalSet.t)
+      end) in
     fun sets ->
       (* Removing duplicates can speed up partitioning significantly *)
       let sets = List.sort_uniq TerminalSet.compare sets in

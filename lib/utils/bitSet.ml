@@ -15,76 +15,76 @@
 (*                                                                            *)
 (******************************************************************************)
 
-module type S = sig
+module type S1 = sig
   (* Elements are assumed to have a natural total order. *)
 
-  type element
+  type 'a element
 
   (* Sets. *)
 
-  type t
+  type 'a t
 
   (* The empty set. *)
 
-  val empty: t
+  val empty: 'a t
 
   (* [is_empty s] tells whether [s] is the empty set. *)
 
-  val is_empty: t -> bool
+  val is_empty: 'a t -> bool
 
   (* [singleton x] returns a singleton set containing [x] as its only
      element. *)
 
-  val singleton: element -> t
+  val singleton: 'a element -> 'a t
 
   (* [is_singleton s] tests whether [s] is a singleton set. *)
 
-  val is_singleton: t -> bool
+  val is_singleton: 'a t -> bool
 
   (* [cardinal s] returns the cardinal of [s]. *)
 
-  val cardinal: t -> int
+  val cardinal: 'a t -> int
 
   (* [choose s] returns an arbitrarily chosen element of [s], if [s]
      is nonempty, and raises [Not_found] otherwise. *)
 
-  val choose: t -> element
+  val choose: 'a t -> 'a element
 
-  val minimum: t -> element option
+  val minimum: 'a t -> 'a element option
 
   (* [mem x s] returns [true] if and only if [x] appears in the set
      [s]. *)
 
-  val mem: element -> t -> bool
+  val mem: 'a element -> 'a t -> bool
 
   (* [add x s] returns a set whose elements are all elements of [s],
      plus [x]. *)
 
-  val add: element -> t -> t
+  val add: 'a element -> 'a t -> 'a t
 
   (* [remove x s] returns a set whose elements are all elements of
      [s], except [x]. *)
 
-  val remove: element -> t -> t
+  val remove: 'a element -> 'a t -> 'a t
 
   (* [union s1 s2] returns the union of the sets [s1] and [s2]. *)
 
-  val union: t -> t -> t
+  val union: 'a t -> 'a t -> 'a t
 
   (* [inter s t] returns the set intersection of [s] and [t], that is,
      $s\cap t$. *)
 
-  val inter: t -> t -> t
+  val inter: 'a t -> 'a t -> 'a t
 
   (* [disjoint s1 s2] returns [true] if and only if the sets [s1] and
      [s2] are disjoint, i.e. iff their intersection is empty. *)
 
-  val disjoint: t -> t -> bool
+  val disjoint: 'a t -> 'a t -> bool
 
   (* [iter f s] invokes [f x], in turn, for each element [x] of the
      set [s]. Elements are presented to [f] in increasing order. *)
 
-  val iter: (element -> unit) -> t -> unit
+  val iter: ('a element -> unit) -> 'a t -> unit
 
   (* [fold f s seed] invokes [f x accu], in turn, for each element [x]
      of the set [s]. Elements are presented to [f] in increasing
@@ -95,57 +95,74 @@ module type S = sig
      where $x_1 < x_2 < \ldots < x_n$, then [fold f s seed] computes
      $([f]\,x_n\,\ldots\,([f]\,x_2\,([f]\,x_1\,[seed]))\ldots)$. *)
 
-  val fold: (element -> 'b -> 'b) -> t -> 'b -> 'b
+  val fold: ('a element -> 'b -> 'b) -> 'a t -> 'b -> 'b
 
-  val map: (element -> element) -> t -> t
+  val map: ('a element -> 'a element) -> 'a t -> 'a t
 
-  val exists: (element -> bool) -> t -> bool
+  val exists: ('a element -> bool) -> 'a t -> bool
 
   (* [elements s] is a list of all elements in the set [s]. *)
 
-  val elements: t -> element list
+  val elements: 'a t -> 'a element list
 
   (* [compare] is an ordering over sets. *)
 
-  val compare: t -> t -> int
+  val compare: 'a t -> 'a t -> int
 
   (* [equal] implements equality over sets. *)
 
-  val equal: t -> t -> bool
+  val equal: 'a t -> 'a t -> bool
 
   (* [subset] implements the subset predicate over sets. *)
 
-  val subset: t -> t -> bool
+  val subset: 'a t -> 'a t -> bool
 
-  val quick_subset : t -> t -> bool
+  (* [quick_subset s1 s2] is a fast test for the set inclusion [s1 ⊆ s2].
 
-  val diff : t -> t -> t
+     The sets [s1] and [s2] must be nonempty.
+
+     It must be known ahead of time that either [s1] is a subset of [s2] or
+     these sets are disjoint: that is, [s1 ⊆ s2 ⋁ s1 ∩ s2 = ∅] must hold.
+
+     Under this hypothesis, [quick_subset s1 s2] can be implemented simply
+     by picking an arbitrary element of [s1] (if there is one) and testing
+     whether it is a member of [s2]. *)
+  val quick_subset: 'a t -> 'a t -> bool
+
+  val diff : 'a t -> 'a t -> 'a t
 
   (** {1 Decomposing sets}
 
-      These functions implements the [Partition.DECOMPOSABLE] interface.
-      We cannot reference it here as [Partition] is implemented using bitsets,
+      These functions implements the [Refine.DECOMPOSABLE] interface.
+      We cannot reference it here as [Refine] is implemented using bitsets,
       that would create a reference cycle.
   *)
 
   (* [compare_minimum l r] order two sets by comparing their least element *)
-  val compare_minimum : t -> t -> int
+  val compare_minimum : 'a t -> 'a t -> int
 
   (* [extract_unique_prefix l r] split l in two sets (l_min, l_rest) such that:
      - l_min contains elements strictly smaller than the all elements of [r]
      - l_rest contains other elements
   *)
-   val extract_unique_prefix : t -> t -> t * t
+   val extract_unique_prefix : 'a t -> 'a t -> 'a t * 'a t
 
   (* [extract_shared_prefix l r] decomposes l and r in (min, l', r') such that:
      - [min] is the set of minimal elements that are part of both [l] and [r]
      - [l = min U l'] and [r = min U r']
   *)
-  val extract_shared_prefix : t -> t -> t * (t * t)
+  val extract_shared_prefix : 'a t -> 'a t -> 'a t * ('a t * 'a t)
 
   (* [sorted_union l] computes the union of an ordered list of intervals.
      This is an optimized special case of union *)
-  val sorted_union : t list -> t
+  val sorted_union : 'a t list -> 'a t
+end
+
+module type S0 = sig
+  type element
+  type t
+  include S1 with type 'a element := element
+              and type 'a t := t
 end
 
 module IntSet = struct
@@ -501,10 +518,25 @@ module IntSet = struct
   let extract_shared_prefix l r = extract_shared_prefix (l, r)
 end
 
+module type S1_int = S1 with type 'a element = int
+module type S1_index = S1 with type 'a element = 'a Fix.Indexing.index
+
+module IndexSeq_int : S1_int = struct
+  type 'a element = int
+  type 'a t = IntSet.t
+  include (IntSet : S0 with type element := int and type t := IntSet.t)
+end
+
+module IndexSet =
+  (val (Obj.magic
+          ((module IndexSeq_int)
+           : (module S1_int))
+        : (module S1_index)))
+
 module Make (Element : sig
     type t = private int
     val of_int : int -> t
-  end) : S with type element = Element.t =
+  end) : S0 with type element = Element.t =
 struct
   type element = Element.t
   type t = IntSet.t
