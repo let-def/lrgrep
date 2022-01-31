@@ -151,6 +151,7 @@ module Lr1C = struct
   include (val const Lr1.count)
   let of_g lr1 = Index.of_int n (Lr1.to_int lr1)
   let to_g lr1 = Lr1.of_int (Index.to_int lr1)
+  let to_lr0 lr1 = Lr1.lr0 (to_g lr1)
 end
 
 module Lr1Map = Map.Make(struct
@@ -192,7 +193,7 @@ struct
 
   let () =
     Index.iter Lr1C.n (fun lr1 ->
-        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
+        match Lr0.incoming (Lr1C.to_lr0 lr1) with
         | None -> ()
         | Some (T t) -> array_set_add states_of_terminals (t :> int) lr1
         | Some (N n) -> array_set_add states_of_nonterminals (n :> int) lr1
@@ -426,8 +427,7 @@ let set_of_predecessors =
         IndexSet.empty transitions
     )
 
-module Redgraph =
-struct
+module Redgraph = struct
   module Node_id = Gensym()
 
   type node = {
@@ -589,12 +589,12 @@ struct
       Lr1Map.map (!) !rmap
   end
 
-  let roots =
-    Vector.init Lr1C.n @@ fun lr1 ->
-    let root = make_node lr1 (Node_goto_from {nodes=[]}) in
-    let vs = close_transitions [] (Lr1 root)  in
-    List.iter (Closed_derivation.register lr1) vs;
-    root
+  let roots = Vector.init Lr1C.n (fun lr1 ->
+      let root = make_node lr1 (Node_goto_from {nodes=[]}) in
+      let vs = close_transitions [] (Lr1 root)  in
+      List.iter (Closed_derivation.register lr1) vs;
+      root
+    )
 
   let () =
     (* Compute the "goto_from" relation *)
@@ -619,7 +619,7 @@ struct
     Vector.make' Node_id.n dummy
 
   let () =
-    (* Initialize ndoes and compute "next_goto_closure" relation *)
+    (* Initialize nodes and compute "next_goto_closure" relation *)
     let module Property = struct
       type property = Lr1C.n IndexSet.t
       let leq_join = IndexSet.union
@@ -724,7 +724,7 @@ struct
           Printf.printf "  ST%d[label=%S]\n"
             (lr1 : _ index :> int)
             (Format.asprintf "%d: %a" (lr1 :> int) Print.itemset
-               (Lr0.items (Lr1.lr0 (Lr1C.to_g lr1))));
+               (Lr0.items (Lr1C.to_lr0 lr1)));
           let tgt_table = Hashtbl.create 7 in
           let rec traverse path node =
             let path = (node.lr1 : _ index :> int) :: path in
@@ -1014,32 +1014,13 @@ struct
 
   let get_label _ = Label.empty
 
-  let make_one compiled node =
-    if IndexSet.disjoint compiled.domain node.Redgraph.next_goto_closure
-    then Reg.Expr.empty
-    else Reg.Expr.abstract (Node { node; compiled })
-
   let make compiled states =
-    (*let lr1 = Index.of_int Lr1C.n 509 in
-    Reg.Expr.(
-      set (Sigma.singleton lr1) ^.
-      let re' = make_one compiled (Vector.get Redgraph.roots lr1) in
-      match Lr1Map.find_opt lr1 compiled.derivations with
-      | None -> re'
-      | Some (_, re) -> Reg.Expr.(|.) re re'*)
     Reg.Expr.abstract (Root { compiled; states })
-    (*Reg.Expr.disjunction (
-      IndexSet.fold (fun lr1 acc ->
-          make_one compiled (Vector.get Redgraph.roots lr1) :: acc
-        ) states []
-    )*)
 
   let left_classes t f acc =
     match t with
     | Root t ->
-      IndexSet.fold
-        (fun lr1 acc -> f (Sigma.singleton lr1) acc)
-        t.states acc
+      IndexSet.fold (fun lr1 acc -> f (Sigma.singleton lr1) acc) t.states acc
     | Node t ->
       let rec visit acc node =
         List.fold_left visit
@@ -1053,55 +1034,56 @@ struct
 
   let empty_delta = (Label.empty, Reg.Expr.empty)
 
-  let make_delta compiled node goto =
+  let make_one compiled node =
+    (*if IndexSet.disjoint compiled.domain node.Redgraph.next_goto_closure
+    then Reg.Expr.empty
+    else*) Reg.Expr.abstract (Node { node; compiled })
+
+  let make_initial compiled lr1 =
+    let expr = make_one compiled (Vector.get Redgraph.roots lr1) in
+    match Lr1Map.find_opt lr1 compiled.derivations with
+    | None -> (Label.empty, expr)
+    | Some (lbl, expr') -> (lbl, Reg.Expr.(expr |. expr'))
+
+  let node_with_state lr1 node =
+    lr1 = node.Redgraph.lr1
+
+  let next_at node lr1 =
+    List.find_opt (node_with_state lr1) node.Redgraph.next
+
+  let rec make_delta compiled (node : Redgraph.node) =
+    let nodes =
+      IndexSet.fold (fun lr1 nodes ->
+          match next_at (Vector.get Redgraph.roots lr1) node.lr1 with
+          | None -> nodes
+          | Some node -> node :: nodes
+        ) node.goto []
+    in
+    let lbls, res = List.split (List.map (make_delta compiled) nodes) in
     let lbls, res =
-      IndexSet.fold (fun lr1 (lbls, res as acc) ->
-          match Lr1Map.find_opt lr1 compiled.derivations with
-          | None -> acc
-          | Some (lbl, re) -> (lbl :: lbls, re :: res)
-        ) goto ([], [])
+      IndexSet.fold begin fun lr1 (lbls, res) ->
+        match Lr1Map.find_opt lr1 compiled.derivations with
+        | None -> (lbls, res)
+        | Some (_lbl, re) ->
+          let lbl, re = Reg.Expr.left_delta re (Sigma.singleton node.lr1) in
+          (lbl :: lbls, re :: res)
+      end node.goto (lbls, res)
     in
     (List.fold_left Label.append Label.empty lbls,
      Reg.Expr.disjunction (make_one compiled node :: res))
-
-  let node_with_state lr1 node = lr1 = node.Redgraph.lr1
-
-  let make_delta' compiled node goto =
-    let lbls, res, nodes =
-      IndexSet.fold (fun lr1 (lbls, res, nodes) ->
-          let nodes =
-            match List.find_opt
-                    (node_with_state node.Redgraph.lr1)
-                    (Vector.get Redgraph.roots lr1).next
-            with
-            | None -> nodes
-            | Some node -> node :: nodes
-          in
-          match Lr1Map.find_opt lr1 compiled.derivations with
-          | None -> (lbls, res, nodes)
-          | Some (lbl, re) -> (lbl :: lbls, re :: res, nodes)
-        ) goto ([], [], [node])
-    in
-    (List.fold_left Label.append Label.empty lbls,
-     Reg.Expr.disjunction (List.map (make_one compiled) nodes @ res))
 
   let left_delta (t : t) = function
     | Sigma.Pos s when IndexSet.is_singleton s ->
       let lr1 = IndexSet.choose s in
       begin match t with
         | Root t ->
-          if IndexSet.mem lr1 t.states then
-            make_delta t.compiled (Vector.get Redgraph.roots lr1) s
-          else
-            empty_delta
+          if IndexSet.mem lr1 t.states
+          then make_initial t.compiled lr1
+          else empty_delta
         | Node t ->
-          begin match List.find_opt (node_with_state lr1) t.node.next with
+          begin match next_at t.node lr1 with
             | None -> empty_delta
-            | Some node' ->
-              (*Printf.eprintf "delta %d -> %d\n"
-                (t.node.lr1 :> int)
-                (lr1 :> int);*)
-              make_delta' t.compiled node' node'.goto
+            | Some node' -> make_delta t.compiled node'
           end
       end
     | _ -> empty_delta
@@ -1196,7 +1178,8 @@ let rec translate_term = function
   | Syntax.Reduce (expr, _) ->
     let expr = translate_expr expr in
     let compiled = Redgraph_derivation.compile expr in
-    Redgraph_derivation.make compiled all_states
+    let expr' = Redgraph_derivation.make compiled all_states in
+    Reg.Expr.(expr |. expr')
 
 and translate_expr terms =
   let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
@@ -1209,7 +1192,7 @@ let translate_clause priority {Syntax. pattern; action} =
   in
   let pattern = translate_expr pattern in
   let label = Reg.Expr.label (Action {priority; action_desc}) in
-  Reg.Expr.(^.) pattern label (*(pattern ^. label)*)
+  Reg.Expr.(^.) pattern label
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
@@ -1220,7 +1203,7 @@ let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
 (* Derive DFA with naive intersection *)
 
 module DFA = struct
-  let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
+(*  let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
       List.fold_left
         (fun acc tr -> IndexSet.add (Transition.source tr) acc)
         (IndexSet.empty)
@@ -1315,7 +1298,6 @@ module DFA = struct
     schedule initial Sigma.full;
     loop ();
     (!dfa, initial)
-end
 
 let compile_dfa (dfa, initial : DFA.state Reg.Map.t * DFA.state) =
   let first = ref true in
@@ -1355,7 +1337,8 @@ let compile_dfa (dfa, initial : DFA.state Reg.Map.t * DFA.state) =
     )
   in
   Reg.Map.iter (fun _ state -> visit state) dfa;
-  Printf.printf "  in st_%d stack" initial.DFA.index
+  Printf.printf "  in st_%d stack" initial.DFA.index*)
+end
 
 let cmon_re re =
   Mulet.cmon_re re
@@ -1368,12 +1351,43 @@ let test_stack =
     (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]*)
 
 let () =
+  prerr_endline (
+    "Test stack: " ^
+    String.concat " "
+      (List.rev_map symbol_name
+         (List.filter_map (fun x -> Lr0.incoming (Lr1C.to_lr0 x)) test_stack))
+  )
+
+let step re state =
+  let _lbl, re = Reg.Expr.left_delta re (Sigma.singleton state) in
+  let itemset = Lr0.items (Lr1C.to_lr0 state) in
+  (*let action' = match lbl with
+    | Label.Nothing -> "\x1b[31mNo action\x1b[m"
+    | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
+  in*)
+  let action = match Reg.Expr.get_label re with
+    | Label.Nothing -> "\x1b[31mNo action\x1b[m"
+    | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
+  in
+  Format.eprintf "Matching %s at state %d:\n%a%s%!\n%a%!\n-------------\n%!"
+    (match Lr0.incoming (Lr1C.to_lr0 state) with
+     | None -> "()"
+     | Some sym -> symbol_name sym)
+    (state :> int) Print.itemset itemset action Cmon.format (cmon_re re);
+  re
+
+let interpret re stack =
+  List.fold_left step re stack
+
+let () =
   let entry = List.hd lexer_definition.entrypoints in
   (*Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);*)
   let clauses = translate_entry entry in
   let re = Reg.Expr.disjunction clauses in
+  ignore (interpret re test_stack : Reg.Expr.t)
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
-  let dfa, initial = DFA.translate re in
-  let count = Reg.Map.cardinal dfa in
-  prerr_endline (string_of_int count ^ " states");
-  compile_dfa (dfa, initial);
+  (*let dfa, initial = DFA.translate re in*)
+  (*let count = Reg.Map.cardinal dfa in
+  prerr_endline (string_of_int count ^ " states");*)
+  (*compile_dfa (dfa, initial);*)
+
