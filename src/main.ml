@@ -15,6 +15,7 @@
 
 open Utils
 module IndexSet = BitSet.IndexSet
+type 'a indexset = 'a IndexSet.t
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -106,6 +107,12 @@ let lexer_definition =
 open Fix.Indexing
 open Input
 
+let array_set_add arr index value =
+  arr.(index) <- IndexSet.add value arr.(index)
+
+let array_cons arr index value =
+  arr.(index) <- value :: arr.(index)
+
 let vector_iter v f =
   Index.iter (Vector.length v) (fun i -> f (Vector.get v i ))
 
@@ -117,24 +124,6 @@ let cmon_index =
 
 let cmon_indexset xs =
   Cmon.list_map cmon_index (IndexSet.elements xs)
-
-(*let initial_states : (nonterminal * lr1) list =
-  Lr1.fold begin fun lr1 acc ->
-    let lr0 = Lr1.lr0 lr1 in
-    match Lr0.incoming lr0 with
-    | Some _ -> acc
-    | None ->
-      (* Initial state *)
-      Format.eprintf "Initial state %d\n%a\n"
-        (Lr1.to_int lr1)
-        Print.itemset (Lr0.items lr0);
-      let (prod, _) = List.hd (Lr0.items lr0) in
-      let nt = match (Production.rhs prod).(0) with
-        | N nt, _, _ -> nt
-        | _ -> assert false
-      in
-      (nt, lr1) :: acc
-  end []*)
 
 module TerminalSet = BitSet.Make(Terminal)
 
@@ -149,13 +138,15 @@ let all_terminals =
 (* [Lr1C] represents Lr1 states as elements of a [Numbering.Typed] set *)
 module Lr1C = struct
   include (val const Lr1.count)
+  type t = n index
+  type set = n indexset
   let of_g lr1 = Index.of_int n (Lr1.to_int lr1)
   let to_g lr1 = Lr1.of_int (Index.to_int lr1)
   let to_lr0 lr1 = Lr1.lr0 (to_g lr1)
 end
 
 module Lr1Map = Map.Make(struct
-    type t = Lr1C.n index
+    type t = Lr1C.t
     let compare = compare_index
   end)
 module IndexRefine = Refine.Make(Utils.BitSet.IndexSet)
@@ -166,7 +157,7 @@ let all_states =
   do acc := IndexSet.add (Index.of_int Lr1C.n i) !acc done;
   !acc
 
-let lr1set_bind : Lr1C.n IndexSet.t -> (Lr1C.n index -> Lr1C.n IndexSet.t) -> Lr1C.n IndexSet.t =
+let lr1set_bind : Lr1C.set -> (Lr1C.t -> Lr1C.set) -> Lr1C.set =
   fun s f ->
   IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
 
@@ -181,9 +172,6 @@ module State_indices =
 struct
 
   (* Precompute states associated to symbols *)
-
-  let array_set_add arr index value =
-    arr.(index) <- IndexSet.add value arr.(index)
 
   let states_of_terminals =
     Array.make Terminal.count IndexSet.empty
@@ -267,13 +255,13 @@ module Transition : sig
 
   (* [find_goto s nt] finds the goto transition originating from [s] and
      labelled by [nt], or raise [Not_found].  *)
-  val find_goto : Lr1C.n index -> Nonterminal.t -> goto index
+  val find_goto : Lr1C.t -> Nonterminal.t -> goto index
 
   (* Get the source state of a transition *)
-  val source : any index -> Lr1C.n index
+  val source : any index -> Lr1C.t
 
   (* Get the target state of a transition *)
-  val target : any index -> Lr1C.n index
+  val target : any index -> Lr1C.t
 
   (* Symbol that labels a transition *)
   val symbol : any index -> symbol
@@ -286,11 +274,11 @@ module Transition : sig
 
   (* [successors s] returns all the transitions [tr] such that
      [source tr = s] *)
-  val successors : Lr1C.n index -> any index list
+  val successors : Lr1C.t -> any index list
 
   (* [predecessors s] returns all the transitions [tr] such that
      [target tr = s] *)
-  val predecessors : Lr1C.n index -> any index list
+  val predecessors : Lr1C.t -> any index list
 end =
 struct
 
@@ -419,125 +407,114 @@ struct
   let target i = Vector.get targets i
 end
 
-let set_of_predecessors =
-  Vector.init Lr1C.n (fun lr1 ->
-      let transitions = Transition.predecessors lr1 in
-      List.fold_left
-        (fun set tr -> IndexSet.add (Transition.source tr) set)
-        IndexSet.empty transitions
-    )
+let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
+    List.fold_left
+      (fun acc tr -> IndexSet.add (Transition.source tr) acc)
+      IndexSet.empty
+      (Transition.predecessors lr1)
+  )
+
+let lr1set_predecessors lr1s =
+  lr1set_bind lr1s (Vector.get lr1_predecessors)
 
 module Redgraph = struct
-  module Node_id = Gensym()
+  let reductions = Vector.init Lr1C.n (fun lr1 ->
+      let prepare_goto p =
+        (Array.length (Production.rhs p), Production.lhs p)
+      in
+      let order (d1, n1) (d2, n2) =
+        let c = Int.compare d1 d2 in
+        if c = 0
+        then Int.compare (n1 : nonterminal :> int) (n2 : nonterminal :> int)
+        else c
+      in
+      let productions =
+        Lr1.reductions (Lr1C.to_g lr1)
+        |> List.map (fun (_, ps) -> prepare_goto (List.hd ps))
+        |> List.sort_uniq order
+      in
+      let depth = List.fold_left (fun x (d, _) -> max x d) 0 productions in
+      let vector = Array.make depth [] in
+      List.iter (fun (d,n) -> array_cons vector d n) productions;
+      vector
+    )
 
-  type node = {
-    id: Node_id.n index;
-    lr1: Lr1C.n index;
-    ancestor : ancestor;
-    mutable next: node list;
-    mutable goto: Lr1C.n IndexSet.t;
-    mutable goto_next: node list;
-    mutable next_goto_closure: Lr1C.n IndexSet.t;
+  type abstract_stack = {
+    states: Lr1C.set;
+    mutable goto: Lr1C.set ref Lr1Map.t;
+    parent: abstract_parent;
   }
 
-  and ancestor =
-    | Node_next_of of node
-    | Node_goto_from of {mutable nodes: node list}
+  and abstract_parent = abstract_stack option ref
+
+  type concrete_stack = {
+    prefix: Lr1C.t list;
+    base: Lr1C.t;
+    suffix: abstract_parent;
+  }
 
   type stack =
-    | Goto of {lr1: Lr1C.n index; parent: stack}
-    | Lr1 of node
+    | Concrete of concrete_stack
+    | Abstract of abstract_stack
 
-  let lr1 (Goto {lr1; _} | Lr1 {lr1; _}) = lr1
+  let get_parent states suffix =
+    match !suffix with
+    | Some parent -> parent
+    | None ->
+      let states = lr1set_predecessors states in
+      let result = {states; goto = Lr1Map.empty; parent = ref None} in
+      suffix := Some result;
+      result
 
-  let productions =
-    Vector.init Lr1C.n (fun lr1 ->
-        let order p1 p2 =
-          let c =
-            Int.compare
-              (Array.length (Production.rhs p1))
-              (Array.length (Production.rhs p2))
-          in
-          if c = 0
-          then Int.compare (p1 :> int) (p2 :> int)
-          else c
-        in
-        Lr1.reductions (Lr1C.to_g lr1)
-        |> List.map (fun (_, ps) -> List.hd ps)
-        |> List.sort_uniq order
-      )
-
-  type states =
-    | Concrete of stack
-    | Abstract of node list
-
-  let make_node lr1 ancestor = {
-    id = Node_id.fresh ();
-    lr1;
-    ancestor;
-    goto = IndexSet.empty;
-    goto_next = [];
-    next = [];
-    next_goto_closure = IndexSet.empty;
-  }
-
-  let get_parent_nodes node =
-    match node.next with
-    | [] ->
-      let ancestor = Node_next_of node in
-      let next = List.map
-          (fun tr -> make_node (Transition.source tr) ancestor)
-          (Transition.predecessors node.lr1)
-      in
-      node.next <- next;
-      next
-    | next -> next
+  let get_goto stack state =
+    match Lr1Map.find_opt state stack.goto with
+    | Some set -> set
+    | None ->
+      let set = ref IndexSet.empty in
+      stack.goto <- Lr1Map.add state set stack.goto;
+      set
 
   let pop = function
-    | Concrete (Goto {parent; _}) -> Concrete parent
-    | Concrete (Lr1 t) ->
-      Abstract (get_parent_nodes t)
-    | Abstract states ->
-      Abstract (
-        List.fold_left
-          (fun states state -> get_parent_nodes state @ states) [] states
-      )
-
-  let rec pop_many states = function
-    | 0 -> states
-    | n ->
-      assert (n > 0);
-      pop_many (pop states) (n - 1)
+    | Concrete {prefix = _ :: prefix; base; suffix} ->
+      Concrete {prefix; base; suffix}
+    | Concrete {prefix = []; base; suffix} ->
+      Abstract (get_parent (IndexSet.singleton base) suffix)
+    | Abstract t ->
+      Abstract (get_parent t.states t.parent)
 
   let goto_target lr1 nt =
     match Transition.(target (of_goto (find_goto lr1 nt))) with
     | exception Not_found -> None
     | result -> Some result
 
-  let goto nt acc = function
-    | Abstract states ->
-      List.iter (fun state ->
-          match goto_target state.lr1 nt with
-          | None -> ()
-          | Some st -> state.goto <- IndexSet.add st state.goto
-        ) states;
-      acc
-    | Concrete st ->
-      begin match goto_target (lr1 st) nt with
-        | None -> acc
-        | Some tgt -> Goto {lr1=tgt; parent=st} :: acc
-      end
+  let goto stack acc nts =
+    match stack with
+    | Concrete {prefix; base; suffix} ->
+      let lr1 = match prefix with lr1 :: _ -> lr1 | [] -> base in
+      List.iter begin fun nt ->
+        match goto_target lr1 nt with
+        | None -> ()
+        | Some lr1 -> acc := {prefix = lr1 :: prefix; base; suffix} :: !acc
+      end nts
+    | Abstract t ->
+      IndexSet.iter begin fun src ->
+        match List.filter_map (goto_target src) nts with
+        | [] -> ()
+        | targets ->
+          let set = get_goto t src in
+          set := IndexSet.union (IndexSet.of_list targets) !set
+      end t.states
 
-  let follow_transitions state =
-    let rec follow states depth acc = function
-      | [] -> acc
-      | p :: ps ->
-        let depth' = Array.length (Production.rhs p) in
-        let states = pop_many states (depth' - depth) in
-        let acc = goto (Production.lhs p) acc states in
-        follow states depth' acc ps
-    in
-    follow (Concrete state) 0 [] (Vector.get productions (lr1 state))
+  let follow_transitions stack =
+    let lr1 = List.hd stack.prefix in
+    let reductions = Vector.get reductions lr1 in
+    let acc = ref [] in
+    let stack = ref (Concrete stack) in
+    Array.iteri begin fun i nts ->
+      if i <> 0 then stack := pop !stack;
+      goto !stack acc nts;
+    end reductions;
+    !acc
 
   let rec close_transitions acc state =
     let new_transitions = follow_transitions state in
@@ -547,14 +524,14 @@ module Redgraph = struct
   module Closed_derivation = struct
     type node = {
       mutable children: node Lr1Map.t;
-      mutable sources: Lr1C.n IndexSet.t;
+      mutable sources: Lr1C.set;
     }
 
     let fresh () = {children = Lr1Map.empty; sources = IndexSet.empty}
 
     let root_node = fresh ()
 
-    let delta lr1 node =
+    let delta node lr1 =
       match Lr1Map.find_opt lr1 node.children with
       | Some node' -> node'
       | None ->
@@ -563,14 +540,8 @@ module Redgraph = struct
         node'
 
     let register source state =
-      let rec loop node state =
-        let (Lr1 {lr1; _} | Goto {lr1; _}) = state in
-        let node' = delta lr1 node in
-        match state with
-        | Lr1 _ -> node'
-        | Goto {parent; _} -> loop node' parent
-      in
-      let node = loop root_node state in
+      let node = List.fold_left delta root_node state.prefix in
+      let node = delta node state.base in
       node.sources <- IndexSet.add source node.sources
 
     let derive ~root ~step ~join =
@@ -589,9 +560,43 @@ module Redgraph = struct
       Lr1Map.map (!) !rmap
   end
 
+  type goto_transition = {
+    sources: Lr1C.set;
+    targets: Lr1C.set;
+  }
+
+  type node = {
+    states: Lr1C.set;
+    goto_transitions: goto_transition list;
+  }
+
+  type root = {
+    stack: node array;
+  }
+
+  let reconstruct_root suffix =
+    let nodes =
+      let rec aux = function
+        | None -> []
+        | Some state -> state :: aux !(state.parent)
+      in
+      aux !suffix
+    in
+    let prepare_node state =
+      let goto_transitions =
+        Lr1Map.bindings state.goto
+        |> List.map (fun (state, targets) -> (!targets, state))
+        |> IndexRefine.annotated_partition
+        |> List.map (fun (targets, sources) ->
+            {sources = IndexSet.of_list sources; targets})
+      in
+      {states = state.states; goto_transitions}
+    in
+    { stack = Array.of_list (List.map prepare_node nodes) }
+
   let roots = Vector.init Lr1C.n (fun lr1 ->
-      let root = make_node lr1 (Node_goto_from {nodes=[]}) in
-      let vs = close_transitions [] (Lr1 root)  in
+      let root = {prefix = []; base = lr1; suffix = ref None} in
+      let vs = close_transitions [] root  in
       List.iter (Closed_derivation.register lr1) vs;
       root
     )
@@ -602,11 +607,7 @@ module Redgraph = struct
       let target = Vector.get roots target in
       match target.ancestor with
       | Node_next_of _ -> assert false
-      | Node_goto_from t ->
-        t.nodes <- from :: t.nodes;
-        match List.find_opt (fun t -> t.lr1 = from.lr1) target.next with
-        | None -> ()
-        | Some t' -> from.goto_next <- t' :: from.goto_next
+      | Node_goto_from t -> t.nodes <- from :: t.nodes
     in
     let rec visit node =
       IndexSet.iter (register_goto ~from:node) node.goto;
@@ -621,7 +622,7 @@ module Redgraph = struct
   let () =
     (* Initialize nodes and compute "next_goto_closure" relation *)
     let module Property = struct
-      type property = Lr1C.n IndexSet.t
+      type property = Lr1C.set
       let leq_join = IndexSet.union
     end in
     let module Graph = struct
@@ -802,11 +803,11 @@ module Sigma : sig
 
       This makes complement a cheap operation.  *)
   type t =
-    | Pos of Lr1C.n IndexSet.t
-    | Neg of Lr1C.n IndexSet.t
+    | Pos of Lr1C.set
+    | Neg of Lr1C.set
 
-  val singleton : Lr1C.n index -> t
-  val to_lr1set : t -> Lr1C.n IndexSet.t
+  val singleton : Lr1C.t -> t
+  val to_lr1set : t -> Lr1C.set
 
   include Mulet.SIGMA with type t := t
 
@@ -816,14 +817,14 @@ module Sigma : sig
   val intersect : t -> t -> bool
   (** Check if two sets intersect *)
 
-  val mem : Lr1C.n index -> t -> bool
+  val mem : Lr1C.t -> t -> bool
   (** [mem lr1 t] checks if the state [lr1] is an element of a sigma set [t] *)
 
   val cmon : t -> Cmon.t
 end = struct
   type t =
-    | Pos of Lr1C.n IndexSet.t
-    | Neg of Lr1C.n IndexSet.t
+    | Pos of Lr1C.set
+    | Neg of Lr1C.set
 
   let empty = Pos IndexSet.empty
   let full = Neg IndexSet.empty
@@ -944,7 +945,7 @@ sig
   type compiled
   val compile : Reg.Expr.t -> compiled
 
-  val make : compiled -> Lr1C.n IndexSet.t -> Reg.Expr.t
+  val make : compiled -> Lr1C.set -> Reg.Expr.t
 
   val cmon : t -> Cmon.t
 end =
@@ -952,7 +953,7 @@ struct
   type compiled = {
     source: Reg.Expr.t;
     derivations: (Label.t * Reg.Expr.t) Lr1Map.t;
-    domain: Lr1C.n IndexSet.t;
+    domain: Lr1C.set;
   }
 
   let compare_compilation t1 t2 =
@@ -993,7 +994,7 @@ struct
 
   type t =
     | Node of { node: Redgraph.node; compiled: compiled; }
-    | Root of { states: Lr1C.n IndexSet.t; compiled: compiled }
+    | Root of { states: Lr1C.set; compiled: compiled }
 
   let compare t1 t2 =
     match t1, t2 with
@@ -1021,8 +1022,8 @@ struct
     match t with
     | Root t ->
       IndexSet.fold (fun lr1 acc -> f (Sigma.singleton lr1) acc) t.states acc
-    | Node t ->
-      let rec visit acc node =
+    | Node _t ->
+      (*let rec visit acc node =
         List.fold_left visit
           (List.fold_left
              (fun acc (parent : Redgraph.node) ->
@@ -1030,7 +1031,8 @@ struct
              acc node.Redgraph.next)
           node.Redgraph.goto_next
       in
-      visit acc t.node
+        visit acc t.node*)
+      acc
 
   let empty_delta = (Label.empty, Reg.Expr.empty)
 
@@ -1203,16 +1205,6 @@ let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
 (* Derive DFA with naive intersection *)
 
 module DFA = struct
-(*  let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
-      List.fold_left
-        (fun acc tr -> IndexSet.add (Transition.source tr) acc)
-        (IndexSet.empty)
-        (Transition.predecessors lr1)
-    )
-
-  let lr1set_predecessors lr1s =
-    lr1set_bind lr1s (fun lr1 -> Vector.get lr1_predecessors lr1)
-
   let sigma_predecessors sg =
     Sigma.Pos (lr1set_predecessors (Sigma.to_lr1set sg))
 
@@ -1299,45 +1291,45 @@ module DFA = struct
     loop ();
     (!dfa, initial)
 
-let compile_dfa (dfa, initial : DFA.state Reg.Map.t * DFA.state) =
-  let first = ref true in
-  Printf.printf "let analyse stack =\n";
-  let interesting = ref BitSet.IntSet.empty in
-  Reg.Map.iter (fun _ state ->
-      if state.DFA.transitions = []
-      && Reg.Expr.get_label state.DFA.expr = Label.Nothing
-      then ()
-      else interesting := BitSet.IntSet.add state.DFA.index !interesting
-    ) dfa;
-  let interesting = !interesting in
-  let visit (state : DFA.state) =
-    if BitSet.IntSet.mem state.index interesting then (
-      Printf.printf "  %s st_%d stack =\n"
-        (if !first then "let rec" else "and")
-        state.index;
-      first := false;
-      let action = Reg.Expr.get_label state.expr in
-      begin match action with
-        | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
-        | Label.Nothing -> ()
-      end;
-      Printf.printf "    match state stack with\n";
-      List.iter (fun (sg, st) ->
-          if BitSet.IntSet.mem st.DFA.index interesting then (
-            Printf.printf
-              "    | %s -> st_%d (next stack)\n"
-              (Sigma.to_lr1set sg
-               |> IndexSet.elements
-               |> List.map (string_of_int : int -> string :> _ index -> string)
-               |> String.concat "|")
-              st.DFA.index
-          )
-        ) state.transitions;
-      Printf.printf "    | _ -> []\n";
-    )
-  in
-  Reg.Map.iter (fun _ state -> visit state) dfa;
-  Printf.printf "  in st_%d stack" initial.DFA.index*)
+  let compile (dfa, initial : state Reg.Map.t * state) =
+    let first = ref true in
+    Printf.printf "let analyse stack =\n";
+    let interesting = ref BitSet.IntSet.empty in
+    Reg.Map.iter (fun _ state ->
+        if state.transitions = []
+        && Reg.Expr.get_label state.expr = Label.Nothing
+        then ()
+        else interesting := BitSet.IntSet.add state.index !interesting
+      ) dfa;
+    let interesting = !interesting in
+    let visit (state : state) =
+      if BitSet.IntSet.mem state.index interesting then (
+        Printf.printf "  %s st_%d stack =\n"
+          (if !first then "let rec" else "and")
+          state.index;
+        first := false;
+        let action = Reg.Expr.get_label state.expr in
+        begin match action with
+          | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
+          | Label.Nothing -> ()
+        end;
+        Printf.printf "    match state stack with\n";
+        List.iter (fun (sg, st) ->
+            if BitSet.IntSet.mem st.index interesting then (
+              Printf.printf
+                "    | %s -> st_%d (next stack)\n"
+                (Sigma.to_lr1set sg
+                 |> IndexSet.elements
+                 |> List.map (string_of_int : int -> string :> _ index -> string)
+                 |> String.concat "|")
+                st.index
+            )
+          ) state.transitions;
+        Printf.printf "    | _ -> []\n";
+      )
+    in
+    Reg.Map.iter (fun _ state -> visit state) dfa;
+    Printf.printf "  in st_%d stack" initial.index
 end
 
 let cmon_re re =
@@ -1361,10 +1353,6 @@ let () =
 let step re state =
   let _lbl, re = Reg.Expr.left_delta re (Sigma.singleton state) in
   let itemset = Lr0.items (Lr1C.to_lr0 state) in
-  (*let action' = match lbl with
-    | Label.Nothing -> "\x1b[31mNo action\x1b[m"
-    | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
-  in*)
   let action = match Reg.Expr.get_label re with
     | Label.Nothing -> "\x1b[31mNo action\x1b[m"
     | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
@@ -1379,15 +1367,15 @@ let step re state =
 let interpret re stack =
   List.fold_left step re stack
 
-let () =
+let () = (
   let entry = List.hd lexer_definition.entrypoints in
   (*Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);*)
   let clauses = translate_entry entry in
   let re = Reg.Expr.disjunction clauses in
-  ignore (interpret re test_stack : Reg.Expr.t)
+  ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
-  (*let dfa, initial = DFA.translate re in*)
-  (*let count = Reg.Map.cardinal dfa in
-  prerr_endline (string_of_int count ^ " states");*)
-  (*compile_dfa (dfa, initial);*)
-
+  (*let dfa, initial = DFA.translate re in
+    let count = Reg.Map.cardinal dfa in
+    prerr_endline (string_of_int count ^ " states");
+    DFA.compile (dfa, initial);*)
+)

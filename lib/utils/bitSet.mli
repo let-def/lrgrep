@@ -154,6 +154,8 @@ module type S1 = sig
   (* [sorted_union l] computes the union of an ordered list of intervals.
      This is an optimized special case of union *)
   val sorted_union : 'a t list -> 'a t
+
+  val of_list : 'a element list -> 'a t
 end
 
 module type S0 = sig

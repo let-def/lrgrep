@@ -156,6 +156,8 @@ module type S1 = sig
   (* [sorted_union l] computes the union of an ordered list of intervals.
      This is an optimized special case of union *)
   val sorted_union : 'a t list -> 'a t
+
+  val of_list : 'a element list -> 'a t
 end
 
 module type S0 = sig
@@ -516,6 +518,8 @@ module IntSet = struct
     | (l, r) -> N, (l, r)
 
   let extract_shared_prefix l r = extract_shared_prefix (l, r)
+
+  let of_list xs = List.fold_left (fun xs x -> add x xs) empty xs
 end
 
 module type S1_int = S1 with type 'a element = int
@@ -570,5 +574,7 @@ struct
   let compare_minimum = IntSet.compare_minimum
   let extract_unique_prefix  = IntSet.extract_unique_prefix
   let extract_shared_prefix  = IntSet.extract_shared_prefix
+
+  let of_list = (IntSet.of_list :> element list -> t)
 end
 
