@@ -1362,6 +1362,11 @@ let cmon_re re =
     ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
     ~abstract:Redgraph_derivation.cmon
 
+let test_stack =
+  List.map (Index.of_int Lr1C.n)
+    [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;618;0]
+    (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]*)
+
 let () =
   let entry = List.hd lexer_definition.entrypoints in
   (*Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);*)
