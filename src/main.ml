@@ -978,8 +978,8 @@ struct
     let derivations = ref Lr1Map.empty in
     let domain = ref IndexSet.empty in
     let visit lr1 =
-      (* Can do a bit better: group states that are "classes of interest" for
-         source re, so that derivation is shared *)
+      (* Can do a bit better: group states that are "classes of interest"
+         for source re, so that derivation is shared *)
       let d = match Lr1Map.find_opt lr1 closed_derivations with
         | None -> lift source
         | Some d -> join_derivation d (lift source)
@@ -1028,14 +1028,14 @@ struct
   let fold_left_classes t f acc =
     match t with
     | Root t ->
-      IndexSet.fold (fun lr1 acc ->
-          match Vector.get Redgraph.reachable_goto_closure lr1 with
-          | [||] -> acc
-          | stack ->
-            if IndexSet.disjoint stack.(0) t.compiled.domain
-            then acc
-            else f (Sigma.singleton lr1) acc
-        ) t.states acc
+      IndexSet.fold begin fun lr1 acc ->
+        (*match Vector.get Redgraph.reachable_goto_closure lr1 with
+        | [||] -> acc
+        | stack ->
+          if IndexSet.disjoint stack.(0) t.compiled.domain
+          then acc
+          else*) f (Sigma.singleton lr1) acc
+      end t.states acc
     | Node t ->
       let root = Vector.get Redgraph.roots t.root in
       let cell = root.stack.(t.step) in
@@ -1092,7 +1092,16 @@ struct
       end (Vector.get Redgraph.goto_closure t.root).(t.step);
       !lbls, Reg.Expr.disjunction !res
 
-  let cmon _ = Cmon.unit
+  let cmon = function
+    | Root _ -> Cmon.constant "Root"
+    | Node {root; step; _} ->
+      Cmon.crecord "Node" [
+        "root", cmon_index root;
+        (*"root_items",
+        Cmon.constant (Format.asprintf "%a" Print.itemset
+                         (Lr0.items (Lr1C.to_lr0 root)));*)
+        "step", Cmon.int step;
+      ]
 end
 
 module Match_item = struct
