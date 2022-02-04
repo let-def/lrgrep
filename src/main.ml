@@ -1006,8 +1006,10 @@ struct
         | Some Void | None -> re
         | Some (Step d) -> Reg.Expr.(|.) re d.re
       in
-      derivations := Lr1Map.add lr1 (lbl, lift re) !derivations;
-      domain := IndexSet.add lr1 !domain;
+      if not (Reg.Expr.is_empty re) then (
+        derivations := Lr1Map.add lr1 (lbl, lift re) !derivations;
+        domain := IndexSet.add lr1 !domain;
+      )
     in
     Index.iter Lr1C.n visit;
     let derivations = !derivations in
