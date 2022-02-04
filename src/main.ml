@@ -112,9 +112,12 @@ let vector_iter v f =
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
+let cmon_index =
+  (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
+
 let cmon_indexset xs =
-  Cmon.list_map (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
-    (IndexSet.elements xs)
+  Cmon.list_map cmon_index (IndexSet.elements xs)
+
 (*let initial_states : (nonterminal * lr1) list =
   Lr1.fold begin fun lr1 acc ->
     let lr0 = Lr1.lr0 lr1 in
@@ -895,8 +898,14 @@ end = struct
     | Neg xs -> not (IndexSet.mem x xs)
 
   let cmon = function
-    | Pos xs -> Cmon.construct "Pos" [cmon_indexset xs]
-    | Neg xs -> Cmon.construct "Neg" [cmon_indexset xs]
+    | Pos xs ->
+      if IndexSet.is_empty xs
+      then Cmon.constant "Empty"
+      else Cmon.construct "Pos" [cmon_indexset xs]
+    | Neg xs ->
+      if IndexSet.is_empty xs
+      then Cmon.constant "Full"
+      else Cmon.construct "Neg" [cmon_indexset xs]
 end
 
 module Label = struct
@@ -936,6 +945,8 @@ sig
   val compile : Reg.Expr.t -> compiled
 
   val make : compiled -> Lr1C.n IndexSet.t -> Reg.Expr.t
+
+  val cmon : t -> Cmon.t
 end =
 struct
   type compiled = {
@@ -1095,6 +1106,7 @@ struct
       end
     | _ -> empty_delta
 
+  let cmon _ = Cmon.unit
 end
 
 module Match_item = struct
@@ -1348,7 +1360,7 @@ let compile_dfa (dfa, initial : DFA.state Reg.Map.t * DFA.state) =
 let cmon_re re =
   Mulet.cmon_re re
     ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
-    ~abstract:(fun _ -> Cmon.unit)
+    ~abstract:Redgraph_derivation.cmon
 
 let () =
   let entry = List.hd lexer_definition.entrypoints in
