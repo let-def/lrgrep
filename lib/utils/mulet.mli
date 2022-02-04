@@ -173,7 +173,7 @@ module type DERIVABLE = sig
 
   (** Derivation operations *)
 
-  val left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+  val fold_left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
   (** Fold over each subset of the alphabet with respect to which the object is
       "interesting" to derive. *)
 
@@ -252,9 +252,11 @@ module type S = sig
     val get_label : t -> label
     (** Extract the labels of an expression in terminal position *)
 
-    val left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+    val fold_left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
     (** Fold over each subset of the alphabet with respect to which the object
         is "interesting" to derive. *)
+
+    val left_classes : t -> sigma list
 
     val left_delta : t -> sigma -> label * t
     (** Compute the derivative of the regular expression with respect to a
@@ -329,7 +331,7 @@ module Null_derivable : sig
   val is_empty : t -> bool
   val nullable : t -> bool
   val get_label : t -> _
-  val left_classes : t -> _
+  val fold_left_classes : t -> _
   val left_delta : t -> _ -> _ * (_, _, t) re
 end
 

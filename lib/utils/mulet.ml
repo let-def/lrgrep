@@ -72,7 +72,7 @@ module type DERIVABLE = sig
   val is_empty : t -> bool
   val nullable : t -> bool
   val get_label : t -> label
-  val left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+  val fold_left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
   val left_delta : t -> sigma -> label * (sigma, label, t) re
 end
 
@@ -82,7 +82,7 @@ module Null_derivable = struct
   let is_empty t = t.void
   let nullable t = t.void
   let get_label t = t.void
-  let left_classes t = t.void
+  let fold_left_classes t = t.void
   let left_delta t _ = t.void
 end
 
@@ -111,7 +111,8 @@ module type S = sig
     val is_empty : t -> bool
     val nullable : t -> bool
     val get_label : t -> label
-    val left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+    val fold_left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+    val left_classes : t -> sigma list
     val left_delta : t -> sigma -> label * t
   end
 
@@ -155,7 +156,8 @@ struct
     val is_empty : t -> bool
     val nullable : t -> bool
     val get_label : t -> label
-    val left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+    val fold_left_classes : t -> (sigma -> 'a -> 'a) -> 'a -> 'a
+    val left_classes : t -> sigma list
     val left_delta : t -> sigma -> label * t
   end = struct
     type t = (sigma, label, abstract) re
@@ -374,28 +376,31 @@ struct
 
     let label l = Label l
 
-    let rec left_classes f f' acc = function
+    let rec fold_left_classes f f' acc = function
       | Epsilon | Label _ -> f Sigma.full acc
       | Set s -> f s acc
       | Concat xs ->
         let rec aux acc = function
           | [] -> acc
           | x :: xs ->
-            let acc = left_classes f f' acc x in
+            let acc = fold_left_classes f f' acc x in
             if nullable x
             then aux acc xs
             else acc
         in
         aux acc xs
       | Or xs | And xs ->
-        List.fold_left (fun acc x -> left_classes f f' acc x) acc xs
-      | Closure r -> left_classes f f' acc r
-      | Not r -> left_classes f' f acc r
-      | Abstract a -> Abstract.left_classes a f acc
+        List.fold_left (fun acc x -> fold_left_classes f f' acc x) acc xs
+      | Closure r -> fold_left_classes f f' acc r
+      | Not r -> fold_left_classes f' f acc r
+      | Abstract a -> Abstract.fold_left_classes a f acc
 
-    let left_classes re f acc =
+    let fold_left_classes re f acc =
       let f' set acc = f (Sigma.compl set) acc in
-      left_classes f f' acc re
+      fold_left_classes f f' acc re
+
+    let left_classes re =
+      Sigma.partition (fold_left_classes re (fun x xs -> x :: xs) [])
   end
 
   module Map = Map.Make(struct
@@ -412,7 +417,7 @@ struct
       (sigma, labels, x') :: acc
     in
     let add_non_empty s ss = if Sigma.is_empty s then ss else s :: ss in
-    let classes = Expr.left_classes expr add_non_empty [] in
+    let classes = Expr.fold_left_classes expr add_non_empty [] in
     let partition = Sigma.partition classes in
     List.fold_left class_delta [] partition
 

@@ -191,7 +191,7 @@ struct
 
     let get_label _ = Action.empty
 
-    let left_classes t f acc =
+    let fold_left_classes t f acc =
       match t with
       | Initial t ->
         Lr1.Set.fold (fun lr1 acc ->
