@@ -119,11 +119,16 @@ let vector_iter v f =
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
+let string_of_index =
+  (string_of_int : int -> string :> _ index -> string)
+
 let cmon_index =
   (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
 
 let cmon_indexset xs =
-  Cmon.list_map cmon_index (IndexSet.elements xs)
+  Cmon.constant (
+    "[" ^ String.concat ";" (List.map string_of_index (IndexSet.elements xs)) ^ "]"
+  )
 
 module TerminalSet = BitSet.Make(Terminal)
 
@@ -652,15 +657,14 @@ module Redgraph = struct
       ) roots
     in
     let close_one acc t0 =
-      IndexSet.fold (fun target acc ->
-          List.filter_map (fun t' ->
-              let sources = IndexSet.inter t0.sources t'.sources in
-              if IndexSet.is_empty sources then
-                None
-              else
-                Some {sources; targets = t'.targets}
-            ) (Vector.get top_goto_closure target).transitions @ acc
-        ) t0.targets acc
+      IndexSet.fold begin fun target acc ->
+        List.filter_map begin fun t' ->
+          let sources = IndexSet.inter t0.sources t'.sources in
+          if IndexSet.is_empty sources
+          then None
+          else Some {sources; targets = t'.targets}
+        end (Vector.get top_goto_closure target).transitions @ acc
+      end t0.targets acc
     in
     let close_list transitions =
       List.fold_left close_one transitions transitions
@@ -670,7 +674,7 @@ module Redgraph = struct
       | [||] -> []
       | stack -> close_list stack.(0).goto_transitions
     in
-    let acc = ref [] in
+    let todo = ref [] in
     let update lr1 =
       let top_goto = Vector.get top_goto_closure lr1 in
       top_goto.mark <- false;
@@ -681,24 +685,33 @@ module Redgraph = struct
         List.iter (fun dep ->
             let top_goto' = Vector.get top_goto_closure dep in
             if not top_goto'.mark then
-              (top_goto'.mark <- true; acc := dep :: !acc)
+              (top_goto'.mark <- true; todo := dep :: !todo)
           ) (Vector.get top_deps lr1)
       )
     in
-    Index.iter Lr1C.n update;
     let rec loop () =
-      match List.rev !acc with
+      match List.rev !todo with
       | [] -> ()
       | xs ->
-        acc := [];
+        todo := [];
         List.iter update xs;
         loop ()
     in
+    Index.iter Lr1C.n update;
     loop ();
-    Vector.map
-      (fun root ->
-         Array.map (fun node -> close_list node.goto_transitions) root.stack)
-      roots
+    let final_list node =
+      node.goto_transitions
+      |> close_list
+      |> List.map (fun {sources; targets} -> sources, targets)
+      |> IndexRefine.annotated_partition
+      |> List.map (fun (sources, targetss) ->
+          {
+            sources;
+            targets =List.fold_left IndexSet.union IndexSet.empty targetss;
+          }
+        )
+    in
+    Vector.map (fun root -> Array.map final_list root.stack) roots
 
   let reachable_goto_closure =
     (* Compute reachable goto closure *)
@@ -713,8 +726,7 @@ module Redgraph = struct
         end)
     in
     let equations (index, step) valuation =
-      let root = Vector.get roots index in
-      let len = Array.length root.stack in
+      let len = Array.length (Vector.get roots index).stack in
       assert (step <= len);
       if step >= len then
         IndexSet.empty
@@ -934,7 +946,7 @@ struct
         d.transitions <- List.map mk_transition (Reg.Expr.left_classes d.re);
       );
       match
-        List.find_map (fun t ->
+        List.filter_map (fun t ->
             if not (Sigma.quick_subset sg t.sigma) then
               None
             else (
@@ -950,8 +962,19 @@ struct
             )
           ) d.transitions
       with
-      | None -> Label.empty, Void
-      | Some d' -> d'
+      | [] -> Label.empty, Void
+      | [d] -> d
+      | ds ->
+        prerr_endline "MULTIPLE DERIVATIONS, FIX ME";
+        let lbl = ref Label.empty in
+        let res = List.filter_map (fun (lbl', d) ->
+            lbl := Label.append lbl' !lbl;
+            match d with
+            | Void -> None
+            | Step { re; _} -> Some re
+          ) ds
+        in
+        (!lbl, lift (Reg.Expr.disjunction res))
 
   let join_derivation d1 d2 = match d1, d2 with
     | Void, x | x, Void -> x
@@ -967,28 +990,24 @@ struct
     Reg.Expr.compare t1.source t2.source
 
   let compile source =
-    let source = Reg.Expr.(source ^. star (set Sigma.full)) in
+    let source = Reg.Expr.(source ^. compl (set Sigma.empty)) in
     let root = Step { re = source; transitions = [] } in
     let closed_derivations =
       Redgraph.Closed_derivation.derive
         ~root
-        ~step:(fun d1 d2 -> snd (derive d1 (Sigma.singleton d2)))
+        ~step:(fun d lr1 -> snd (derive d (Sigma.singleton lr1)))
         ~join:join_derivation
     in
     let derivations = ref Lr1Map.empty in
     let domain = ref IndexSet.empty in
     let visit lr1 =
-      (* Can do a bit better: group states that are "classes of interest"
-         for source re, so that derivation is shared *)
-      let d = match Lr1Map.find_opt lr1 closed_derivations with
-        | None -> lift source
-        | Some d -> join_derivation d (lift source)
+      let lbl, re = Reg.Expr.left_delta source (Sigma.singleton lr1) in
+      let re = match Lr1Map.find_opt lr1 closed_derivations with
+        | Some Void | None -> re
+        | Some (Step d) -> Reg.Expr.(|.) re d.re
       in
-      match derive d (Sigma.singleton lr1) with
-      | _, Void -> ()
-      | d ->
-        derivations := Lr1Map.add lr1 d !derivations;
-        domain := IndexSet.add lr1 !domain;
+      derivations := Lr1Map.add lr1 (lbl, lift re) !derivations;
+      domain := IndexSet.add lr1 !domain;
     in
     Index.iter Lr1C.n visit;
     let derivations = !derivations in
@@ -1029,19 +1048,19 @@ struct
     match t with
     | Root t ->
       IndexSet.fold begin fun lr1 acc ->
-        (*match Vector.get Redgraph.reachable_goto_closure lr1 with
+        match Vector.get Redgraph.reachable_goto_closure lr1 with
         | [||] -> acc
         | stack ->
           if IndexSet.disjoint stack.(0) t.compiled.domain
           then acc
-          else*) f (Sigma.singleton lr1) acc
+          else f (Sigma.singleton lr1) acc
       end t.states acc
     | Node t ->
       let root = Vector.get Redgraph.roots t.root in
       let cell = root.stack.(t.step) in
       let acc =
         (* If closure in domain *)
-        if t.step < Array.length root.stack - 1
+        if t.step < Array.length root.stack
         then f (Sigma.Pos cell.states) acc
         else acc
       in
@@ -1057,9 +1076,9 @@ struct
 
   let make_one compiled root step =
     let node = Vector.get Redgraph.roots root in
-    if step >= Array.length node.stack (*||
+    if step >= Array.length node.stack ||
        IndexSet.disjoint compiled.domain
-         (Vector.get Redgraph.reachable_goto_closure root).(step)*)
+         (Vector.get Redgraph.reachable_goto_closure root).(step)
     then Reg.Expr.empty
     else Reg.Expr.abstract (Node { root; step; compiled })
 
@@ -1078,17 +1097,16 @@ struct
       let res = ref [make_one t.compiled t.root (t.step + 1)] in
       let lbls = ref Label.empty in
       List.iter begin fun {Redgraph. sources; targets} ->
-        if Sigma.quick_subset sigma (Sigma.Pos sources) then (
-          IndexSet.iter (fun lr1 ->
-              res := make_one t.compiled lr1 1 :: !res;
-              match Lr1Map.find lr1 t.compiled.derivations with
-              | exception Not_found -> ()
-              | _, d ->
-                let lbl, d = derive d sigma in
-                lbls := Label.append lbl !lbls;
-                res := unlift d :: !res
-            ) targets
-        )
+        if Sigma.is_subset_of sigma (Sigma.Pos sources) then
+          IndexSet.iter begin fun lr1 ->
+            res := make_one t.compiled lr1 1 :: !res;
+            match Lr1Map.find lr1 t.compiled.derivations with
+            | exception Not_found -> ()
+            | _, d ->
+              let lbl, d = derive d sigma in
+              lbls := Label.append lbl !lbls;
+              res := unlift d :: !res
+          end targets
       end (Vector.get Redgraph.goto_closure t.root).(t.step);
       !lbls, Reg.Expr.disjunction !res
 
@@ -1193,19 +1211,35 @@ let rec translate_term = function
     let compiled = Redgraph_derivation.compile expr in
     let expr' = Redgraph_derivation.make compiled all_states in
     Reg.Expr.(expr |. expr')
+  | Syntax.Action n ->
+    Reg.Expr.label (Label.Action {priority = n; action_desc = Label.Code "foo"})
 
 and translate_expr terms =
   let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
   Reg.Expr.concatenation terms
 
-let translate_clause priority {Syntax. pattern; action} =
-  let action_desc = match action with
-    | None -> Label.Unreachable
-    | Some (_, code) -> Label.Code code
-  in
-  let pattern = translate_expr pattern in
-  let label = Reg.Expr.label (Action {priority; action_desc}) in
-  Reg.Expr.(^.) pattern label
+let no_pos = {Syntax. line = -1; col = -1}
+
+let rec add_action n = function
+  | [] -> [Syntax.Action n, no_pos]
+  | (((Syntax.Symbol _ | Syntax.Item _ | Syntax.Wildcard | Syntax.Action _), _) :: _) as rest ->
+    (Syntax.Action n, no_pos) :: rest
+  | (e1, pos) :: rest ->
+    let e1 = match e1 with
+      | Syntax.Alternative (e1, e2) ->
+        Syntax.Alternative (add_action n e1, add_action n e2)
+      | Syntax.Repetition (e1, l1) ->
+        Syntax.Repetition (add_action n e1, l1)
+      | Syntax.Reduce (e1, l1) ->
+        Syntax.Reduce (add_action n e1, l1)
+      | _ -> assert false
+    in
+    (e1, pos) :: rest
+
+let translate_clause priority {Syntax. pattern; action=_} =
+  let expr = add_action priority pattern in
+  Format.printf "%a\n%!" Cmon.format (Syntax.print_regular_expression expr);
+  translate_expr expr
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
@@ -1376,7 +1410,7 @@ let interpret re stack =
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  (*Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);*)
+  Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
   let clauses = translate_entry entry in
   let re = Reg.Expr.disjunction clauses in
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
