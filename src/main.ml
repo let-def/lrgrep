@@ -716,7 +716,7 @@ module Redgraph = struct
       let root = Vector.get roots index in
       let len = Array.length root.stack in
       assert (step <= len);
-      if step >= len - 1 then
+      if step >= len then
         IndexSet.empty
       else
         List.fold_left (fun acc {targets; _} ->
@@ -733,182 +733,6 @@ module Redgraph = struct
           (Array.length (Vector.get roots root).stack)
           (fun i -> fix (root, i))
       )
-
-  (*let () =
-    (* Initialize nodes and compute "next_goto_closure" relation *)
-    let module Property = struct
-      type property = Lr1C.set
-      let leq_join = IndexSet.union
-    end in
-    let module Graph = struct
-      type variable = Node_id.n index
-
-      let foreach_root f =
-        let rec populate node =
-          Vector.set nodes node.id node;
-          let acc = List.fold_left visit_next IndexSet.empty node.next in
-          f node.id acc;
-          acc
-        and visit_next acc node =
-          IndexSet.union (IndexSet.union node.goto (populate node)) acc
-        in
-        let populate' node = ignore (populate node) in
-        vector_iter roots populate'
-
-      let foreach_successor id reachable f =
-        let self = Vector.get nodes id in
-        let reachable = IndexSet.union reachable self.goto in
-        match self.ancestor with
-        | Node_next_of node -> f node.id reachable
-        | Node_goto_from {nodes} ->
-          List.iter (fun node -> f node.id reachable) nodes
-    end in
-    let module Store = struct
-      let get id = (Vector.get nodes id).next_goto_closure
-      let set id closure = (Vector.get nodes id).next_goto_closure <- closure
-    end in
-    let module Marks = struct
-      let vector = Vector.make Node_id.n false
-      let get = Vector.get vector
-      let set = Vector.set vector
-    end in
-    let module _ =
-      Fix.DataFlow.ForCustomMaps(Property)(Graph)(Store)(Marks)
-    in
-    ()*)
-
-  (*let hashtbl_find_or_ref table key value =
-    match Hashtbl.find table key with
-    | ref -> ref
-    | exception Not_found ->
-      let r = ref value in
-      Hashtbl.add table key r;
-      r*)
-
-  (*let node_reverse_deps =
-    let vector = Vector.make Lr1C.n IndexSet.empty in
-    Index.iter Lr1C.n (fun lr1 ->
-        let rec visit ps =
-          IndexSet.iter (fun lr1' ->
-              let states = Vector.get vector lr1' in
-              Vector.set vector lr1' (IndexSet.add lr1 states)
-            ) ps.goto;
-          List.iter visit ps.next
-        in
-        List.iter visit (Vector.get roots lr1).next
-      );
-    vector*)
-
-  (*let () = if false then (
-    print_endline "digraph G {";
-    print_endline "  overlap=false";
-    let visited = Vector.make Lr1C.n false in
-    let should_visit lr1 =
-      let result = not (Vector.get visited lr1) in
-      Vector.set visited lr1 true;
-      result
-    in
-    let target_states =
-      Syntax.Name "let_binding_body"
-      |> State_indices.find_symbol
-      |> Option.get
-      |> State_indices.states_of_symbol
-    in
-    let target_closure =
-      let closure = ref IndexSet.empty in
-      let rec expand states =
-        if not (IndexSet.is_empty states) then
-          expand (
-            IndexSet.fold (fun lr1 acc ->
-                if IndexSet.mem lr1 !closure then
-                  acc
-                else (
-                  closure := IndexSet.add lr1 !closure;
-                  IndexSet.union (Vector.get node_reverse_deps lr1) acc
-                )
-              ) states IndexSet.empty
-          )
-      in
-      expand target_states;
-      !closure
-    in
-    let rec visit lr1 =
-      if not (IndexSet.mem lr1 target_closure) then
-        false
-      else (
-        if should_visit lr1 then (
-          Printf.printf "  ST%d[label=%S]\n"
-            (lr1 : _ index :> int)
-            (Format.asprintf "%d: %a" (lr1 :> int) Print.itemset
-               (Lr0.items (Lr1C.to_lr0 lr1)));
-          let tgt_table = Hashtbl.create 7 in
-          let rec traverse path node =
-            let path = (node.lr1 : _ index :> int) :: path in
-            List.iter (traverse path) node.next;
-            IndexSet.iter (fun lr1' ->
-                if visit lr1' then
-                  let r = hashtbl_find_or_ref tgt_table lr1' [] in
-                  r := path :: !r
-              ) node.goto
-          in
-          List.iter (traverse []) (Vector.get roots lr1).next;
-          Hashtbl.iter (fun lr1' paths ->
-              Printf.printf "  ST%d -> ST%d [label=%S]\n"
-                (lr1 : _ index :> int)
-                (lr1' : _ index :> int)
-                (String.concat "\n"
-                   (List.map (fun path -> String.concat " -> " (List.rev_map string_of_int path))
-                      !paths));
-            ) tgt_table;
-        );
-        true
-      )
-    in
-    ignore (visit (Index.of_int Lr1C.n 509) : bool);
-    print_endline "}";
-  )*)
-
-  (*let () =
-    print_endline "digraph G {";
-    let reachable = Vector.make Lr1C.n false in
-    let rec reach lr1 =
-      if not (Vector.get reachable lr1) then (
-        Vector.set reachable lr1 true;
-        let rec visit node =
-          IndexSet.iter reach node.goto;
-          List.iter visit node.parents
-        in
-        visit (Vector.get roots lr1).node
-      )
-    in
-    reach (Index.of_int Lr1C.n 509);
-    Index.iter Lr1C.n (fun src ->
-        if Vector.get reachable src then (
-          let stt = Vector.get roots src in
-          Printf.printf "  ST%d[fontname=Mono,shape=box,label=%S]\n"
-            (src :> int)
-            (Format.asprintf "%d\n%a" (src :> int)
-               Print.itemset (Lr0.items (Lr1.lr0 (Lr1C.to_g src))));
-          let tgt_table = Hashtbl.create 7 in
-          let rec visit_target pst =
-            IndexSet.iter (fun tgt ->
-                let lbl = string_of_int (pst.lr1 :> int) in
-                match Hashtbl.find tgt_table tgt with
-                | exception Not_found ->
-                  Hashtbl.add tgt_table tgt (ref [lbl])
-                | lst -> lst := lbl :: !lst
-              ) pst.goto;
-            List.iter visit_target pst.parents
-          in
-          List.iter visit_target stt.node.parents;
-          Hashtbl.iter (fun tgt srcs ->
-              Printf.printf "  ST%d -> ST%d [label=%S]\n"
-                (src :> int) (tgt : _ index :> int)
-                (String.concat "|" !srcs)
-            ) tgt_table
-        )
-      );
-    print_endline "}";*)
 end
 
 module Sigma : sig
@@ -1205,12 +1029,12 @@ struct
     match t with
     | Root t ->
       IndexSet.fold (fun lr1 acc ->
-          (*match Vector.get Redgraph.reachable_goto_closure lr1 with
+          match Vector.get Redgraph.reachable_goto_closure lr1 with
           | [||] -> acc
           | stack ->
             if IndexSet.disjoint stack.(0) t.compiled.domain
             then acc
-            else*) f (Sigma.singleton lr1) acc
+            else f (Sigma.singleton lr1) acc
         ) t.states acc
     | Node t ->
       let root = Vector.get Redgraph.roots t.root in
@@ -1251,25 +1075,21 @@ struct
           | lbl, d -> lbl, Reg.Expr.(|.) re (unlift d)
       end
     | Node t ->
-      let stack = (Vector.get Redgraph.roots t.root).stack in
-      let node = stack.(t.step) in
-      let res = ref [] in
-      if t.step < Array.length stack - 1 then
-        res := make_one t.compiled t.root (t.step + 1) :: !res;
+      let res = ref [make_one t.compiled t.root (t.step + 1)] in
       let lbls = ref Label.empty in
-      List.iter begin fun tr ->
-        if Sigma.quick_subset sigma (Sigma.Pos tr.Redgraph.sources) then (
+      List.iter begin fun {Redgraph. sources; targets} ->
+        if Sigma.quick_subset sigma (Sigma.Pos sources) then (
           IndexSet.iter (fun lr1 ->
               res := make_one t.compiled lr1 1 :: !res;
               match Lr1Map.find lr1 t.compiled.derivations with
               | exception Not_found -> ()
               | _, d ->
-                let lbl, d = derive d (Sigma.singleton lr1) in
+                let lbl, d = derive d sigma in
                 lbls := Label.append lbl !lbls;
                 res := unlift d :: !res
-            ) tr.Redgraph.targets
+            ) targets
         )
-      end node.goto_transitions;
+      end (Vector.get Redgraph.goto_closure t.root).(t.step);
       !lbls, Reg.Expr.disjunction !res
 
   let cmon _ = Cmon.unit
