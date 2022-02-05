@@ -897,6 +897,8 @@ module Label = struct
       else t2
 end
 
+let do_log = ref false
+
 module rec
   Reg
   : Mulet.S with type sigma = Sigma.t
@@ -946,26 +948,25 @@ struct
         d.transitions <- List.map mk_transition (Reg.Expr.left_classes d.re);
       );
       match
-        List.filter_map (fun t ->
-            if not (Sigma.quick_subset sg t.sigma) then
-              None
-            else (
-              let d' = match t.target with
-                | Some x -> x
-                | None ->
-                  let lbl, re = Reg.Expr.left_delta d.re t.sigma in
-                  let x = lbl, lift re in
-                  t.target <- Some x;
-                  x
-              in
-              Some d'
-            )
-          ) d.transitions
+        List.filter_map begin fun t ->
+          if Sigma.is_subset_of sg t.sigma then (
+            let d' = match t.target with
+              | Some x -> x
+              | None ->
+                let lbl, re = Reg.Expr.left_delta d.re t.sigma in
+                let x = lbl, lift re in
+                t.target <- Some x;
+                x
+            in
+            Some d'
+          ) else None
+        end d.transitions
       with
       | [] -> Label.empty, Void
       | [d] -> d
       | ds ->
         prerr_endline "MULTIPLE DERIVATIONS, FIX ME";
+        if true then exit 1;
         let lbl = ref Label.empty in
         let res = List.filter_map (fun (lbl', d) ->
             lbl := Label.append lbl' !lbl;
@@ -990,7 +991,7 @@ struct
     Reg.Expr.compare t1.source t2.source
 
   let compile source =
-    let source = Reg.Expr.(source ^. compl (set Sigma.empty)) in
+    let source = Reg.Expr.(source ^. star (set Sigma.full)) in
     let root = Step { re = source; transitions = [] } in
     let closed_derivations =
       Redgraph.Closed_derivation.derive
@@ -1084,6 +1085,22 @@ struct
     then Reg.Expr.empty
     else Reg.Expr.abstract (Node { root; step; compiled })
 
+  let cmon = function
+    | Root _ -> Cmon.constant "Root"
+    | Node {root; step; _} ->
+      Cmon.crecord "Node" [
+        "root", cmon_index root;
+        (*"root_items",
+        Cmon.constant (Format.asprintf "%a" Print.itemset
+                         (Lr0.items (Lr1C.to_lr0 root)));*)
+        "step", Cmon.int step;
+      ]
+
+  let cmon_re re =
+    Mulet.cmon_re re
+      ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
+      ~abstract:Redgraph_derivation.cmon
+
   let left_delta (t : t) sigma =
     match t with
     | Root t ->
@@ -1101,27 +1118,21 @@ struct
       List.iter begin fun {Redgraph. sources; targets} ->
         if Sigma.is_subset_of sigma (Sigma.Pos sources) then
           IndexSet.iter begin fun lr1 ->
+            if !do_log then Printf.eprintf "goto %d\n" (lr1 : _ index :> int);
             res := make_one t.compiled lr1 1 :: !res;
             match Lr1Map.find lr1 t.compiled.derivations with
-            | exception Not_found -> ()
+            | exception Not_found ->
+              Format.eprintf "no continuation\n%!";
             | _, d ->
               let lbl, d = derive d sigma in
               lbls := Label.append lbl !lbls;
+              let re = unlift d in
+              Format.eprintf "continuation @[%a@]\n%!" Cmon.format (cmon_re re);
               res := unlift d :: !res
           end targets
       end (Vector.get Redgraph.goto_closure t.root).(t.step);
       !lbls, Reg.Expr.disjunction !res
 
-  let cmon = function
-    | Root _ -> Cmon.constant "Root"
-    | Node {root; step; _} ->
-      Cmon.crecord "Node" [
-        "root", cmon_index root;
-        (*"root_items",
-        Cmon.constant (Format.asprintf "%a" Print.itemset
-                         (Lr0.items (Lr1C.to_lr0 root)));*)
-        "step", Cmon.int step;
-      ]
 end
 
 module Match_item = struct
@@ -1238,10 +1249,16 @@ let rec add_action n = function
     in
     (e1, pos) :: rest
 
-let translate_clause priority {Syntax. pattern; action=_} =
-  let expr = add_action priority pattern in
-  Format.printf "%a\n%!" Cmon.format (Syntax.print_regular_expression expr);
-  translate_expr expr
+let translate_clause priority {Syntax. pattern; action} =
+  (*let expr = add_action priority pattern in*)
+  (*Format.printf "%a\n%!" Cmon.format (Syntax.print_regular_expression expr);*)
+  let expr = translate_expr pattern in
+  let action_desc = match action with
+    | None -> Label.Unreachable
+    | Some (_, code) -> Label.Code code
+  in
+  let label = Reg.Expr.label (Action {priority; action_desc}) in
+  Reg.Expr.(^.) expr label
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
@@ -1337,16 +1354,8 @@ module DFA = struct
   let compile (dfa, initial : state Reg.Map.t * state) =
     let first = ref true in
     Printf.printf "let analyse stack =\n";
-    let interesting = ref BitSet.IntSet.empty in
-    Reg.Map.iter (fun _ state ->
-        if state.transitions = []
-        && Reg.Expr.get_label state.expr = Label.Nothing
-        then ()
-        else interesting := BitSet.IntSet.add state.index !interesting
-      ) dfa;
-    let interesting = !interesting in
     let visit (state : state) =
-      if BitSet.IntSet.mem state.index interesting then (
+      if true then (
         Printf.printf "  %s st_%d stack =\n"
           (if !first then "let rec" else "and")
           state.index;
@@ -1358,7 +1367,7 @@ module DFA = struct
         end;
         Printf.printf "    match state stack with\n";
         List.iter (fun (sg, st) ->
-            if BitSet.IntSet.mem st.index interesting then (
+            if true then (
               Printf.printf
                 "    | %s -> st_%d (next stack)\n"
                 (Sigma.to_lr1set sg
@@ -1382,8 +1391,8 @@ let cmon_re re =
 
 let test_stack =
   List.map (Index.of_int Lr1C.n)
-    [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;618;0]
-    (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]*)
+    (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;618;0]*)
+    [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]
 
 let () =
   prerr_endline (
@@ -1407,8 +1416,13 @@ let step re state =
     (state :> int) Print.itemset itemset action Cmon.format (cmon_re re);
   re
 
-let interpret re stack =
-  List.fold_left step re stack
+let rec interpret re = function
+  | [] -> re
+  | [last] ->
+    do_log := true;
+    step re last
+  | x :: xs ->
+    interpret (step re x) xs
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
@@ -1418,8 +1432,8 @@ let () = (
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
-  (*let dfa, initial = DFA.translate re in
+  let dfa, initial = DFA.translate re in
     let count = Reg.Map.cardinal dfa in
     prerr_endline (string_of_int count ^ " states");
-    DFA.compile (dfa, initial);*)
+    DFA.compile (dfa, initial)
 )
