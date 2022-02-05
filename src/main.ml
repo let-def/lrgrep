@@ -162,7 +162,7 @@ let all_states =
   do acc := IndexSet.add (Index.of_int Lr1C.n i) !acc done;
   !acc
 
-let lr1set_bind : Lr1C.set -> (Lr1C.t -> Lr1C.set) -> Lr1C.set =
+let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
   IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
 
@@ -420,7 +420,7 @@ let lr1_predecessors = Vector.init Lr1C.n (fun lr1 ->
   )
 
 let lr1set_predecessors lr1s =
-  lr1set_bind lr1s (Vector.get lr1_predecessors)
+  indexset_bind lr1s (Vector.get lr1_predecessors)
 
 module Redgraph = struct
   let reductions = Vector.init Lr1C.n (fun lr1 ->
@@ -571,6 +571,7 @@ module Redgraph = struct
   type goto_transition = {
     sources: Lr1C.set;
     targets: Lr1C.set;
+    mutable targets_closure: Lr1C.set;
   }
 
   let equal_goto_transition a b =
@@ -602,8 +603,11 @@ module Redgraph = struct
         Lr1Map.bindings state.goto
         |> List.map (fun (state, targets) -> (!targets, state))
         |> IndexRefine.annotated_partition
-        |> List.map (fun (targets, sources) ->
-            {sources = IndexSet.of_list sources; targets})
+        |> List.map (fun (targets, sources) -> {
+              sources = IndexSet.of_list sources;
+              targets;
+              targets_closure = IndexSet.empty;
+            })
       in
       { states = state.states; goto_transitions; }
     in
@@ -619,7 +623,7 @@ module Redgraph = struct
   let reverse_deps = Vector.make Lr1C.n []
 
   let () =
-    let register_dep node {sources; targets} =
+    let register_dep node {sources; targets; _} =
       let origin = (node, sources) in
       IndexSet.iter
         (fun target -> Vector.set_cons reverse_deps target origin)
@@ -662,7 +666,7 @@ module Redgraph = struct
           let sources = IndexSet.inter t0.sources t'.sources in
           if IndexSet.is_empty sources
           then None
-          else Some {sources; targets = t'.targets}
+          else Some {sources; targets = t'.targets; targets_closure = IndexSet.empty}
         end (Vector.get top_goto_closure target).transitions @ acc
       end t0.targets acc
     in
@@ -702,12 +706,13 @@ module Redgraph = struct
     let final_list node =
       node.goto_transitions
       |> close_list
-      |> List.map (fun {sources; targets} -> sources, targets)
+      |> List.map (fun {sources; targets; _} -> sources, targets)
       |> IndexRefine.annotated_partition
       |> List.map (fun (sources, targetss) ->
           {
             sources;
-            targets =List.fold_left IndexSet.union IndexSet.empty targetss;
+            targets = List.fold_left IndexSet.union IndexSet.empty targetss;
+            targets_closure = IndexSet.empty;
           }
         )
     in
@@ -745,6 +750,22 @@ module Redgraph = struct
           (Array.length (Vector.get roots root).stack)
           (fun i -> fix (root, i))
       )
+
+  let () =
+    Index.iter Lr1C.n begin fun lr1 ->
+      Array.iter begin fun transitions ->
+        List.iter (fun tr ->
+            tr.targets_closure <-
+              IndexSet.union
+                tr.targets
+                (indexset_bind tr.targets (fun lr1 ->
+                     match Vector.get reachable_goto_closure lr1 with
+                     | [||] -> IndexSet.empty
+                     | stack -> stack.(0)
+                   ))
+          ) transitions
+      end (Vector.get goto_closure lr1)
+    end
 end
 
 module Sigma : sig
@@ -1067,8 +1088,8 @@ struct
         then f (Sigma.Pos cell.states) acc
         else acc
       in
-      let visit acc {Redgraph. sources; targets} =
-        if IndexSet.disjoint t.compiled.domain targets
+      let visit acc {Redgraph. sources; targets=_; targets_closure} =
+        if IndexSet.disjoint t.compiled.domain targets_closure
         then acc
         else f (Sigma.Pos sources) acc
       in
@@ -1115,19 +1136,21 @@ struct
     | Node t ->
       let res = ref [make_one t.compiled t.root (t.step + 1)] in
       let lbls = ref Label.empty in
-      List.iter begin fun {Redgraph. sources; targets} ->
+      List.iter begin fun {Redgraph. sources; targets; _} ->
         if Sigma.is_subset_of sigma (Sigma.Pos sources) then
           IndexSet.iter begin fun lr1 ->
             if !do_log then Printf.eprintf "goto %d\n" (lr1 : _ index :> int);
             res := make_one t.compiled lr1 1 :: !res;
             match Lr1Map.find lr1 t.compiled.derivations with
             | exception Not_found ->
-              Format.eprintf "no continuation\n%!";
+              if !do_log then
+                Format.eprintf "no continuation\n%!";
             | _, d ->
               let lbl, d = derive d sigma in
               lbls := Label.append lbl !lbls;
               let re = unlift d in
-              Format.eprintf "continuation @[%a@]\n%!" Cmon.format (cmon_re re);
+              if !do_log then
+                Format.eprintf "continuation @[%a@]\n%!" Cmon.format (cmon_re re);
               res := unlift d :: !res
           end targets
       end (Vector.get Redgraph.goto_closure t.root).(t.step);
@@ -1266,6 +1289,11 @@ let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   let clauses = List.mapi translate_clause clauses in
   clauses
 
+let cmon_re re =
+  Mulet.cmon_re re
+    ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
+    ~abstract:Redgraph_derivation.cmon
+
 (* Derive DFA with naive intersection *)
 
 module DFA = struct
@@ -1303,7 +1331,7 @@ module DFA = struct
       if not (Sigma.is_empty unvisited) then (
         if Sigma.is_empty state.scheduled then
           todo := state :: !todo;
-        state.scheduled <- Sigma.union state.scheduled sigma
+        state.scheduled <- Sigma.union state.scheduled unvisited
       )
     in
     let update_transition sigma (sigma', state') =
@@ -1328,9 +1356,13 @@ module DFA = struct
       )
     in
     let process state =
-      state.visited <- Sigma.union state.visited state.scheduled;
-      let sigma = state.scheduled in
+      let sigma =
+        if state.index = 197
+        then Sigma.full
+        else state.scheduled
+      in
       state.scheduled <- Sigma.empty;
+      state.visited <- Sigma.union state.visited sigma;
       List.iter (update_transition sigma) state.transitions;
       let unvisited, new_transitions =
         List.partition_map (discover_transition sigma state) state.unvisited
@@ -1355,39 +1387,29 @@ module DFA = struct
     let first = ref true in
     Printf.printf "let analyse stack =\n";
     let visit (state : state) =
-      if true then (
-        Printf.printf "  %s st_%d stack =\n"
-          (if !first then "let rec" else "and")
-          state.index;
-        first := false;
-        let action = Reg.Expr.get_label state.expr in
-        begin match action with
-          | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
-          | Label.Nothing -> ()
-        end;
-        Printf.printf "    match state stack with\n";
-        List.iter (fun (sg, st) ->
-            if true then (
-              Printf.printf
-                "    | %s -> st_%d (next stack)\n"
-                (Sigma.to_lr1set sg
-                 |> IndexSet.elements
-                 |> List.map (string_of_int : int -> string :> _ index -> string)
-                 |> String.concat "|")
-                st.index
-            )
-          ) state.transitions;
-        Printf.printf "    | _ -> []\n";
-      )
+      Printf.printf "  %s st_%d stack =\n"
+        (if !first then "let rec" else "and") state.index;
+      first := false;
+      let action = Reg.Expr.get_label state.expr in
+      begin match action with
+        | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
+        | Label.Nothing -> ()
+      end;
+      Printf.printf "    match state stack with\n";
+      List.iter begin fun (sg, st) ->
+        let states =
+          Sigma.to_lr1set sg
+          |> IndexSet.elements
+          |> List.map (string_of_int : int -> string :> _ index -> string)
+          |> String.concat "|"
+        in
+        Printf.printf "    | %s -> st_%d (next stack)\n" states st.index
+      end state.transitions;
+      Printf.printf "    | _ -> []\n";
     in
     Reg.Map.iter (fun _ state -> visit state) dfa;
     Printf.printf "  in st_%d stack" initial.index
 end
-
-let cmon_re re =
-  Mulet.cmon_re re
-    ~set:Sigma.cmon ~label:(fun _ -> Cmon.unit)
-    ~abstract:Redgraph_derivation.cmon
 
 let test_stack =
   List.map (Index.of_int Lr1C.n)
@@ -1419,7 +1441,7 @@ let step re state =
 let rec interpret re = function
   | [] -> re
   | [last] ->
-    do_log := true;
+    (*do_log := true;*)
     step re last
   | x :: xs ->
     interpret (step re x) xs
@@ -1433,7 +1455,7 @@ let () = (
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
   let dfa, initial = DFA.translate re in
-    let count = Reg.Map.cardinal dfa in
-    prerr_endline (string_of_int count ^ " states");
-    DFA.compile (dfa, initial)
+  let count = Reg.Map.cardinal dfa in
+  prerr_endline (string_of_int count ^ " states");
+  DFA.compile (dfa, initial)
 )
