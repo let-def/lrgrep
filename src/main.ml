@@ -1088,11 +1088,11 @@ struct
       end t.states acc
     | Node t ->
       let root = Vector.get Redgraph.roots t.root in
-      let cell = root.stack.(t.step) in
+      (*let cell = root.stack.(t.step) in*)
       let acc =
         (* If closure in domain *)
         if t.step < Array.length root.stack
-        then f (Sigma.Pos cell.states) acc
+        then f Sigma.full acc
         else acc
       in
       let visit acc {Redgraph. sources; targets; targets_closure} =
@@ -1372,11 +1372,7 @@ module DFA = struct
       )
     in
     let process state =
-      let sigma =
-        if state.index = 197
-        then Sigma.full
-        else state.scheduled
-      in
+      let sigma = state.scheduled in
       state.scheduled <- Sigma.empty;
       state.visited <- Sigma.union state.visited sigma;
       List.iter (update_transition sigma) state.transitions;
@@ -1421,22 +1417,31 @@ module DFA = struct
               (sg, st)
             )
       in
-      List.iter begin fun (sg, st) ->
+      let pos, neg = List.partition_map (fun (sg, st) ->
+          match sg with
+          | Sigma.Pos lr1s -> Either.Left  (lr1s, st)
+          | Sigma.Neg lr1s -> Either.Right (lr1s, st)
+        ) transitions
+      in
+      List.iter begin fun (lr1s, st) ->
         let states =
-          Sigma.to_lr1set sg
-          |> IndexSet.elements
+          IndexSet.elements lr1s
           |> List.map (string_of_int : int -> string :> _ index -> string)
           |> String.concat "|"
         in
         Printf.printf "    | %s -> st_%d (next stack)\n" states st.index
-      end transitions;
-      Printf.printf "    | _ -> []\n";
+      end pos;
+      begin match neg with
+        | [] -> Printf.printf "    | _ -> []\n";
+        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" st.index;
+        | _ :: _ :: _ -> assert false
+      end
     in
     Reg.Map.iter (fun _ state -> visit state) dfa;
     Printf.printf "  in st_%d stack" initial.index
 end
 
-let.index test_stack =.index
+let test_stack =
   List.map (Index.of_int Lr1C.n)
     (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;618;0]*)
     [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]
