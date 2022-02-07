@@ -960,28 +960,35 @@ struct
     | Void -> Reg.Expr.empty
     | Step { re; _} -> re
 
+  let get_transitions = function
+    | Void -> []
+    | Step d ->
+      match d.transitions with
+      | [] ->
+        let mk_transition sigma = {sigma; target=None} in
+        let result = List.map mk_transition (Reg.Expr.left_classes d.re) in
+        d.transitions <- result;
+        result
+      | transitions -> transitions
+
   let derive d sg =
     match d with
     | Void -> Label.empty, Void
-    | Step d ->
-      if d.transitions = [] then (
-        let mk_transition sigma = {sigma; target=None} in
-        d.transitions <- List.map mk_transition (Reg.Expr.left_classes d.re);
-      );
+    | Step {re; _} ->
       match
         List.filter_map begin fun t ->
           if Sigma.is_subset_of sg t.sigma then (
             let d' = match t.target with
               | Some x -> x
               | None ->
-                let lbl, re = Reg.Expr.left_delta d.re t.sigma in
+                let lbl, re = Reg.Expr.left_delta re t.sigma in
                 let x = lbl, lift re in
                 t.target <- Some x;
                 x
             in
             Some d'
           ) else None
-        end d.transitions
+        end (get_transitions d)
       with
       | [] -> Label.empty, Void
       | [d] -> d
@@ -1088,10 +1095,19 @@ struct
         then f (Sigma.Pos cell.states) acc
         else acc
       in
-      let visit acc {Redgraph. sources; targets=_; targets_closure} =
-        if IndexSet.disjoint t.compiled.domain targets_closure
-        then acc
-        else f (Sigma.Pos sources) acc
+      let visit acc {Redgraph. sources; targets; targets_closure} =
+        if IndexSet.disjoint t.compiled.domain targets_closure then acc else (
+          let acc = f (Sigma.Pos sources) acc in
+          let acc = IndexSet.fold (fun lr1 acc ->
+              match Lr1Map.find lr1 t.compiled.derivations with
+              | exception Not_found -> acc
+              | _, d ->
+                List.fold_left
+                  (fun acc tr -> f tr.sigma acc) acc (get_transitions d)
+            ) targets acc
+          in
+          acc
+        )
       in
       List.fold_left visit acc
         (Vector.get Redgraph.goto_closure t.root).(t.step)
