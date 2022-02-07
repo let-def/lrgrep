@@ -1412,6 +1412,15 @@ module DFA = struct
         | Label.Nothing -> ()
       end;
       Printf.printf "    match state stack with\n";
+      let transitions = Misc.group_by state.transitions
+          ~compare:(fun (_, st1) (_, st2) -> Int.compare st1.index st2.index)
+          ~group:(fun (sg, st) sgs ->
+              let sg =
+                List.fold_left (fun sg (sg', _) -> Sigma.union sg sg') sg sgs
+              in
+              (sg, st)
+            )
+      in
       List.iter begin fun (sg, st) ->
         let states =
           Sigma.to_lr1set sg
@@ -1420,14 +1429,14 @@ module DFA = struct
           |> String.concat "|"
         in
         Printf.printf "    | %s -> st_%d (next stack)\n" states st.index
-      end state.transitions;
+      end transitions;
       Printf.printf "    | _ -> []\n";
     in
     Reg.Map.iter (fun _ state -> visit state) dfa;
     Printf.printf "  in st_%d stack" initial.index
 end
 
-let test_stack =
+let.index test_stack =.index
   List.map (Index.of_int Lr1C.n)
     (*[509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;618;0]*)
     [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]
