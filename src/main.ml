@@ -796,6 +796,8 @@ module Sigma : sig
   val cmon : t -> Cmon.t
 
   val quick_subset : t -> t -> bool
+
+  val annotated_partition : (t * 'a) list -> (t * 'a list) list
 end = struct
   type t =
     | Pos of Lr1C.set
@@ -875,6 +877,40 @@ end = struct
           IndexSet.iter (fun elt -> Printf.eprintf "%d," (elt : _ index :> int)) set;
         ) l;
       raise exn
+
+  let annotated_partition l =
+    let negative = ref [] in
+    let project (sg, tag) =
+      match sg with
+      | Pos x -> (x, `P tag)
+      | Neg x ->
+        let tag = (ref (-1), tag) in
+        negative := tag :: !negative; (x, `N tag)
+    in
+    let l = List.map project l in
+    let negative = !negative in
+    try
+      let parts, total = IndexRefine.annotated_partition_and_total l in
+      let parts =
+        List.mapi (fun i (part, tags) ->
+            let tags =
+              List.filter_map (function
+                  | `P tag -> Some tag
+                  | `N (r, _) -> r := i; None
+                ) tags
+            in
+            let tags = List.fold_left
+                (fun tags (r, tag) ->
+                   if !r <> i then tag :: tags else tags)
+                tags negative
+            in
+            Pos part, tags
+          ) parts
+      in
+      match negative with
+      | [] -> parts
+      | neg -> (Neg total, List.map snd neg) :: parts
+    with _ -> assert false
 
   let mem x = function
     | Pos xs -> IndexSet.mem x xs
@@ -1451,8 +1487,104 @@ module DFA = struct
     Index.iter States.n (fun index -> visit (index, Vector.get states index));
     Printf.printf "  in st_%d stack" (fst initial :> int)
 
-  let minimize (Large_dfa {set = (module States); states; dfa; initial}) =
-    ()
+  let minimize (Large_dfa {set = (module States); states; dfa=_; initial}) =
+    let module Class = struct
+      type t = Lr1C.set * Lr1C.set
+      let compare (p1,n1) (p2,n2) =
+        let c = IndexSet.compare p1 p2 in
+        if c <> 0 then c else
+          IndexSet.compare n1 n2
+      let empty = IndexSet.(empty,empty)
+      let add_transition (p,n) (sg, _) =
+        match sg with
+        | Sigma.Pos p' -> (IndexSet.union p p', n)
+        | Sigma.Neg n' -> (p, IndexSet.union n n')
+    end in
+    let module ClassMap = Map.Make(Class) in
+    let class_of state =
+      List.fold_left Class.add_transition Class.empty state.transitions
+    in
+    let classes = ref ClassMap.empty in
+    Index.iter States.n (fun index ->
+        let state = Vector.get states index in
+        let clss = class_of state in
+        match ClassMap.find_opt clss !classes with
+        | None ->
+          let states = IndexSet.singleton index in
+          classes := ClassMap.add clss (ref states) !classes
+        | Some states -> states := IndexSet.add index !states
+      );
+    let module Transitions = struct
+      type t = {
+        source: States.n index;
+        label: Sigma.t;
+        target: States.n index;
+      }
+      include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+    end in
+    let partition_transition set =
+      let sigmas =
+        IndexSet.fold begin fun src acc ->
+          let state = Vector.get states src in
+          List.fold_left (fun acc (lbl, tgt) -> (lbl, (src, tgt)) :: acc)
+            acc state.transitions
+        end set []
+      in
+      Sigma.annotated_partition sigmas
+    in
+    ClassMap.iter begin fun _cl st ->
+      List.iter begin fun (label, pairs) ->
+        List.iter begin fun (source, target) ->
+          ignore (Transitions.add {label; source; target} : _ index)
+        end pairs;
+      end (partition_transition !st);
+    end !classes;
+    let module LabelMap = Map.Make(Label) in
+    let label_classes = ref LabelMap.empty in
+    Index.iter States.n (fun i ->
+        let state = Vector.get states i in
+        match Reg.Expr.get_label state.expr with
+        | Label.Nothing -> ()
+        | Label.Action _ as label ->
+          match LabelMap.find_opt label !label_classes with
+          | None ->
+            let si = IndexSet.singleton i in
+            label_classes := LabelMap.add label (ref si) !label_classes
+          | Some set ->
+            set := IndexSet.add i !set
+      );
+    let transition_table = Transitions.freeze () in
+    let module DFA = struct
+      let label tr = (Vector.get transition_table tr).label
+      let source tr = (Vector.get transition_table tr).source
+      let target tr = (Vector.get transition_table tr).target
+
+      let finals f =
+        LabelMap.iter (fun _ si -> IndexSet.iter f !si) !label_classes
+
+      let initials f = f (fst initial)
+
+      let refinements ~refine =
+        LabelMap.iter
+          (fun _ si -> refine ~iter:(fun f -> IndexSet.iter f !si))
+          !label_classes
+
+      type states = States.n
+      let states = States.n
+
+      type transitions = Transitions.n
+      let transitions = Transitions.n
+    end in
+    let module Min = Valmari.Minimize(Sigma)(DFA) in
+    let unique_transitions = Hashtbl.create 7 in
+    Index.iter Min.transitions (fun tr ->
+        let src = Min.source tr in
+        let tgt = Min.target tr in
+        Hashtbl.replace unique_transitions (src, tgt) ()
+    );
+    Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n"
+      (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions)
+
 end
 
 let test_stack =
@@ -1500,5 +1632,6 @@ let () = (
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
   let (Large_dfa {set=(module Set); _} as dfa) = DFA.translate re in
   prerr_endline (string_of_int (cardinal Set.n) ^ " states");
-  DFA.gencode dfa
+  DFA.minimize dfa;
+  (*DFA.gencode dfa*)
 )

@@ -84,6 +84,8 @@ module type S = sig
   val partition_and_total : 'a t list -> 'a t list * 'a t
   (* [partition_and_total xs] returns both [partition xs] and the union of
      all sets in the list [xs]. *)
+
+  val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t
