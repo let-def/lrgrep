@@ -920,15 +920,12 @@ end
 
 let do_log = ref false
 
-module rec
-  Reg
-  : Mulet.S with type sigma = Sigma.t
-             and type label = Label.t
-             and type abstract = Redgraph_derivation.t
+module rec Reg : Mulet.S with type sigma = Sigma.t
+                          and type label = Label.t
+                          and type abstract = Redgraph_derivation.t
   = Mulet.Make(Sigma)(Label)(Redgraph_derivation)
 
-and Redgraph_derivation :
-sig
+and Redgraph_derivation : sig
   include Mulet.DERIVABLE
     with type sigma := Sigma.t
      and type label := Label.t
@@ -1128,7 +1125,7 @@ struct
       Cmon.crecord "Node" [
         "root", cmon_index root;
         (*"root_items",
-        Cmon.constant (Format.asprintf "%a" Print.itemset
+          Cmon.constant (Format.asprintf "%a" Print.itemset
                          (Lr0.items (Lr1C.to_lr0 root)));*)
         "step", Cmon.int step;
       ]
@@ -1211,13 +1208,13 @@ module Match_item = struct
     (*let lhs = match lhs with
       | None -> ""
       | Some nt -> Nonterminal.name nt ^ ": "
-    in
-    let sym_list l = String.concat " " (List.map (function
+      in
+      let sym_list l = String.concat " " (List.map (function
         | Some sym -> symbol_name sym
         | None -> "_"
       ) l)
-    in
-    Printf.eprintf "[%s%s . %s] = %d states\n"
+      in
+      Printf.eprintf "[%s%s . %s] = %d states\n"
       lhs (sym_list prefix) (sym_list suffix) (Set.cardinal result);*)
     result
 end
@@ -1316,62 +1313,69 @@ module DFA = struct
   let sigma_predecessors sg =
     Sigma.Pos (lr1set_predecessors (Sigma.to_lr1set sg))
 
-  type state = {
-    index: int;
+  type 'set state = {
     expr: Reg.Expr.t;
     mutable visited: Sigma.t;
     mutable scheduled: Sigma.t;
     mutable unvisited: Sigma.t list;
-    mutable transitions: (Sigma.t * state) list;
+    mutable transitions: (Sigma.t * 'set index) list;
   }
 
+  type large_dfa =
+      Large_dfa : {
+        set: (module CARDINAL with type n = 'set);
+        states: ('set, 'set state) vector;
+        dfa: ('set index * 'set state) Reg.Map.t;
+        initial: 'set index * 'set state;
+      } -> large_dfa
+
   let translate expr =
-    let count = ref 0 in
+    let module States = IndexBuffer.Gen(struct type 'n t = 'n state end)() in
     let dfa = ref Reg.Map.empty in
     let todo = ref [] in
     let make_state expr =
-      let index = !count in
-      incr count;
       let state = {
-        index; expr;
+        expr;
         unvisited = Reg.Expr.left_classes expr;
         visited = Sigma.empty;
         scheduled = Sigma.empty;
-        transitions = []
+        transitions = [];
       } in
-      dfa := Reg.Map.add expr state !dfa;
-      state
+      let result = (States.add state, state) in
+      dfa := Reg.Map.add expr result !dfa;
+      result
     in
-    let schedule state sigma =
+    let schedule (index, state) sigma =
       let unvisited = Sigma.inter sigma (Sigma.compl state.visited) in
       if not (Sigma.is_empty unvisited) then (
         if Sigma.is_empty state.scheduled then
-          todo := state :: !todo;
+          todo := index :: !todo;
         state.scheduled <- Sigma.union state.scheduled unvisited
       )
     in
     let update_transition sigma (sigma', state') =
       let inter = Sigma.inter sigma sigma' in
       if not (Sigma.is_empty inter) then
-        schedule state' (sigma_predecessors inter)
+        schedule (state', States.get state') (sigma_predecessors inter)
     in
     let discover_transition sigma state sigma' =
       let inter = Sigma.inter sigma sigma' in
       (*Format.printf "discover %a\n%!"
         Cmon.format (Cmon.tuple [Sigma.cmon sigma; Sigma.cmon sigma']);*)
-      if Sigma.is_empty inter then
-        Either.Left sigma'
+      if Sigma.is_empty inter
+      then Either.Left sigma'
       else (
         let _, expr' = Reg.Expr.left_delta state.expr sigma' in
-        let state' = match Reg.Map.find_opt expr' !dfa with
+        let (index, _) as state' = match Reg.Map.find_opt expr' !dfa with
           | None -> make_state expr'
           | Some state' -> state'
         in
         schedule state' (sigma_predecessors inter);
-        Either.Right (sigma', state')
+        Either.Right (sigma', index)
       )
     in
-    let process state =
+    let process index =
+      let state = States.get index in
       let sigma = state.scheduled in
       state.scheduled <- Sigma.empty;
       state.visited <- Sigma.union state.visited sigma;
@@ -1393,14 +1397,20 @@ module DFA = struct
     let initial = make_state expr in
     schedule initial Sigma.full;
     loop ();
-    (!dfa, initial)
+    Large_dfa {
+      set = (module States);
+      states = States.freeze ();
+      dfa = !dfa;
+      initial;
+    }
 
-  let compile (dfa, initial : state Reg.Map.t * state) =
+
+  let gencode (Large_dfa {set = (module States); states; dfa=_; initial}) =
     let first = ref true in
     Printf.printf "let analyse stack =\n";
-    let visit (state : state) =
+    let visit (index, state : States.n index * States.n state) =
       Printf.printf "  %s st_%d stack =\n"
-        (if !first then "let rec" else "and") state.index;
+        (if !first then "let rec" else "and") (index :> int);
       first := false;
       let action = Reg.Expr.get_label state.expr in
       begin match action with
@@ -1409,7 +1419,7 @@ module DFA = struct
       end;
       Printf.printf "    match state stack with\n";
       let transitions = Misc.group_by state.transitions
-          ~compare:(fun (_, st1) (_, st2) -> Int.compare st1.index st2.index)
+          ~compare:(fun (_, st1) (_, st2) -> compare_index st1 st2)
           ~group:(fun (sg, st) sgs ->
               let sg =
                 List.fold_left (fun sg (sg', _) -> Sigma.union sg sg') sg sgs
@@ -1429,16 +1439,20 @@ module DFA = struct
           |> List.map (string_of_int : int -> string :> _ index -> string)
           |> String.concat "|"
         in
-        Printf.printf "    | %s -> st_%d (next stack)\n" states st.index
+        Printf.printf "    | %s -> st_%d (next stack)\n"
+          states (st : _ index :> int)
       end pos;
       begin match neg with
         | [] -> Printf.printf "    | _ -> []\n";
-        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" st.index;
+        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
         | _ :: _ :: _ -> assert false
       end
     in
-    Reg.Map.iter (fun _ state -> visit state) dfa;
-    Printf.printf "  in st_%d stack" initial.index
+    Index.iter States.n (fun index -> visit (index, Vector.get states index));
+    Printf.printf "  in st_%d stack" (fst initial :> int)
+
+  let minimize (Large_dfa {set = (module States); states; dfa; initial}) =
+    ()
 end
 
 let test_stack =
@@ -1484,8 +1498,7 @@ let () = (
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
-  let dfa, initial = DFA.translate re in
-  let count = Reg.Map.cardinal dfa in
-  prerr_endline (string_of_int count ^ " states");
-  DFA.compile (dfa, initial)
+  let (Large_dfa {set=(module Set); _} as dfa) = DFA.translate re in
+  prerr_endline (string_of_int (cardinal Set.n) ^ " states");
+  DFA.gencode dfa
 )

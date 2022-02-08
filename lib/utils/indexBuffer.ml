@@ -35,31 +35,31 @@ let contents t c =
   vector
 
 module type GEN = sig
-  type elt
+  type 'n elt
   type n
   val n : n cardinal
 
-  val push : elt -> n index
+  val add : n elt -> n index
 
-  val get : n index -> elt
-  val set : n index -> elt -> unit
+  val get : n index -> n elt
+  val set : n index -> n elt -> unit
 
-  val freeze : unit -> (n, elt) vector
+  val freeze : unit -> (n, n elt) vector
 end
 
-module Gen(T : sig type t end)() : GEN with type elt = T.t = struct
-  type elt = T.t
+module Gen(T : sig type 'a t end)() : GEN with type 'a elt = 'a T.t = struct
+  type 'a elt = 'a T.t
 
   include Gensym()
 
-  let buffer : (n, elt) t option ref = ref None
+  let buffer : (n, 'a elt) t option ref = ref None
 
   let get_buffer () =
     match !buffer with
     | Some buffer -> buffer
     | None -> assert false
 
-  let push x =
+  let add x =
     let result = fresh () in
     let buffer = match !buffer with
       | Some buffer -> buffer
@@ -78,5 +78,6 @@ module Gen(T : sig type t end)() : GEN with type elt = T.t = struct
     | Some buf -> contents buf n
 end
 
-let gen (type a) () =
-  (module Gen(struct type t = a end)() : GEN with type elt = a)
+(*type 'a gen = (module GEN with type elt = 'a)
+let gen (type a) () : a gen =
+  (module Gen(struct type t = a end)() : GEN with type elt = a)*)
