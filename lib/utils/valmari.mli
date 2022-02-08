@@ -1,4 +1,4 @@
-open Strong.Finite
+open Fix.Indexing
 
 (** Valmari is an automata minimization algorithm, described in
     "Fast brief practical DFA minimization"
@@ -6,37 +6,37 @@ open Strong.Finite
 
 module type DFA = sig
   type states
-  val states : states set
+  val states : states cardinal
   (** The set of DFA nodes *)
 
   type transitions
-  val transitions : transitions set
+  val transitions : transitions cardinal
   (** The set of DFA transitions *)
 
   type label
   (** The type of labels that annotate transitions *)
 
-  val label  : transitions elt -> label
+  val label  : transitions index -> label
   (** Get the label associated with a transition *)
 
-  val source : transitions elt -> states elt
+  val source : transitions index -> states index
   (** Get the source state of the transition *)
 
-  val target : transitions elt -> states elt
+  val target : transitions index -> states index
   (** Get the target state of the transition *)
 end
 
 module type INPUT = sig
   include DFA
 
-  val initials : (states elt -> unit) -> unit
+  val initials : (states index -> unit) -> unit
   (** Iterate on initial states *)
 
-  val finals : (states elt -> unit) -> unit
+  val finals : (states index -> unit) -> unit
   (** Iterate final states *)
 
   val refinements :
-    refine:(iter:((states elt -> unit) -> unit) -> unit) -> unit
+    refine:(iter:((states index -> unit) -> unit) -> unit) -> unit
     (** The minimization algorithms operate on a DFA plus an optional initial
         refinement (states that must be distinguished, because of some external
         properties not observable from the labelled transitions alone).
@@ -63,12 +63,12 @@ module Minimize
 sig
   include DFA with type label = Label.t
 
-  val initials : states elt array
-  val finals : states elt array
+  val initials : states index array
+  val finals : states index array
 
-  val transport_state : In.states elt -> states elt option
-  val transport_transition : In.transitions elt -> transitions elt option
+  val transport_state : In.states index -> states index option
+  val transport_transition : In.transitions index -> transitions index option
 
-  val represent_state : states elt -> In.states elt
-  val represent_transition : transitions elt -> In.transitions elt
+  val represent_state : states index -> In.states index
+  val represent_transition : transitions index -> In.transitions index
 end

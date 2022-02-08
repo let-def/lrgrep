@@ -1,4 +1,4 @@
-open Strong
+open Fix.Indexing
 
 type set = int
 type 'a set_array = 'a array
@@ -8,7 +8,7 @@ type 'a loc_array = 'a array
 
 type 'a t = {
   mutable set_count: set;
-  element  : 'a Finite.elt loc_array;
+  element  : 'a index loc_array;
   location : loc array; (* L *)
   set_of   : set array; (* S *)
   first    : loc set_array; (* F *)
@@ -17,13 +17,13 @@ type 'a t = {
   mutable worklist: set list;
 }
 
-let create (type a) ?partition (set : a Finite.set) =
+let create (type a) ?partition (set : a cardinal) =
   let id x = x in
   let undefined = 0 in
-  let n = Finite.Set.cardinal set in
+  let n = cardinal set in
   let t = {
     set_count = if n = 0 then 0 else 1;
-    element  = Finite.Array.to_array (Finite.Array.all_elements set);
+    element  = Array.init n (Index.of_int set);
     location = Array.init n id;
     set_of = Array.make n 0;
     first = Array.make n undefined;
@@ -59,7 +59,7 @@ let create (type a) ?partition (set : a Finite.set) =
   t
 
 let mark (t : 'a t) element =
-  let element' : 'a Finite.elt :> int = element in
+  let element' : 'a index :> int = element in
   let set = t.set_of.(element') in
   if set > -1 then (
     let loc_unmarked = t.first.(set) + t.marked.(set) in
@@ -70,7 +70,7 @@ let mark (t : 'a t) element =
       if loc > loc_unmarked then (
         let elt_unmarked = t.element.(loc_unmarked) in
         t.element.(loc) <- elt_unmarked;
-        t.location.((elt_unmarked : _ Finite.elt :> int)) <- loc;
+        t.location.((elt_unmarked : _ index :> int)) <- loc;
         t.element.(loc_unmarked) <- element;
         t.location.(element') <- loc_unmarked;
       );
@@ -97,7 +97,7 @@ let split t =
           t.past.(set) <- j;
         );
         for i = t.first.(t.set_count) to t.past.(t.set_count) - 1 do
-          t.set_of.((t.element.(i) : _ Finite.elt :> int)) <- t.set_count
+          t.set_of.((t.element.(i) : _ index :> int)) <- t.set_count
         done;
         t.marked.(set) <- 0;
         t.marked.(t.set_count) <- 0;
@@ -110,7 +110,7 @@ let discard_unmarked t =
   for set = 0 to t.set_count - 1 do
     let first_unmarked = t.first.(set) + t.marked.(set) in
     for i = first_unmarked to t.past.(set) - 1 do
-      let elt = (t.element.(i) : _ Finite.elt :> int) in
+      let elt = (t.element.(i) : _ index :> int) in
       (*prerr_endline ("discarding " ^ string_of_int elt);*)
       t.set_of.(elt) <- -1
     done;
@@ -130,7 +130,7 @@ let discard t f =
 
 let set_count t = t.set_count
 
-let set_of (t : 'a t) elt = t.set_of.((elt : 'a Finite.elt :> int))
+let set_of (t : 'a t) elt = t.set_of.((elt : 'a index :> int))
 
 let choose t set =
   assert (t.first.(set) < t.past.(set));
@@ -165,7 +165,7 @@ let clear_marks t =
   List.iter (fun set -> t.marked.(set) <- 0) worklist
 
 let is_first t n =
-  let n = (n : 'n Finite.elt :> int) in
+  let n = (n : 'n index :> int) in
   let s = t.set_of.(n) in
   let loc = t.location.(n) in
   (s > -1 && loc = t.first.(s) && loc < t.past.(s))

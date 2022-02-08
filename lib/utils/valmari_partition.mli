@@ -1,4 +1,4 @@
-open Strong
+open Fix.Indexing
 
 (** An intermediate datastructure used by Valmari automata minimization
     algorithm for efficiently representing incremental refinements of a set
@@ -13,8 +13,8 @@ type 'n t
     (encoded as a Strong.Natural) *)
 
 val create :
-  ?partition:('n Finite.elt -> 'n Finite.elt -> int) ->
-  'n Finite.set -> 'n t
+  ?partition:('n index -> 'n index -> int) ->
+  'n cardinal -> 'n t
 (** [create ?partition n] create a fresh partitioning data structure for a set
     of cardinal [n].
     If [partition] is not provided, the datastructure is initialized with a
@@ -23,7 +23,7 @@ val create :
     can be distinguished are put in different subsets.
 *)
 
-val mark : 'n t -> 'n Finite.elt -> unit
+val mark : 'n t -> 'n index -> unit
 (** [mark part elt] marks the element [elt] as active.
     The datastructure manages an active set by marking a certain number of
     elements, and then applying an operation to all of them at once.
@@ -45,7 +45,7 @@ val discard_unmarked : 'n t -> unit
     Active set is reset after (no elements are marked).
 *)
 
-val discard : 'n t -> ('n Finite.elt -> bool) -> unit
+val discard : 'n t -> ('n index -> bool) -> unit
 (** [discard part f] calls the function [f] for each element in the set
     and discard it if the function returns [true].
     Active set must be empty before and is reset after (no elements are marked).
@@ -54,27 +54,27 @@ val discard : 'n t -> ('n Finite.elt -> bool) -> unit
 val set_count : 'n t -> int
 (** Number of sets in the current partition *)
 
-val set_of : 'n t -> 'n Finite.elt -> set
+val set_of : 'n t -> 'n index -> set
 (** [set_of part elt] returns the index of the set that contains element [elt].
     Result is between [0] and [set_of part - 1] unless the element has been
     discarded, in which case it is [-1]. *)
 
-val choose : 'n t -> set -> 'n Finite.elt
+val choose : 'n t -> set -> 'n index
 (** [choose part set] returns an arbitrary element that belongs to set [set].
     [set] must be between [0] and [set_of part - 1].
 *)
 
-val choose_opt : 'n t -> set -> 'n Finite.elt option
+val choose_opt : 'n t -> set -> 'n index option
 (** [choose part set] returns an arbitrary element that belongs to set [set].
     [set] must be between [0] and [set_of part - 1].
 *)
 
-val iter_elements : 'n t -> set -> ('n Finite.elt -> unit) -> unit
+val iter_elements : 'n t -> set -> ('n index -> unit) -> unit
 (** [iter_elements part set f] applies function [f] to each element that
     currently belongs to set [set].
 *)
 
-val iter_marked_elements : 'n t -> set -> ('n Finite.elt -> unit) -> unit
+val iter_marked_elements : 'n t -> set -> ('n index -> unit) -> unit
 (** [iter_marked_elements part set f] applies function [f] to each element that
     currently belongs to set [set] and is marked.
 *)
@@ -85,4 +85,4 @@ val clear_marks : 'n t -> unit
 val marked_sets : 'n t -> set list
 (** Returns all sets that have marked elements. *)
 
-val is_first : 'n t -> 'n Finite.elt -> bool
+val is_first : 'n t -> 'n index -> bool
