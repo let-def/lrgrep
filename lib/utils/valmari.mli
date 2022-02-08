@@ -38,7 +38,7 @@ module type INPUT = sig
   val refinements :
     refine:(iter:((states elt -> unit) -> unit) -> unit) -> unit
     (** The minimization algorithms operate on a DFA plus an optional initial
-        refinement (state that must be distinguished, because of some external
+        refinement (states that must be distinguished, because of some external
         properties not observable from the labelled transitions alone).
 
         If no refinements are needed, the minimum implementation is just:
