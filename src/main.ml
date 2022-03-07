@@ -16,6 +16,7 @@
 open Utils
 module IndexSet = BitSet.IndexSet
 type 'a indexset = 'a IndexSet.t
+type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -106,6 +107,90 @@ let lexer_definition =
 
 open Fix.Indexing
 open Input
+
+module Share_transitions (States : sig
+    type t
+    val t : t cardinal
+    val transitions : t index ->
+      t indexset * (t, t indexset) indexmap * t index option
+  end) = struct
+  type state = States.t
+
+  type transitions = (state, state indexset) indexmap
+
+  type entry = {
+    state: state index;
+    covered: int;
+    coverage: state indexset;
+    transitions: transitions;
+  }
+
+  let per_fallback = Vector.make States.t []
+  let no_fallback = ref []
+
+  let () = Index.iter States.t (fun state ->
+      let coverage, transitions, fallback = States.transitions state in
+      let entry = {
+        state;
+        covered = IndexSet.cardinal coverage;
+        coverage;
+        transitions;
+      } in
+      match fallback with
+      | None -> no_fallback := entry :: !no_fallback
+      | Some fb -> Vector.set_cons per_fallback fb entry
+    )
+
+  type solution = {
+    entry: entry;
+    forest: forest;
+  }
+
+  and forest = solution list ref
+
+  let initial_cost entry = entry.covered
+
+  let size_of_diff e1 e2 =
+    (IndexSet.cardinal (IndexSet.diff e1 e2))
+
+  let cost_of entry ~wrt =
+    IndexMap.fold
+      (fun target targets sum ->
+         sum +
+         match IndexMap.find_opt target wrt.transitions with
+         | None -> IndexSet.cardinal targets
+         | Some targets' -> size_of_diff targets targets'
+      )
+      entry.transitions
+      (size_of_diff wrt.coverage entry.coverage)
+
+  let rec evaluate_solution entry depth current candidate =
+    let cost = cost_of entry ~wrt:candidate.entry in
+    let current =
+      let (best_cost, best_depth, _) = current in
+      if cost < best_cost || (cost = best_cost && depth < best_depth) then
+        (cost, depth, candidate.forest)
+      else
+        current
+    in
+    evaluate_forest entry depth current candidate.forest
+
+  and evaluate_forest entry depth current forest =
+    List.fold_left
+      (evaluate_solution entry (depth + 1))
+      current !forest
+
+  let process set =
+    let set = List.sort (fun e1 e2 -> Int.compare e1.covered e2.covered) set in
+    let forest = ref [] in
+    List.iter (fun entry ->
+        let initial = (initial_cost entry, 0, forest) in
+        let (_, _, best_forest) = evaluate_forest entry 0 initial forest in
+        best_forest := {entry; forest = ref []} :: !best_forest
+      ) set;
+    forest
+end
+
 
 let array_set_add arr index value =
   arr.(index) <- IndexSet.add value arr.(index)
