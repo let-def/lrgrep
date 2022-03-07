@@ -1582,8 +1582,65 @@ module DFA = struct
         let tgt = Min.target tr in
         Hashtbl.replace unique_transitions (src, tgt) ()
     );
-    Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n"
-      (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions)
+    Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n%!"
+      (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions);
+    let first = ref true in
+    Printf.printf "let analyse stack =\n";
+    let get_label (index : Min.states index) =
+      Reg.Expr.get_label
+        (Vector.get states (Min.represent_state index)).expr
+    in
+    let module StateMap = Map.Make(struct
+        type t = Min.states index
+        let compare = compare_index
+      end)
+    in
+    let transitions_from = Vector.make Min.states StateMap.empty in
+    Index.iter Min.transitions (fun tr ->
+        let source = Min.source tr in
+        let target = Min.target tr in
+        let label = Min.label tr in
+        let map = Vector.get transitions_from source in
+        match StateMap.find_opt target map with
+        | None ->
+          Vector.set transitions_from source
+            (StateMap.add target (ref label) map)
+        | Some rlabel -> rlabel := Sigma.union label !rlabel
+      );
+    let visit (index : Min.states index) =
+      Printf.printf "  %s st_%d stack =\n"
+        (if !first then "let rec" else "and") (index :> int);
+      first := false;
+      let action = get_label index in
+      begin match action with
+        | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
+        | Label.Nothing -> ()
+      end;
+      Printf.printf "    match state stack with\n";
+      let transitions = Vector.get transitions_from index in
+      let pos, neg = StateMap.fold (fun st sg (pos, neg) ->
+          match !sg with
+          | Sigma.Pos lr1s -> ((lr1s, st) :: pos, neg)
+          | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
+        ) transitions ([], [])
+      in
+      List.iter begin fun (lr1s, st) ->
+        let states =
+          IndexSet.elements lr1s
+          |> List.map (string_of_int : int -> string :> _ index -> string)
+          |> String.concat "|"
+        in
+        Printf.printf "    | %s -> st_%d (next stack)\n"
+          states (st : _ index :> int)
+      end pos;
+      begin match neg with
+        | [] -> Printf.printf "    | _ -> []\n";
+        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
+        | _ :: _ :: _ -> assert false
+      end
+    in
+    Index.iter Min.states visit;
+    Printf.printf "  in st_%d stack" (Min.initials.(0) :> int)
 
 end
 
