@@ -108,45 +108,45 @@ let lexer_definition =
 open Fix.Indexing
 open Input
 
-module Share_transitions (States : sig
-    type t
-    val t : t cardinal
-    val transitions : t index ->
-      t indexset * (t, t indexset) indexmap * t index option
-  end) = struct
-  type state = States.t
+module Transition_tree =
+struct
+  type ('n, 'lr1) map = ('n, 'lr1 indexset) indexmap
 
-  type transitions = (state, state indexset) indexmap
-
-  type entry = {
-    state: state index;
+  type ('n, 'lr1) entry = {
+    state: 'n index;
     covered: int;
-    coverage: state indexset;
-    transitions: transitions;
+    coverage: 'lr1 indexset;
+    transitions: ('n, 'lr1) map;
   }
 
-  let per_fallback = Vector.make States.t []
-  let no_fallback = ref []
-
-  let () = Index.iter States.t (fun state ->
-      let coverage, transitions, fallback = States.transitions state in
-      let entry = {
-        state;
-        covered = IndexSet.cardinal coverage;
-        coverage;
-        transitions;
-      } in
-      match fallback with
-      | None -> no_fallback := entry :: !no_fallback
-      | Some fb -> Vector.set_cons per_fallback fb entry
-    )
-
-  type solution = {
-    entry: entry;
-    forest: forest;
+  type ('n, 'lr1) tree = {
+    entry: ('n, 'lr1) entry;
+    cost: int;
+    forest: ('n, 'lr1) forest;
   }
 
-  and forest = solution list ref
+  and ('n, 'lr1) forest = ('n, 'lr1) tree list ref
+
+  let transitions_per_target
+      (type n lr1)
+      (states : n cardinal)
+      (transitions : n index -> lr1 indexset * (n, lr1) map * n index option)
+    =
+    let per_fallback = Vector.make states [] in
+    let no_fallback = ref [] in
+    Index.iter states (fun state ->
+        let coverage, transitions, fallback = transitions state in
+        let entry = {
+          state;
+          covered = IndexSet.cardinal coverage;
+          coverage;
+          transitions;
+        } in
+        match fallback with
+        | None -> no_fallback := entry :: !no_fallback
+        | Some fb -> Vector.set_cons per_fallback fb entry
+      );
+    (per_fallback, !no_fallback)
 
   let initial_cost entry = entry.covered
 
@@ -185,12 +185,19 @@ module Share_transitions (States : sig
     let forest = ref [] in
     List.iter (fun entry ->
         let initial = (initial_cost entry, 0, forest) in
-        let (_, _, best_forest) = evaluate_forest entry 0 initial forest in
-        best_forest := {entry; forest = ref []} :: !best_forest
+        let (cost, _, best_forest) = evaluate_forest entry 0 initial forest in
+        best_forest := {entry; cost; forest = ref []} :: !best_forest
       ) set;
-    forest
-end
+    !forest
 
+  let build_tree states transitions =
+    let fallbacks, no_fallback = transitions_per_target states transitions in
+    let roots = ref [] in
+    let process_set set = roots := process set @ !roots in
+    Index.iter states (fun state -> process_set (Vector.get fallbacks state));
+    process_set no_fallback;
+    !roots
+end
 
 let array_set_add arr index value =
   arr.(index) <- IndexSet.add value arr.(index)
@@ -1687,6 +1694,43 @@ module DFA = struct
             (IndexMap.add target (ref label) map)
         | Some rlabel -> rlabel := Sigma.union label !rlabel
       );
+    begin (* Estimate cost *)
+      let forest = Transition_tree.build_tree Min.states (fun index ->
+          let transitions = Vector.get transitions_from index in
+          let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
+              match !sg with
+              | Sigma.Pos lr1s ->
+                assert (not (IndexMap.mem st pos));
+                (IndexMap.add st lr1s pos, neg)
+              | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
+            ) transitions (IndexMap.empty, [])
+          in
+          let coverage =
+            IndexMap.fold (fun _ -> IndexSet.union) pos IndexSet.empty
+          in
+          let neg = match neg with
+            | [] -> None
+            | [_, st] -> Some st
+            | _ :: _ :: _ -> assert false
+          in
+          (coverage, pos, neg)
+        )
+      in
+      let naive_transitions, optimized_transitions =
+        let rec add (naive, optim) {Transition_tree. entry; cost; forest} =
+          let naive = naive + entry.covered in
+          let optim = optim + cost in
+          add_forest (naive, optim) !forest
+        and add_forest acc forest =
+          List.fold_left add acc forest
+        in
+        add_forest (0, 0) forest
+      in
+      Printf.eprintf "(* transitions without inheritance: %d\n
+                     \   transitions with    inheritance: %d *)\n"
+        naive_transitions
+        optimized_transitions
+    end;
     let visit (index : Min.states index) =
       Printf.printf "  %s st_%d stack =\n"
         (if !first then "let rec" else "and") (index :> int);
