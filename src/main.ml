@@ -1675,21 +1675,16 @@ module DFA = struct
       Reg.Expr.get_label
         (Vector.get states (Min.represent_state index)).expr
     in
-    let module StateMap = Map.Make(struct
-        type t = Min.states index
-        let compare = compare_index
-      end)
-    in
-    let transitions_from = Vector.make Min.states StateMap.empty in
+    let transitions_from = Vector.make Min.states IndexMap.empty in
     Index.iter Min.transitions (fun tr ->
         let source = Min.source tr in
         let target = Min.target tr in
         let label = Min.label tr in
         let map = Vector.get transitions_from source in
-        match StateMap.find_opt target map with
+        match IndexMap.find_opt target map with
         | None ->
           Vector.set transitions_from source
-            (StateMap.add target (ref label) map)
+            (IndexMap.add target (ref label) map)
         | Some rlabel -> rlabel := Sigma.union label !rlabel
       );
     let visit (index : Min.states index) =
@@ -1703,7 +1698,7 @@ module DFA = struct
       end;
       Printf.printf "    match state stack with\n";
       let transitions = Vector.get transitions_from index in
-      let pos, neg = StateMap.fold (fun st sg (pos, neg) ->
+      let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
           match !sg with
           | Sigma.Pos lr1s -> ((lr1s, st) :: pos, neg)
           | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
