@@ -31,7 +31,6 @@ type regular_term =
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression * position
   | Reduce of regular_expression * location
-  | Action of int
 
 and regular_expression =
   (regular_term * position) list
@@ -130,8 +129,6 @@ let rec print_regular_term = function
       print_regular_expression re;
       print_location loc;
     ]
-  | Action n ->
-    Cmon.construct "Action" [Cmon.int n]
 
 and print_regular_expression re =
   let print_regular_term (term, pos) =
@@ -180,7 +177,7 @@ type context =
   | Inside_sequence of position
 
 let rec check_wellformed_term context = function
-  | (Symbol _ | Item _ | Wildcard _ | Action _) -> ()
+  | (Symbol _ | Item _ | Wildcard _) -> ()
   | Alternative (re1, re2) ->
     check_wellformed context re1;
     check_wellformed context re2

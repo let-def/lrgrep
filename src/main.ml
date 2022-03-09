@@ -1445,30 +1445,12 @@ let rec translate_term = function
     Reg.Expr.star (translate_expr e1)
   | Syntax.Reduce (expr, _) ->
     reduce (translate_expr expr)
-  | Syntax.Action _ ->
-    failwith "TODO"
 
 and translate_expr terms =
   let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
   Reg.Expr.concatenation terms
 
 let no_pos = {Syntax. line = -1; col = -1}
-
-let rec add_action n = function
-  | [] -> [Syntax.Action n, no_pos]
-  | (((Syntax.Symbol _ | Syntax.Item _ | Syntax.Wildcard _ | Syntax.Action _), _) :: _) as rest ->
-    (Syntax.Action n, no_pos) :: rest
-  | (e1, pos) :: rest ->
-    let e1 = match e1 with
-      | Syntax.Alternative (e1, e2) ->
-        Syntax.Alternative (add_action n e1, add_action n e2)
-      | Syntax.Repetition (e1, l1) ->
-        Syntax.Repetition (add_action n e1, l1)
-      | Syntax.Reduce (e1, l1) ->
-        Syntax.Reduce (add_action n e1, l1)
-      | _ -> assert false
-    in
-    (e1, pos) :: rest
 
 let translate_clause priority {Syntax. pattern; action} =
   let pattern, wrap =
