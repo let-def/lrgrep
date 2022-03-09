@@ -27,15 +27,13 @@ let interpret = ref false
 
 let usage = "usage: menhirlex [options] sourcefile"
 
-let print_version_string () =
-  print_string "The Menhir parser lexer generator :-], version ";
-  print_string Sys.ocaml_version;
-  print_newline ();
+let print_version_num () =
+  print_endline "0.1";
   exit 0
 
-let print_version_num () =
-  print_endline Sys.ocaml_version;
-  exit 0
+let print_version_string () =
+  print_string "The Menhir parser lexer generator :-], version ";
+  print_version_num ()
 
 let specs = [
   "-o", Arg.String (fun x -> output_name := Some x),
@@ -1443,6 +1441,7 @@ module DFA = struct
 
   type 'set state = {
     expr: Reg.Expr.t;
+    label: Label.t;
     mutable visited: Sigma.t;
     mutable scheduled: Sigma.t;
     mutable unvisited: Sigma.t list;
@@ -1464,6 +1463,7 @@ module DFA = struct
     let make_state expr =
       let state = {
         expr;
+        label = Reg.Expr.get_label expr;
         unvisited = Reg.Expr.left_classes expr;
         visited = Sigma.empty;
         scheduled = Sigma.empty;
@@ -1532,7 +1532,6 @@ module DFA = struct
       initial;
     }
 
-
   let gencode (Large_dfa {set = (module States); states; dfa=_; initial}) =
     let first = ref true in
     Printf.printf "let analyse stack =\n";
@@ -1545,7 +1544,6 @@ module DFA = struct
         | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
         | Label.Nothing -> ()
       end;
-      Printf.printf "    match state stack with\n";
       let transitions = Misc.group_by state.transitions
           ~compare:(fun (_, st1) (_, st2) -> compare_index st1 st2)
           ~group:(fun (sg, st) sgs ->
@@ -1561,25 +1559,58 @@ module DFA = struct
           | Sigma.Neg lr1s -> Either.Right (lr1s, st)
         ) transitions
       in
-      List.iter begin fun (lr1s, st) ->
-        let states =
-          IndexSet.elements lr1s
-          |> List.map (string_of_int : int -> string :> _ index -> string)
-          |> String.concat "|"
-        in
-        Printf.printf "    | %s -> st_%d (next stack)\n"
-          states (st : _ index :> int)
-      end pos;
-      begin match neg with
-        | [] -> Printf.printf "    | _ -> []\n";
-        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
-        | _ :: _ :: _ -> assert false
+      if neg = [] && pos = [] then
+        Printf.printf "    []\n"
+      else begin
+        Printf.printf "    match state stack with\n";
+        List.iter begin fun (lr1s, st) ->
+          let states =
+            IndexSet.elements lr1s
+            |> List.map (string_of_int : int -> string :> _ index -> string)
+            |> String.concat "|"
+          in
+          Printf.printf "    | %s -> st_%d (next stack)\n"
+            states (st : _ index :> int)
+        end pos;
+        begin match neg with
+          | [] -> Printf.printf "    | _ -> []\n";
+          | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
+          | _ :: _ :: _ -> assert false
+        end
       end
     in
     Index.iter States.n (fun index -> visit (index, Vector.get states index));
     Printf.printf "  in st_%d stack" (fst initial :> int)
 
   let minimize (Large_dfa {set = (module States); states; dfa=_; initial}) =
+    (* Removing unreachable actions *)
+    let module Scc = Tarjan.Run(struct
+        type node = States.n index
+        let n = cardinal States.n
+        let index = Index.to_int
+        let successors f i =
+          List.iter (fun (_sg, j) -> f j)
+            (Vector.get states i).transitions
+        let iter f = Index.iter States.n f
+      end)
+    in
+    let reachable_action = Vector.make States.n max_int in
+    Scc.rev_topological_iter (fun _repr nodes ->
+        let get_min_action acc src =
+          let state = Vector.get states src in
+          List.fold_left
+            (fun acc (_sg, tgt) ->
+               min acc (Vector.get reachable_action tgt))
+            (match state.label with
+             | Label.Action { priority; _} -> min acc priority
+             | Label.Nothing -> acc
+            )
+            state.transitions
+        in
+        let min = List.fold_left get_min_action max_int nodes in
+        List.iter (fun node -> Vector.set reachable_action node min) nodes
+      );
+    (* Minimize automaton *)
     let module Class = struct
       type t = Lr1C.set * Lr1C.set
       let compare (p1,n1) (p2,n2) =
@@ -1618,7 +1649,14 @@ module DFA = struct
       let sigmas =
         IndexSet.fold begin fun src acc ->
           let state = Vector.get states src in
-          List.fold_left (fun acc (lbl, tgt) -> (lbl, (src, tgt)) :: acc)
+          let src_action = match state.label with
+            | Label.Nothing -> max_int
+            | Label.Action {priority; _} -> priority
+          in
+          List.fold_left (fun acc (lbl, tgt) ->
+              if Vector.get reachable_action tgt >= src_action
+              then acc
+              else (lbl, (src, tgt)) :: acc)
             acc state.transitions
         end set []
       in
@@ -1668,20 +1706,22 @@ module DFA = struct
       let transitions = Transitions.n
     end in
     let module Min = Valmari.Minimize(Sigma)(DFA) in
-    let unique_transitions = Hashtbl.create 7 in
-    Index.iter Min.transitions (fun tr ->
-        let src = Min.source tr in
-        let tgt = Min.target tr in
-        Hashtbl.replace unique_transitions (src, tgt) ()
-    );
-    Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n%!"
-      (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions);
-    let first = ref true in
-    Printf.printf "let analyse stack =\n";
     let get_label (index : Min.states index) =
       Reg.Expr.get_label
         (Vector.get states (Min.represent_state index)).expr
     in
+    (* Print statistics on minimzed automaton *)
+    begin
+      let unique_transitions = Hashtbl.create 7 in
+      Index.iter Min.transitions (fun tr ->
+          let src = Min.source tr in
+          let tgt = Min.target tr in
+          Hashtbl.replace unique_transitions (src, tgt) ()
+        );
+      Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n%!"
+        (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions);
+    end;
+    (* Index transitions by source states *)
     let transitions_from = Vector.make Min.states IndexMap.empty in
     Index.iter Min.transitions (fun tr ->
         let source = Min.source tr in
@@ -1694,7 +1734,8 @@ module DFA = struct
             (IndexMap.add target (ref label) map)
         | Some rlabel -> rlabel := Sigma.union label !rlabel
       );
-    begin (* Estimate cost *)
+    (* Estimate benefits of a layered transitions encoding *)
+    begin
       let forest = Transition_tree.build_tree Min.states (fun index ->
           let transitions = Vector.get transitions_from index in
           let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
@@ -1716,31 +1757,45 @@ module DFA = struct
           (coverage, pos, neg)
         )
       in
-      let naive_transitions, optimized_transitions =
-        let rec add (naive, optim) {Transition_tree. entry; cost; forest} =
-          let naive = naive + entry.covered in
-          let optim = optim + cost in
-          add_forest (naive, optim) !forest
-        and add_forest acc forest =
-          List.fold_left add acc forest
-        in
-        add_forest (0, 0) forest
+      let naive_transitions = ref 0 in
+      let optimized_transitions = ref 0 in
+      let depth_max = ref 0 in
+      let depth_sum = ref 0 in
+      let count = ref 0 in
+      let (+=) r x = r := !r + x in
+      let rec add depth {Transition_tree. entry; cost; forest} =
+        naive_transitions += entry.covered;
+        optimized_transitions += cost;
+        depth_max := max depth !depth_max;
+        if depth > 1 then (
+          depth_sum += depth;
+          incr count;
+        );
+        add_forest depth !forest
+      and add_forest depth forest =
+        List.iter (add (depth + 1)) forest
       in
+      add_forest 0 forest;
       Printf.eprintf "(* transitions without inheritance: %d\n
-                     \   transitions with    inheritance: %d *)\n"
-        naive_transitions
-        optimized_transitions
+                     \   transitions with    inheritance: %d\n
+                     \   max_depth: %d, avg_depth: %f *)\n"
+        !naive_transitions
+        !optimized_transitions
+        !depth_max
+        (float !depth_sum /. float !count)
     end;
+    (* Print matching functions *)
+    let first = ref true in
+    Printf.printf "let analyse stack =\n";
     let visit (index : Min.states index) =
-      Printf.printf "  %s st_%d stack =\n"
+      Printf.printf "  %s st_%d stack ="
         (if !first then "let rec" else "and") (index :> int);
       first := false;
       let action = get_label index in
       begin match action with
-        | Label.Action { priority ; _ } -> Printf.printf "    %d ::\n" priority
+        | Label.Action { priority ; _ } -> Printf.printf "\n    %d ::" priority
         | Label.Nothing -> ()
       end;
-      Printf.printf "    match state stack with\n";
       let transitions = Vector.get transitions_from index in
       let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
           match !sg with
@@ -1748,20 +1803,25 @@ module DFA = struct
           | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
         ) transitions ([], [])
       in
-      List.iter begin fun (lr1s, st) ->
-        let states =
-          IndexSet.elements lr1s
-          |> List.map (string_of_int : int -> string :> _ index -> string)
-          |> String.concat "|"
-        in
-        Printf.printf "    | %s -> st_%d (next stack)\n"
-          states (st : _ index :> int)
-      end pos;
-      begin match neg with
-        | [] -> Printf.printf "    | _ -> []\n";
-        | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
-        | _ :: _ :: _ -> assert false
-      end
+      match pos, neg with
+      | [], [] -> Printf.printf " []\n"
+      | [], [_, st] -> Printf.printf " st_%d (next stack)\n" (st :> int)
+      | _ ->
+        Printf.printf "\n    match state stack with\n";
+        List.iter begin fun (lr1s, st) ->
+          let states =
+            IndexSet.elements lr1s
+            |> List.map (string_of_int : int -> string :> _ index -> string)
+            |> String.concat "|"
+          in
+          Printf.printf "    | %s -> st_%d (next stack)\n"
+            states (st : _ index :> int)
+        end pos;
+        begin match neg with
+          | [] -> Printf.printf "    | _ -> []\n";
+          | [_, st] -> Printf.printf "    | _ -> st_%d (next stack)\n" (st :> int);
+          | _ :: _ :: _ -> assert false
+        end
     in
     Index.iter Min.states visit;
     Printf.printf "  in st_%d stack" (Min.initials.(0) :> int)
