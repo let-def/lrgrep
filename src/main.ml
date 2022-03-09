@@ -1788,8 +1788,8 @@ module DFA = struct
         List.iter (add (depth + 1)) forest
       in
       add_forest 0 forest;
-      Printf.eprintf "(* transitions without inheritance: %d\n
-                     \   transitions with    inheritance: %d\n
+      Printf.eprintf "(* transitions without inheritance: %d\n\
+                     \   transitions with    inheritance: %d\n\
                      \   max_depth: %d, avg_depth: %f *)\n"
         !naive_transitions
         !optimized_transitions
@@ -1836,7 +1836,7 @@ module DFA = struct
         end
     in
     Index.iter Min.states visit;
-    Printf.printf "  in st_%d stack" (Min.initials.(0) :> int)
+    Printf.printf "  in st_%d stack\n" (Min.initials.(0) :> int)
 
 end
 
