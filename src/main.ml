@@ -1364,6 +1364,11 @@ let translate_nonterminal sym =
 let translate_producers list =
   List.map (Option.map translate_symbol) list
 
+let reduce expr =
+  let compiled = Redgraph_derivation.compile expr in
+  let expr' = Redgraph_derivation.make compiled all_states in
+  Reg.Expr.(expr |. expr')
+
 let rec translate_term = function
   | Syntax.Symbol name ->
     let symbol = translate_symbol name in
@@ -1382,10 +1387,7 @@ let rec translate_term = function
   | Syntax.Repetition (e1, _) ->
     Reg.Expr.star (translate_expr e1)
   | Syntax.Reduce (expr, _) ->
-    let expr = translate_expr expr in
-    let compiled = Redgraph_derivation.compile expr in
-    let expr' = Redgraph_derivation.make compiled all_states in
-    Reg.Expr.(expr |. expr')
+    reduce (translate_expr expr)
   | Syntax.Action n ->
     Reg.Expr.label (Label.Action {priority = n; action_desc = Label.Code "foo"})
 
@@ -1414,19 +1416,29 @@ let rec add_action n = function
 let translate_clause priority {Syntax. pattern; action} =
   (*let expr = add_action priority pattern in*)
   (*Format.printf "%a\n%!" Cmon.format (Syntax.print_regular_expression expr);*)
+  let pattern, wrap =
+    match pattern with
+    | [Syntax.Reduce (re, _), _] -> re, Either.right
+    | _ -> pattern, Either.left
+  in
   let expr = translate_expr pattern in
   let action_desc = match action with
     | None -> Label.Unreachable
     | Some (_, code) -> Label.Code code
   in
   let label = Reg.Expr.label (Action {priority; action_desc}) in
-  Reg.Expr.(^.) expr label
+  wrap (Reg.Expr.(^.) expr label)
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
   ignore (startsymbols, error, name, args);
   let clauses = List.mapi translate_clause clauses in
-  clauses
+  let clauses, right = List.partition_map Fun.id clauses in
+  let clauses = match right with
+    | [] -> clauses
+    | clauses' -> reduce (Reg.Expr.disjunction clauses') :: clauses
+  in
+  Reg.Expr.disjunction clauses
 
 let cmon_re re =
   Mulet.cmon_re re
@@ -1867,7 +1879,7 @@ let () = (
   let entry = List.hd lexer_definition.entrypoints in
   Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
   let clauses = translate_entry entry in
-  let re = Reg.Expr.disjunction clauses in
+  let re = clauses in
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
