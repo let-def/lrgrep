@@ -1600,7 +1600,7 @@ module DFA = struct
           List.fold_left
             (fun acc (_sg, tgt) ->
                min acc (Vector.get reachable_action tgt))
-            (match state.label with
+            (match state.label.action with
              | Label.Action { priority; _} -> min acc priority
              | Label.Nothing -> acc
             )
@@ -1648,7 +1648,7 @@ module DFA = struct
       let sigmas =
         IndexSet.fold begin fun src acc ->
           let state = Vector.get states src in
-          let src_action = match state.label with
+          let src_action = match state.label.action with
             | Label.Nothing -> max_int
             | Label.Action {priority; _} -> priority
           in
@@ -1668,17 +1668,17 @@ module DFA = struct
         end pairs;
       end (partition_transition !st);
     end !classes;
-    let module LabelMap = Map.Make(Label) in
-    let label_classes = ref LabelMap.empty in
+    let module ActionMap = Map.Make(struct type t = Label.action let compare = Label.compare_action end) in
+    let action_classes = ref ActionMap.empty in
     Index.iter States.n (fun i ->
         let state = Vector.get states i in
-        match Reg.Expr.get_label state.expr with
+        match state.label.action with
         | Label.Nothing -> ()
-        | Label.Action _ as label ->
-          match LabelMap.find_opt label !label_classes with
+        | Label.Action _ as action ->
+          match ActionMap.find_opt action !action_classes with
           | None ->
             let si = IndexSet.singleton i in
-            label_classes := LabelMap.add label (ref si) !label_classes
+            action_classes := ActionMap.add action (ref si) !action_classes
           | Some set ->
             set := IndexSet.add i !set
       );
@@ -1689,14 +1689,14 @@ module DFA = struct
       let target tr = (Vector.get transition_table tr).target
 
       let finals f =
-        LabelMap.iter (fun _ si -> IndexSet.iter f !si) !label_classes
+        ActionMap.iter (fun _ si -> IndexSet.iter f !si) !action_classes
 
       let initials f = f (fst initial)
 
       let refinements ~refine =
-        LabelMap.iter
+        ActionMap.iter
           (fun _ si -> refine ~iter:(fun f -> IndexSet.iter f !si))
-          !label_classes
+          !action_classes
 
       type states = States.n
       let states = States.n
@@ -1794,8 +1794,7 @@ module DFA = struct
       Printf.printf "  %s st_%d stack ="
         (if !first then "let rec" else "and") (index :> int);
       first := false;
-      let action = get_label index in
-      begin match action with
+      begin match (get_label index).action with
         | Label.Action { priority ; _ } -> Printf.printf "\n    %d ::" priority
         | Label.Nothing -> ()
       end;
@@ -1847,7 +1846,7 @@ let () =
 let step re state =
   let _lbl, re = Reg.Expr.left_delta re (Sigma.singleton state) in
   let itemset = Lr0.items (Lr1C.to_lr0 state) in
-  let action = match Reg.Expr.get_label re with
+  let action = match (Reg.Expr.get_label re).action with
     | Label.Nothing -> "\x1b[31mNo action\x1b[m"
     | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
   in
