@@ -42,7 +42,7 @@ open Syntax
        COMMA       ","
        SEMI        ";"
        COLON       ":"
-       (*AS         "as"*)
+       AS          "as"
        (*HASH       "#"*)
 
 (*%right "as"*)
@@ -96,19 +96,28 @@ symbol:
 ;
 
 wild_symbol:
-| "_" { None }
+| "_"    { None }
 | symbol { Some $1 }
 ;
 
+capture:
+| "as" IDENT { Some $2 }
+|            { None }
+;
+
+atom:
+| "_" capture
+  { Wildcard $2 }
+| symbol capture
+  { Symbol ($1, $2) }
+| "[" prefix=wild_symbol* "." suffix=wild_symbol* "]" capture=capture
+  { Item {lhs=None; prefix; suffix; capture} }
+| "[" lhs=symbol ":" prefix=wild_symbol* "." suffix=wild_symbol* "]" capture=capture
+  { Item {lhs=Some lhs; prefix; suffix; capture} }
+
 regterm:
-| "_"
-  { Wildcard }
-| symbol
-  { Symbol $1 }
-| "[" prefix=wild_symbol* "." suffix=wild_symbol* "]"
-  { Item {lhs=None; prefix; suffix} }
-| "[" lhs=symbol ":" prefix=wild_symbol* "." suffix=wild_symbol* "]"
-  { Item {lhs=Some lhs; prefix; suffix} }
+| atom
+  { $1 }
 | regexp "*"
   { Repetition ($1, make_position $startpos($2)) }
 | regexp "?"

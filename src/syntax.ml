@@ -16,14 +16,18 @@ type symbol =
   | Name of string
   | Apply of string * symbol list
 
+type capture = string option
+
 type regular_term =
-  | Symbol of symbol
+  | Symbol of symbol * capture
+
   | Item of {
       lhs: symbol option;
       prefix: symbol option list;
       suffix: symbol option list;
+      capture: capture;
     }
-  | Wildcard
+  | Wildcard of capture
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression * position
   | Reduce of regular_expression * location
@@ -89,6 +93,9 @@ let print_option f = function
   | None -> Cmon.constant "None"
   | Some x -> Cmon.constructor "Some" (f x)
 
+let print_capture c =
+  print_option Cmon.string c
+
 let rec print_symbol = function
   | Name sym -> Cmon.constructor "Name" (Cmon.string sym)
   | Apply (sym, args) -> Cmon.construct "Apply" [
@@ -97,14 +104,17 @@ let rec print_symbol = function
     ]
 
 let rec print_regular_term = function
-  | Symbol sym -> Cmon.constructor "Symbol" (print_symbol sym)
-  | Item {lhs; prefix; suffix} ->
+  | Symbol (sym, capture) ->
+    Cmon.construct "Symbol" [print_symbol sym; print_capture capture]
+  | Wildcard capture ->
+    Cmon.construct "Wildcard" [print_capture capture]
+  | Item {lhs; prefix; suffix; capture} ->
     Cmon.crecord "Item" [
-      "lhs", print_option print_symbol lhs;
-      "prefix", Cmon.list (List.map (print_option print_symbol) prefix);
-      "suffix", Cmon.list (List.map (print_option print_symbol) suffix);
+      "lhs"    , print_option print_symbol lhs;
+      "prefix" , Cmon.list (List.map (print_option print_symbol) prefix);
+      "suffix" , Cmon.list (List.map (print_option print_symbol) suffix);
+      "capture", print_capture capture;
     ]
-  | Wildcard -> Cmon.constant "Wildcard"
   | Alternative (re1, re2) ->
     Cmon.construct "Alternative" [
       print_regular_expression re1;
@@ -170,7 +180,7 @@ type context =
   | Inside_sequence of position
 
 let rec check_wellformed_term context = function
-  | (Symbol _ | Item _ | Wildcard | Action _) -> ()
+  | (Symbol _ | Item _ | Wildcard _ | Action _) -> ()
   | Alternative (re1, re2) ->
     check_wellformed context re1;
     check_wellformed context re2
