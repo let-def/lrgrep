@@ -1046,6 +1046,7 @@ module Clause = struct
 
   and t = {
     priority: int;
+    action: Syntax.ocaml_code option;
     mutable captures: capture list;
     mutable arity: int;
   }
@@ -1067,19 +1068,46 @@ module Clause = struct
   let compare_capture c1 c2 =
     Int.compare c1.id c2.id
 
-  let make priority =
-    { priority; captures = []; arity = 0 }
+  let make priority action =
+    { priority; captures = []; arity = 0; action }
+
+  let gencode clauses =
+    let arities =
+      List.mapi (fun i clause ->
+          assert (clause.priority = i);
+          string_of_int clause.arity)
+        clauses
+    in
+    Printf.printf
+      "let arities = [|%s|]" (String.concat ";" arities);
+    Printf.printf
+      "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
+      (String.capitalize_ascii (Filename.basename Input.Grammar.basename));
+    List.iter (fun clause ->
+        let variables = Array.make clause.arity "" in
+        List.iter (fun capture ->
+            match capture.var with
+            | None -> ()
+            | Some i ->
+              variables.(i) <- "Some " ^ capture.name
+          ) clause.captures;
+        let variables = String.concat "; " (Array.to_list variables) in
+        Printf.printf " | %d, [|%s|] -> begin\n%s\nend\n"
+          clause.priority
+          variables
+          (match clause.action with
+           | None -> "failwith \"Should be unreachable\""
+           | Some (_, str) -> str)
+      ) clauses;
+    Printf.printf
+      "  | _ -> failwith \"Invalid action\""
 end
 
 module Label = struct
   module Action = struct
-    type desc =
-      | Unreachable
-      | Code of string
-
     type t =
       | Nothing
-      | Action of { priority: int; desc: desc }
+      | Action of Clause.t
 
     let compare : t -> t -> int = compare
 
@@ -1088,6 +1116,10 @@ module Label = struct
       | Nothing, x | x, Nothing -> x
       | Action {priority = p1; _}, Action {priority = p2; _} ->
         if p1 <= p2 then t1 else t2
+
+    let priority = function
+      | Nothing -> None
+      | Action clause -> Some clause.priority
   end
 
   type t = {
@@ -1115,8 +1147,8 @@ module Label = struct
         captures = merge_uniq Clause.compare_capture t1.captures t2.captures
       }
 
-  let make_action priority desc =
-    { action = Action {priority; desc}; captures=[] }
+  let make_action clause =
+    { action = Action clause; captures=[] }
 
   let make_capture clause name =
     { action = Nothing; captures=[Clause.fresh_capture clause name] }
@@ -1483,18 +1515,14 @@ let translate_expr clause =
   translate_expr
 
 let translate_clause priority {Syntax. pattern; action} =
-  let clause = Clause.make priority in
+  let clause = Clause.make priority action in
   let pattern, wrap =
     match pattern with
     | [Syntax.Reduce (re, _), _] -> re, Either.right
     | _ -> pattern, Either.left
   in
   let expr = translate_expr clause pattern in
-  let action = match action with
-    | None -> Label.Action.Unreachable
-    | Some (_, code) -> Label.Action.Code code
-  in
-  let label = Reg.Expr.label (Label.make_action priority action) in
+  let label = Reg.Expr.label (Label.make_action clause) in
   clause, wrap (Reg.Expr.(^.) expr label)
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
@@ -1638,10 +1666,10 @@ module DFA = struct
           List.fold_left
             (fun acc (_sg, _, tgt) ->
                BitSet.IntSet.union acc (Vector.get reachable_action tgt))
-            (match state.label.action with
-             | Label.Action.Action { priority; _} ->
+            (match Label.Action.priority state.label.action with
+             | Some priority ->
                BitSet.IntSet.add priority acc
-             | Label.Action.Nothing -> acc
+             | None -> acc
             )
             state.transitions
         in
@@ -1714,9 +1742,9 @@ module DFA = struct
       let sigmas =
         IndexSet.fold begin fun src acc ->
           let state = Vector.get states src in
-          let src_action = match state.label.action with
-            | Label.Action.Nothing -> max_int
-            | Label.Action.Action {priority; _} -> priority
+          let src_action = match Label.Action.priority state.label.action with
+            | None -> max_int
+            | Some priority -> priority
           in
           List.fold_left begin fun acc (sg, cs, tgt) ->
             match BitSet.IntSet.minimum (Vector.get reachable_action tgt) with
@@ -1857,25 +1885,20 @@ module DFA = struct
     (* Print matching functions *)
     Printf.printf
       "module Table : sig\n\
-      \  type action = int\n\
-      \  type var = int\n\
-      \  type register = action * var\n\
+      \  open Analyser_def\n\
       \  type state\n\
       \  val initial : state\n\
       \  val step : state -> int -> \n\
-      \    register list * action option * state option\n\
+      \    register list * clause option * state option\n\
        end = struct\n\
-      \  type action = int\n\
-      \  type var = int\n\
-      \  type register = action * var\n\
       \  type state = int\n\
       \  let table = [|\n\
       ";
     let visit (index : Min.states index) =
       Printf.printf "    (fun st ->";
-      let action = match (get_label index).action with
-        | Label.Action.Nothing -> "None"
-        | Label.Action.Action { priority ; _ } ->
+      let action = match Label.Action.priority (get_label index).action with
+        | None -> "None"
+        | Some priority ->
           Printf.sprintf "Some %d" priority
       in
       let pos, neg = IndexMap.fold (fun st lbl (pos, neg) ->
@@ -1976,12 +1999,12 @@ let rec interpret re = function
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
   Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-  let _clauses, re = translate_entry entry in
+  let clauses, re = translate_entry entry in
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
   let (Large_dfa {set=(module Set); _} as dfa) = DFA.translate re in
   prerr_endline (string_of_int (cardinal Set.n) ^ " states");
   DFA.minimize dfa;
-  (*DFA.gencode dfa*)
+  Clause.gencode clauses
 )
