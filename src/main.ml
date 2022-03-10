@@ -1036,25 +1036,42 @@ end = struct
     | Neg ls1, Neg ls2 -> IndexSet.quick_subset ls2 ls1
 end
 
+module Clause = struct
+  type capture = {
+    id: int;
+    for_clause: t;
+    name: string;
+    mutable var: int option;
+  }
+
+  and t = {
+    priority: int;
+    mutable captures: capture list;
+    mutable arity: int;
+  }
+
+  let alloc_capture c =
+    match c.var with
+    | Some _ -> ()
+    | None ->
+      c.var <- Some c.for_clause.arity;
+      c.for_clause.arity <- c.for_clause.arity + 1
+
+  let fresh_capture =
+    let k = ref 0 in
+    fun for_clause name ->
+      let capture = {id = -(incr k; !k); for_clause; name; var = None} in
+      for_clause.captures <- capture :: for_clause.captures;
+      capture
+
+  let compare_capture c1 c2 =
+    Int.compare c1.id c2.id
+
+  let make priority =
+    { priority; captures = []; arity = 0 }
+end
+
 module Label = struct
-  module Capture = struct
-    type t = {
-      for_clause: int;
-      name: string;
-      id: int;
-      mutable var: int;
-    }
-
-    let mk =
-      let k = ref 0 in
-      fun for_clause name -> {for_clause; name; var = -1; id = -(incr k; !k)}
-
-    let compare c1 c2 =
-      Int.compare c1.id c2.id
-  end
-
-  type capture = Capture.t
-
   module Action = struct
     type desc =
       | Unreachable
@@ -1075,7 +1092,7 @@ module Label = struct
 
   type t = {
     action: Action.t;
-    captures: Capture.t list;
+    captures: Clause.capture list;
   }
 
   let empty = {action = Nothing; captures = []}
@@ -1087,7 +1104,7 @@ module Label = struct
   let compare t1 t2 =
     let c = Action.compare t1.action t2.action in
     if c = 0
-    then List.compare Capture.compare t1.captures t2.captures
+    then List.compare Clause.compare_capture t1.captures t2.captures
     else c
 
   let append t1 t2 =
@@ -1095,14 +1112,14 @@ module Label = struct
     | t, {action=Nothing; captures=[]} | {action=Nothing; captures=[]}, t -> t
     | _ -> {
         action = Action.append t1.action t2.action;
-        captures = merge_uniq Capture.compare t1.captures t2.captures
+        captures = merge_uniq Clause.compare_capture t1.captures t2.captures
       }
 
   let make_action priority desc =
     { action = Action {priority; desc}; captures=[] }
 
   let make_capture clause name =
-    { action = Nothing; captures=[Capture.mk clause name] }
+    { action = Nothing; captures=[Clause.fresh_capture clause name] }
 end
 
 let do_log = ref false
@@ -1430,7 +1447,6 @@ let reduce expr =
   let expr' = Redgraph_derivation.make compiled all_states in
   Reg.Expr.(expr |. expr')
 
-
 let no_pos = {Syntax. line = -1; col = -1}
 
 let translate_expr clause =
@@ -1467,29 +1483,30 @@ let translate_expr clause =
   translate_expr
 
 let translate_clause priority {Syntax. pattern; action} =
+  let clause = Clause.make priority in
   let pattern, wrap =
     match pattern with
     | [Syntax.Reduce (re, _), _] -> re, Either.right
     | _ -> pattern, Either.left
   in
-  let expr = translate_expr priority pattern in
+  let expr = translate_expr clause pattern in
   let action = match action with
     | None -> Label.Action.Unreachable
     | Some (_, code) -> Label.Action.Code code
   in
   let label = Reg.Expr.label (Label.make_action priority action) in
-  wrap (Reg.Expr.(^.) expr label)
+  clause, wrap (Reg.Expr.(^.) expr label)
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
   ignore (startsymbols, error, name, args);
-  let clauses = List.mapi translate_clause clauses in
-  let clauses, right = List.partition_map Fun.id clauses in
-  let clauses = match right with
-    | [] -> clauses
-    | clauses' -> reduce (Reg.Expr.disjunction clauses') :: clauses
+  let clauses, terms = List.split (List.mapi translate_clause clauses) in
+  let terms, right = List.partition_map Fun.id terms in
+  let terms = match right with
+    | [] -> terms
+    | terms' -> reduce (Reg.Expr.disjunction terms') :: terms
   in
-  Reg.Expr.disjunction clauses
+  clauses, Reg.Expr.disjunction terms
 
 let cmon_re re =
   Mulet.cmon_re re
@@ -1508,7 +1525,7 @@ module DFA = struct
     mutable visited: Sigma.t;
     mutable scheduled: Sigma.t;
     mutable unvisited: Sigma.t list;
-    mutable transitions: (Sigma.t * Label.capture list * 'set index) list;
+    mutable transitions: (Sigma.t * Clause.capture list * 'set index) list;
   }
 
   type large_dfa =
@@ -1608,6 +1625,13 @@ module DFA = struct
       end)
     in
     let reachable_action = Vector.make States.n BitSet.IntSet.empty in
+    Scc.iter (fun _repr nodes ->
+        List.iter (fun node ->
+            List.iter
+              (fun (_, cs, _) -> List.iter Clause.alloc_capture cs)
+              (Vector.get states node).transitions
+          ) nodes
+      );
     Scc.rev_topological_iter (fun _repr nodes ->
         let get_min_action acc src =
           let state = Vector.get states src in
@@ -1626,12 +1650,10 @@ module DFA = struct
       );
     (* Minimize automaton *)
     let module Class = struct
-      module CaptureMap = Map.Make(Label.Capture)
-
-      type t = Lr1C.set * Lr1C.set * (Label.capture list * Sigma.t) list
+      type t = Lr1C.set * Lr1C.set * (Clause.capture list * Sigma.t) list
 
       let compare_capture_set (cs1,sg1) (cs2,sg2) =
-        let c = List.compare Label.Capture.compare cs1 cs2 in
+        let c = List.compare Clause.compare_capture cs1 cs2 in
         if c <> 0 then c else
           Sigma.compare sg1 sg2
 
@@ -1670,14 +1692,14 @@ module DFA = struct
       );
     let module Transitions = struct
       module Label = struct
-        type t = Sigma.t * Label.capture list
+        type t = Sigma.t * Clause.capture list
         let compare (sg1, cs1) (sg2, cs2) =
           let c = Sigma.compare sg1 sg2 in
           if c <> 0 then c else
-            List.compare Label.Capture.compare cs1 cs2
+            List.compare Clause.compare_capture cs1 cs2
 
         let partial_union (sg1, cs1) (sg2, cs2) =
-          assert (List.compare Label.Capture.compare cs1 cs2 = 0);
+          assert (List.compare Clause.compare_capture cs1 cs2 = 0);
           (Sigma.union sg1 sg2, cs1)
       end
 
@@ -1833,72 +1855,85 @@ module DFA = struct
         (float !depth_sum /. float !count)
     end;
     (* Print matching functions *)
-    let first = ref true in
-    Printf.printf "let analyse ~state ~next stack =\n\
-                  \  let k stack state = match next stack with\n\
-                  \    | None -> []\n\
-                  \    | Some stack -> state stack\n\
-                  \  in\n";
+    Printf.printf
+      "module Table : sig\n\
+      \  type action = int\n\
+      \  type var = int\n\
+      \  type register = action * var\n\
+      \  type state\n\
+      \  val initial : state\n\
+      \  val step : state -> int -> \n\
+      \    register list * action option * state option\n\
+       end = struct\n\
+      \  type action = int\n\
+      \  type var = int\n\
+      \  type register = action * var\n\
+      \  type state = int\n\
+      \  let table = [|\n\
+      ";
     let visit (index : Min.states index) =
-      Printf.printf "  %s st_%d stack ="
-        (if !first then "let rec" else "and") (index :> int);
-      first := false;
-      begin match (get_label index).action with
-        | Label.Action.Nothing -> ()
+      Printf.printf "    (fun st ->";
+      let action = match (get_label index).action with
+        | Label.Action.Nothing -> "None"
         | Label.Action.Action { priority ; _ } ->
-          Printf.printf "\n    %d ::" priority
-      end;
-      let transitions = Vector.get transitions_from index in
+          Printf.sprintf "Some %d" priority
+      in
       let pos, neg = IndexMap.fold (fun st lbl (pos, neg) ->
           let sg, cs = !lbl in
           match sg with
           | Sigma.Pos lr1s -> ((lr1s, cs, st) :: pos, neg)
           | Sigma.Neg lr1s -> (pos, (lr1s, cs, st) :: neg)
-        ) transitions ([], [])
-      in
-      let print_capture {Label.Capture. for_clause; name; _} =
-        Printf.printf "      (* capture %d.%s *)\n" for_clause name
+        ) (Vector.get transitions_from index) ([], [])
       in
       let print_captures cs =
-        List.iter print_capture cs
+        let print_capture c =
+          match c.Clause.var with
+          | None -> assert false
+          | Some var ->
+            Printf.sprintf "(%d,%d)" c.Clause.for_clause.priority var
+        in
+        "[" ^ String.concat ";" (List.map print_capture cs) ^ "]"
+      in
+      let print_states lr1s =
+        IndexSet.elements lr1s
+        |> List.map (string_of_int : int -> string :> _ index -> string)
+        |> String.concat "|"
       in
       match pos, neg with
-      | [], [] -> Printf.printf " []\n"
-      | [], [_, [], st] -> Printf.printf " k stack st_%d\n" (st :> int)
+      | [], [] ->
+        Printf.printf " ([], %s, None));\n" action
       | [], [_, cs, st] ->
-        Printf.printf "\n";
-        print_captures cs;
-        Printf.printf "    k stack st_%d\n" (st :> int)
+        Printf.printf " (%s, %s, Some %d));\n"
+          (print_captures cs) action (st :> int)
       | _ ->
-        Printf.printf "\n    match state stack with\n";
+        Printf.printf "\n    match st with\n";
         List.iter begin fun (lr1s, cs, st) ->
-          let states =
-            IndexSet.elements lr1s
-            |> List.map (string_of_int : int -> string :> _ index -> string)
-            |> String.concat "|"
-          in
-          if cs = [] then
-            Printf.printf "    | %s -> k stack st_%d\n"
-              states (st : _ index :> int)
-          else (
-            Printf.printf "    | %s ->\n" states;
-            print_captures cs;
-            Printf.printf "      k stack st_%d\n" (st : _ index :> int)
-          )
+          Printf.printf "    | %s -> (%s, %s, Some %d)\n"
+            (print_states lr1s)
+            (print_captures cs)
+            action
+            (st : _ index :> int)
         end pos;
         begin match neg with
-          | [] -> Printf.printf "    | _ -> []\n";
-          | [_, [], st] -> Printf.printf "    | _ -> k stack st_%d\n" (st :> int);
+          | [] ->
+            Printf.printf "    | _ -> ([], %s, None)"
+              action
           | [_, cs, st] ->
-            Printf.printf "    | _ ->\n";
-            print_captures cs;
-            Printf.printf "    k stack st_%d\n" (st :> int)
+            Printf.printf "    | _ -> (%s, %s, Some %d)"
+              (print_captures cs)
+              action
+              (st :> int)
           | _ :: _ :: _ -> assert false
-        end
+        end;
+        Printf.printf ");\n";
     in
     Index.iter Min.states visit;
-    Printf.printf "  in st_%d stack\n" (Min.initials.(0) :> int)
-
+    Printf.printf
+      "  |]\n\
+      \  let initial = %d\n\
+      \  let step st lr1 = table.(st) lr1\n\
+       end\n"
+      (Min.initials.(0) :> int)
 end
 
 let test_stack =
@@ -1940,9 +1975,8 @@ let rec interpret re = function
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  Format.printf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-  let clauses = translate_entry entry in
-  let re = clauses in
+  Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
+  let _clauses, re = translate_entry entry in
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
   ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
