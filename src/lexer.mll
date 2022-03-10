@@ -155,6 +155,7 @@ rule main = parse
     | "parse" -> PARSE
     | "error" -> ERROR
     | "and" -> AND
+    | "as" -> AS
     | s -> IDENT s
   }
 | '{' [' ' '\009']* '.' [' ' '\009']* '}'

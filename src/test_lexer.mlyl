@@ -10,7 +10,7 @@ rule error_message = parse error
 
 *)
 
-| (structure_item; <-; SEMI; 
+| (structure_item; <-; SEMI as semi; 
   LET; ext; list(attribute); rec_flag; let_binding_body); <-
   { "Spurious semi-colon at " ^ loc semi }
 

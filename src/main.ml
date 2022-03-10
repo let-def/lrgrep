@@ -1075,16 +1075,23 @@ module Label = struct
 
   let empty = {action = Nothing; captures = []}
 
+  let is_empty = function
+    | {action = Nothing; captures = []} -> true
+    | _ -> false
+
   let compare t1 t2 =
     let c = compare_action t1.action t2.action in
     if c = 0
     then List.compare compare_capture t1.captures t2.captures
     else c
 
-  let append t1 t2 = {
-    action = append_action t1.action t2.action;
-    captures = merge_uniq compare_capture t1.captures t2.captures
-  }
+  let append t1 t2 =
+    match t1, t2 with
+    | t, {action=Nothing; captures=[]} | {action=Nothing; captures=[]}, t -> t
+    | _ -> {
+        action = append_action t1.action t2.action;
+        captures = merge_uniq compare_capture t1.captures t2.captures
+      }
 
   let make_action priority action_desc =
     { action = Action {priority; action_desc}; captures=[] }
@@ -1418,39 +1425,41 @@ let reduce expr =
   let expr' = Redgraph_derivation.make compiled all_states in
   Reg.Expr.(expr |. expr')
 
-let current_clause = ref 0
-
-let translate_capture term = function
-  | None -> term
-  | Some var ->
-    Reg.Expr.(^.)
-      (Reg.Expr.label (Label.make_capture !current_clause var)) term
-
-let rec translate_term = function
-  | Syntax.Symbol (name, capture) ->
-    let symbol = translate_symbol name in
-    let states = State_indices.states_of_symbol symbol in
-    translate_capture (Reg.Expr.set (Sigma.Pos states)) capture
-  | Syntax.Item {lhs; prefix; suffix; capture} ->
-    let lhs = Option.map translate_nonterminal lhs in
-    let prefix = translate_producers prefix in
-    let suffix = translate_producers suffix in
-    let states = Match_item.states_by_items ~lhs ~prefix ~suffix in
-    translate_capture (Reg.Expr.set (Sigma.Pos states)) capture
-  | Syntax.Wildcard capture ->
-    translate_capture (Reg.Expr.set Sigma.full) capture
-  | Syntax.Alternative (e1, e2) ->
-    Reg.Expr.(translate_expr e1 |. translate_expr e2)
-  | Syntax.Repetition (e1, _) ->
-    Reg.Expr.star (translate_expr e1)
-  | Syntax.Reduce (expr, _) ->
-    reduce (translate_expr expr)
-
-and translate_expr terms =
-  let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
-  Reg.Expr.concatenation terms
 
 let no_pos = {Syntax. line = -1; col = -1}
+
+let translate_expr clause =
+  let translate_capture term = function
+    | None -> term
+    | Some var ->
+      Reg.Expr.(^.)
+        (Reg.Expr.label (Label.make_capture clause var)) term
+  in
+  let rec translate_term = function
+    | Syntax.Symbol (name, capture) ->
+      let symbol = translate_symbol name in
+      let states = State_indices.states_of_symbol symbol in
+      translate_capture (Reg.Expr.set (Sigma.Pos states)) capture
+    | Syntax.Item {lhs; prefix; suffix; capture} ->
+      let lhs = Option.map translate_nonterminal lhs in
+      let prefix = translate_producers prefix in
+      let suffix = translate_producers suffix in
+      let states = Match_item.states_by_items ~lhs ~prefix ~suffix in
+      translate_capture (Reg.Expr.set (Sigma.Pos states)) capture
+    | Syntax.Wildcard capture ->
+      translate_capture (Reg.Expr.set Sigma.full) capture
+    | Syntax.Alternative (e1, e2) ->
+      Reg.Expr.(translate_expr e1 |. translate_expr e2)
+    | Syntax.Repetition (e1, _) ->
+      Reg.Expr.star (translate_expr e1)
+    | Syntax.Reduce (expr, _) ->
+      reduce (translate_expr expr)
+
+  and translate_expr terms =
+    let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
+    Reg.Expr.concatenation terms
+  in
+  translate_expr
 
 let translate_clause priority {Syntax. pattern; action} =
   let pattern, wrap =
@@ -1458,7 +1467,7 @@ let translate_clause priority {Syntax. pattern; action} =
     | [Syntax.Reduce (re, _), _] -> re, Either.right
     | _ -> pattern, Either.left
   in
-  let expr = translate_expr pattern in
+  let expr = translate_expr priority pattern in
   let action = match action with
     | None -> Label.Unreachable
     | Some (_, code) -> Label.Code code
@@ -1705,10 +1714,6 @@ module DFA = struct
       let transitions = Transitions.n
     end in
     let module Min = Valmari.Minimize(Sigma)(DFA) in
-    let get_label (index : Min.states index) =
-      Reg.Expr.get_label
-        (Vector.get states (Min.represent_state index)).expr
-    in
     (* Print statistics on minimzed automaton *)
     begin
       let unique_transitions = Hashtbl.create 7 in
@@ -1720,6 +1725,17 @@ module DFA = struct
       Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n%!"
         (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions);
     end;
+    (* Compute labels associated to each state *)
+    let states_labels = Vector.make Min.states Label.empty in
+    Index.iter DFA.states (fun large_st ->
+        match Min.transport_state large_st with
+        | None -> ()
+        | Some st ->
+          let label = (Vector.get states large_st).label in
+          if not (Label.is_empty label) then
+            Vector.set states_labels st
+              (Label.append (Vector.get states_labels st) label)
+      );
     (* Index transitions by source states *)
     let transitions_from = Vector.make Min.states IndexMap.empty in
     Index.iter Min.transitions (fun tr ->
@@ -1794,7 +1810,19 @@ module DFA = struct
       Printf.printf "  %s st_%d stack ="
         (if !first then "let rec" else "and") (index :> int);
       first := false;
-      begin match (get_label index).action with
+      let label = Vector.get states_labels index in
+      begin match label.captures with
+        | [] -> ()
+        | caps ->
+          let caps =
+            List.map
+              (fun {Label. for_clause; name; _} -> Printf.sprintf "%d.%s" for_clause name)
+              caps
+          in
+          Printf.printf "\n    (* %s *)\n"
+            (String.concat " " caps)
+      end;
+      begin match label.action with
         | Label.Action { priority ; _ } -> Printf.printf "\n    %d ::" priority
         | Label.Nothing -> ()
       end;
