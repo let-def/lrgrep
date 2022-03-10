@@ -1037,41 +1037,46 @@ end = struct
 end
 
 module Label = struct
-  type capture = {
-    for_clause: int;
-    name: string;
-    id: int;
-    mutable var: int;
-  }
+  module Capture = struct
+    type t = {
+      for_clause: int;
+      name: string;
+      id: int;
+      mutable var: int;
+    }
 
-  let mk_capture =
-    let k = ref 0 in
-    fun for_clause name -> {for_clause; name; var = -1; id = -(incr k; !k)}
+    let mk =
+      let k = ref 0 in
+      fun for_clause name -> {for_clause; name; var = -1; id = -(incr k; !k)}
 
-  let compare_capture c1 c2 =
-    Int.compare c1.var c2.var
+    let compare c1 c2 =
+      Int.compare c1.id c2.id
+  end
 
-  type action =
-    | Nothing
-    | Action of { priority: int; action_desc: action_desc }
+  type capture = Capture.t
 
-  and action_desc =
-    | Unreachable
-    | Code of string
+  module Action = struct
+    type desc =
+      | Unreachable
+      | Code of string
+
+    type t =
+      | Nothing
+      | Action of { priority: int; desc: desc }
+
+    let compare : t -> t -> int = compare
+
+    let append t1 t2 =
+      match t1, t2 with
+      | Nothing, x | x, Nothing -> x
+      | Action {priority = p1; _}, Action {priority = p2; _} ->
+        if p1 <= p2 then t1 else t2
+  end
 
   type t = {
-    action: action;
-    captures: capture list;
+    action: Action.t;
+    captures: Capture.t list;
   }
-
-  let compare_action : action -> action -> int =
-    compare
-
-  let append_action t1 t2 =
-    match t1, t2 with
-    | Nothing, x | x, Nothing -> x
-    | Action {priority = p1; _}, Action {priority = p2; _} ->
-      if p1 <= p2 then t1 else t2
 
   let empty = {action = Nothing; captures = []}
 
@@ -1080,24 +1085,24 @@ module Label = struct
     | _ -> false
 
   let compare t1 t2 =
-    let c = compare_action t1.action t2.action in
+    let c = Action.compare t1.action t2.action in
     if c = 0
-    then List.compare compare_capture t1.captures t2.captures
+    then List.compare Capture.compare t1.captures t2.captures
     else c
 
   let append t1 t2 =
     match t1, t2 with
     | t, {action=Nothing; captures=[]} | {action=Nothing; captures=[]}, t -> t
     | _ -> {
-        action = append_action t1.action t2.action;
-        captures = merge_uniq compare_capture t1.captures t2.captures
+        action = Action.append t1.action t2.action;
+        captures = merge_uniq Capture.compare t1.captures t2.captures
       }
 
-  let make_action priority action_desc =
-    { action = Action {priority; action_desc}; captures=[] }
+  let make_action priority desc =
+    { action = Action {priority; desc}; captures=[] }
 
   let make_capture clause name =
-    { action = Nothing; captures=[mk_capture clause name] }
+    { action = Nothing; captures=[Capture.mk clause name] }
 end
 
 let do_log = ref false
@@ -1469,8 +1474,8 @@ let translate_clause priority {Syntax. pattern; action} =
   in
   let expr = translate_expr priority pattern in
   let action = match action with
-    | None -> Label.Unreachable
-    | Some (_, code) -> Label.Code code
+    | None -> Label.Action.Unreachable
+    | Some (_, code) -> Label.Action.Code code
   in
   let label = Reg.Expr.label (Label.make_action priority action) in
   wrap (Reg.Expr.(^.) expr label)
@@ -1503,7 +1508,7 @@ module DFA = struct
     mutable visited: Sigma.t;
     mutable scheduled: Sigma.t;
     mutable unvisited: Sigma.t list;
-    mutable transitions: (Sigma.t * 'set index) list;
+    mutable transitions: (Sigma.t * Label.capture list * 'set index) list;
   }
 
   type large_dfa =
@@ -1539,7 +1544,7 @@ module DFA = struct
         state.scheduled <- Sigma.union state.scheduled unvisited
       )
     in
-    let update_transition sigma (sigma', state') =
+    let update_transition sigma (sigma', _, state') =
       let inter = Sigma.inter sigma sigma' in
       if not (Sigma.is_empty inter) then
         schedule (state', States.get state') (sigma_predecessors inter)
@@ -1551,13 +1556,13 @@ module DFA = struct
       if Sigma.is_empty inter
       then Either.Left sigma'
       else (
-        let _, expr' = Reg.Expr.left_delta state.expr sigma' in
+        let label, expr' = Reg.Expr.left_delta state.expr sigma' in
         let (index, _) as state' = match Reg.Map.find_opt expr' !dfa with
           | None -> make_state expr'
           | Some state' -> state'
         in
         schedule state' (sigma_predecessors inter);
-        Either.Right (sigma', index)
+        Either.Right (sigma', label.captures, index)
       )
     in
     let process index =
@@ -1597,39 +1602,57 @@ module DFA = struct
         let n = cardinal States.n
         let index = Index.to_int
         let successors f i =
-          List.iter (fun (_sg, j) -> f j)
+          List.iter (fun (_sg, _, j) -> f j)
             (Vector.get states i).transitions
         let iter f = Index.iter States.n f
       end)
     in
-    let reachable_action = Vector.make States.n max_int in
+    let reachable_action = Vector.make States.n BitSet.IntSet.empty in
     Scc.rev_topological_iter (fun _repr nodes ->
         let get_min_action acc src =
           let state = Vector.get states src in
           List.fold_left
-            (fun acc (_sg, tgt) ->
-               min acc (Vector.get reachable_action tgt))
+            (fun acc (_sg, _, tgt) ->
+               BitSet.IntSet.union acc (Vector.get reachable_action tgt))
             (match state.label.action with
-             | Label.Action { priority; _} -> min acc priority
-             | Label.Nothing -> acc
+             | Label.Action.Action { priority; _} ->
+               BitSet.IntSet.add priority acc
+             | Label.Action.Nothing -> acc
             )
             state.transitions
         in
-        let min = List.fold_left get_min_action max_int nodes in
-        List.iter (fun node -> Vector.set reachable_action node min) nodes
+        let set = List.fold_left get_min_action BitSet.IntSet.empty nodes in
+        List.iter (fun node -> Vector.set reachable_action node set) nodes
       );
     (* Minimize automaton *)
     let module Class = struct
-      type t = Lr1C.set * Lr1C.set
-      let compare (p1,n1) (p2,n2) =
+      module CaptureMap = Map.Make(Label.Capture)
+
+      type t = Lr1C.set * Lr1C.set * (Label.capture list * Sigma.t) list
+
+      let compare_capture_set (cs1,sg1) (cs2,sg2) =
+        let c = List.compare Label.Capture.compare cs1 cs2 in
+        if c <> 0 then c else
+          Sigma.compare sg1 sg2
+
+      let compare (p1,n1,c1) (p2,n2,c2) =
         let c = IndexSet.compare p1 p2 in
         if c <> 0 then c else
-          IndexSet.compare n1 n2
-      let empty = IndexSet.(empty,empty)
-      let add_transition (p,n) (sg, _) =
-        match sg with
-        | Sigma.Pos p' -> (IndexSet.union p p', n)
-        | Sigma.Neg n' -> (p, IndexSet.union n n')
+          let c = IndexSet.compare n1 n2 in
+          if c <> 0 then c else
+            List.compare compare_capture_set c1 c2
+
+      let empty = IndexSet.(empty,empty,[])
+
+      let add_transition (p,n,cs) (sg, c, _) =
+        match c with
+        | [] ->
+          begin match sg with
+            | Sigma.Pos p' -> (IndexSet.union p p', n, cs)
+            | Sigma.Neg n' -> (p, IndexSet.union n n', cs)
+          end
+        | c ->
+          (p, n, merge_uniq compare_capture_set [c, sg] cs)
     end in
     let module ClassMap = Map.Make(Class) in
     let class_of state =
@@ -1646,9 +1669,21 @@ module DFA = struct
         | Some states -> states := IndexSet.add index !states
       );
     let module Transitions = struct
+      module Label = struct
+        type t = Sigma.t * Label.capture list
+        let compare (sg1, cs1) (sg2, cs2) =
+          let c = Sigma.compare sg1 sg2 in
+          if c <> 0 then c else
+            List.compare Label.Capture.compare cs1 cs2
+
+        let partial_union (sg1, cs1) (sg2, cs2) =
+          assert (List.compare Label.Capture.compare cs1 cs2 = 0);
+          (Sigma.union sg1 sg2, cs1)
+      end
+
       type t = {
         source: States.n index;
-        label: Sigma.t;
+        label: Label.t;
         target: States.n index;
       }
       include IndexBuffer.Gen(struct type nonrec _ t = t end)()
@@ -1658,32 +1693,34 @@ module DFA = struct
         IndexSet.fold begin fun src acc ->
           let state = Vector.get states src in
           let src_action = match state.label.action with
-            | Label.Nothing -> max_int
-            | Label.Action {priority; _} -> priority
+            | Label.Action.Nothing -> max_int
+            | Label.Action.Action {priority; _} -> priority
           in
-          List.fold_left (fun acc (lbl, tgt) ->
-              if Vector.get reachable_action tgt >= src_action
-              then acc
-              else (lbl, (src, tgt)) :: acc)
-            acc state.transitions
+          List.fold_left begin fun acc (sg, cs, tgt) ->
+            match BitSet.IntSet.minimum (Vector.get reachable_action tgt) with
+            | Some tgt_action when tgt_action < src_action ->
+              ((sg, (src, cs, tgt)) :: acc)
+            | _ -> acc
+          end acc state.transitions
         end set []
       in
       Sigma.annotated_partition sigmas
     in
     ClassMap.iter begin fun _cl st ->
-      List.iter begin fun (label, pairs) ->
-        List.iter begin fun (source, target) ->
+      List.iter begin fun (sg, pairs) ->
+        List.iter begin fun (source, cs, target) ->
+          let label = (sg, cs) in
           ignore (Transitions.add {label; source; target} : _ index)
         end pairs;
       end (partition_transition !st);
     end !classes;
-    let module ActionMap = Map.Make(struct type t = Label.action let compare = Label.compare_action end) in
+    let module ActionMap = Map.Make(Label.Action) in
     let action_classes = ref ActionMap.empty in
     Index.iter States.n (fun i ->
         let state = Vector.get states i in
         match state.label.action with
-        | Label.Nothing -> ()
-        | Label.Action _ as action ->
+        | Label.Action.Nothing -> ()
+        | Label.Action.Action _ as action ->
           match ActionMap.find_opt action !action_classes with
           | None ->
             let si = IndexSet.singleton i in
@@ -1713,7 +1750,7 @@ module DFA = struct
       type transitions = Transitions.n
       let transitions = Transitions.n
     end in
-    let module Min = Valmari.Minimize(Sigma)(DFA) in
+    let module Min = Valmari.Minimize(Transitions.Label)(DFA) in
     (* Print statistics on minimzed automaton *)
     begin
       let unique_transitions = Hashtbl.create 7 in
@@ -1725,17 +1762,10 @@ module DFA = struct
       Printf.eprintf "minimized: states:%d transitions:%d (%d unique)\n%!"
         (cardinal Min.states) (cardinal Min.transitions) (Hashtbl.length unique_transitions);
     end;
-    (* Compute labels associated to each state *)
-    let states_labels = Vector.make Min.states Label.empty in
-    Index.iter DFA.states (fun large_st ->
-        match Min.transport_state large_st with
-        | None -> ()
-        | Some st ->
-          let label = (Vector.get states large_st).label in
-          if not (Label.is_empty label) then
-            Vector.set states_labels st
-              (Label.append (Vector.get states_labels st) label)
-      );
+    let get_label st =
+      let large_st = Min.represent_state st in
+      (Vector.get states large_st).label
+    in
     (* Index transitions by source states *)
     let transitions_from = Vector.make Min.states IndexMap.empty in
     Index.iter Min.transitions (fun tr ->
@@ -1747,26 +1777,29 @@ module DFA = struct
         | None ->
           Vector.set transitions_from source
             (IndexMap.add target (ref label) map)
-        | Some rlabel -> rlabel := Sigma.union label !rlabel
+        | Some rlabel ->
+          rlabel := Transitions.Label.partial_union label !rlabel
       );
     (* Estimate benefits of a layered transitions encoding *)
     begin
       let forest = Transition_tree.build_tree Min.states (fun index ->
           let transitions = Vector.get transitions_from index in
-          let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
-              match !sg with
+          let pos, neg = IndexMap.fold (fun st lbl (pos, neg) ->
+              let (sg, cs) = !lbl in
+              match sg with
               | Sigma.Pos lr1s ->
                 assert (not (IndexMap.mem st pos));
-                (IndexMap.add st lr1s pos, neg)
-              | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
+                (IndexMap.add st (lr1s (*FIXME , cs*)) pos, neg)
+              | Sigma.Neg lr1s -> (pos, (lr1s, cs, st) :: neg)
             ) transitions (IndexMap.empty, [])
           in
           let coverage =
-            IndexMap.fold (fun _ -> IndexSet.union) pos IndexSet.empty
+            IndexMap.fold (fun _ sg acc -> IndexSet.union sg acc)
+              pos IndexSet.empty
           in
           let neg = match neg with
             | [] -> None
-            | [_, st] -> Some st
+            | [_, _, st] -> Some st
             | _ :: _ :: _ -> assert false
           in
           (coverage, pos, neg)
@@ -1810,46 +1843,56 @@ module DFA = struct
       Printf.printf "  %s st_%d stack ="
         (if !first then "let rec" else "and") (index :> int);
       first := false;
-      let label = Vector.get states_labels index in
-      begin match label.captures with
-        | [] -> ()
-        | caps ->
-          let caps =
-            List.map
-              (fun {Label. for_clause; name; _} -> Printf.sprintf "%d.%s" for_clause name)
-              caps
-          in
-          Printf.printf "\n    (* %s *)\n"
-            (String.concat " " caps)
-      end;
-      begin match label.action with
-        | Label.Action { priority ; _ } -> Printf.printf "\n    %d ::" priority
-        | Label.Nothing -> ()
+      begin match (get_label index).action with
+        | Label.Action.Nothing -> ()
+        | Label.Action.Action { priority ; _ } ->
+          Printf.printf "\n    %d ::" priority
       end;
       let transitions = Vector.get transitions_from index in
-      let pos, neg = IndexMap.fold (fun st sg (pos, neg) ->
-          match !sg with
-          | Sigma.Pos lr1s -> ((lr1s, st) :: pos, neg)
-          | Sigma.Neg lr1s -> (pos, (lr1s, st) :: neg)
+      let pos, neg = IndexMap.fold (fun st lbl (pos, neg) ->
+          let sg, cs = !lbl in
+          match sg with
+          | Sigma.Pos lr1s -> ((lr1s, cs, st) :: pos, neg)
+          | Sigma.Neg lr1s -> (pos, (lr1s, cs, st) :: neg)
         ) transitions ([], [])
+      in
+      let print_capture {Label.Capture. for_clause; name; _} =
+        Printf.printf "      (* capture %d.%s *)\n" for_clause name
+      in
+      let print_captures cs =
+        List.iter print_capture cs
       in
       match pos, neg with
       | [], [] -> Printf.printf " []\n"
-      | [], [_, st] -> Printf.printf " k stack st_%d\n" (st :> int)
+      | [], [_, [], st] -> Printf.printf " k stack st_%d\n" (st :> int)
+      | [], [_, cs, st] ->
+        Printf.printf "\n";
+        print_captures cs;
+        Printf.printf "    k stack st_%d\n" (st :> int)
       | _ ->
         Printf.printf "\n    match state stack with\n";
-        List.iter begin fun (lr1s, st) ->
+        List.iter begin fun (lr1s, cs, st) ->
           let states =
             IndexSet.elements lr1s
             |> List.map (string_of_int : int -> string :> _ index -> string)
             |> String.concat "|"
           in
-          Printf.printf "    | %s -> k stack st_%d\n"
-            states (st : _ index :> int)
+          if cs = [] then
+            Printf.printf "    | %s -> k stack st_%d\n"
+              states (st : _ index :> int)
+          else (
+            Printf.printf "    | %s ->\n" states;
+            print_captures cs;
+            Printf.printf "      k stack st_%d\n" (st : _ index :> int)
+          )
         end pos;
         begin match neg with
           | [] -> Printf.printf "    | _ -> []\n";
-          | [_, st] -> Printf.printf "    | _ -> k stack st_%d\n" (st :> int);
+          | [_, [], st] -> Printf.printf "    | _ -> k stack st_%d\n" (st :> int);
+          | [_, cs, st] ->
+            Printf.printf "    | _ ->\n";
+            print_captures cs;
+            Printf.printf "    k stack st_%d\n" (st :> int)
           | _ :: _ :: _ -> assert false
         end
     in
@@ -1875,8 +1918,10 @@ let step re state =
   let _lbl, re = Reg.Expr.left_delta re (Sigma.singleton state) in
   let itemset = Lr0.items (Lr1C.to_lr0 state) in
   let action = match (Reg.Expr.get_label re).action with
-    | Label.Nothing -> "\x1b[31mNo action\x1b[m"
-    | Label.Action {priority; _} -> "\x1b[32mAction\x1b[m " ^ string_of_int priority
+    | Label.Action.Nothing ->
+      "\x1b[31mNo action\x1b[m"
+    | Label.Action.Action {priority; _} ->
+      "\x1b[32mAction\x1b[m " ^ string_of_int priority
   in
   Format.eprintf "Matching %s at state %d:\n%a%s%!\n%a%!\n-------------\n%!"
     (match Lr0.incoming (Lr1C.to_lr0 state) with
