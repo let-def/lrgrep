@@ -3,5 +3,5 @@
 
 (executable
  (name main)
+ (public_name lrgrep)
  (libraries fix utils middle menhirSdk))
-
