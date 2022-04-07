@@ -20,6 +20,9 @@ type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
 
 (* The lexer generator. Command-line parsing. *)
 
+let run_test = false
+let verbose = false
+
 let source_name = ref None
 let output_name = ref None
 let grammar_file = ref None
@@ -1071,16 +1074,15 @@ module Clause = struct
   let make priority action =
     { priority; captures = []; arity = 0; action }
 
-  let gencode clauses =
+  let gencode oc clauses =
     let arities =
       List.mapi (fun i clause ->
           assert (clause.priority = i);
           string_of_int clause.arity)
         clauses
     in
-    Printf.printf
-      "let arities = [|%s|]" (String.concat ";" arities);
-    Printf.printf
+    let print fmt = Printf.fprintf oc fmt in
+    print
       "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
       (String.capitalize_ascii (Filename.basename Input.Grammar.basename));
     List.iter (fun clause ->
@@ -1092,15 +1094,15 @@ module Clause = struct
               variables.(i) <- "Some " ^ capture.name
           ) clause.captures;
         let variables = String.concat "; " (Array.to_list variables) in
-        Printf.printf " | %d, [|%s|] -> begin\n%s\nend\n"
+        print "  | %d, [|%s|] -> begin\n%s\n    end\n"
           clause.priority
           variables
           (match clause.action with
            | None -> "failwith \"Should be unreachable\""
            | Some (_, str) -> str)
       ) clauses;
-    Printf.printf
-      "  | _ -> failwith \"Invalid action\""
+    print "  | _ -> failwith \"Invalid action\"\n\n";
+    print "let arities = [|%s|]\n" (String.concat ";" arities)
 end
 
 module Label = struct
@@ -1640,7 +1642,7 @@ module DFA = struct
       initial;
     }
 
-  let minimize (Large_dfa {set = (module States); states; dfa=_; initial}) =
+  let minimize oc (Large_dfa {set = (module States); states; dfa=_; initial}) =
     (* Removing unreachable actions *)
     let module Scc = Tarjan.Run(struct
         type node = States.n index
@@ -1883,7 +1885,9 @@ module DFA = struct
         (float !depth_sum /. float !count)
     end;
     (* Print matching functions *)
-    Printf.printf
+    let print fmt = Printf.fprintf oc fmt in
+    let sprint fmt = Printf.sprintf fmt in
+    print
       "module Table : sig\n\
       \  open Analyser_def\n\
       \  type state\n\
@@ -1895,11 +1899,10 @@ module DFA = struct
       \  let table = [|\n\
       ";
     let visit (index : Min.states index) =
-      Printf.printf "    (fun st ->";
+      print "    (fun st ->";
       let action = match Label.Action.priority (get_label index).action with
         | None -> "None"
-        | Some priority ->
-          Printf.sprintf "Some %d" priority
+        | Some priority -> sprint "Some %d" priority
       in
       let pos, neg = IndexMap.fold (fun st lbl (pos, neg) ->
           let sg, cs = !lbl in
@@ -1913,7 +1916,7 @@ module DFA = struct
           match c.Clause.var with
           | None -> assert false
           | Some var ->
-            Printf.sprintf "(%d,%d)" c.Clause.for_clause.priority var
+            sprint "(%d,%d)" c.Clause.for_clause.priority var
         in
         "[" ^ String.concat ";" (List.map print_capture cs) ^ "]"
       in
@@ -1924,34 +1927,30 @@ module DFA = struct
       in
       match pos, neg with
       | [], [] ->
-        Printf.printf " ([], %s, None));\n" action
+        print " ([], %s, None));\n" action
       | [], [_, cs, st] ->
-        Printf.printf " (%s, %s, Some %d));\n"
+        print " (%s, %s, Some %d));\n"
           (print_captures cs) action (st :> int)
       | _ ->
-        Printf.printf "\n    match st with\n";
+        print "\n    match st with\n";
         List.iter begin fun (lr1s, cs, st) ->
-          Printf.printf "    | %s -> (%s, %s, Some %d)\n"
+          print "    | %s -> (%s, %s, Some %d)\n"
             (print_states lr1s)
             (print_captures cs)
             action
             (st : _ index :> int)
         end pos;
         begin match neg with
-          | [] ->
-            Printf.printf "    | _ -> ([], %s, None)"
-              action
+          | [] -> print "    | _ -> ([], %s, None)" action
           | [_, cs, st] ->
-            Printf.printf "    | _ -> (%s, %s, Some %d)"
-              (print_captures cs)
-              action
-              (st :> int)
+            print "    | _ -> (%s, %s, Some %d)"
+              (print_captures cs) action (st :> int)
           | _ :: _ :: _ -> assert false
         end;
-        Printf.printf ");\n";
+        print ");\n";
     in
     Index.iter Min.states visit;
-    Printf.printf
+    print
       "  |]\n\
       \  let initial = %d\n\
       \  let step st lr1 = table.(st) lr1\n\
@@ -1965,12 +1964,13 @@ let test_stack =
     [509;617;585;1124;1123;1122;618;812;802;617;585;1124;1123;1122;1643;1642;0]
 
 let () =
-  prerr_endline (
-    "Test stack: " ^
-    String.concat " "
-      (List.rev_map symbol_name
-         (List.filter_map (fun x -> Lr0.incoming (Lr1C.to_lr0 x)) test_stack))
-  )
+  if run_test then
+    prerr_endline (
+      "Test stack: " ^
+      String.concat " "
+        (List.rev_map symbol_name
+           (List.filter_map (fun x -> Lr0.incoming (Lr1C.to_lr0 x)) test_stack))
+    )
 
 let step re state =
   let _lbl, re = Reg.Expr.left_delta re (Sigma.singleton state) in
@@ -1998,13 +1998,27 @@ let rec interpret re = function
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
+  if verbose then
+    Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
   let clauses, re = translate_entry entry in
   (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
-  ignore (interpret re test_stack : Reg.Expr.t);
+  if run_test then ignore (interpret re test_stack : Reg.Expr.t);
   (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
   let (Large_dfa {set=(module Set); _} as dfa) = DFA.translate re in
   prerr_endline (string_of_int (cardinal Set.n) ^ " states");
-  DFA.minimize dfa;
-  Clause.gencode clauses
+  begin match !output_name with
+    | None ->
+      prerr_endline "No output file provided (option -o). Giving up.";
+      exit 1
+    | Some path ->
+      let oc = open_out_bin path in
+      output_string oc (snd lexer_definition.header);
+      output_char oc '\n';
+      Clause.gencode oc clauses;
+      output_char oc '\n';
+      output_string oc (snd lexer_definition.trailer);
+      output_char oc '\n';
+      DFA.minimize oc dfa;
+      close_out oc
+  end
 )
