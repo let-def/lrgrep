@@ -14,7 +14,6 @@
 
 {
 open Misc
-open Std
 open Lexing
 open Parser_raw
 
@@ -51,22 +50,18 @@ let rec (>>=) (m : 'a result) (f : 'a -> 'b result) : 'b result =
     Refill (fun () -> u () >>= f)
   | Fail _ as e -> e
 
-type preprocessor = (Lexing.lexbuf -> Parser_raw.token) -> Lexing.lexbuf -> Parser_raw.token
-
 type state = {
   keywords: keywords;
   mutable buffer: Buffer.t;
   mutable string_start_loc: Location.t;
   mutable comment_start_loc: Location.t list;
-  mutable preprocessor: preprocessor option;
 }
 
-let make ?preprocessor keywords = {
+let make keywords = {
   keywords;
   buffer = Buffer.create 17;
   string_start_loc = Location.none;
   comment_start_loc = [];
-  preprocessor;
 }
 
 let lABEL m = m >>= fun v -> return (LABEL v)
@@ -142,12 +137,6 @@ let keyword_table : keywords =
 ]
 
 let keywords l = create_hashtable 11 l
-
-let list_keywords =
-  let add_kw str _tok kws = str :: kws in
-  let init = Hashtbl.fold add_kw keyword_table [] in
-  fun keywords ->
-    Hashtbl.fold add_kw keywords init
 
 (* To store the position of the beginning of a string and comment *)
 let in_comment state = state.comment_start_loc <> []
@@ -393,26 +382,14 @@ let literal_modifier = ['G'-'Z' 'g'-'z']
 refill {fun k lexbuf -> Refill (fun () -> k lexbuf)}
 
 rule token state = parse
-  | ("\\" as bs) newline {
-      match state.preprocessor with
-      | None -> fail lexbuf (Illegal_character bs)
-      | Some _ ->
-        update_loc lexbuf None 1 false 0;
-        token state lexbuf }
+  | ("\\" as bs) newline
+      { fail lexbuf (Illegal_character bs) }
   | newline
-      { update_loc lexbuf None 1 false 0;
-        match state.preprocessor with
-        | None -> token state lexbuf
-        | Some _ -> return EOL
-      }
+      { update_loc lexbuf None 1 false 0; token state lexbuf }
   | blank +
       { token state lexbuf }
-  | ".<"
-      { return DOTLESS }
   | ">."
       { return (keyword_or state (Lexing.lexeme lexbuf) (INFIXOP0 ">.")) }
-  | ".~"
-      { return (keyword_or state (Lexing.lexeme lexbuf) DOTTILDE) }
   | "_"
       { return UNDERSCORE }
   | "~"
@@ -429,8 +406,6 @@ rule token state = parse
         return (LABEL name) }
   | "?"
       { return QUESTION }
-  | "??"
-      { return QUESTIONQUESTION }
   | "?" (lowercase identchar * as name) ':'
       { oPTLABEL (check_label_name lexbuf name) }
   | "?" (lowercase_latin1 identchar_latin1 * as name) ':'
@@ -578,7 +553,6 @@ rule token state = parse
   | "||" { return BARBAR }
   | "|]" { return BARRBRACKET }
   | ">"  { return GREATER }
-  | ">]" { return GREATERRBRACKET }
   | "}"  { return RBRACE }
   | ">}" { return GREATERRBRACE }
   | "[@" { return LBRACKETAT }
@@ -663,7 +637,7 @@ and comment state = parse
   | "{" ('%' '%'? extattrident blank*)? lowercase* "|"
       {
         let delim = Lexing.lexeme lexbuf in
-        let delim = String.sub delim ~pos:1 ~len:(String.length delim - 2) in
+        let delim = String.sub delim 1 (String.length delim - 2) in
         state.string_start_loc <- Location.curr lexbuf;
         Buffer.add_string state.buffer (Lexing.lexeme lexbuf);
         (catch (quoted_string delim state lexbuf) (fun e l -> match e with
@@ -783,7 +757,7 @@ and quoted_string delim state = parse
   | "|" lowercase* "}"
       {
         let edelim = Lexing.lexeme lexbuf in
-        let edelim = String.sub edelim ~pos:1 ~len:(String.length edelim - 2) in
+        let edelim = String.sub edelim 1 (String.length edelim - 2) in
         if delim = edelim then return lexbuf.lex_start_p
         else (Buffer.add_string state.buffer (Lexing.lexeme lexbuf);
               quoted_string delim state lexbuf)

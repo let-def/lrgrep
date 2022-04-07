@@ -1,0 +1,9 @@
+(executable
+  (name frontend)
+  (libraries compiler-libs.common menhirLib))
+
+(ocamllex lexer_raw)
+
+(menhir 
+  (modules parser_raw)
+  (flags :standard --inspection --table --cmly))
