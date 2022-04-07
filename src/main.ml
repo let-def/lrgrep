@@ -28,7 +28,11 @@ let output_name = ref None
 let grammar_file = ref None
 let interpret = ref false
 
-let usage = "usage: menhirlex [options] sourcefile"
+let usage =
+  Printf.sprintf
+    "lrgrep, a menhir lexer\n\
+     usage: %s [options] sourcefile"
+    Sys.argv.(0)
 
 let print_version_num () =
   print_endline "0.1";
