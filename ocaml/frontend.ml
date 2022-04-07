@@ -39,31 +39,40 @@ let do_parse
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
   =
   let module I = Parser_raw.MenhirInterpreter in
+  let module PE = Analyser_def.Interpreter(Parse_errors)(I) in
   let error_and_exit msg =
     let loc = Location.curr lexbuf in
     let report = {
       Location.
       kind = Location.Report_error;
-      main = Location.msg ~loc msg;
+      main = Location.msg ~loc "%s" msg;
       sub = [];
     } in
     Format.eprintf "%a\n" Location.print_report report;
     exit 1
   in
-  let rec loop : _ I.checkpoint -> _ = function
-    | I.InputNeeded _ as cp ->
+  let rec loop : _ I.env -> _ I.checkpoint -> _ = fun env -> function
+    | I.InputNeeded env' as cp ->
       let token = get_token lexbuf in
-      loop (I.offer cp (token, lexbuf.lex_start_p, lexbuf.lex_curr_p))
+      loop env' (I.offer cp (token, lexbuf.lex_start_p, lexbuf.lex_curr_p))
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
-      loop (I.resume cp)
+      loop env (I.resume cp)
     | I.Accepted x -> x
-    | I.Rejected ->
-      error_and_exit "Syntax error (no handler for it)"
+    | I.Rejected -> assert false
     | I.HandlingError _ ->
-      error_and_exit "Syntax error (no handler for it)"
+      match PE.run env with
+      | None -> error_and_exit "Syntax error (no handler for it)"
+      | Some state ->
+        error_and_exit (Parse_errors.execute state)
+  in
+  let start cp =
+    match cp with
+    | I.InputNeeded env ->
+      loop env cp
+    | _ -> assert false
   in
   Pparse.write_ast kind "/dev/fd/1"
-    (loop (checkpoint lexbuf.lex_curr_p))
+    (start (checkpoint lexbuf.lex_curr_p))
 
 let () =
   let is_interface = Filename.check_suffix infile "i" in

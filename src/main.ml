@@ -1646,7 +1646,7 @@ module DFA = struct
       initial;
     }
 
-  let minimize oc (Large_dfa {set = (module States); states; dfa=_; initial}) =
+  let minimize (Large_dfa {set = (module States); states; dfa=_; initial}) =
     (* Removing unreachable actions *)
     let module Scc = Tarjan.Run(struct
         type node = States.n index
@@ -1888,6 +1888,7 @@ module DFA = struct
         !depth_max
         (float !depth_sum /. float !count)
     end;
+    fun oc ->
     (* Print matching functions *)
     let print fmt = Printf.fprintf oc fmt in
     let sprint fmt = Printf.sprintf fmt in
@@ -1899,6 +1900,7 @@ module DFA = struct
       \  val step : state -> int -> \n\
       \    register list * clause option * state option\n\
        end = struct\n\
+      \  [@@@ocaml.warning \"-27\"]\n\
       \  type state = int\n\
       \  let table = [|\n\
       ";
@@ -2018,11 +2020,12 @@ let () = (
       let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
       output_char oc '\n';
+      let gen_table = DFA.minimize dfa in
       Clause.gencode oc clauses;
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      DFA.minimize oc dfa;
+      gen_table oc;
       close_out oc
   end
 )
