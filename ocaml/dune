@@ -1,5 +1,28 @@
 (executable
   (name frontend)
+  (modules frontend parse_errors)
+  (libraries ocaml_parser))
+
+(executable
+  (name interpreter)
+  (modules interpreter interpreter_data)
+  (libraries ocaml_parser fix utils middle menhirSdk))
+
+(executable
+  (name embed)
+  (modules embed))
+
+(rule
+  (targets interpreter_data.ml)
+  (deps    parser_raw.cmly)
+  (action
+    (with-stdout-to %{targets}
+       (run %{exe:./embed.exe} grammar=parser_raw.cmly))))
+
+(library
+  (name ocaml_parser)
+  (modules lexer_raw parser_raw parser_def)
+  (wrapped false)
   (libraries compiler-libs.common menhirLib lrgrep.runtime))
 
 (ocamllex lexer_raw)
