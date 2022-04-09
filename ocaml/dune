@@ -1,6 +1,7 @@
 (executable
   (name frontend)
   (modules frontend parse_errors)
+  (modes byte native)
   (libraries ocaml_parser))
 
 (executable
