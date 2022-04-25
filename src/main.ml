@@ -1487,6 +1487,13 @@ let reduce expr =
 
 let no_pos = {Syntax. line = -1; col = -1}
 
+let final_action = ref Reg.Expr.epsilon
+
+let terminate_if_needed terminal expr =
+  if terminal
+  then Reg.Expr.(^.) expr !final_action
+  else expr
+
 let translate_expr clause =
   let translate_capture term = function
     | None -> term
@@ -1494,7 +1501,7 @@ let translate_expr clause =
       Reg.Expr.(^.)
         (Reg.Expr.label (Label.make_capture clause var)) term
   in
-  let rec translate_term = function
+  let rec translate_term' terminal = function
     | Syntax.Symbol (name, capture) ->
       let symbol = translate_symbol name in
       let states = State_indices.states_of_symbol symbol in
@@ -1508,17 +1515,26 @@ let translate_expr clause =
     | Syntax.Wildcard capture ->
       translate_capture (Reg.Expr.set Sigma.full) capture
     | Syntax.Alternative (e1, e2) ->
-      Reg.Expr.(translate_expr e1 |. translate_expr e2)
+      Reg.Expr.(translate_expr terminal e1 |. translate_expr terminal e2)
     | Syntax.Repetition (e1, _) ->
-      Reg.Expr.star (translate_expr e1)
+      Reg.Expr.star (translate_expr terminal e1)
     | Syntax.Reduce (expr, _) ->
-      reduce (translate_expr expr)
+      reduce (translate_expr terminal expr)
 
-  and translate_expr terms =
-    let terms = List.rev_map (fun (term, _) -> translate_term term) terms in
-    Reg.Expr.concatenation terms
+  and translate_term terminal term =
+    translate_term' terminal term
+    |> terminate_if_needed terminal
+
+  and translate_expr terminal = function
+    | [] -> if terminal then !final_action else Reg.Expr.empty
+    | terms ->
+      terms
+      |> List.mapi
+        (fun i (term, _) -> translate_term (i = 0 && terminal) term)
+      |> List.rev
+      |> Reg.Expr.concatenation
   in
-  translate_expr
+  translate_expr true
 
 let translate_clause priority {Syntax. pattern; action} =
   let clause = Clause.make priority action in
@@ -1527,9 +1543,10 @@ let translate_clause priority {Syntax. pattern; action} =
     | [Syntax.Reduce (re, _), _] -> re, Either.right
     | _ -> pattern, Either.left
   in
+  final_action := Reg.Expr.label (Label.make_action clause);
   let expr = translate_expr clause pattern in
-  let label = Reg.Expr.label (Label.make_action clause) in
-  clause, wrap (Reg.Expr.(^.) expr label)
+  final_action := Reg.Expr.epsilon;
+  clause, wrap expr
 
 let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
   (* TODO *)
