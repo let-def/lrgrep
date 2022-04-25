@@ -1282,7 +1282,7 @@ struct
     Index.iter Lr1C.n visit;
     let derivations = !derivations in
     let domain = !domain in
-    Printf.printf "%d non empty derivations\n%!"
+    Printf.eprintf "%d non empty derivations\n%!"
       (IndexSet.cardinal domain);
     { source; derivations; domain }
 
