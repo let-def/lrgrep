@@ -1,3 +1,5 @@
+export OCAMLPARAM=
+
 all:
 	dune build src/main.exe ocaml/interpreter.exe ocaml/frontend.bc
 
