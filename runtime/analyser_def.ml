@@ -1,3 +1,4 @@
+type lr1 = int
 type clause = int
 type var = int
 type register = clause * var
@@ -29,7 +30,7 @@ module type Parse_errors = sig
   module Table : sig
     type state
     val initial : state
-    val step : state -> clause -> register list * clause option * state option
+    val step : state -> lr1 -> register list * clause option * state option
   end
 end
 
