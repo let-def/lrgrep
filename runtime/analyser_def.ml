@@ -72,7 +72,9 @@ struct
         | None -> ()
         | Some state' ->
           match P.pop env with
-          | None -> ()
+          | None ->
+            let _, clause, _ = PE.Table.step state' (-1) in
+            Option.iter update_candidate clause
           | Some env' -> loop env' state'
       end
     in
