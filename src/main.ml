@@ -1158,6 +1158,12 @@ module Label = struct
 
   let make_capture clause name =
     { action = Nothing; captures=[Clause.fresh_capture clause name] }
+
+  let deriv t = {
+    action = t.action;
+    captures = [];
+  }
+
 end
 
 let do_log = ref false
@@ -1180,77 +1186,70 @@ and Redgraph_derivation : sig
   val cmon : t -> Cmon.t
 end =
 struct
-  type derivation =
-    | Step of { re: Reg.Expr.t; mutable transitions: transition list }
-    | Void
+  type derivation = {
+    label: Label.t;
+    re: Reg.Expr.t;
+    mutable transitions: transition list option;
+  }
 
   and transition = {
     sigma: Sigma.t;
-    mutable target: (Label.t * derivation) option;
+    mutable target: derivation option;
   }
 
-  let lift re =
-    if Reg.Expr.is_empty re then
-      Void
-    else
-      Step { re; transitions = [] }
+  let lift label re =
+    {label; re; transitions = None}
 
-  let unlift = function
-    | Void -> Reg.Expr.empty
-    | Step { re; _} -> re
+  let get_transitions t =
+    match t.transitions with
+    | Some trs -> trs
+    | None ->
+      let mk_transition sigma = {sigma; target=None} in
+      let result = List.map mk_transition (Reg.Expr.left_classes t.re) in
+      t.transitions <- Some result;
+      result
 
-  let get_transitions = function
-    | Void -> []
-    | Step d ->
-      match d.transitions with
-      | [] ->
-        let mk_transition sigma = {sigma; target=None} in
-        let result = List.map mk_transition (Reg.Expr.left_classes d.re) in
-        d.transitions <- result;
-        result
-      | transitions -> transitions
+  let repeat_action label =
+    let rec d = {
+      label; re = Reg.Expr.label label;
+      transitions = Some [{sigma=Sigma.full; target=Some d}];
+    } in
+    d
 
   let derive d sg =
-    match d with
-    | Void -> Label.empty, Void
-    | Step {re; _} ->
-      match
-        List.filter_map begin fun t ->
-          if Sigma.is_subset_of sg t.sigma then (
-            let d' = match t.target with
-              | Some x -> x
-              | None ->
-                let lbl, re = Reg.Expr.left_delta re t.sigma in
-                let x = lbl, lift re in
-                t.target <- Some x;
-                x
-            in
-            Some d'
-          ) else None
-        end (get_transitions d)
-      with
-      | [] -> Label.empty, Void
-      | [d] -> d
-      | ds ->
-        prerr_endline "MULTIPLE DERIVATIONS, FIX ME";
-        if true then exit 1;
-        let lbl = ref Label.empty in
-        let res = List.filter_map (fun (lbl', d) ->
-            lbl := Label.append lbl' !lbl;
-            match d with
-            | Void -> None
-            | Step { re; _} -> Some re
-          ) ds
-        in
-        (!lbl, lift (Reg.Expr.disjunction res))
+    match
+      List.filter_map begin fun t ->
+        if Sigma.is_subset_of sg t.sigma then (
+          let d' = match t.target with
+            | Some x -> x
+            | None ->
+              let lbl, re = Reg.Expr.left_delta d.re t.sigma in
+              let lbl = Label.append (Label.deriv d.label) lbl in
+              let x = lift lbl re in
+              t.target <- Some x;
+              x
+          in
+          Some d'
+        ) else None
+      end (get_transitions d)
+    with
+    | [] ->
+      if Label.is_empty d.label then
+        {label=Label.empty; re=Reg.Expr.empty; transitions=Some []}
+      else
+        repeat_action d.label
+    | [d] -> d
+    | _ds ->
+      prerr_endline "MULTIPLE DERIVATIONS, FIX ME";
+      exit 1
+      (*(!lbl, lift (Reg.Expr.disjunction res))*)
 
-  let join_derivation d1 d2 = match d1, d2 with
-    | Void, x | x, Void -> x
-    | Step d1, Step d2 -> lift (Reg.Expr.(|.) d1.re d2.re)
+  let join_derivation d1 d2 =
+    lift (Label.append d1.label d2.label) (Reg.Expr.(|.) d1.re d2.re)
 
   type compiled = {
     source: Reg.Expr.t;
-    derivations: (Label.t * derivation) Lr1Map.t;
+    derivations: derivation Lr1Map.t;
     domain: Lr1C.set;
   }
 
@@ -1258,24 +1257,23 @@ struct
     Reg.Expr.compare t1.source t2.source
 
   let compile source =
-    let source = Reg.Expr.(source ^. star (set Sigma.full)) in
-    let root = Step { re = source; transitions = [] } in
+    (*let source = Reg.Expr.(source ^. star (set Sigma.full)) in*)
     let closed_derivations =
       Redgraph.Closed_derivation.derive
-        ~root
-        ~step:(fun d lr1 -> snd (derive d (Sigma.singleton lr1)))
+        ~root:(lift Label.empty source)
+        ~step:(fun d lr1 -> derive d (Sigma.singleton lr1))
         ~join:join_derivation
     in
     let derivations = ref Lr1Map.empty in
     let domain = ref IndexSet.empty in
     let visit lr1 =
       let lbl, re = Reg.Expr.left_delta source (Sigma.singleton lr1) in
-      let re = match Lr1Map.find_opt lr1 closed_derivations with
-        | Some Void | None -> re
-        | Some (Step d) -> Reg.Expr.(|.) re d.re
+      let lbl, re = match Lr1Map.find_opt lr1 closed_derivations with
+        | None -> lbl, re
+        | Some d -> (Label.append lbl d.label, Reg.Expr.(|.) re d.re)
       in
-      if not (Reg.Expr.is_empty re) then (
-        derivations := Lr1Map.add lr1 (lbl, lift re) !derivations;
+      if not (Label.is_empty lbl && Reg.Expr.is_empty re) then (
+        derivations := Lr1Map.add lr1 (lift lbl re) !derivations;
         domain := IndexSet.add lr1 !domain;
       )
     in
@@ -1340,9 +1338,8 @@ struct
           let acc = IndexSet.fold (fun lr1 acc ->
               match Lr1Map.find lr1 t.compiled.derivations with
               | exception Not_found -> acc
-              | _, d ->
-                List.fold_left
-                  (fun acc tr -> f tr.sigma acc) acc (get_transitions d)
+              | d -> List.fold_left
+                       (fun acc tr -> f tr.sigma acc) acc (get_transitions d)
             ) targets acc
           in
           acc
@@ -1386,7 +1383,7 @@ struct
           let re = make_one t.compiled lr1 0 in
           match Lr1Map.find lr1 t.compiled.derivations with
           | exception Not_found -> Label.empty, re
-          | lbl, d -> lbl, Reg.Expr.(|.) re (unlift d)
+          | d -> d.label, Reg.Expr.(|.) re d.re
       end
     | Node t ->
       let res = ref [make_one t.compiled t.root (t.step + 1)] in
@@ -1400,13 +1397,14 @@ struct
             | exception Not_found ->
               if !do_log then
                 Format.eprintf "no continuation\n%!";
-            | _, d ->
-              let lbl, d = derive d sigma in
-              lbls := Label.append lbl !lbls;
-              let re = unlift d in
+            | d ->
+              let d = derive d sigma in
+              lbls := Label.append d.label !lbls;
               if !do_log then
-                Format.eprintf "continuation @[%a@]\n%!" Cmon.format (cmon_re re);
-              res := unlift d :: !res
+                Format.eprintf "continuation @[%a@]\n%!" Cmon.format (cmon_re d.re);
+              if Label.Action.Nothing <> d.label.action then
+                res := Reg.Expr.label d.label :: !res;
+              res := d.re :: !res
           end targets
       end (Vector.get Redgraph.goto_closure t.root).(t.step);
       !lbls, Reg.Expr.disjunction !res
