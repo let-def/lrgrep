@@ -261,6 +261,7 @@ struct
 
     let (^.) a b = match a, b with
       | Epsilon, x | x, Epsilon -> x
+      | Label la, Label lb -> Label (Label.append la lb)
       | x, y when is_empty x || is_empty y -> empty
       | Concat xs, Concat ys ->
         Concat (List.fold_right re_seq xs ys)
