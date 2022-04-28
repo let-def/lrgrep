@@ -402,19 +402,19 @@ module Redgraph = struct
         (Array.length (Production.rhs p), Production.lhs p)
       in
       let order (d1, n1) (d2, n2) =
-        let c = Int.compare d1 d2 in
-        if c = 0
-        then Int.compare (n1 : nonterminal :> int) (n2 : nonterminal :> int)
-        else c
+        match Int.compare d1 d2 with
+        | 0 -> compare_index n1 n2
+        | c -> c
       in
       let productions =
         Lr1.reductions lr1
         |> List.map (fun (_, ps) -> prepare_goto (List.hd ps))
         |> List.sort_uniq order
       in
-      let depth = List.fold_left (fun x (d, _) -> max x d) 0 productions in
+      let depth = List.fold_left (fun x (d, _) -> max x d) (-1) productions in
       let vector = Array.make (depth + 1) [] in
       List.iter (fun (d,n) -> array_cons vector d n) productions;
+      assert (depth = -1 || vector.(depth) <> []);
       vector
     )
 
@@ -426,23 +426,21 @@ module Redgraph = struct
 
   and abstract_parent = abstract_stack option ref
 
-  type concrete_stack = {
-    prefix: Lr1.t list;
-    base: Lr1.t;
-    suffix: abstract_parent;
-  }
+  type concrete_stack =
+    | Goto of Lr1.t * concrete_stack
+    | Base of Lr1.t * abstract_parent
 
   type stack =
     | Concrete of concrete_stack
     | Abstract of abstract_stack
 
-  let get_parent states suffix =
-    match !suffix with
+  let force_parent states (parent : abstract_parent) =
+    match !parent with
     | Some parent -> parent
     | None ->
       let states = lr1set_predecessors states in
       let result = {states; goto = Lr1Map.empty; parent = ref None} in
-      suffix := Some result;
+      parent := Some result;
       result
 
   let get_goto stack state =
@@ -454,26 +452,25 @@ module Redgraph = struct
       set
 
   let pop = function
-    | Concrete {prefix = _ :: prefix; base; suffix} ->
-      Concrete {prefix; base; suffix}
-    | Concrete {prefix = []; base; suffix} ->
-      Abstract (get_parent (IndexSet.singleton base) suffix)
+    | Concrete (Goto (_, parent)) -> Concrete parent
+    | Concrete (Base (base, parent)) ->
+      Abstract (force_parent (IndexSet.singleton base) parent)
     | Abstract t ->
-      Abstract (get_parent t.states t.parent)
-
-  let goto_target lr1 nt =
-    match Transition.(target (of_goto (find_goto lr1 nt))) with
-    | exception Not_found -> None
-    | result -> Some result
+      Abstract (force_parent t.states t.parent)
 
   let goto stack acc nts =
+    let goto_target lr1 nt =
+      match Transition.find_goto lr1 nt with
+      | exception Not_found -> None
+      | result -> Some (Transition.target (Transition.of_goto result))
+    in
     match stack with
-    | Concrete {prefix; base; suffix} ->
-      let lr1 = match prefix with lr1 :: _ -> lr1 | [] -> base in
+    | Concrete t ->
+      let Goto (lr1, _) | Base (lr1, _) = t in
       List.iter begin fun nt ->
         match goto_target lr1 nt with
         | None -> ()
-        | Some lr1 -> acc := {prefix = lr1 :: prefix; base; suffix} :: !acc
+        | Some lr1 -> acc := Goto (lr1, t) :: !acc
       end nts
     | Abstract t ->
       IndexSet.iter begin fun src ->
@@ -485,10 +482,7 @@ module Redgraph = struct
       end t.states
 
   let follow_transitions stack =
-    let lr1 = match stack.prefix with
-      | lr1 :: _ -> lr1
-      | [] -> stack.base
-    in
+    let Goto (lr1, _) | Base (lr1, _) = stack in
     let reductions = Vector.get reductions lr1 in
     let acc = ref [] in
     let stack = ref (Concrete stack) in
@@ -522,8 +516,11 @@ module Redgraph = struct
         node'
 
     let register source state =
-      let node = List.fold_left delta root_node state.prefix in
-      let node = delta node state.base in
+      let rec walk node = function
+        | Goto (lr1, parent) -> walk (delta node lr1) parent
+        | Base (lr1, _parent) -> delta node lr1
+      in
+      let node = walk root_node state in
       node.sources <- IndexSet.add source node.sources
 
     let derive ~root ~step ~join =
@@ -588,10 +585,11 @@ module Redgraph = struct
     { stack = Array.of_list (List.map prepare_node nodes) }
 
   let roots = Vector.init Lr1.n (fun lr1 ->
-      let root = {prefix = []; base = lr1; suffix = ref None} in
-      let vs = close_transitions [] root  in
+      let parent = ref None in
+      let root = Base (lr1, parent) in
+      let vs = close_transitions [] root in
       List.iter (Closed_derivation.register lr1) vs;
-      reconstruct_root root.suffix
+      reconstruct_root parent
     )
 
   let reverse_deps = Vector.make Lr1.n []
