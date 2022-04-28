@@ -51,24 +51,28 @@ let do_parse
     Format.eprintf "%a\n" Location.print_report report;
     exit 1
   in
-  let rec loop : _ I.env -> _ I.checkpoint -> _ = fun env -> function
+  let wrap_tok lexbuf tok =
+    (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
+  in
+  let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
-      let token = get_token lexbuf in
-      loop env' (I.offer cp (token, lexbuf.lex_start_p, lexbuf.lex_curr_p))
+      let tok' = get_token lexbuf in
+      loop env' tok' (I.offer cp (wrap_tok lexbuf tok'))
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
-      loop env (I.resume cp)
+      loop env tok (I.resume cp)
     | I.Accepted x -> x
     | I.Rejected -> assert false
     | I.HandlingError _ ->
       match PE.run env with
       | None -> error_and_exit "Syntax error (no handler for it)"
       | Some state ->
-        error_and_exit (Parse_errors.execute state)
+        error_and_exit (Parse_errors.execute state tok)
   in
   let start cp =
     match cp with
     | I.InputNeeded env ->
-      loop env cp
+      let tok = get_token lexbuf in
+      loop env tok (I.offer cp (wrap_tok lexbuf tok))
     | _ -> assert false
   in
   Pparse.write_ast kind "/dev/fd/1"

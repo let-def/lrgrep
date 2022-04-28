@@ -68,16 +68,16 @@ $ ocamlc -c -pp _build/default/ocaml/frontend.bc test_ok.ml
 This first example compiled successfully.
 
 ```
-$ ocamlc -c -pp _build/default/ocaml/frontend.bc test_ko.ml
-ocamlc -pp _build/default/ocaml/frontend.bc test_ko.ml
-File "test_ko.ml", line 4, characters 0-3:
+$ ocamlc -c -pp _build/default/ocaml/frontend.bc test_ko_01.ml
+ocamlc -pp _build/default/ocaml/frontend.bc test_ko_01.ml
+File "test_ko_01.ml", line 4, characters 0-3:
 4 | let z = 7
     ^^^
 Error: Spurious semi-colon at 2:9
 
-File "test_ko.ml", line 1:
+File "test_ko_01.ml", line 1:
 Error: Error while running external preprocessor
-Command line: _build/default/ocaml/frontend.bc 'test_ko.ml' > /tmp/ocamlppbbc3f9
+Command line: _build/default/ocaml/frontend.bc 'test_ko_01.ml' > /tmp/ocamlppbbc3f9
 ```
 
 In this one however, there is a syntax error. Luckily, this case is covered by a rule: while the error happens on line 4, it is likely caused by the semi-colon at the end of line 2.
@@ -91,7 +91,7 @@ $ ./setup_shell.sh
 export 'OCAMLPARAM=pp=$PWD/lrgrep/_build/default/ocaml/frontend.bc,_'
 # setup_shell commands produces a suitable OCAMLPARAM value
 $ eval `./setup_shell.sh`
-$ ocamlc test_ko.ml
+$ ocamlc test_ko_01.ml
 ...
 Error: Spurious semi-colon at 2:9
 ...

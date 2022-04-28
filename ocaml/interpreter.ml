@@ -36,7 +36,7 @@ let specs = [
   " Process input but do not generate any file";
   "-no-reductions", Arg.Set opt_no_reductions,
   " Dump parsetree";
-  "-stack-items,", Arg.Set opt_stack_items,
+  "-stack-items", Arg.Set opt_stack_items,
   " Print items of all states on stack";
   "-v",  Arg.Unit print_version_string,
   " Print version and exit";

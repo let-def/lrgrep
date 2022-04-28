@@ -136,6 +136,13 @@ let keyword_table : keywords =
     "asr", INFIXOP4("asr");
 ]
 
+let as_keyword k =
+  let exception Found of string in
+  let find t k' = if k = k' then raise (Found t) in
+  match Hashtbl.iter find keyword_table with
+  | () -> None
+  | exception Found msg -> Some msg
+
 let keywords l = create_hashtable 11 l
 
 (* To store the position of the beginning of a string and comment *)

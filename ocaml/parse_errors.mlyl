@@ -2,33 +2,53 @@
 
 rule error_message = parse error
 
-(*
+(* let x = 5 ; let y = 6 let z = 7 *)
 
-  let x = 5 ;
-  let y = 6 
-  let z = 7
-
-*)
-
-| structure_item; <-; SEMI as semi; 
+| structure_item; <-; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; <-
-  {
+  { fun _ ->
     let Parser_raw.MenhirInterpreter.Element (_lr1, _val, startp, _endp) = semi in
-    "Spurious semi-colon at " ^ string_of_int startp.pos_lnum ^
-    ":" ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+    "Might be due to the semicolon line "
+    ^ string_of_int startp.pos_lnum
+    ^ ", character "
+    ^ string_of_int (startp.pos_cnum - startp.pos_bol)
   }
 
+(* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | LPAREN; [. RPAREN]; <-
-  { "Unclosed parenthesis" }
+  { fun _ ->
+    "Unclosed parenthesis"
+  }
 
-| [. expr ]; <-
-  { "Expecting expression" }
+(* https://github.com/ocaml/ocaml/issues/11108
+   Report when a keyword has been typed in a context where a lowercase
+   identifier is expected. *)
+| [. LIDENT] <-
+  { fun token ->
+    match Lexer_raw.as_keyword token with
+    | None ->
+    "Not expecting a lower-case identifier (TODO: support partial match)"
+    | Some kw ->
+    "`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)"
+  }
 
-(*rule main = parse
-| ([ . module_expr ] & [ . paren_module_expr ]) <-
-  { `Module_expr_struct_paren_module_expr }
-| [ . module_type ] <-
-  { `Sig_or_lparen_module_type }
-| ([ . FOR ] | [ . IF ]) <-
-  { `For_If }
-|*)
+(* https://github.com/ocaml/ocaml/issues/5068 *)
+| ([. UIDENT] | [. TYPE] | [. REC]) <-
+  { fun _ ->
+    "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
+  }
+
+| [. seq_expr ]; <-
+  { function
+    | MODULE ->
+      (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
+      "`module' keyword cannot appear in an expression, \
+       use `(module M)' to pack a first class-module \
+       or `let module M = ... in ...' to define a local module"
+    | _ -> "Expecting expression"
+  }
+
+(* FIXME: goto closure is incomplete *)
+(*| test 07
+  { fun _ -> "Expecting `in'" }*)
+
