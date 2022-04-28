@@ -32,10 +32,10 @@ let specs = [
   " Read input from stdin";
   "-intf", Arg.Set opt_parse_intf,
   " Parse an interface (by default: use extension or parse an implementation)";
-  "-no-reduction-items", Arg.Set opt_no_reductions_items,
-  " Process input but do not generate any file";
   "-no-reductions", Arg.Set opt_no_reductions,
-  " Dump parsetree";
+  " Do not simulate reductions";
+  "-no-reduction-items", Arg.Set opt_no_reductions_items,
+  " Do not print items when simulating reductions";
   "-stack-items", Arg.Set opt_stack_items,
   " Print items of all states on stack";
   "-v",  Arg.Unit print_version_string,
@@ -236,6 +236,7 @@ module Transition : sig
   (* [find_goto s nt] finds the goto transition originating from [s] and
      labelled by [nt], or raise [Not_found].  *)
   val find_goto : Lr1.t -> Nonterminal.t -> goto index
+  val find_goto_target : Lr1.t -> Nonterminal.t -> Lr1.t
 
   (* Get the source state of a transition *)
   val source : any index -> Lr1.t
@@ -384,6 +385,9 @@ struct
   let shift_symbol i = Vector.get t_symbols i
 
   let target i = Vector.get targets i
+
+  let find_goto_target source nt =
+    target (of_goto (find_goto source nt))
 end
 
 let lr1_predecessors = Vector.init Lr1.n (fun lr1 ->
@@ -420,324 +424,65 @@ module Redgraph = struct
 
   type abstract_stack = {
     states: Lr1.set;
-    mutable goto: Lr1.set ref Lr1Map.t;
-    parent: abstract_parent;
+    mutable goto: Nonterminal.n indexset;
+    parent: abstract_stack lazy_t;
   }
 
-  and abstract_parent = abstract_stack option ref
+  type concrete_stack = {
+    state: Lr1.t;
+    mutable goto: concrete_stack Lr1Map.t;
+    parent: stack;
+  }
 
-  type concrete_stack =
-    | Goto of Lr1.t * concrete_stack
-    | Base of Lr1.t * abstract_parent
-
-  type stack =
+  and stack =
     | Concrete of concrete_stack
-    | Abstract of abstract_stack
+    | Abstract of abstract_stack lazy_t
 
-  let force_parent states (parent : abstract_parent) =
-    match !parent with
-    | Some parent -> parent
-    | None ->
-      let states = lr1set_predecessors states in
-      let result = {states; goto = Lr1Map.empty; parent = ref None} in
-      parent := Some result;
-      result
+  let strong_pop = function
+    | Concrete t -> t.parent
+    | Abstract (lazy t) -> Abstract t.parent
 
-  let get_goto stack state =
-    match Lr1Map.find_opt state stack.goto with
-    | Some set -> set
-    | None ->
-      let set = ref IndexSet.empty in
-      stack.goto <- Lr1Map.add state set stack.goto;
-      set
+  let pop_abstract (t : abstract_stack) =
+      if Lazy.is_val t.parent
+      then Some (Lazy.force_val t.parent)
+      else None
 
-  let pop = function
-    | Concrete (Goto (_, parent)) -> Concrete parent
-    | Concrete (Base (base, parent)) ->
-      Abstract (force_parent (IndexSet.singleton base) parent)
-    | Abstract t ->
-      Abstract (force_parent t.states t.parent)
-
-  let goto stack acc nts =
-    let goto_target lr1 nt =
-      match Transition.find_goto lr1 nt with
-      | exception Not_found -> None
-      | result -> Some (Transition.target (Transition.of_goto result))
-    in
+  let rec goto stack nt =
     match stack with
+    | Abstract (lazy t) ->
+      t.goto <- IndexSet.add nt t.goto
     | Concrete t ->
-      let Goto (lr1, _) | Base (lr1, _) = t in
-      List.iter begin fun nt ->
-        match goto_target lr1 nt with
-        | None -> ()
-        | Some lr1 -> acc := Goto (lr1, t) :: !acc
-      end nts
-    | Abstract t ->
-      IndexSet.iter begin fun src ->
-        match List.filter_map (goto_target src) nts with
-        | [] -> ()
-        | targets ->
-          let set = get_goto t src in
-          set := IndexSet.union (IndexSet.of_list targets) !set
-      end t.states
-
-  let follow_transitions stack =
-    let Goto (lr1, _) | Base (lr1, _) = stack in
-    let reductions = Vector.get reductions lr1 in
-    let acc = ref [] in
-    let stack = ref (Concrete stack) in
-    Array.iteri begin fun i nts ->
-      if i <> 0 then stack := pop !stack;
-      goto !stack acc nts;
-    end reductions;
-    !acc
-
-  let rec close_transitions acc state =
-    let new_transitions = follow_transitions state in
-    let acc = new_transitions @ acc in
-    List.fold_left close_transitions acc new_transitions
-
-  module Closed_derivation = struct
-    type node = {
-      mutable children: node Lr1Map.t;
-      mutable sources: Lr1.set;
-    }
-
-    let fresh () = {children = Lr1Map.empty; sources = IndexSet.empty}
-
-    let root_node = fresh ()
-
-    let delta node lr1 =
-      match Lr1Map.find_opt lr1 node.children with
-      | Some node' -> node'
-      | None ->
-        let node' = fresh () in
-        node.children <- Lr1Map.add lr1 node' node.children;
-        node'
-
-    let register source state =
-      let rec walk node = function
-        | Goto (lr1, parent) -> walk (delta node lr1) parent
-        | Base (lr1, _parent) -> delta node lr1
-      in
-      let node = walk root_node state in
-      node.sources <- IndexSet.add source node.sources
-
-    let derive ~root ~step ~join =
-      let rmap = ref Lr1Map.empty in
-      let register derivation source =
-        match Lr1Map.find_opt source !rmap with
-        | None -> rmap := Lr1Map.add source (ref derivation) !rmap
-        | Some rderiv -> rderiv := join !rderiv derivation
-      in
-      let rec visit derivation node =
-        IndexSet.iter (register derivation) node.sources;
-        Lr1Map.iter (fun lr1 node' -> visit (step derivation lr1) node')
-          node.children
-      in
-      visit root root_node;
-      Lr1Map.map (!) !rmap
-  end
-
-  type goto_transition = {
-    sources: Lr1.set;
-    targets: Lr1.set;
-    mutable targets_closure: Lr1.set;
-  }
-
-  let equal_goto_transition a b =
-    IndexSet.equal a.sources b.sources &&
-    IndexSet.equal a.targets b.targets
-
-  let equal_goto_transition_list l =
-    List.equal equal_goto_transition l
-
-  type node = {
-    states: Lr1.set;
-    goto_transitions: goto_transition list;
-  }
-
-  type root = {
-    stack: node array;
-  }
-
-  let reconstruct_root suffix =
-    let nodes =
-      let rec aux = function
-        | None -> []
-        | Some state -> state :: aux !(state.parent)
-      in
-      aux !suffix
-    in
-    let prepare_node state =
-      let goto_transitions =
-        Lr1Map.bindings state.goto
-        |> List.map (fun (state, targets) -> (!targets, state))
-        |> IndexRefine.annotated_partition
-        |> List.map (fun (targets, sources) -> {
-              sources = IndexSet.of_list sources;
-              targets;
-              targets_closure = IndexSet.empty;
-            })
-      in
-      { states = state.states; goto_transitions; }
-    in
-    { stack = Array.of_list (List.map prepare_node nodes) }
-
-  let roots = Vector.init Lr1.n (fun lr1 ->
-      let parent = ref None in
-      let root = Base (lr1, parent) in
-      let vs = close_transitions [] root in
-      List.iter (Closed_derivation.register lr1) vs;
-      reconstruct_root parent
-    )
-
-  let reverse_deps = Vector.make Lr1.n []
-
-  let () =
-    let register_dep node {sources; targets; _} =
-      let origin = (node, sources) in
-      IndexSet.iter
-        (fun target -> Vector.set_cons reverse_deps target origin)
-        targets
-    in
-    Index.iter Lr1.n begin fun lr1 ->
-      let root = Vector.get roots lr1 in
-      Array.iteri (fun offset node ->
-          List.iter (register_dep (lr1, offset)) node.goto_transitions;
-        ) root.stack;
-    end
-
-  let goto_closure =
-    let module T = struct
-      type top_goto_closure = {
-        mutable mark: bool;
-        mutable transitions: goto_transition list;
-      }
-    end in
-    let open T in
-    let top_deps = Vector.map (fun deps ->
-        List.filter_map (function
-            | ((root, 0), _) -> Some root
-            | ((_, _), _) -> None
-          ) deps
-      ) reverse_deps
-    in
-    let top_goto_closure = Vector.map (fun node ->
-        { mark = false;
-          transitions =
-            match node.stack with
-            | [||] -> []
-            | stack -> stack.(0).goto_transitions
-        }
-      ) roots
-    in
-    let close_one acc t0 =
-      IndexSet.fold begin fun target acc ->
-        List.filter_map begin fun t' ->
-          let sources = IndexSet.inter t0.sources t'.sources in
-          if IndexSet.is_empty sources
-          then None
-          else Some {sources; targets = t'.targets; targets_closure = IndexSet.empty}
-        end (Vector.get top_goto_closure target).transitions @ acc
-      end t0.targets acc
-    in
-    let close_list transitions =
-      List.fold_left close_one transitions transitions
-    in
-    let close lr1 =
-      match (Vector.get roots lr1).stack with
-      | [||] -> []
-      | stack -> close_list stack.(0).goto_transitions
-    in
-    let todo = ref [] in
-    let update lr1 =
-      let top_goto = Vector.get top_goto_closure lr1 in
-      top_goto.mark <- false;
-      let transitions = close lr1 in
-      if not (equal_goto_transition_list transitions top_goto.transitions)
-      then (
-        top_goto.transitions <- transitions;
-        List.iter (fun dep ->
-            let top_goto' = Vector.get top_goto_closure dep in
-            if not top_goto'.mark then
-              (top_goto'.mark <- true; todo := dep :: !todo)
-          ) (Vector.get top_deps lr1)
-      )
-    in
-    let rec loop () =
-      match List.rev !todo with
-      | [] -> ()
-      | xs ->
-        todo := [];
-        List.iter update xs;
-        loop ()
-    in
-    Index.iter Lr1.n update;
-    loop ();
-    let final_list node =
-      node.goto_transitions
-      |> close_list
-      |> List.map (fun {sources; targets; _} -> sources, targets)
-      |> IndexRefine.annotated_partition
-      |> List.map (fun (sources, targetss) ->
-          {
-            sources;
-            targets = List.fold_left IndexSet.union IndexSet.empty targetss;
-            targets_closure = IndexSet.empty;
-          }
-        )
-    in
-    Vector.map (fun root -> Array.map final_list root.stack) roots
-
-  let reachable_goto_closure =
-    (* Compute reachable goto closure *)
-    let module X =
-      Fix.Fix.ForType
-        (struct type t = Lr1.t * int end)
-        (struct
-          type property = Lr1.set
-          let bottom = IndexSet.empty
-          let equal = IndexSet.equal
-          let is_maximal _ = false
-        end)
-    in
-    let equations (index, step) valuation =
-      let len = Array.length (Vector.get roots index).stack in
-      assert (step <= len);
-      if step >= len then
-        IndexSet.empty
-      else
-        List.fold_left (fun acc {targets; _} ->
-            IndexSet.fold (fun target acc ->
-                IndexSet.union (valuation (target, 0)) acc
-              ) targets (IndexSet.union targets acc)
-          )
-          (valuation (index, step + 1))
-          (Vector.get goto_closure index).(step)
-    in
-    let fix = X.lfp equations in
-    Vector.init Lr1.n (fun root ->
-        Array.init
-          (Array.length (Vector.get roots root).stack)
-          (fun i -> fix (root, i))
+      let state = Transition.find_goto_target t.state nt in
+      if not (Lr1Map.mem state t.goto) then (
+        let target = {state; goto=Lr1Map.empty; parent=stack} in
+        t.goto <- Lr1Map.add state target t.goto;
+        populate target
       )
 
-  let () =
-    Index.iter Lr1.n begin fun lr1 ->
-      Array.iter begin fun transitions ->
-        List.iter (fun tr ->
-            tr.targets_closure <-
-              IndexSet.union
-                tr.targets
-                (indexset_bind tr.targets (fun lr1 ->
-                     match Vector.get reachable_goto_closure lr1 with
-                     | [||] -> IndexSet.empty
-                     | stack -> stack.(0)
-                   ))
-          ) transitions
-      end (Vector.get goto_closure lr1)
-    end
+  and populate state =
+    let _ : stack =
+      Array.fold_left (fun stack nts ->
+          List.iter (goto stack) nts;
+          strong_pop stack
+        ) (Concrete state) (Vector.get reductions state.state)
+    in
+    ()
+
+  let rec make_abstract states = lazy (
+    let states = lr1set_predecessors states in
+    { states; goto = IndexSet.empty; parent = make_abstract states }
+  )
+
+  let make_root state =
+    let state = {
+      state;
+      goto = Lr1Map.empty;
+      parent = Abstract (make_abstract (IndexSet.singleton state))
+    } in
+    populate state;
+    state
+
+  (*let roots = Vector.init Lr1.n make_root*)
 end
 
 let lexbuf =
@@ -790,54 +535,6 @@ let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
     else
       sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
-type node =
-  | Root
-  | Node of {root: Lr1.t; step: int}
-
-let compare_node n1 n2 = match n1, n2 with
-  | Root, Root -> 0
-  | Root, Node _ -> -1
-  | Node _, Root -> +1
-  | Node n1, Node n2 ->
-    match compare_index n1.root n2.root with
-    | 0 -> Int.compare n1.step n2.step
-    | n -> n
-
-let compare_item (i1, p1) (i2, p2) =
-    match compare_index i1 i2 with
-    | 0 -> Int.compare p1 p2
-    | n -> n
-
-let expand_root root step =
-  let {Redgraph. stack} = Vector.get Redgraph.roots root in
-  if step >= Array.length stack then
-    []
-  else
-    [Node {root; step}]
-
-type derivation = Node of Lr1.t * derivation list
-
-let derivations =
-  Redgraph.Closed_derivation.derive
-    ~root:[]
-    ~step:(fun acc lr1 -> [Node (lr1, acc)])
-    ~join:(@)
-
-let expand_node deriv nodes state = function
-  | Root ->
-    nodes := expand_root state 0 @ !nodes
-  | Node {root; step} ->
-    nodes := expand_root root (step + 1) @ !nodes;
-    List.iter begin fun {Redgraph. sources; targets; _} ->
-      if IndexSet.mem state sources then
-        IndexSet.iter begin fun target ->
-          nodes := expand_root target 1 @ !nodes;
-          match Lr1Map.find_opt target derivations with
-          | None -> ()
-          | Some lr1s -> deriv := lr1s @ !deriv
-        end targets
-    end (Vector.get Redgraph.goto_closure root).(step)
-
 let print_item (prod, pos) =
   let rhs = Production.rhs prod in
   let path = ref [] in
@@ -857,50 +554,87 @@ let print_items lr1 =
       print_endline (print_item item)
     ) (Lr1.items lr1)
 
+let rec get_states acc env =
+  let module I = Parser_raw.MenhirInterpreter in
+  let loc =
+    match I.top env with
+    | Some (I.Element (_,_,start,stop)) -> Some (start, stop)
+    | None -> None
+  in
+  let acc = (I.current_state_number env, loc) :: acc in
+  match I.pop env with
+  | None -> acc
+  | Some env' -> get_states acc env'
+
+let get_states env =
+  List.rev (get_states [] env)
+
+let print_lr1 state =
+  match grammar.g_lr0_states.((Lr1.to_lr0 state :> int)).lr0_incoming with
+  | None -> None
+  | Some sym -> Some (symbol_name (import_symbol sym))
+
+let rec print_concrete_children acc node =
+  Lr1Map.iter (fun _ node -> print_concrete acc node) node.Redgraph.goto
+
+and print_concrete acc node =
+  let acc = node.state :: acc in
+  print_concrete_children acc node;
+  print_string "\x1b[1;33m\t\t↱ ";
+  print_endline
+    (String.concat " " (List.filter_map print_lr1 (List.rev acc)));
+  if not !opt_no_reductions_items then (
+    print_string "\x1b[0;36m";
+    print_items node.state;
+  )
+
+let get_root_parent root =
+  match root.Redgraph.parent with
+  | Concrete _ -> assert false
+  | Abstract t -> if Lazy.is_val t then Some (Lazy.force t) else None
+
 let process_result lexbuf = function
   | None -> print_endline "Successful parse"
   | Some env ->
+    let stack = get_states env in
     Format.printf "%a, parser stack (most recent first):\n%!"
       Location.print_loc (Location.curr lexbuf);
-    let module I = Parser_raw.MenhirInterpreter in
-    let rec get_states acc env =
-      let loc =
-        match I.top env with
-        | Some (I.Element (_,_,start,stop)) -> Some (start, stop)
-        | None -> None
-      in
-      let acc = (I.current_state_number env, loc) :: acc in
-      match I.pop env with
-      | None -> acc
-      | Some env' -> get_states acc env'
-    in
-    let stack = List.rev (get_states [] env) in
-    let nodes = ref [Root] in
-    let print_lr1 state =
-      match grammar.g_lr0_states.((Lr1.to_lr0 state :> int)).lr0_incoming with
-      | None -> None
-      | Some sym -> Some (symbol_name (import_symbol sym))
-    in
+    let reds = ref [] in
     List.iteri begin fun i (state, loc) ->
       let state = Index.of_int Lr1.n state in
       if not !opt_no_reductions then (
-        let deriv = ref [] in
-        let nodes' = !nodes in
-        nodes := [];
-        List.iter (expand_node deriv nodes state) nodes';
-        let deriv = !deriv in
-        let rec loop acc (Node (lr1, derivations)) =
-          let acc = lr1 :: acc in
-          List.iter (loop acc) derivations;
-          print_string "\x1b[1;33m\t\t↱ ";
-          print_endline
-            (String.concat " " (List.filter_map print_lr1 (List.rev acc)));
-          if not !opt_no_reductions_items then (
-            print_string "\x1b[0;36m";
-            print_items lr1;
-          )
-        in
-        List.iter (loop []) deriv;
+        if i = 0 then (
+          let root = Redgraph.make_root state in
+          print_concrete_children [] root;
+          reds := Option.to_list (get_root_parent root);
+        ) else (
+          let visited = ref IndexSet.empty in
+          let visit nt =
+            if IndexSet.mem nt !visited then None
+            else (
+              visited := IndexSet.add nt !visited;
+              let state' = Transition.find_goto_target state nt in
+              let root = Redgraph.make_root state' in
+              print_concrete [] root;
+              get_root_parent root
+            )
+          in
+          let rec fix acc = function
+            | [] -> acc
+            | fresh ->
+              let fresh =
+                List.fold_left (fun acc (abs : Redgraph.abstract_stack) ->
+                    IndexSet.fold (fun nt acc ->
+                        match visit nt with
+                        | None -> acc
+                        | Some abs -> abs :: acc
+                      ) abs.goto acc
+                  ) [] fresh
+              in
+              fix (fresh @ acc) fresh
+          in
+          reds := List.filter_map Redgraph.pop_abstract (fix [] !reds)
+        );
       );
       print_string "\x1b[0m- ";
       print_string (
