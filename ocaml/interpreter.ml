@@ -57,6 +57,11 @@ let grammar : MenhirSdk.Cmly_format.grammar =
 
 open Fix.Indexing
 
+let cons_option x xs =
+  match x with
+  | None -> xs
+  | Some x -> x :: xs
+
 let array_set_add arr index value =
   arr.(index) <- IndexSet.add value arr.(index)
 
@@ -134,17 +139,20 @@ let all_terminals =
 
 module Production = struct
   include (val const (Array.length grammar.g_productions))
+
+  let get_prod p = grammar.g_productions.((p : n index :> int))
+
   let rhs =
     Vector.init n (fun prod ->
         Array.map
           (fun (sym, name, attrs) -> import_symbol sym, name, attrs)
-          grammar.g_productions.((prod :> int)).p_rhs
+          (get_prod prod).p_rhs
       )
     |> Vector.get
 
-  let lhs prod =
-    Index.of_int Nonterminal.n
-      grammar.g_productions.((prod : n index :> int)).p_lhs
+  let lhs prod = Index.of_int Nonterminal.n (get_prod prod).p_lhs
+
+  let kind prod = (get_prod prod).p_kind
 end
 
 (* ---------------------------------------------------------------------- *)
@@ -440,7 +448,12 @@ module Redgraph = struct
       in
       let productions =
         Lr1.reductions lr1
-        |> List.map (fun (_, ps) -> prepare_goto (List.hd ps))
+        |> List.filter_map (fun (_, ps) ->
+            let prod = List.hd ps in
+            match Production.kind prod with
+            | `REGULAR -> Some (prepare_goto prod)
+            | `START -> None
+          )
         |> List.sort_uniq order
       in
       let depth = List.fold_left (fun x (d, _) -> max x d) (-1) productions in
@@ -452,7 +465,8 @@ module Redgraph = struct
 
   type abstract_stack = {
     states: Lr1.set;
-    mutable goto: Nonterminal.n indexset;
+    mutable goto_nt: Nonterminal.set;
+    mutable goto_closure: Lr1.set Lr1Map.t;
     parent: abstract_stack lazy_t;
   }
 
@@ -478,7 +492,7 @@ module Redgraph = struct
   let rec goto stack nt =
     match stack with
     | Abstract (lazy t) ->
-      t.goto <- IndexSet.add nt t.goto
+      t.goto_nt <- IndexSet.add nt t.goto_nt
     | Concrete t ->
       let state = Transition.find_goto_target t.state nt in
       if not (Lr1Map.mem state t.goto) then (
@@ -498,19 +512,75 @@ module Redgraph = struct
 
   let rec make_abstract states = lazy (
     let states = lr1set_predecessors states in
-    { states; goto = IndexSet.empty; parent = make_abstract states }
+    { states;
+      goto_nt = IndexSet.empty;
+      goto_closure = Lr1Map.empty;
+      parent = make_abstract states }
   )
 
-  let make_root state =
-    let state = {
-      state;
-      goto = Lr1Map.empty;
-      parent = Abstract (make_abstract (IndexSet.singleton state))
-    } in
-    populate state;
-    state
+  let get_root =
+    let make_root state =
+      let state = {
+        state;
+        goto = Lr1Map.empty;
+        parent = Abstract (make_abstract (IndexSet.singleton state))
+      } in
+      populate state;
+      state
+    in
+    Vector.get (Vector.init Lr1.n make_root)
 
-  (*let roots = Vector.init Lr1.n make_root*)
+  let get_root_parent lr1 =
+    match (get_root lr1).parent with
+    | Concrete _ -> assert false
+    | Abstract t ->
+      if Lazy.is_val t
+      then Some (Lazy.force_val t)
+      else None
+
+  let goto_nts =
+    let goto_nts lr1 =
+      match get_root_parent lr1 with
+      | None -> IndexSet.empty
+      | Some t -> t.goto_nt
+    in
+    let vec = Vector.init Lr1.n goto_nts in
+    Vector.get vec
+
+  let close abs =
+    let close_st st =
+      let visited = ref IndexSet.empty in
+      let rec visit_nt nt =
+        let st' =
+          try Transition.find_goto_target st nt
+          with Not_found ->
+            Printf.eprintf "goto(#%d,%s): error\nitems:\n%!"
+              (st :> int) (Nonterminal.print nt);
+            List.iter prerr_endline (print_items st);
+            assert false
+        in
+        if not (IndexSet.mem st' !visited) then (
+          visited := IndexSet.add st' !visited;
+          visit_nts (goto_nts st')
+        )
+      and visit_nts nts =
+        IndexSet.iter visit_nt nts
+      in
+      visit_nts abs.goto_nt;
+      !visited
+    in
+    let add_st st acc = Lr1Map.add st (close_st st) acc in
+    if not (IndexSet.is_empty abs.goto_nt) then
+      abs.goto_closure <- IndexSet.fold add_st abs.states Lr1Map.empty
+
+  let rec close_all abs =
+      close abs;
+      if Lazy.is_val abs.parent then
+        close_all (Lazy.force abs.parent)
+
+  let () =
+    Index.iter Lr1.n
+      (fun lr1 -> Option.iter close_all (get_root_parent lr1))
 end
 
 let lexbuf =
@@ -603,36 +673,23 @@ let process_result lexbuf = function
       let state = Index.of_int Lr1.n state in
       if not !opt_no_reductions then (
         if i = 0 then (
-          let root = Redgraph.make_root state in
+          let root = Redgraph.get_root state in
           print_concrete_children [] root;
           reds := Option.to_list (get_root_parent root);
         ) else (
-          let visited = ref IndexSet.empty in
-          let visit nt =
-            if IndexSet.mem nt !visited then None
-            else (
-              visited := IndexSet.add nt !visited;
-              let state' = Transition.find_goto_target state nt in
-              let root = Redgraph.make_root state' in
-              print_concrete [] root;
-              get_root_parent root
-            )
+          let expand abs =
+            match Lr1Map.find_opt state abs.Redgraph.goto_closure with
+            | None -> [abs]
+            | Some sts ->
+              IndexSet.fold (fun st' acc ->
+                  let root = Redgraph.get_root st' in
+                  print_concrete [] root;
+                  cons_option (get_root_parent root) acc
+                ) sts [abs]
           in
-          let rec fix acc = function
-            | [] -> acc
-            | fresh ->
-              let fresh =
-                List.fold_left (fun acc (abs : Redgraph.abstract_stack) ->
-                    IndexSet.fold (fun nt acc ->
-                        match visit nt with
-                        | None -> acc
-                        | Some abs -> abs :: acc
-                      ) abs.goto acc
-                  ) [] fresh
-              in
-              fix (fresh @ acc) fresh
-          in
-          reds := List.filter_map Redgraph.pop_abstract (fix [] !reds)
+          reds :=
+            List.filter_map Redgraph.pop_abstract
+              (List.concat_map expand !reds)
         );
       );
       print_string "\x1b[0m- ";
