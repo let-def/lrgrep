@@ -103,6 +103,7 @@ end
 module Nonterminal = struct
   include (val const (Array.length grammar.g_nonterminals))
   type t = n index
+  type set = n indexset
   let of_int = Index.of_int n
   let count = cardinal n
   let print n = grammar.g_nonterminals.((n : t :> int)).n_name
@@ -200,6 +201,33 @@ let all_states =
 let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
   IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
+
+let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
+    let sprintf = Printf.sprintf in
+    let sline = loc_start.pos_lnum in
+    let scol  = loc_start.pos_cnum - loc_start.pos_bol in
+    let eline = loc_end.pos_lnum in
+    let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
+    if sline = eline then
+      sprintf "line %d:%d-%d\t" sline scol ecol
+    else
+      sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
+
+let print_item (prod, pos) =
+  let rhs = Production.rhs prod in
+  let path = ref [] in
+  let add_dot i = if pos = i then path := "." :: !path in
+  add_dot (Array.length rhs);
+  for i = Array.length rhs - 1 downto 0 do
+    let sym, _, _ = rhs.(i) in
+    path := symbol_name sym :: !path;
+    add_dot i;
+  done;
+  path := symbol_name (N (Production.lhs prod)) :: "::=" :: !path;
+  String.concat " " !path
+
+let print_items lr1 =
+  List.map (fun item -> "\t\t  " ^ print_item item) (Lr1.items lr1)
 
 (* ---------------------------------------------------------------------- *)
 
@@ -524,35 +552,6 @@ let do_parse
   | I.InputNeeded env as cp -> loop env cp
   | _ -> assert false
 
-let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
-    let sprintf = Printf.sprintf in
-    let sline = loc_start.pos_lnum in
-    let scol  = loc_start.pos_cnum - loc_start.pos_bol in
-    let eline = loc_end.pos_lnum in
-    let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
-    if sline = eline then
-      sprintf "line %d:%d-%d\t" sline scol ecol
-    else
-      sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
-
-let print_item (prod, pos) =
-  let rhs = Production.rhs prod in
-  let path = ref [] in
-  let add_dot i = if pos = i then path := "." :: !path in
-  add_dot (Array.length rhs);
-  for i = Array.length rhs - 1 downto 0 do
-    let sym, _, _ = rhs.(i) in
-    path := symbol_name sym :: !path;
-    add_dot i;
-  done;
-  path := symbol_name (N (Production.lhs prod)) :: "::=" :: !path;
-  String.concat " " !path
-
-let print_items lr1 =
-  List.iter (fun item ->
-      print_string "\t\t  ";
-      print_endline (print_item item)
-    ) (Lr1.items lr1)
 
 let rec get_states acc env =
   let module I = Parser_raw.MenhirInterpreter in
@@ -585,7 +584,7 @@ and print_concrete acc node =
     (String.concat " " (List.filter_map print_lr1 (List.rev acc)));
   if not !opt_no_reductions_items then (
     print_string "\x1b[0;36m";
-    print_items node.state;
+    List.iter print_endline (print_items node.state);
   )
 
 let get_root_parent root =
@@ -652,7 +651,7 @@ let process_result lexbuf = function
       end;
       if i = 0 || !opt_stack_items then (
         print_string "\x1b[0;36m";
-        print_items state;
+        List.iter print_endline (print_items state);
       );
       print_string "\x1b[0m";
     end stack;
