@@ -643,15 +643,13 @@ let print_lr1 state =
   | None -> None
   | Some sym -> Some (symbol_name (import_symbol sym))
 
-let rec print_concrete_children acc node =
-  Lr1Map.iter (fun _ node -> print_concrete acc node) node.Redgraph.goto
+let rec print_concrete_children n node =
+  Lr1Map.iter (fun _ node -> print_concrete n node) node.Redgraph.goto
 
-and print_concrete acc node =
-  let acc = node.state :: acc in
-  print_concrete_children acc node;
-  print_string "\x1b[1;33m\t\t↱ ";
-  print_endline
-    (String.concat " " (List.filter_map print_lr1 (List.rev acc)));
+and print_concrete n node =
+  print_concrete_children (n + 1) node;
+  Printf.printf "\x1b[1;33m\t\t%s↱ %s\n"
+    (String.make n ' ') (Option.get (print_lr1 node.state));
   if not !opt_no_reductions_items then (
     print_string "\x1b[0;36m";
     List.iter print_endline (print_items node.state);
@@ -674,7 +672,7 @@ let process_result lexbuf = function
       if not !opt_no_reductions then (
         if i = 0 then (
           let root = Redgraph.get_root state in
-          print_concrete_children [] root;
+          print_concrete_children 0 root;
           reds := Option.to_list (get_root_parent root);
         ) else (
           let expand abs =
@@ -683,7 +681,7 @@ let process_result lexbuf = function
             | Some sts ->
               IndexSet.fold (fun st' acc ->
                   let root = Redgraph.get_root st' in
-                  print_concrete [] root;
+                  print_concrete 0 root;
                   cons_option (get_root_parent root) acc
                 ) sts [abs]
           in
