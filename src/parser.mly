@@ -83,9 +83,9 @@ definition:
 
 case:
 | regexp ACTION
-  { {pattern = $1; action = Some $2} }
+  { {pattern = $1; action = Some $2; reached=false} }
 | regexp UNREACHABLE
-  { {pattern = $1; action = None} }
+  { {pattern = $1; action = None; reached=false} }
 ;
 
 symbol:
@@ -100,24 +100,20 @@ wild_symbol:
 | symbol { Some $1 }
 ;
 
-capture:
-| "as" IDENT { Some $2 }
-|            { None }
-;
-
 atom:
-| "_" capture
-  { Wildcard $2 }
-| symbol capture
-  { Symbol ($1, $2) }
-| "[" prefix=wild_symbol* "." suffix=wild_symbol* "]" capture=capture
-  { Item {lhs=None; prefix; suffix; capture} }
-| "[" lhs=symbol ":" prefix=wild_symbol* "." suffix=wild_symbol* "]" capture=capture
-  { Item {lhs=Some lhs; prefix; suffix; capture} }
+| "_"    { Wildcard }
+| symbol { Symbol $1 }
+| "[" lhs=terminated(symbol,":")? prefix=wild_symbol* "." suffix=wild_symbol* "]"
+  { Item {lhs; prefix; suffix} }
 
 regterm:
-| atom
-  { $1 }
+| atom preceded("as",IDENT)?
+  { Atom {
+      desc=$1;
+      capture=$2;
+      position=make_position $startpos;
+      reached=false;
+  } }
 | regexp "*"
   { Repetition ($1, make_position $startpos($2)) }
 | regexp "?"

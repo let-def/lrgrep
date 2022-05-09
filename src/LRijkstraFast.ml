@@ -8,42 +8,35 @@
 (*                                                                            *)
 (******************************************************************************)
 
-open Fix.Indexing
+(*open Fix.Indexing
+open Utils
+open BitSet
 
 module Make
     (Grammar : MenhirSdk.Cmly_api.GRAMMAR)
-    (TerminalSet : Utils.BitSet.S0 with type element = Grammar.terminal)
-    (Lr1C : sig
+    (Lr1 : sig
        include CARDINAL
        val of_g : Grammar.lr1 -> n index
        val to_g : n index -> Grammar.lr1
        end)
-    (X : sig
+    (Terminal : sig
        (* The set of all real terminals, useful for encoding default reduction *)
-       val all_terminals : TerminalSet.t
+       include CARDINAL
+       val of_g : Grammar.terminal -> n index
+       val to_g : n index -> Grammar.terminal
+       val all : n Utils.BitSet.IndexSet.t
      end)()
 =
 struct
-  open Grammar
-  open X
+
+  module Nonterminal = Grammar.Nonterminal
 
   (* ---------------------------------------------------------------------- *)
 
   (* Useful definitions *)
 
-  (* Partition refinement algorithm for sets of terminals *)
-  let terminal_partition =
-    let module TerminalPartition = Utils.Refine.Make(struct
-        type 'a t = TerminalSet.t
-        include (TerminalSet : Utils.BitSet.S0 with type t := TerminalSet.t)
-      end) in
-    fun sets ->
-      (* Removing duplicates can speed up partitioning significantly *)
-      let sets = List.sort_uniq TerminalSet.compare sets in
-      TerminalPartition.partition sets
-
   (* Testing class inclusion *)
-  let quick_subset = TerminalSet.quick_subset
+  let quick_subset = IndexSet.quick_subset
 
   (* The algorithm uses many typed vectors (provided by Fix.Numbering.Typed) *)
   open Fix.Indexing
@@ -82,30 +75,30 @@ struct
 
     (* [find_goto s nt] finds the goto transition originating from [s] and
        labelled by [nt], or raise [Not_found].  *)
-    val find_goto : Lr1C.n index -> Nonterminal.t -> goto index
+    val find_goto : Lr1.n index -> Nonterminal.t -> goto index
 
     (* Get the source state of a transition *)
-    val source : any index -> Lr1C.n index
+    val source : any index -> Lr1.n index
 
     (* Get the target state of a transition *)
-    val target : any index -> Lr1C.n index
+    val target : any index -> Lr1.n index
 
     (* Symbol that labels a transition *)
-    val symbol : any index -> symbol
+    val symbol : any index -> Grammar.symbol
 
     (* Symbol that labels a goto transition *)
-    val goto_symbol : goto index -> Nonterminal.t
+    val goto_symbol : goto index -> Grammar.nonterminal
 
     (* Symbol that labels a shift transition *)
-    val shift_symbol : shift index -> Terminal.t
+    val shift_symbol : shift index -> Grammar.terminal
 
     (* [successors s] returns all the transitions [tr] such that
        [source tr = s] *)
-    val successors : Lr1C.n index -> any index list
+    val successors : Lr1.n index -> any index list
 
     (* [predecessors s] returns all the transitions [tr] such that
        [target tr = s] *)
-    val predecessors : Lr1C.n index -> any index list
+    val predecessors : Lr1.n index -> any index list
   end =
   struct
 
@@ -118,22 +111,22 @@ struct
     module Shift = Gensym()
 
     let terminal_real t =
-      match Terminal.kind t with
+      match Grammar.Terminal.kind t with
       | `EOF | `REGULAR -> true
       | `PSEUDO | `ERROR -> false
 
     let () =
       (* Count goto and shift transitions by iterating on all states and
          transitions *)
-      Lr1.iter begin fun lr1 ->
+      Index.iter Lr1.n begin fun lr1 ->
         List.iter begin fun (sym, _) ->
           match sym with
-          | T t ->
+          | Grammar.T t ->
             if terminal_real t then
               ignore (Shift.fresh ())
-          | N _ ->
+          | Grammar.N _ ->
             ignore (Goto.fresh ())
-        end (Lr1.transitions lr1)
+        end (Grammar.Lr1.transitions (Lr1.to_g lr1))
       end
 
     type goto = Goto.n
@@ -158,10 +151,10 @@ struct
        and then populate them by iterating over all transitions.
     *)
 
-    let sources = Vector.make' any (fun () -> Index.of_int Lr1C.n 0)
-    let targets = Vector.make' any (fun () -> Index.of_int Lr1C.n 0)
+    let sources = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
+    let targets = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
 
-    let t_symbols = Vector.make' shift (fun () -> Terminal.of_int 0)
+    let t_symbols = Vector.make' shift (fun () -> Grammar.Terminal.of_int 0)
     let nt_symbols = Vector.make' goto (fun () -> Nonterminal.of_int 0)
 
     (* Hash tables to associate information to the pair of
@@ -180,12 +173,12 @@ struct
     let t_pack lr1 t =
       (* Custom function to key into t_table: compute a unique integer from
          an lr1 state and a terminal. *)
-      Index.to_int lr1 * Terminal.count + Terminal.to_int t
+      Index.to_int lr1 * Grammar.Terminal.count + Grammar.Terminal.to_int t
 
     (* A vector to store the predecessors of an lr1 state.
        We cannot compute them directly, we discover them by exploring the
        successor relation below. *)
-    let predecessors = Vector.make Lr1C.n []
+    let predecessors = Vector.make Lr1.n []
 
     let successors =
       (* We populate all the data structures allocated above, i.e.
@@ -194,14 +187,14 @@ struct
          nt_table, by iterating over all successors. *)
       let next_goto = Index.enumerate goto in
       let next_shift = Index.enumerate shift in
-      Vector.init Lr1C.n begin fun source ->
+      Vector.init Lr1.n begin fun source ->
         List.fold_left begin fun acc (sym, target) ->
           match sym with
             | T t when not (terminal_real t) ->
               (* Ignore pseudo-terminals *)
               acc
             | _ ->
-              let target = Lr1C.of_g target in
+              let target = Lr1.of_g target in
               let index = match sym with
                 | T t ->
                   let index = next_shift () in
@@ -218,7 +211,7 @@ struct
               Vector.set targets index target;
               Vector.set_cons predecessors target index;
               index :: acc
-        end [] (Lr1.transitions (Lr1C.to_g source))
+        end [] (Lr1.transitions (Lr1.to_g source))
       end
 
     let successors lr1 = Vector.get successors lr1
@@ -264,7 +257,7 @@ struct
       (* The lr1 state at the top of the stack before reducing.
          That is [state] can reduce [production] when the lookahead terminal
          is in [lookahead]. *)
-      state: Lr1C.n index;
+      state: Lr1.n index;
     }
 
     (* [goto_transition tr] lists all the reductions that ends up
@@ -276,7 +269,7 @@ struct
       production: Production.t;
       lookahead: TerminalSet.t;
       steps: Transition.any index list;
-      state: Lr1C.n index;
+      state: Lr1.n index;
     }
 
     let table = Vector.make Transition.goto []
@@ -317,7 +310,7 @@ struct
     (* [get_reductions lr1] returns the list of productions and the lookahead
        sets that allow reducing them from state [lr1] *)
     let get_reductions lr1 =
-      let lr1 = Lr1C.to_g lr1 in
+      let lr1 = Lr1.to_g lr1 in
       match has_default_reduction lr1 with
       | Some prod ->
         (* State has a default reduction, the lookahead can be any terminal *)
@@ -346,7 +339,7 @@ struct
 
     let () =
       (* Populate [table] with the reductions of all state *)
-      Index.iter Lr1C.n
+      Index.iter Lr1.n
         (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1))
 
     let goto_transition tr = Vector.get table tr
@@ -367,7 +360,7 @@ struct
   module Classes = struct
 
     (* A node of the graph is either an lr1 state or a goto transition *)
-    module Node = (val sum Lr1C.n Transition.goto)
+    module Node = (val sum Lr1.n Transition.goto)
 
     (* Represents the dependency graph of Equation 7-9, to compute the SCCs *)
     module Gr = struct
@@ -377,7 +370,7 @@ struct
       let index = Index.to_int
 
       let visit_lr1 f lr1 =
-        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
+        match Lr0.incoming (Lr1.lr0 (Lr1.to_g lr1)) with
         | None | Some (T _) -> ()
         | Some (N _) ->
           List.iter (fun tr ->
@@ -462,8 +455,8 @@ struct
 
     (* Initialize classes of initial states and of states whose incoming
        symbol is a terminal *)
-    let () = Index.iter Lr1C.n (fun lr1 ->
-        match Lr0.incoming (Lr1.lr0 (Lr1C.to_g lr1)) with
+    let () = Index.iter Lr1.n (fun lr1 ->
+        match Lr0.incoming (Lr1.lr0 (Lr1.to_g lr1)) with
         | Some (N _) -> ()
         | None | Some (T _) ->
           Vector.set classes (Node.inj_l lr1) [all_terminals]
@@ -1148,3 +1141,4 @@ struct
     include Fix.DataFlow.ForCustomMaps(Property)(Graph)(CostMap)(MarkMap)
   end
 end
+  *)

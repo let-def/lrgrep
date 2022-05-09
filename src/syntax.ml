@@ -16,18 +16,24 @@ type symbol =
   | Name of string
   | Apply of string * symbol list
 
-type capture = string option
-
-type regular_term =
-  | Symbol of symbol * capture
-
+type atom_desc =
+  | Symbol of symbol
   | Item of {
       lhs: symbol option;
       prefix: symbol option list;
       suffix: symbol option list;
-      capture: capture;
     }
-  | Wildcard of capture
+  | Wildcard
+
+type atom = {
+  desc : atom_desc;
+  capture: string option;
+  position: position;
+  mutable reached: bool;
+}
+
+type regular_term =
+  | Atom of atom
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression * position
   | Reduce of regular_expression * location
@@ -38,6 +44,7 @@ and regular_expression =
 type clause = {
   pattern: regular_expression;
   action: ocaml_code option;
+  mutable reached: bool;
 }
 
 type entry = {
@@ -92,9 +99,6 @@ let print_option f = function
   | None -> Cmon.constant "None"
   | Some x -> Cmon.constructor "Some" (f x)
 
-let print_capture c =
-  print_option Cmon.string c
-
 let rec print_symbol = function
   | Name sym -> Cmon.constructor "Name" (Cmon.string sym)
   | Apply (sym, args) -> Cmon.construct "Apply" [
@@ -102,18 +106,27 @@ let rec print_symbol = function
       Cmon.list (List.map print_symbol args);
     ]
 
-let rec print_regular_term = function
-  | Symbol (sym, capture) ->
-    Cmon.construct "Symbol" [print_symbol sym; print_capture capture]
-  | Wildcard capture ->
-    Cmon.construct "Wildcard" [print_capture capture]
-  | Item {lhs; prefix; suffix; capture} ->
+let print_atom_desc = function
+  | Symbol sym ->
+    Cmon.construct "Symbol" [print_symbol sym]
+  | Wildcard ->
+    Cmon.constant "Wildcard"
+  | Item {lhs; prefix; suffix} ->
     Cmon.crecord "Item" [
       "lhs"    , print_option print_symbol lhs;
       "prefix" , Cmon.list (List.map (print_option print_symbol) prefix);
       "suffix" , Cmon.list (List.map (print_option print_symbol) suffix);
-      "capture", print_capture capture;
     ]
+
+let print_atom {desc; capture; position; reached=_} =
+  Cmon.record [
+    "desc"     , print_atom_desc desc;
+    "capture"  , print_option Cmon.string capture;
+    "position" , print_position position;
+  ]
+
+let rec print_regular_term = function
+  | Atom atom -> Cmon.constructor "Atom" (print_atom atom)
   | Alternative (re1, re2) ->
     Cmon.construct "Alternative" [
       print_regular_expression re1;
@@ -139,7 +152,7 @@ and print_regular_expression re =
   in
   Cmon.list (List.map print_regular_term re)
 
-let print_clause {pattern; action} =
+let print_clause {pattern; action; reached=_} =
   Cmon.record [
     "pattern", print_regular_expression pattern;
     "action", print_option print_ocamlcode action;
@@ -160,52 +173,6 @@ let print_definition {header; entrypoints; trailer} : Cmon.t =
     "entrypoints", Cmon.list (List.map print_entrypoints entrypoints);
     "trailer", print_ocamlcode trailer;
   ]
-
-exception Illformed of {msg: string; file: string; line: int; col: int}
-
-let illformed loc fmt =
-  Printf.ksprintf (fun msg -> raise (Illformed {
-      msg;
-      file = loc.loc_file;
-      line = loc.start_line;
-      col = loc.start_col;
-    })) fmt
-
-type context =
-  | Reducible
-  | Inside_repetition of position
-  | Inside_sequence of position
-
-let rec check_wellformed_term context = function
-  | (Symbol _ | Item _ | Wildcard _) -> ()
-  | Alternative (re1, re2) ->
-    check_wellformed context re1;
-    check_wellformed context re2
-  | Repetition (re, pos) ->
-    check_wellformed (Inside_repetition pos) re
-  | Reduce (re, loc) ->
-    begin match context with
-      | Reducible -> check_wellformed Reducible re
-      | Inside_repetition {line; col} ->
-        illformed loc
-          "Reduce operator cannot appear inside \
-           repetition (started at line %d, character %d)"
-          line col
-      | Inside_sequence {line; col} ->
-        illformed loc
-          "Reduce operator cannot appear inside a sequence \
-           (started at line %d, character %d)"
-          line col
-    end
-
-and check_wellformed context = function
-  | [] -> ()
-  | (x, {line; col}) :: xs ->
-    check_wellformed_term context x;
-    let context = Inside_sequence {line; col} in
-    List.iter (fun (re, _) -> check_wellformed_term context re) xs
-
-let check_wellformed x = check_wellformed Reducible x
 
 type prompt_sentence =
   | Prompt_interpret of symbol list
