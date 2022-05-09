@@ -198,7 +198,6 @@ module Lr1Map = Map.Make(struct
     type t = Lr1.t
     let compare = compare_index
   end)
-module IndexRefine = Refine.Make(Utils.BitSet.IndexSet)
 
 let all_states =
   let acc = ref IndexSet.empty in
