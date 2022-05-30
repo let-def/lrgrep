@@ -36,7 +36,7 @@ type regular_term =
   | Atom of atom
   | Alternative of regular_expression * regular_expression
   | Repetition of regular_expression * position
-  | Reduce of regular_expression * location
+  | Reduce of location
 
 and regular_expression =
   (regular_term * position) list
@@ -137,11 +137,8 @@ let rec print_regular_term = function
       print_regular_expression re;
       print_position pos;
     ]
-  | Reduce (re, loc) ->
-    Cmon.construct "Reduce" [
-      print_regular_expression re;
-      print_location loc;
-    ]
+  | Reduce loc ->
+    Cmon.construct "Reduce" [print_location loc]
 
 and print_regular_expression re =
   let print_regular_term (term, pos) =

@@ -50,7 +50,7 @@ open Syntax
 %nonassoc "?" "*" (*"+"*)
 (*%left "#"*)
 (*%nonassoc IDENT "_" "[" "("*)
-%left "<-" ";"
+%left ";"
 
 %start <Syntax.lexer_definition> lexer_definition
 %start <Syntax.prompt_sentence> prompt_sentence
@@ -103,8 +103,14 @@ wild_symbol:
 atom:
 | "_"    { Wildcard }
 | symbol { Symbol $1 }
-| "[" lhs=terminated(symbol,":")? prefix=wild_symbol* "." suffix=wild_symbol* "]"
+| "[" lhs=item_lhs prefix=wild_symbol* "." suffix=wild_symbol* "]"
   { Item {lhs; prefix; suffix} }
+;
+
+item_lhs:
+| (*empty*)  { None }
+| symbol ";" { Some $1 }
+;
 
 regterm:
 | atom preceded("as",IDENT)?
@@ -120,18 +126,14 @@ regterm:
   { Alternative ([], $1) }
 | regexp "|" regexp
   { Alternative ($1, $3) }
+| "<-"
+  { Reduce (make_location $startpos($1) $endpos($1)) }
 
 regexp:
 | regterm
   { [$1, make_position $endpos] }
 | "(" regexp ")"
   { $2 }
-| regexp ioption(";") "<-"
-  { [Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($3)] }
-| regexp ioption(";") "<-" regexp
-  { (Reduce ($1, make_location $startpos($1) $endpos($1)),
-     make_position $startpos($3)) :: $4 }
 | regexp ";" regexp
   { $1 @ $3 }
 ;
