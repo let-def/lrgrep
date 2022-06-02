@@ -107,7 +107,7 @@ atom:
   { Item {lhs; prefix; suffix} }
 ;
 
-item_lhs:
+%inline item_lhs:
 | (*empty*)  { None }
 | symbol ";" { Some $1 }
 ;

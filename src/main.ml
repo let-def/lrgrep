@@ -18,7 +18,7 @@ open Utils
 (* The lexer generator. Command-line parsing. *)
 
 let run_test = false
-let verbose = false
+let verbose = true
 
 let source_name = ref None
 let output_name = ref None
@@ -564,10 +564,10 @@ end
 (* KRE, first intermediate language *)
 
 module KRE = struct
-  type uid = int
+  type clause = {priority: int; clause: Syntax.clause}
 
   type desc =
-    | KDone of {priority: int; clause: Syntax.clause}
+    | KDone of clause
     | KAtom of Lr1.set * Syntax.atom * t
     | KOr of t * t
     | KStar of t lazy_t * t
@@ -612,6 +612,12 @@ module KRE = struct
         | KOr _     , (KAtom _ | KDone _)
         | KAtom _   , (KDone _)
           -> 1
+
+  let compare t1 t2 = compare_until t2 t1 t1 t2
+
+  let hash t = t.hash
+
+  let equal t1 t2 = compare t1 t2 = 0
 
   let make desc =
     let hash = match desc with
@@ -688,24 +694,96 @@ module KRE = struct
     List.mapi translate_clause clauses
 end
 
+type kre = KRE.t
+
 (* Derive DFA with naive intersection *)
+
+module DFA = struct
+
+  let push xs x = xs := x :: !xs
+
+  module KREs : sig
+    type t = private kre list
+    val make : kre list -> t
+    val compare : t -> t -> int
+    val equal : t -> t -> bool
+    val hash : t -> int
+  end = struct
+    type t = kre list
+    let make ts = List.sort_uniq KRE.compare ts
+
+    let compare t1 t2 = List.compare KRE.compare t1 t2
+    let equal t1 t2 = List.equal KRE.equal t1 t2
+    let rec hash = function
+      | [] -> 7
+      | x :: xs -> Hashtbl.seeded_hash (hash xs) (KRE.hash x)
+  end
+  type kres = KREs.t
+
+  module Table = Hashtbl.Make(KREs)
+
+  type dfa = state Table.t
+
+  and state = {
+    id: int;
+    raw: kres;
+    clauses: KRE.clause list;
+    transitions: (Lr1.set * kres) list;
+  }
+
+  let rec derive cs ks (kre: kre) =
+    match kre.desc with
+    | KAtom (a, _, k) -> push ks (a, k)
+    | KOr (k1, k2) | KStar (lazy k1, k2) ->
+      derive cs ks k1;
+      derive cs ks k2
+    | KReduce _ -> failwith "TODO"
+    | KDone c -> push cs c
+
+  let derive kres =
+    let cs = ref [] in
+    let ks = ref [] in
+    List.iter (derive cs ks) (kres : KREs.t :> kre list);
+    let ks = IndexRefine.annotated_partition !ks in
+    (!cs, List.map (fun (s, kres) -> (s, KREs.make kres)) ks)
+
+  let add_state dfa raw =
+    let id = Table.length dfa in
+    let clauses, transitions = derive raw in
+    let st = {id; raw; clauses; transitions} in
+    Table.add dfa raw st;
+    st
+
+  let state_for dfa key =
+    match Table.find_opt dfa key with
+    | Some st -> st
+    | None -> add_state dfa key
+
+  let make dfa =
+    let rec loop key =
+      if not (Table.mem dfa key) then (
+        let st = add_state dfa key in
+        List.iter loop_transition st.transitions
+      )
+    and loop_transition (_, key) = loop key
+    in
+    loop
+end
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
   if verbose then
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-  let clauses, re = translate_entry entry in
-  (*Format.eprintf "Starting from @[%a@]\n%!" Cmon.format (cmon_re re);*)
-  if run_test then ignore (interpret re test_stack : Reg.Expr.t);
-  (*Format.printf "%a\n%!" Cmon.format (cmon_re re);*)
-  let (Large_dfa {set=(module Set); _} as dfa) = DFA.translate re in
-  prerr_endline (string_of_int (cardinal Set.n) ^ " states");
+  let kres = DFA.KREs.make (KRE.translate_entry entry) in
+  let dfa = DFA.Table.create 7 in
+  DFA.make dfa kres;
   begin match !output_name with
     | None ->
       prerr_endline "No output file provided (option -o). Giving up.";
       exit 1
-    | Some path ->
-      let oc = open_out_bin path in
+    | Some _path ->
+      failwith "TODO"
+      (*let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
       output_char oc '\n';
       let gen_table = DFA.minimize dfa in
@@ -714,6 +792,6 @@ let () = (
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
       gen_table oc;
-      close_out oc
+      close_out oc*)
   end
 )

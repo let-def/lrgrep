@@ -23,7 +23,7 @@ rule error_message = parse error
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
-| [. LIDENT] <-
+| [. LIDENT]; <-
   { fun token ->
     match Lexer_raw.as_keyword token with
     | None ->
@@ -33,7 +33,7 @@ rule error_message = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| ([. UIDENT] | [. TYPE] | [. REC]) <-
+| ([. UIDENT] | [. TYPE] | [. REC]); <-
   { fun _ ->
     "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
   }
