@@ -122,6 +122,9 @@ let vector_set_add vec index value =
 let vector_iter v f =
   Index.iter (Vector.length v) (fun i -> f (Vector.get v i ))
 
+let vector_tabulate n f =
+  Vector.get (Vector.init n f)
+
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
@@ -269,65 +272,6 @@ module Lr1 = struct
     in
     let import_lr1 lr1 = import_red (reductions (to_g lr1)) in
     Vector.get (Vector.init n import_lr1)
-end
-
-(*module LRijkstra =
-  LRijkstraFast.Make(Grammar)(TerminalSet)(Lr1)
-    (struct let all_terminals = all_terminals end)
-    ()*)
-
-(* State indices *)
-
-module State_indices = struct
-
-  (* Precompute states associated to symbols *)
-
-  let states_of_terminals =
-    Vector.make Terminal.n IndexSet.empty
-
-  let states_of_nonterminals =
-    Vector.make Nonterminal.n IndexSet.empty
-
-  let () =
-    Index.iter Lr1.n (fun lr1 ->
-        match Lr1.incoming lr1 with
-        | None -> ()
-        | Some (Symbol.T t) -> vector_set_add states_of_terminals t lr1
-        | Some (Symbol.N n) -> vector_set_add states_of_nonterminals n lr1
-      )
-
-  let states_of_symbol = function
-    | Symbol.T t -> Vector.get states_of_terminals t
-    | Symbol.N n -> Vector.get states_of_nonterminals n
-
-  (* Map symbol names to actual symbols *)
-
-  let linearize_symbol =
-    let buffer = Buffer.create 32 in
-    function
-    | Syntax.Name s -> s
-    | sym ->
-      Buffer.reset buffer;
-      let rec aux = function
-        | Syntax.Name s -> Buffer.add_string buffer s
-        | Syntax.Apply (s, args) ->
-          Buffer.add_string buffer s;
-          Buffer.add_char buffer '(';
-          List.iteri (fun i sym ->
-              if i > 0 then Buffer.add_char buffer ',';
-              aux sym
-            ) args;
-          Buffer.add_char buffer ')'
-      in
-      aux sym;
-      Buffer.contents buffer
-
-  let find_symbol =
-    let table = Hashtbl.create 7 in
-    let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
-    Index.iter Terminal.n (fun t -> add_symbol (Symbol.T t));
-    Index.iter Nonterminal.n (fun n -> add_symbol (Symbol.N n));
-    fun name -> Hashtbl.find_opt table (linearize_symbol name)
 end
 
 (* ---------------------------------------------------------------------- *)
@@ -527,6 +471,60 @@ let lr1_predecessors = Vector.init Lr1.n (fun lr1 ->
 let lr1set_predecessors lr1s =
   indexset_bind lr1s (Vector.get lr1_predecessors)
 
+(* State indices, used to translate symbols and items *)
+
+module State_indices = struct
+
+  (* Precompute states associated to symbols *)
+
+  let states_of_terminals =
+    Vector.make Terminal.n IndexSet.empty
+
+  let states_of_nonterminals =
+    Vector.make Nonterminal.n IndexSet.empty
+
+  let () =
+    Index.iter Lr1.n (fun lr1 ->
+        match Lr1.incoming lr1 with
+        | None -> ()
+        | Some (Symbol.T t) -> vector_set_add states_of_terminals t lr1
+        | Some (Symbol.N n) -> vector_set_add states_of_nonterminals n lr1
+      )
+
+  let states_of_symbol = function
+    | Symbol.T t -> Vector.get states_of_terminals t
+    | Symbol.N n -> Vector.get states_of_nonterminals n
+
+  (* Map symbol names to actual symbols *)
+
+  let linearize_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Syntax.Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Syntax.Name s -> Buffer.add_string buffer s
+        | Syntax.Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
+
+  let find_symbol =
+    let table = Hashtbl.create 7 in
+    let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
+    Index.iter Terminal.n (fun t -> add_symbol (Symbol.T t));
+    Index.iter Nonterminal.n (fun n -> add_symbol (Symbol.N n));
+    fun name -> Hashtbl.find_opt table (linearize_symbol name)
+end
+
 module Match_item = struct
   let maybe_has_lhs prod = function
     | None -> true
@@ -561,22 +559,341 @@ module Match_item = struct
       )
 end
 
+(* Implementation of simulation reduction *)
+
+module Redgraph = struct
+  let reductions = Vector.init Lr1.n (fun lr1 ->
+      let prepare_goto p =
+        (Array.length (Production.rhs p), Production.lhs p)
+      in
+      let order (d1, n1) (d2, n2) =
+        match Int.compare d1 d2 with
+        | 0 -> compare_index n1 n2
+        | c -> c
+      in
+      let productions =
+        Lr1.reductions lr1
+        |> List.filter_map (fun (p, _) ->
+            match Production.kind p with
+            | `REGULAR -> Some (prepare_goto p)
+            | `START -> None
+          )
+        |> List.sort_uniq order
+      in
+      let depth = List.fold_left (fun x (d, _) -> max x d) (-1) productions in
+      let vector = Array.make (depth + 1) [] in
+      List.iter (fun (d,n) -> array_cons vector d n) productions;
+      assert (depth = -1 || vector.(depth) <> []);
+      vector
+    )
+
+  (* Representation of concrete stack suffix *)
+
+  type concrete_frame = {
+    state: Lr1.t;
+    mutable goto: concrete_frame Lr1.map;
+    parent: concrete_frame option;
+  }
+
+  (* Representation of abstract stack suffix *)
+
+  module AbstractExtra = Gensym()
+  module AbstractState = struct
+    include Sum(Lr1)(AbstractExtra)
+    let of_lr1 = inj_l
+    let fresh () = inj_r (AbstractExtra.fresh ())
+  end
+
+  type abstract_frame = {
+    states: Lr1.set;
+    mutable goto_nt: Nonterminal.set;
+    mutable parent: AbstractState.n index option;
+  }
+
+  let abstract_frames : (AbstractState.n, abstract_frame) IndexBuffer.t =
+    IndexBuffer.make {
+      states = IndexSet.empty;
+      goto_nt = IndexSet.empty;
+      parent = None;
+    }
+
+  let make_abstract_frame states =
+    { states; goto_nt = IndexSet.empty; parent = None }
+
+  (* Initialize abstract frames associated to each lr1 state *)
+  let () = Index.iter Lr1.n (fun lr1 ->
+      IndexBuffer.set abstract_frames (AbstractState.inj_l lr1)
+        (make_abstract_frame (Vector.get lr1_predecessors lr1))
+    )
+
+  let fresh_abstract_frame states =
+    let index = AbstractState.fresh () in
+    let frame = make_abstract_frame states in
+    IndexBuffer.set abstract_frames index frame;
+    index
+
+  type stack =
+    | Concrete of concrete_frame
+    | Abstract of AbstractState.n index
+
+  (* Tabulate the roots, populating all concrete and abstract stacks *)
+  let concrete_root =
+    let pop = function
+      | Concrete t ->
+        begin match t.parent with
+          | None -> Abstract (AbstractState.of_lr1 t.state)
+          | Some t' -> Concrete t'
+        end
+      | Abstract t ->
+        let frame = IndexBuffer.get abstract_frames t in
+        match frame.parent with
+        | Some t' -> Abstract t'
+        | None ->
+          let t' = fresh_abstract_frame (lr1set_predecessors frame.states) in
+          frame.parent <- Some t';
+          Abstract t'
+    in
+    let rec goto parent nt =
+      match parent with
+      | Abstract t ->
+        let frame = IndexBuffer.get abstract_frames t in
+        frame.goto_nt <- IndexSet.add nt frame.goto_nt
+      | Concrete t ->
+        let state = Transition.find_goto_target t.state nt in
+        if not (IndexMap.mem state t.goto) then (
+          let target = {state; goto = IndexMap.empty; parent = Some t} in
+          t.goto <- IndexMap.add state target t.goto;
+          populate target
+        )
+    and populate state =
+      let frame = ref (Concrete state) in
+      let reductions = Vector.get reductions state.state in
+      for i = 0 to Array.length reductions - 1 do
+        if i <> 0 then frame := pop !frame;
+        List.iter (goto !frame) reductions.(i);
+      done
+    in
+    vector_tabulate Lr1.n (fun state ->
+        let frame = {state; goto = IndexMap.empty; parent = None} in
+        populate frame;
+        frame
+      )
+
+  (* Compute the trie of derivations *)
+
+  type derivation = {
+    mutable children: derivation Lr1.map;
+    mutable roots: Lr1.set;
+  }
+
+  let fresh_derivation () = {
+    children = IndexMap.empty;
+    roots = IndexSet.empty;
+  }
+
+  let derivation_root = fresh_derivation ()
+
+  let () =
+    let count = ref 0 in
+    Index.iter Lr1.n (fun lr1 ->
+        let delta lr1 d =
+          match IndexMap.find_opt lr1 d.children with
+          | Some d' -> d'
+          | None ->
+            let d' = fresh_derivation () in
+            d.children <- IndexMap.add lr1 d' d.children;
+            d'
+        in
+        let rec visit frame =
+          List.map
+            (delta frame.state)
+            (derivation_root :: visit_children frame)
+        and visit_children frame =
+          IndexMap.fold
+            (fun _ frame' acc -> visit frame' @ acc)
+            frame.goto
+            []
+        in
+        let derivations = visit_children (concrete_root lr1) in
+        List.iter (fun d ->
+            if not (IndexSet.mem lr1 d.roots) then incr count;
+            d.roots <- IndexSet.add lr1 d.roots)
+          derivations;
+      );
+    Printf.eprintf "CLOSED DERIVATIONS: %d\n%!" !count
+
+  (* Goto closure *)
+
+  (* Force the AbstractFrames set, no new frames should be added from now on *)
+  let abstract_frames = IndexBuffer.contents abstract_frames AbstractState.n
+
+  let abstract_root lr1 =
+    Vector.get abstract_frames (AbstractState.of_lr1 lr1)
+
+  let goto_closure =
+    let table = Vector.make AbstractState.n [] in
+    let close i =
+      let frame = Vector.get abstract_frames i in
+      let close_st st =
+        let visited = ref IndexSet.empty in
+        let rec visit_nt nt =
+          let st' =
+            try Transition.find_goto_target st nt
+            with Not_found -> assert false
+          in
+          if not (IndexSet.mem st' !visited) then (
+            visited := IndexSet.add st' !visited;
+            visit_nts (abstract_root st').goto_nt
+          )
+        and visit_nts nts =
+          IndexSet.iter visit_nt nts
+        in
+        visit_nts frame.goto_nt;
+        !visited
+      in
+      let add_st st acc = (close_st st, st) :: acc in
+      if not (IndexSet.is_empty frame.goto_nt) then
+        Vector.set table i (
+          IndexSet.fold add_st frame.states []
+          |> IndexRefine.annotated_partition
+          |> List.map (fun (tgts, srcs) -> IndexSet.of_list srcs, tgts)
+        )
+    in
+    let rec close_all i =
+      close i;
+      Option.iter close_all (Vector.get abstract_frames i).parent
+    in
+    Index.iter Lr1.n (fun lr1 -> close_all (AbstractState.of_lr1 lr1));
+    table
+
+  let () =
+    let count = ref 0 in
+    vector_iter goto_closure (fun trs ->
+        count := List.fold_left
+            (fun acc (_, tgts) -> IndexSet.cardinal tgts + acc)
+            !count trs
+      );
+    Printf.eprintf "GOTO CLOSURE: %d\n" !count
+
+  let reachable_goto =
+    (* Compute reachable goto closure *)
+    let module X =
+      Fix.Fix.ForType
+        (struct type t = AbstractState.n index end)
+        (struct
+          type property = Lr1.set
+          let bottom = IndexSet.empty
+          let equal = IndexSet.equal
+          let is_maximal _ = false
+        end)
+    in
+    let equations index =
+      let all_goto =
+        List.fold_left
+          (fun acc (_srcs, tgts) -> IndexSet.union tgts acc)
+          IndexSet.empty
+          (Vector.get goto_closure index)
+      in
+      let targets =
+        IndexSet.fold
+          (fun lr1 acc -> IndexSet.add (AbstractState.of_lr1 lr1) acc)
+          all_goto IndexSet.empty
+      in
+      fun valuation ->
+        let frame = Vector.get abstract_frames index in
+        let acc = all_goto in
+        let acc = match frame.parent with
+          | None -> acc
+          | Some parent -> IndexSet.union acc (valuation parent)
+        in
+        IndexSet.fold
+          (fun target acc -> IndexSet.union (valuation target) acc)
+          targets acc
+    in
+    vector_tabulate AbstractState.n (X.lfp equations)
+
+  let derive ~root ~step ~join ~is_empty =
+    let vec = Vector.make Lr1.n [] in
+    let rec visit acc d =
+      if not (is_empty acc) then (
+        IndexSet.iter (fun lr1 -> Vector.set_cons vec lr1 acc) d.roots;
+        IndexMap.iter (fun lr1 d' -> visit (step acc lr1) d') d.children
+      )
+    in
+    visit root derivation_root;
+    Vector.map join vec
+end
+
 (* KRE, first intermediate language *)
 
-module KRE = struct
-  type clause = {priority: int; clause: Syntax.clause}
+type clause = {priority: int; syntax: Syntax.clause}
 
+module KRE : sig
   type desc =
     | KDone of clause
     | KAtom of Lr1.set * Syntax.atom * t
     | KOr of t * t
     | KStar of t lazy_t * t
     | KReduce of t
+    | KReduction of reduction
+
+  and reduction = {
+    state: Redgraph.AbstractState.n index;
+    compiled: compiled_reductions;
+    ks: ts;
+  }
+
+  and compiled_reductions = {
+    derivations: t Lr1.map;
+    domain: Lr1.set;
+  }
+
+  and t = private {
+    desc: desc;
+    mutable hash: int;
+  }
+
+  and ts = private t list
+
+  val make : desc -> t
+  val make_ts : t list -> ts
+
+  module Klist : sig
+    val make : t list -> ts
+
+    type t = ts
+    val compare : t -> t -> int
+    val equal : t -> t -> bool
+    val hash : t -> int
+  end
+
+  val translate_entry : Syntax.entry -> t list
+end = struct
+  type desc =
+    | KDone of clause
+    | KAtom of Lr1.set * Syntax.atom * t
+    | KOr of t * t
+    | KStar of t lazy_t * t
+    | KReduce of t
+    | KReduction of reduction
+
+  and reduction = {
+    state: Redgraph.AbstractState.n index;
+    compiled: compiled_reductions;
+    ks: ts;
+  }
+
+  and compiled_reductions = {
+    derivations: t Lr1.map;
+    domain: Lr1.set;
+  }
 
   and t = {
     desc: desc;
     mutable hash: int;
   }
+
+  and ts = t list
 
   let rec compare_until d1 d2 k1 k2 =
     if (k1 == k2) || (k1 == d1 && k2 == d2) then 0
@@ -602,11 +919,17 @@ module KRE = struct
             compare_until d1 d2 d1' d2'
         | KReduce k1, KReduce k2 ->
           compare_until d1 d2 k1 k2
-        | KDone _   , (KAtom _ | KOr _ | KStar _ | KReduce _)
-        | KAtom _   , (KOr _ | KStar _ | KReduce _)
-        | KOr _     , (KStar _ | KReduce _)
-        | KStar _   , (KReduce _)
+        | KReduction r1, KReduction r2 ->
+          let c = compare_index r1.state r2.state in
+          if c <> 0 then c else
+            List.compare (compare_until d1 d2) r1.ks r2.ks
+        | KDone _   , (KAtom _ | KOr _ | KStar _ | KReduce _ | KReduction _)
+        | KAtom _   , (KOr _ | KStar _ | KReduce _ | KReduction _)
+        | KOr _     , (KStar _ | KReduce _ | KReduction _)
+        | KStar _   , (KReduce _ | KReduction _)
+        | KReduce _ , (KReduction _)
           -> -1
+        | KReduction _ , (KReduce _ | KStar _ | KOr _ | KAtom _ | KDone _)
         | KReduce _ , (KStar _ | KOr _ | KAtom _ | KDone _)
         | KStar _   , (KOr _ | KAtom _ | KDone _)
         | KOr _     , (KAtom _ | KDone _)
@@ -617,6 +940,10 @@ module KRE = struct
 
   let hash t = t.hash
 
+  let rec hash_list = function
+    | [] -> 7
+    | x :: xs -> Hashtbl.seeded_hash (hash_list xs) (hash x)
+
   let equal t1 t2 = compare t1 t2 = 0
 
   let make desc =
@@ -626,6 +953,7 @@ module KRE = struct
       | KOr (k1, k2)    -> Hashtbl.seeded_hash k1.hash k2.hash
       | KStar (_, k')   -> Hashtbl.seeded_hash 42 k'.hash
       | KReduce k'      -> Hashtbl.seeded_hash 51 k'.hash
+      | KReduction r    -> Hashtbl.seeded_hash 69 (hash_list r.ks)
     in
     {desc; hash}
 
@@ -686,112 +1014,185 @@ module KRE = struct
     in
     translate_expr
 
-  let translate_clause priority clause =
-    translate_expr (make (KDone {priority; clause})) clause.Syntax.pattern
+  let translate_clause priority syntax =
+    translate_expr (make (KDone {priority; syntax})) syntax.Syntax.pattern
 
   let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
     ignore (startsymbols, error, name, args);
     List.mapi translate_clause clauses
+
+  let make_ts ts = List.sort_uniq compare ts
+
+  module Klist = struct
+    type t = ts
+    let make = make_ts
+    let compare t1 t2 = List.compare compare t1 t2
+    let equal t1 t2 = List.equal equal t1 t2
+    let hash = hash_list
+  end
 end
 
 type kre = KRE.t
+
+module KRETable = Hashtbl.Make(KRE.Klist)
+
+(* Implement reduction simulation on top of KRE *)
+
+module KReduce = struct
+
+  type state = {
+    kre: KRE.ts;
+    mutable derivations: (Lr1.set * KRE.ts);
+  }
+
+  let cache = KRETable.create 7
+
+  (*let compile kres =
+    match KRETable.find_opt cache kres with
+    | Some domain -> domain
+    | None ->*)
+
+end
 
 (* Derive DFA with naive intersection *)
 
 module DFA = struct
 
   let push xs x = xs := x :: !xs
+  let pushs xs x = xs := x @ !xs
 
-  module KREs : sig
-    type t = private kre list
-    val make : kre list -> t
-    val compare : t -> t -> int
-    val equal : t -> t -> bool
-    val hash : t -> int
-  end = struct
-    type t = kre list
-    let make ts = List.sort_uniq KRE.compare ts
+  type dfa = state KRETable.t
 
-    let compare t1 t2 = List.compare KRE.compare t1 t2
-    let equal t1 t2 = List.equal KRE.equal t1 t2
-    let rec hash = function
-      | [] -> 7
-      | x :: xs -> Hashtbl.seeded_hash (hash xs) (KRE.hash x)
-  end
-  type kres = KREs.t
-
-  module Table = Hashtbl.Make(KREs)
-
-  type dfa = state Table.t
+  and transition = Lr1.set * KRE.ts
 
   and state = {
     id: int;
-    raw: kres;
-    clauses: KRE.clause list;
-    transitions: (Lr1.set * kres) list;
+    raw: KRE.ts;
+    clauses: clause list;
+    transitions: transition list;
   }
 
-  let rec derive cs ks (kre: kre) =
-    match kre.desc with
-    | KAtom (a, _, k) -> push ks (a, k)
-    | KOr (k1, k2) | KStar (lazy k1, k2) ->
-      derive cs ks k1;
-      derive cs ks k2
-    | KReduce _ -> failwith "TODO"
-    | KDone c -> push cs c
+  type pre_transition = Lr1.set * kre
+
+  type pre_derivatives = {
+    reached: clause list ref;
+    direct: pre_transition list ref;
+    reduce: pre_transition list ref;
+    reductions: KRE.reduction list ref;
+  }
+
+  let derivatives outcome kre =
+    let rec loop ks (kre: kre) =
+      match kre.desc with
+      | KAtom (a, _, k) ->
+        push ks (a, k)
+      | KOr (k1, k2) | KStar (lazy k1, k2) ->
+        loop ks k1;
+        loop ks k2
+      | KReduce k ->
+        loop outcome.reduce k
+      | KDone c ->
+        push outcome.reached c
+      | KReduction r ->
+        let frame = Vector.get Redgraph.abstract_frames r.state in
+        begin match frame.parent with
+          | _ -> ()
+        end
+    in
+    loop outcome.direct kre
+
+  (* A state is a list of kre
+     Transitions are a pair of a Lr1.set and the target list of kres
+
+     During derivation, we can:
+     - compute a direct set of non-deterministic transitions
+     - compute the reduction steps to simulate:
+       - new reductions to start
+       - new abstract frames to reach
+  *)
 
   let derive kres =
-    let cs = ref [] in
-    let ks = ref [] in
-    List.iter (derive cs ks) (kres : KREs.t :> kre list);
-    let ks = IndexRefine.annotated_partition !ks in
-    (!cs, List.map (fun (s, kres) -> (s, KREs.make kres)) ks)
+    let oc =
+      {reached=ref []; direct=ref []; reduce=ref []; reductions=ref []}
+    in
+    List.iter (derivatives oc) (kres : KRE.ts :> kre list);
+    let rs = IndexRefine.annotated_partition !(oc.reduce) in
+
 
   let add_state dfa raw =
-    let id = Table.length dfa in
+    let id = KRETable.length dfa in
     let clauses, transitions = derive raw in
     let st = {id; raw; clauses; transitions} in
-    Table.add dfa raw st;
+    KRETable.add dfa raw st;
     st
 
   let state_for dfa key =
-    match Table.find_opt dfa key with
+    match KRETable.find_opt dfa key with
     | Some st -> st
     | None -> add_state dfa key
 
   let make dfa =
     let rec loop key =
-      if not (Table.mem dfa key) then (
+      if not (KRETable.mem dfa key) then (
         let st = add_state dfa key in
         List.iter loop_transition st.transitions
       )
-    and loop_transition (_, key) = loop key
+    and loop_transition (_, key) =
+      loop key
     in
     loop
 end
 
+let gen_clauses oc clauses =
+  let arities = List.mapi (fun i clause ->
+      assert (clause.priority = i);
+      "0" (*string_of_int clause.KRE.arity*)
+    ) clauses
+  in
+  let print fmt = Printf.fprintf oc fmt in
+  print
+    "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
+    (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
+  List.iter (fun clause ->
+      (*let variables = Array.make clause.arity "" in
+      List.iter (fun capture ->
+          match capture.var with
+          | None -> ()
+          | Some i ->
+            variables.(i) <- "Some " ^ capture.name
+        ) clause.captures;*)
+      (*let variables = String.concat "; " (Array.to_list variables) in*)
+      print "  | %d, _ -> begin\n%s\n    end\n"
+        clause.priority
+        (match clause.syntax.action with
+         | None -> "failwith \"Should be unreachable\""
+         | Some (_, str) -> str)
+    ) clauses;
+  print "  | _ -> failwith \"Invalid action\"\n\n";
+  print "let arities = [|%s|]\n" (String.concat ";" arities)
+
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  if verbose then
+  if false && verbose then
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-  let kres = DFA.KREs.make (KRE.translate_entry entry) in
-  let dfa = DFA.Table.create 7 in
+  let kres = KRE.Klist.make (KRE.translate_entry entry) in
+  let dfa = KRETable.create 7 in
   DFA.make dfa kres;
+  Format.eprintf "(* %d states *)\n%!" (KRETable.length dfa);
   begin match !output_name with
     | None ->
       prerr_endline "No output file provided (option -o). Giving up.";
       exit 1
-    | Some _path ->
-      failwith "TODO"
-      (*let oc = open_out_bin path in
+    | Some path ->
+      let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
       output_char oc '\n';
-      let gen_table = DFA.minimize dfa in
-      Clause.gencode oc clauses;
+      (*let gen_table = DFA.minimize dfa in
+        Clause.gencode oc clauses;*)
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      gen_table oc;
-      close_out oc*)
+      (*gen_table oc;*)
+      close_out oc
   end
 )
