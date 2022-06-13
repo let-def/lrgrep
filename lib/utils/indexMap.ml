@@ -79,3 +79,6 @@ let to_rev_seq : ('n, 'a) t -> ('n index * 'a) Seq.t = IntMap.to_rev_seq
 let to_seq_from : 'n index -> ('n, 'a) t -> ('n index * 'a) Seq.t = IntMap.to_seq_from
 let add_seq : ('n index * 'a) Seq.t -> ('n, 'a) t -> ('n, 'a) t = IntMap.add_seq
 let of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t = IntMap.of_seq*)
+
+let domain t =
+  fold (fun n _ set -> BitSet.IndexSet.add n set) t BitSet.IndexSet.empty

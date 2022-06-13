@@ -14,6 +14,7 @@
 (**************************************************************************)
 
 open Utils
+let filename_of_position _ = failwith "TODO"
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -107,6 +108,11 @@ type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
 let array_cons arr index value =
   arr.(index) <- value :: arr.(index)
 
+let option_cons x xs =
+  match x with
+  | None -> xs
+  | Some x -> x :: xs
+
 let index_fold v a f =
   let a = ref a in
   Index.iter v (fun i -> a := f i !a);
@@ -138,6 +144,16 @@ let cmon_indexset xs =
   Cmon.constant (
     "[" ^ String.concat ";" (List.map string_of_index (IndexSet.elements xs)) ^ "]"
   )
+
+let push xs x = xs := x :: !xs
+
+let pushs xs = function
+  | [] -> ()
+  | x -> xs := x @ !xs
+
+let rec hash_list f = function
+  | [] -> 7
+  | x :: xs -> Hashtbl.seeded_hash (hash_list f xs) (f x)
 
 let rec merge_uniq cmp l1 l2 =
   match l1, l2 with
@@ -637,7 +653,7 @@ module Redgraph = struct
     | Abstract of AbstractState.n index
 
   (* Tabulate the roots, populating all concrete and abstract stacks *)
-  let concrete_root =
+  let concrete_frames =
     let pop = function
       | Concrete t ->
         begin match t.parent with
@@ -683,44 +699,47 @@ module Redgraph = struct
 
   type derivation = {
     mutable children: derivation Lr1.map;
-    mutable roots: Lr1.set;
+    mutable children_domain: Lr1.set;
+    mutable goto_targets: Lr1.set;
   }
 
   let fresh_derivation () = {
     children = IndexMap.empty;
-    roots = IndexSet.empty;
+    children_domain = IndexSet.empty;
+    goto_targets = IndexSet.empty;
   }
 
   let derivation_root = fresh_derivation ()
 
   let () =
-    let count = ref 0 in
+    (* let count = ref 0 in *)
+    let delta lr1 d =
+      match IndexMap.find_opt lr1 d.children with
+      | Some d' -> d'
+      | None ->
+        let d' = fresh_derivation () in
+        d.children <- IndexMap.add lr1 d' d.children;
+        d.children_domain <- IndexSet.add lr1 d.children_domain;
+        d'
+    in
+    let rec visit frame =
+      List.map
+        (delta frame.state)
+        (derivation_root :: visit_children frame)
+    and visit_children frame =
+      IndexMap.fold
+        (fun _ frame' acc -> visit frame' @ acc)
+        frame.goto
+        []
+    in
     Index.iter Lr1.n (fun lr1 ->
-        let delta lr1 d =
-          match IndexMap.find_opt lr1 d.children with
-          | Some d' -> d'
-          | None ->
-            let d' = fresh_derivation () in
-            d.children <- IndexMap.add lr1 d' d.children;
-            d'
-        in
-        let rec visit frame =
-          List.map
-            (delta frame.state)
-            (derivation_root :: visit_children frame)
-        and visit_children frame =
-          IndexMap.fold
-            (fun _ frame' acc -> visit frame' @ acc)
-            frame.goto
-            []
-        in
-        let derivations = visit_children (concrete_root lr1) in
+        let derivations = visit (concrete_frames lr1) in
         List.iter (fun d ->
-            if not (IndexSet.mem lr1 d.roots) then incr count;
-            d.roots <- IndexSet.add lr1 d.roots)
-          derivations;
-      );
-    Printf.eprintf "CLOSED DERIVATIONS: %d\n%!" !count
+            (*if not (IndexSet.mem lr1 d.goto_targets) then incr count;*)
+            d.goto_targets <- IndexSet.add lr1 d.goto_targets
+          ) derivations;
+      )
+    (* Printf.eprintf "CLOSED DERIVATIONS: %d\n%!" !count *)
 
   (* Goto closure *)
 
@@ -816,12 +835,30 @@ module Redgraph = struct
     let vec = Vector.make Lr1.n [] in
     let rec visit acc d =
       if not (is_empty acc) then (
-        IndexSet.iter (fun lr1 -> Vector.set_cons vec lr1 acc) d.roots;
+        IndexSet.iter (fun lr1 -> Vector.set_cons vec lr1 acc) d.goto_targets;
         IndexMap.iter (fun lr1 d' -> visit (step acc lr1) d') d.children
       )
     in
     visit root derivation_root;
     Vector.map join vec
+
+  let () =
+    let string_of_state lr1 =
+      (match Lr1.incoming lr1 with
+       | None -> "<entrypoint>"
+       | Some s -> Symbol.name s) ^
+      " (" ^ string_of_index lr1 ^ ")"
+    in
+    let rec visit path node =
+      IndexSet.iter (fun lr1 ->
+          Printf.eprintf "%s <- %s\n"
+            (String.concat " -> " (List.rev_map string_of_state path))
+            (string_of_state lr1)
+        )
+        node.goto_targets;
+      IndexMap.iter (fun lr1 tgt -> visit (lr1 :: path) tgt) node.children
+    in
+    visit [] derivation_root
 end
 
 (* KRE, first intermediate language *)
@@ -835,39 +872,20 @@ module KRE : sig
     | KOr of t * t
     | KStar of t lazy_t * t
     | KReduce of t
-    | KReduction of reduction
-
-  and reduction = {
-    state: Redgraph.AbstractState.n index;
-    compiled: compiled_reductions;
-    ks: ts;
-  }
-
-  and compiled_reductions = {
-    derivations: t Lr1.map;
-    domain: Lr1.set;
-  }
 
   and t = private {
     desc: desc;
     mutable hash: int;
   }
 
-  and ts = private t list
-
   val make : desc -> t
-  val make_ts : t list -> ts
-
-  module Klist : sig
-    val make : t list -> ts
-
-    type t = ts
-    val compare : t -> t -> int
-    val equal : t -> t -> bool
-    val hash : t -> int
-  end
-
   val translate_entry : Syntax.entry -> t list
+
+  val compare : t -> t -> int
+  val equal : t -> t -> bool
+  val hash : t -> int
+
+  val cmon : unit -> t -> Cmon.t
 end = struct
   type desc =
     | KDone of clause
@@ -875,25 +893,11 @@ end = struct
     | KOr of t * t
     | KStar of t lazy_t * t
     | KReduce of t
-    | KReduction of reduction
-
-  and reduction = {
-    state: Redgraph.AbstractState.n index;
-    compiled: compiled_reductions;
-    ks: ts;
-  }
-
-  and compiled_reductions = {
-    derivations: t Lr1.map;
-    domain: Lr1.set;
-  }
 
   and t = {
     desc: desc;
     mutable hash: int;
   }
-
-  and ts = t list
 
   let rec compare_until d1 d2 k1 k2 =
     if (k1 == k2) || (k1 == d1 && k2 == d2) then 0
@@ -919,17 +923,11 @@ end = struct
             compare_until d1 d2 d1' d2'
         | KReduce k1, KReduce k2 ->
           compare_until d1 d2 k1 k2
-        | KReduction r1, KReduction r2 ->
-          let c = compare_index r1.state r2.state in
-          if c <> 0 then c else
-            List.compare (compare_until d1 d2) r1.ks r2.ks
-        | KDone _   , (KAtom _ | KOr _ | KStar _ | KReduce _ | KReduction _)
-        | KAtom _   , (KOr _ | KStar _ | KReduce _ | KReduction _)
-        | KOr _     , (KStar _ | KReduce _ | KReduction _)
-        | KStar _   , (KReduce _ | KReduction _)
-        | KReduce _ , (KReduction _)
+        | KDone _   , (KAtom _ | KOr _ | KStar _ | KReduce _)
+        | KAtom _   , (KOr _ | KStar _ | KReduce _)
+        | KOr _     , (KStar _ | KReduce _)
+        | KStar _   , (KReduce _)
           -> -1
-        | KReduction _ , (KReduce _ | KStar _ | KOr _ | KAtom _ | KDone _)
         | KReduce _ , (KStar _ | KOr _ | KAtom _ | KDone _)
         | KStar _   , (KOr _ | KAtom _ | KDone _)
         | KOr _     , (KAtom _ | KDone _)
@@ -940,10 +938,6 @@ end = struct
 
   let hash t = t.hash
 
-  let rec hash_list = function
-    | [] -> 7
-    | x :: xs -> Hashtbl.seeded_hash (hash_list xs) (hash x)
-
   let equal t1 t2 = compare t1 t2 = 0
 
   let make desc =
@@ -953,7 +947,6 @@ end = struct
       | KOr (k1, k2)    -> Hashtbl.seeded_hash k1.hash k2.hash
       | KStar (_, k')   -> Hashtbl.seeded_hash 42 k'.hash
       | KReduce k'      -> Hashtbl.seeded_hash 51 k'.hash
-      | KReduction r    -> Hashtbl.seeded_hash 69 (hash_list r.ks)
     in
     {desc; hash}
 
@@ -1003,14 +996,13 @@ end = struct
         let (lazy result, lazy jump) = result, jump in
         result.hash <- Hashtbl.seeded_hash 69 jump.hash;
         result
-      | Syntax.Reduce _ ->
-        make (KOr (k, make (KReduce k)))
+      | Syntax.Reduce _ -> make (KReduce k)
 
       and translate_expr k = function
         | [] -> k
         | (x, _) :: xs ->
-          let k = translate_expr k xs in
-          translate_term k x
+          let k = translate_term k x in
+          translate_expr k xs
     in
     translate_expr
 
@@ -1021,107 +1013,299 @@ end = struct
     ignore (startsymbols, error, name, args);
     List.mapi translate_clause clauses
 
-  let make_ts ts = List.sort_uniq compare ts
+  let rec cmon table t =
+    match Hashtbl.find_opt table t with
+    | Some c -> c
+    | None ->
+      let c = Cmon.of_lazy (lazy (cmon_desc table t.desc)) in
+      Hashtbl.add table t c;
+      c
 
-  module Klist = struct
-    type t = ts
-    let make = make_ts
-    let compare t1 t2 = List.compare compare t1 t2
-    let equal t1 t2 = List.equal equal t1 t2
-    let hash = hash_list
-  end
+  and cmon_desc table = function
+    | KDone clause -> Cmon.constructor "KDone" (Cmon.int clause.priority)
+    | KAtom (set, _, t') ->
+      Cmon.construct "KAtom" [
+        Cmon.constant (
+          match
+            IndexSet.fold
+              (fun st acc -> option_cons (Lr1.incoming st) acc)
+              set []
+            |> List.sort_uniq Stdlib.compare
+          with
+          | [s] ->
+            Printf.sprintf "#{%d states ~ %s}"
+              (IndexSet.cardinal set)
+              (Symbol.name s)
+          | _ ->
+            Printf.sprintf "#{%d states}"
+              (IndexSet.cardinal set)
+        );
+        cmon table t';
+      ]
+    | KOr (t1, t2) ->
+      Cmon.construct "KOr" [cmon table t1; cmon table t2]
+    | KStar (lazy t1, t2) ->
+      Cmon.construct "KStar" [cmon table t1; cmon table t2]
+    | KReduce t ->
+      Cmon.construct "KReduce" [cmon table t]
+
+  let cmon () = cmon (Hashtbl.create 7)
+end
+
+module KST : sig
+  type t = private {
+    direct: KRE.t list;
+    reductions: reduction list;
+  }
+
+  and derivations = private {
+    continuations: t Lr1.map;
+    domain: Lr1.set;
+    source: KRE.t list;
+    hash: int;
+  }
+
+  and reduction = {
+    state: Redgraph.AbstractState.n index;
+    derivations: derivations;
+  }
+
+  val make :
+    direct:KRE.t list -> reductions:reduction list -> ?merge:t list -> unit -> t
+
+  val make_derivations : KRE.t list -> t Lr1.map -> derivations
+
+  val compare : t -> t -> int
+
+  val equal : t -> t -> bool
+  val hash : t -> int
+
+  val compare_reduction : reduction -> reduction -> int
+end = struct
+  type t = {
+    direct: KRE.t list;
+    reductions: reduction list;
+  }
+
+  and derivations = {
+    continuations: t Lr1.map;
+    domain: Lr1.set;
+    source: KRE.t list;
+    hash: int;
+  }
+
+  and reduction = {
+    state: Redgraph.AbstractState.n index;
+    derivations: derivations;
+  }
+
+  let compare_reduction r1 r2 =
+    let c = compare_index r1.state r2.state in
+    if c <> 0 then c else
+      List.compare KRE.compare r1.derivations.source r2.derivations.source
+
+  let make ~direct ~reductions ?(merge=[]) () =
+    let direct = List.sort_uniq KRE.compare direct in
+    let reductions = List.sort compare_reduction reductions in
+    List.fold_left (fun t t' ->
+        {
+          direct = merge_uniq KRE.compare t.direct t'.direct;
+          reductions = merge_uniq compare_reduction t.reductions t'.reductions;
+        }
+      ) {direct; reductions} merge
+
+  let make_derivations kres continuations = {
+    continuations;
+    domain = IndexMap.domain continuations;
+    source = kres;
+    hash = hash_list KRE.hash kres;
+  }
+
+  let compare t1 t2 =
+    let c = List.compare KRE.compare t1.direct t2.direct in
+    if c <> 0 then c else
+      List.compare compare_reduction t1.reductions t2.reductions
+
+  let equal t1 t2 = compare t1 t2 = 0
+
+  let hash_reduction r =
+    Hashtbl.seeded_hash r.derivations.hash r.state
+
+  let hash t =
+    hash_list KRE.hash t.direct lxor
+    hash_list hash_reduction t.reductions
+end
+
+module Derive : sig
+  type 'a pre_transition = Lr1.set * 'a
+
+  val normalize_transitions : ('a -> 'a -> int) -> 'a pre_transition list -> (Lr1.set * 'a list) list
+
+  type pre_derivatives = {
+    reached: clause list;
+    direct: KRE.t pre_transition list;
+    reduce: KRE.t list;
+  }
+
+  val derive_direct : KRE.t list -> pre_derivatives
+  val derive_domain : KRE.t list -> (Lr1.n, KST.t) indexmap
+end = struct
+
+  type 'a pre_transition = Lr1.set * 'a
+
+  module KREsmap = Map.Make(struct type t = KRE.t list let compare t1 t2 = List.compare KRE.compare t1 t2 end)
+
+  let normalize_transitions cmp (tr : _ pre_transition list) =
+    IndexRefine.annotated_partition tr
+    |> List.map (fun (sg, a) -> sg, List.sort_uniq cmp a)
+    |> Misc.group_by
+      ~compare:(fun (_, a1) (_, a2) -> List.compare cmp a1 a2)
+      ~group:(fun (sg0, a) sgs ->
+          (List.fold_left
+            (fun sg (sg', _) -> IndexSet.union sg sg')
+            sg0 sgs, a)
+        )
+
+  type pre_derivatives = {
+    reached: clause list;
+    direct: KRE.t pre_transition list;
+    reduce: KRE.t list;
+  }
+
+  let derive_direct kres =
+    let reached = ref [] in
+    let direct = ref [] in
+    let reduce = ref [] in
+    let rec loop (kre: KRE.t) =
+      match kre.desc with
+      | KAtom (a, _, k) ->
+        push direct (a, k)
+      | KOr (k1, k2) | KStar (lazy k1, k2) ->
+        loop k1;
+        loop k2
+      | KReduce k ->
+        push reduce k;
+        loop k
+      | KDone c ->
+        push reached c
+    in
+    List.iter loop kres;
+    { direct = !direct; reached = !reached; reduce = !reduce }
+
+  let derive_domain kres =
+    Format.eprintf "%a\n%!" Cmon.format (Cmon.list_map (KRE.cmon ()) kres);
+    let map = ref IndexMap.empty in
+    let rec visit node = function
+      | ([], []) -> ()
+      | (reached',kres) ->
+        let {reached; direct; reduce} = derive_direct kres in
+        ignore reduce;
+        let reached = reached @ reached' in
+        let direct = normalize_transitions KRE.compare direct in
+        let add_target kres target =
+          let (rreached, rkres) =
+            match IndexMap.find_opt target !map with
+            | Some cell -> cell
+            | None ->
+              let cell = (ref [], ref []) in
+              map := IndexMap.add target cell !map;
+              cell
+          in
+          pushs rreached reached;
+          pushs rkres kres;
+        in
+        IndexSet.iter (add_target kres) node.Redgraph.goto_targets;
+        let visit_transition (sg, kres) =
+          IndexMap.iter (fun lr1 node' ->
+              if IndexSet.mem lr1 sg then (
+                Printf.eprintf "derivation wrt to %d (%s)? "
+                  (lr1 : _ index :> int)
+                  (match Lr1.incoming lr1 with
+                   | None -> "<entrypoint>"
+                   | Some s -> Symbol.name s)
+                ;
+                Printf.eprintf "yes!\n%!";
+                visit node' (reached, kres)
+              ) else (
+                (*Printf.eprintf "no!\n%!";*)
+              )
+            )
+            node.Redgraph.children
+        in
+        List.iter visit_transition direct
+    in
+    visit Redgraph.derivation_root ([], kres);
+    IndexMap.map (fun (rreached, rkres) ->
+        KST.make
+          ~direct:(List.map (fun clause -> KRE.make (KRE.KDone clause)) !rreached @ !rkres)
+          ~reductions:[]
+          ()
+      ) !map
 end
 
 type kre = KRE.t
+type kst = KST.t
 
-module KRETable = Hashtbl.Make(KRE.Klist)
-
-(* Implement reduction simulation on top of KRE *)
-
-module KReduce = struct
-
-  type state = {
-    kre: KRE.ts;
-    mutable derivations: (Lr1.set * KRE.ts);
-  }
-
-  let cache = KRETable.create 7
-
-  (*let compile kres =
-    match KRETable.find_opt cache kres with
-    | Some domain -> domain
-    | None ->*)
-
-end
+module KRETable = Hashtbl.Make(KST)
 
 (* Derive DFA with naive intersection *)
 
 module DFA = struct
 
-  let push xs x = xs := x :: !xs
-  let pushs xs x = xs := x @ !xs
-
   type dfa = state KRETable.t
 
-  and transition = Lr1.set * KRE.ts
+  and transition = Lr1.set * KST.t
 
   and state = {
     id: int;
-    raw: KRE.ts;
+    raw: KST.t;
     clauses: clause list;
     transitions: transition list;
   }
 
-  type pre_transition = Lr1.set * kre
-
-  type pre_derivatives = {
-    reached: clause list ref;
-    direct: pre_transition list ref;
-    reduce: pre_transition list ref;
-    reductions: KRE.reduction list ref;
-  }
-
-  let derivatives outcome kre =
-    let rec loop ks (kre: kre) =
-      match kre.desc with
-      | KAtom (a, _, k) ->
-        push ks (a, k)
-      | KOr (k1, k2) | KStar (lazy k1, k2) ->
-        loop ks k1;
-        loop ks k2
-      | KReduce k ->
-        loop outcome.reduce k
-      | KDone c ->
-        push outcome.reached c
-      | KReduction r ->
-        let frame = Vector.get Redgraph.abstract_frames r.state in
-        begin match frame.parent with
-          | _ -> ()
-        end
-    in
-    loop outcome.direct kre
-
-  (* A state is a list of kre
-     Transitions are a pair of a Lr1.set and the target list of kres
-
-     During derivation, we can:
-     - compute a direct set of non-deterministic transitions
-     - compute the reduction steps to simulate:
-       - new reductions to start
-       - new abstract frames to reach
-  *)
-
-  let derive kres =
-    let oc =
-      {reached=ref []; direct=ref []; reduce=ref []; reductions=ref []}
-    in
-    List.iter (derivatives oc) (kres : KRE.ts :> kre list);
-    let rs = IndexRefine.annotated_partition !(oc.reduce) in
-
-
   let add_state dfa raw =
     let id = KRETable.length dfa in
-    let clauses, transitions = derive raw in
+    let {Derive. reached=clauses; direct; reduce} =
+      Derive.derive_direct raw.KST.direct
+    in
+    let transitions =
+      match reduce with
+      | [] ->
+        List.map
+          (fun (sg, kre) -> sg, KST.make ~direct:kre ~reductions:[] ())
+          (Derive.normalize_transitions KRE.compare direct)
+      | rs ->
+        let derivations =
+          KST.make_derivations rs (Derive.derive_domain rs )
+        in
+        let kres = List.map (fun (k, v) -> (k, `D v)) direct in
+        let kres =
+          index_fold Lr1.n kres (fun lr1 acc ->
+              let abs = Redgraph.AbstractState.of_lr1 lr1 in
+              if IndexSet.disjoint derivations.domain (Redgraph.reachable_goto abs)
+              then (IndexSet.singleton lr1, `R abs) :: acc
+              else acc
+            )
+        in
+        let compare_dr a b =
+          match a, b with
+          | `D d1, `D d2 -> KRE.compare d1 d2
+          | `R r1, `R r2 -> compare_index r1 r2
+          | `D _, `R _ -> -1
+          | `R _, `D _ -> 1
+        in
+        List.map
+          (fun (sg, ks) ->
+             let direct, reductions =
+               List.partition_map (function
+                   | `D d -> Either.Left d
+                   | `R state -> Either.Right {KST. state; derivations}
+                 ) ks
+             in
+             (sg, KST.make ~direct ~reductions ())
+          )
+          (Derive.normalize_transitions compare_dr kres)
+    in
     let st = {id; raw; clauses; transitions} in
     KRETable.add dfa raw st;
     st
@@ -1173,11 +1357,14 @@ let gen_clauses oc clauses =
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  if false && verbose then
+  let kst = KST.make ~direct:(KRE.translate_entry entry) ~reductions:[] () in
+  let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
+  if verbose then (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-  let kres = KRE.Klist.make (KRE.translate_entry entry) in
+    Format.eprintf "%a\n%!" Cmon.format doc;
+  );
   let dfa = KRETable.create 7 in
-  DFA.make dfa kres;
+  DFA.make dfa kst;
   Format.eprintf "(* %d states *)\n%!" (KRETable.length dfa);
   begin match !output_name with
     | None ->

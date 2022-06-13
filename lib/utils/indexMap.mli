@@ -286,3 +286,5 @@ val map: ('a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
 (*val of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t*)
 (** Build a map from the given bindings
     @since 4.07 *)
+
+val domain : ('n, _) t -> 'n BitSet.IndexSet.t
