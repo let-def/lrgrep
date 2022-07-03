@@ -25,26 +25,21 @@ type atom_desc =
     }
   | Wildcard
 
-type atom = {
-  desc : atom_desc;
-  capture: string option;
+type regular_desc =
+  | Atom of atom_desc * string option
+  | Alternative of regular_expr list
+  | Repetition of regular_expr
+  | Reduce
+  | Concat of regular_expr list
+
+and regular_expr = {
+  desc: regular_desc;
   position: position;
-  mutable reached: bool;
 }
 
-type regular_term =
-  | Atom of atom
-  | Alternative of regular_expression * regular_expression
-  | Repetition of regular_expression * position
-  | Reduce of location
-
-and regular_expression =
-  (regular_term * position) list
-
 type clause = {
-  pattern: regular_expression;
+  pattern: regular_expr;
   action: ocaml_code option;
-  mutable reached: bool;
 }
 
 type entry = {
@@ -118,38 +113,24 @@ let print_atom_desc = function
       "suffix" , Cmon.list (List.map (print_option print_symbol) suffix);
     ]
 
-let print_atom {desc; capture; position; reached=_} =
-  Cmon.record [
-    "desc"     , print_atom_desc desc;
-    "capture"  , print_option Cmon.string capture;
-    "position" , print_position position;
-  ]
-
 let rec print_regular_term = function
-  | Atom atom -> Cmon.constructor "Atom" (print_atom atom)
-  | Alternative (re1, re2) ->
-    Cmon.construct "Alternative" [
-      print_regular_expression re1;
-      print_regular_expression re2;
-    ]
-  | Repetition (re, pos) ->
-    Cmon.construct "Repetition" [
-      print_regular_expression re;
-      print_position pos;
-    ]
-  | Reduce loc ->
-    Cmon.construct "Reduce" [print_location loc]
+  | Atom (ad, cap) ->
+    Cmon.construct "Atom" [print_atom_desc ad; print_option Cmon.string cap]
+  | Alternative res ->
+    Cmon.constructor "Alternative" (Cmon.list_map print_regular_expression res)
+  | Concat res ->
+    Cmon.constructor "Concat" (Cmon.list_map print_regular_expression res)
+  | Repetition re ->
+    Cmon.constructor "Repetition" (print_regular_expression re)
+  | Reduce -> Cmon.constant "Reduce"
 
 and print_regular_expression re =
-  let print_regular_term (term, pos) =
-    Cmon.tuple [
-      print_regular_term term;
-      print_position pos;
-    ]
-  in
-  Cmon.list (List.map print_regular_term re)
+  Cmon.record [
+    "desc", print_regular_term re.desc;
+    "position", print_position re.position;
+  ]
 
-let print_clause {pattern; action; reached=_} =
+let print_clause {pattern; action} =
   Cmon.record [
     "pattern", print_regular_expression pattern;
     "action", print_option print_ocamlcode action;

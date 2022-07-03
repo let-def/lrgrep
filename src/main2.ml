@@ -102,6 +102,11 @@ open Fix.Indexing
 
 module IndexSet = BitSet.IndexSet
 
+let (@) l1 l2 =
+  match l1, l2 with
+  | [], l | l, [] -> l
+  | l1, l2 -> l1 @ l2
+
 type 'a indexset = 'a IndexSet.t
 type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
 
@@ -588,7 +593,6 @@ module Redgraph : sig
     mutable goto_nt : Nonterminal.set;
     mutable parent : AbstractState.n index option;
   }
-  val abstract_frames : (AbstractState.n, abstract_frame) IndexBuffer.t
 
   type derivation
   val derivation_root : derivation
@@ -894,198 +898,23 @@ end = struct
     visit [] derivation_root
 end
 
-(* KRE, first intermediate language *)
-
-type clause = {priority: int; syntax: Syntax.clause}
-
-module KRE : sig
-  type desc =
-    | KDone of clause
-    | KAtom of Lr1.set * Syntax.atom * t
-    | KOr of t * t
-    | KStar of t lazy_t * t
-    | KReduce of t
-
-  and t = private {
-    desc: desc;
-    mutable hash: int;
-  }
-
-  val make : desc -> t
-  val translate_entry : Syntax.entry -> t list
-
-  val compare : t -> t -> int
-  val equal : t -> t -> bool
-  val hash : t -> int
-
-  val cmon : unit -> t -> Cmon.t
-end = struct
-  type desc =
-    | KDone of clause
-    | KAtom of Lr1.set * Syntax.atom * t
-    | KOr of t * t
-    | KStar of t lazy_t * t
-    | KReduce of t
-
-  and t = {
-    desc: desc;
-    mutable hash: int;
-  }
-
-  let rec compare_until d1 d2 k1 k2 =
-    if (k1 == k2) || (k1 == d1 && k2 == d2) then 0
-    else
-      let c = Int.compare k1.hash k2.hash in
-      if c <> 0 then c else
-        match k1.desc, k2.desc with
-        | KDone c1, KDone c2 ->
-          Int.compare c1.priority c2.priority
-        | KAtom (s1, a1, k1), KAtom (s2, a2, k2) ->
-          let c = IndexSet.compare s1 s2 in
-          if c <> 0 then c else
-            let c = compare a1 a2 in
-            if c <> 0 then c else
-              compare_until d1 d2 k1 k2
-        | KOr (k1a, k1b), KOr (k2a, k2b) ->
-          let c = compare_until d1 d2 k1a k2a in
-          if c <> 0 then c else
-            compare_until d1 d2 k1b k2b
-        | KStar (lazy k1', d1'), KStar (lazy k2', d2') ->
-          let c = compare_until d1' d2' k1' k2' in
-          if c <> 0 then c else
-            compare_until d1 d2 d1' d2'
-        | KReduce k1, KReduce k2 ->
-          compare_until d1 d2 k1 k2
-        | KDone _   , (KAtom _ | KOr _ | KStar _ | KReduce _)
-        | KAtom _   , (KOr _ | KStar _ | KReduce _)
-        | KOr _     , (KStar _ | KReduce _)
-        | KStar _   , (KReduce _)
-          -> -1
-        | KReduce _ , (KStar _ | KOr _ | KAtom _ | KDone _)
-        | KStar _   , (KOr _ | KAtom _ | KDone _)
-        | KOr _     , (KAtom _ | KDone _)
-        | KAtom _   , (KDone _)
-          -> 1
-
-  let compare t1 t2 = compare_until t2 t1 t1 t2
-
-  let hash t = t.hash
-
-  let equal t1 t2 = compare t1 t2 = 0
-
-  let make desc =
-    let hash = match desc with
-      | KDone _         -> Hashtbl.hash desc
-      | KAtom (s, a, k) -> Hashtbl.seeded_hash k.hash (s, a)
-      | KOr (k1, k2)    -> Hashtbl.seeded_hash k1.hash k2.hash
-      | KStar (_, k')   -> Hashtbl.seeded_hash 42 k'.hash
-      | KReduce k'      -> Hashtbl.seeded_hash 51 k'.hash
-    in
-    {desc; hash}
-
-  let translate_symbol name =
-    match State_indices.find_symbol name with
-    | None ->
-      prerr_endline
-        ("Unknown symbol " ^ State_indices.linearize_symbol name);
-      exit 1
-    | Some symbol -> symbol
-
-  let translate_nonterminal sym =
-    match translate_symbol sym with
-    | N n -> n
-    | T t ->
-      Printf.eprintf "Expecting a non-terminal but %s is a terminal\n%!"
-        (Terminal.name t);
-      exit 1
-
-  let translate_producers list =
-    List.map (Option.map translate_symbol) list
-
-  let translate_expr =
-    let translate_atom_desc = function
-      | Syntax.Symbol name ->
-        let symbol = translate_symbol name in
-        State_indices.states_of_symbol symbol
-      | Syntax.Item {lhs; prefix; suffix} ->
-        let lhs = Option.map translate_nonterminal lhs in
-        let prefix = translate_producers prefix in
-        let suffix = translate_producers suffix in
-        Match_item.states_by_items ~lhs ~prefix ~suffix
-      | Syntax.Wildcard ->
-        Lr1.all
-    in
-    let translate_atom k (atom: Syntax.atom) =
-      KAtom (translate_atom_desc atom.desc, atom, k)
-    in
-    let rec translate_term k = function
-      | Syntax.Atom atom ->
-        make (translate_atom k atom)
-      | Syntax.Alternative (e1, e2) ->
-        make (KOr (translate_expr k e1, translate_expr k e2))
-      | Syntax.Repetition (e1, _) ->
-        let rec result = lazy (make (KStar (jump, k)))
-        and jump = lazy (translate_expr (Lazy.force result) e1) in
-        let (lazy result, lazy jump) = result, jump in
-        result.hash <- Hashtbl.seeded_hash 69 jump.hash;
-        result
-      | Syntax.Reduce _ -> make (KReduce k)
-
-      and translate_expr k = function
-        | [] -> k
-        | (x, _) :: xs ->
-          let k = translate_term k x in
-          translate_expr k xs
-    in
-    translate_expr
-
-  let translate_clause priority syntax =
-    translate_expr (make (KDone {priority; syntax})) syntax.Syntax.pattern
-
-  let translate_entry {Syntax. startsymbols; error; name; args; clauses} =
-    ignore (startsymbols, error, name, args);
-    List.mapi translate_clause clauses
-
-  let rec cmon table t =
-    match Hashtbl.find_opt table t with
-    | Some c -> c
-    | None ->
-      let c = Cmon.of_lazy (lazy (cmon_desc table t.desc)) in
-      Hashtbl.add table t c;
-      c
-
-  and cmon_desc table = function
-    | KDone clause -> Cmon.constructor "KDone" (Cmon.int clause.priority)
-    | KAtom (set, _, t') ->
-      Cmon.construct "KAtom" [
-        Cmon.constant (
-          match
-            IndexSet.fold
-              (fun st acc -> option_cons (Lr1.incoming st) acc)
-              set []
-            |> List.sort_uniq Stdlib.compare
-          with
-          | [s] ->
-            Printf.sprintf "#{%d states ~ %s}"
-              (IndexSet.cardinal set)
-              (Symbol.name s)
-          | _ ->
-            Printf.sprintf "#{%d states}"
-              (IndexSet.cardinal set)
-        );
-        cmon table t';
-      ]
-    | KOr (t1, t2) ->
-      Cmon.construct "KOr" [cmon table t1; cmon table t2]
-    | KStar (lazy t1, t2) ->
-      Cmon.construct "KStar" [cmon table t1; cmon table t2]
-    | KReduce t ->
-      Cmon.construct "KReduce" [cmon table t]
-
-  let cmon () = cmon (Hashtbl.create 7)
-end
-
 type 'a transition = Lr1.set * 'a
+
+let normalize_transitions
+    cmp (tr : 'a transition list) : 'a list transition list
+  =
+  IndexRefine.annotated_partition tr
+  |> List.map (fun (sg, a) -> sg, List.sort_uniq cmp a)
+  |> Misc.group_by
+    ~compare:(fun (_, a1) (_, a2) -> List.compare cmp a1 a2)
+    ~group:(fun (sg0, a) sgs ->
+        (List.fold_left
+           (fun sg (sg', _) -> IndexSet.union sg sg')
+           sg0 sgs, a)
+        )
+
+let normalize_and_merge ~compare ~merge ts =
+  normalize_transitions compare ts |> List.map (fun (k, v) -> (k, merge v))
 
 module type DERIVABLE = sig
   type t
@@ -1122,7 +951,6 @@ end = struct
   let compare t1 t2 =
     D.compare t1.d t2.d
 end
-
 
 module Reduce_op (D : DERIVABLE) :
 sig
@@ -1228,3 +1056,253 @@ struct
     (!direct, !reducible)
 end
 
+module RE = struct
+  module Uid : sig
+    type t = private int
+    val t : unit -> t
+    val compare : t -> t -> int
+  end = struct
+    type t = int
+    let t = let k = ref 0 in fun () -> incr k; !k
+    let compare = Int.compare
+  end
+
+  type t = {
+    uid: Uid.t;
+    desc: desc;
+    position: Syntax.position;
+  }
+  and desc =
+    | Set of Lr1.set * string option
+    | Alt of t list
+    | Seq of t list
+    | Star of t
+    | Reduce
+
+  let compare t1 t2 =
+    Uid.compare t1.uid t2.uid
+
+  let transl_symbol name =
+    match State_indices.find_symbol name with
+    | None ->
+      prerr_endline
+        ("Unknown symbol " ^ State_indices.linearize_symbol name);
+      exit 1
+    | Some symbol -> symbol
+
+  let transl_nonterminal sym =
+    match transl_symbol sym with
+    | N n -> n
+    | T t ->
+      Printf.eprintf "Expecting a non-terminal but %s is a terminal\n%!"
+        (Terminal.name t);
+      exit 1
+
+  let transl_producers list =
+    List.map (Option.map transl_symbol) list
+
+  let transl_atom = function
+    | Syntax.Symbol name ->
+      State_indices.states_of_symbol (transl_symbol name)
+    | Syntax.Item {lhs; prefix; suffix} ->
+      let lhs = Option.map transl_nonterminal lhs in
+      let prefix = transl_producers prefix in
+      let suffix = transl_producers suffix in
+      Match_item.states_by_items ~lhs ~prefix ~suffix
+    | Syntax.Wildcard ->
+      Lr1.all
+
+  let rec transl_desc = function
+    | Syntax.Atom (ad, var) -> Set (transl_atom ad, var)
+    | Syntax.Alternative rs -> Alt (List.map transl rs)
+    | Syntax.Repetition r -> Star (transl r)
+    | Syntax.Reduce -> Reduce
+    | Syntax.Concat rs -> Seq (List.map transl rs)
+
+  and transl {Syntax. desc; position} =
+    {uid = Uid.t (); desc = transl_desc desc; position}
+end
+
+module KRE = struct
+  type t =
+    | Done of {clause: int}
+    | More of RE.t * t
+
+  let more re t = More (re, t)
+
+  let rec compare k1 k2 =
+    match k1, k2 with
+    | Done _, More _ -> -1
+    | More _, Done _ -> 1
+    | Done c1, Done c2 -> Int.compare c1.clause c2.clause
+    | More (t1, k1'), More (t2, k2') ->
+      let c = RE.compare t1 t2 in
+      if c <> 0 then c else
+        compare k1' k2'
+
+  let transl pattern index =
+    More (RE.transl pattern, Done {clause=index})
+end
+
+module KRESet = struct
+  include Set.Make(KRE)
+
+  let prederive ~visited ~reached ~direct ~reduce k =
+    let rec loop k =
+      if not (mem k !visited) then (
+        visited := add k !visited;
+        match k with
+        | Done {clause} -> push reached clause
+        | More (re, k') ->
+          match re.desc with
+          | Set (s, _) ->
+            push direct (s, k')
+          | Alt es ->
+            List.iter (fun e -> loop (KRE.more e k')) es
+          | Star r ->
+            loop k';
+            loop (More (r, k))
+          | Seq es ->
+            loop (List.fold_right KRE.more es k')
+          | Reduce ->
+            push reduce k';
+            loop k'
+      )
+    in
+    loop k
+
+  let derive_reduce t : t transition list =
+    let visited = ref empty in
+    let direct = ref [] in
+    let loop k =
+      match k with
+      | KRE.Done _ -> push direct (Lr1.all, k)
+      | k ->
+        let reached = ref [] in
+        prederive ~visited ~direct ~reached ~reduce:(ref []) k;
+        let push_clause clause = push direct (Lr1.all, KRE.Done {clause}) in
+        List.iter push_clause !reached
+    in
+    iter loop t;
+    normalize_and_merge ~compare:KRE.compare ~merge:of_list !direct
+end
+
+module KRESetMap = Map.Make(KRESet)
+
+module CachedKRESet = Cache(struct
+    type t = KRESet.t
+    let compare = KRESet.compare
+    let derive = KRESet.derive_reduce
+    let merge ts = List.fold_left KRESet.union KRESet.empty ts
+  end)
+
+module Red = Reduce_op(CachedKRESet)
+
+module RedSet = Set.Make(Red)
+
+module ST = struct
+  type t = {
+    direct: KRESet.t;
+    reduce: RedSet.t;
+  }
+
+  let compare t1 t2 =
+    let c = KRESet.compare t1.direct t2.direct in
+    if c <> 0 then c else
+      RedSet.compare t1.reduce t2.reduce
+
+  let lift_direct (k, v) =
+    (k, {direct = KRESet.singleton v; reduce = RedSet.empty})
+
+  let lift_cached (k, v) =
+    (k, {direct = CachedKRESet.unlift v; reduce = RedSet.empty})
+
+  let lift_reduce (k, v) =
+    (k, {direct = KRESet.empty; reduce = RedSet.singleton v})
+
+  let lift_red (d, r) =
+    List.map lift_cached d @ List.map lift_reduce r
+
+  let add_redset red tr = lift_red (Red.derive red) @ tr
+
+  let empty = {
+    direct = KRESet.empty;
+    reduce = RedSet.empty;
+  }
+
+  let union t1 t2 = {
+    direct = KRESet.union t1.direct t2.direct;
+    reduce = RedSet.union t1.reduce t2.reduce;
+  }
+
+  let derive ~reduction_cache t =
+    let visited = ref KRESet.empty in
+    let reached = ref [] in
+    let direct = ref [] in
+    let reduce = ref [] in
+    let loop k = KRESet.prederive ~visited ~reached ~reduce ~direct k in
+    KRESet.iter loop t.direct;
+    let reduce = KRESet.of_list !reduce in
+    let tr =
+      match KRESetMap.find_opt reduce !reduction_cache with
+      | Some tr -> tr
+      | None ->
+        let tr = lift_red (Red.initial (CachedKRESet.lift reduce)) in
+        reduction_cache := KRESetMap.add reduce tr !reduction_cache;
+        tr
+    in
+    let tr = RedSet.fold add_redset t.reduce tr in
+    let tr =
+      normalize_and_merge
+        ~compare:compare
+        ~merge:(List.fold_left union empty)
+        (List.map lift_direct !direct @ tr)
+    in
+    (BitSet.IntSet.of_list !reached, tr)
+end
+
+module DFA = Map.Make(ST)
+
+let () = (
+  let entry = List.hd lexer_definition.entrypoints in
+  let cases =
+    entry.Syntax.clauses
+    |> List.mapi (fun i case -> KRE.transl case.Syntax.pattern i)
+    |> KRESet.of_list
+  in
+  let reduction_cache = ref KRESetMap.empty in
+  let dfa = ref DFA.empty in
+  let rec process_st = function
+    | [] -> ()
+    | st :: todo ->
+      match DFA.find_opt st !dfa with
+      | Some _ -> process_st todo
+      | None ->
+        let _, tgts as tr = ST.derive ~reduction_cache st in
+        dfa := DFA.add st tr !dfa;
+        process_st (List.map snd tgts @ todo)
+  in
+  process_st [{ST. direct = cases; reduce = RedSet.empty}];
+  (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
+  if verbose then (
+    Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
+    Format.eprintf "%a\n%!" Cmon.format doc;
+  );*)
+  Format.eprintf "(* %d states *)\n%!" (DFA.cardinal !dfa);
+  begin match !output_name with
+    | None ->
+      prerr_endline "No output file provided (option -o). Giving up.";
+      exit 1
+    | Some path ->
+      let oc = open_out_bin path in
+      output_string oc (snd lexer_definition.header);
+      output_char oc '\n';
+      (*let gen_table = DFA.minimize dfa in
+        Clause.gencode oc clauses;*)
+      output_char oc '\n';
+      output_string oc (snd lexer_definition.trailer);
+      output_char oc '\n';
+      (*gen_table oc;*)
+      close_out oc
+  end
+)

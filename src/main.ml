@@ -14,6 +14,7 @@
 (**************************************************************************)
 
 open Utils
+open Main2
 let filename_of_position _ = failwith "TODO"
 
 (* The lexer generator. Command-line parsing. *)
@@ -1059,7 +1060,7 @@ module KST : sig
   }
 
   and derivations = private {
-    continuations: t Lr1.map;
+    continuations: KRE.t list Lr1.map;
     domain: Lr1.set;
     source: KRE.t list;
     hash: int;
@@ -1073,7 +1074,7 @@ module KST : sig
   val make :
     direct:KRE.t list -> reductions:reduction list -> ?merge:t list -> unit -> t
 
-  val make_derivations : KRE.t list -> t Lr1.map -> derivations
+  val make_derivations : KRE.t list -> KRE.t list Lr1.map -> derivations
 
   val compare : t -> t -> int
 
@@ -1081,6 +1082,8 @@ module KST : sig
   val hash : t -> int
 
   val compare_reduction : reduction -> reduction -> int
+
+  val reachable : derivations -> Redgraph.AbstractState.n index -> bool
 end = struct
   type t = {
     direct: KRE.t list;
@@ -1088,7 +1091,7 @@ end = struct
   }
 
   and derivations = {
-    continuations: t Lr1.map;
+    continuations: KRE.t list Lr1.map;
     domain: Lr1.set;
     source: KRE.t list;
     hash: int;
@@ -1134,6 +1137,9 @@ end = struct
   let hash t =
     hash_list KRE.hash t.direct lxor
     hash_list hash_reduction t.reductions
+
+  let reachable d n =
+    not (IndexSet.disjoint d.domain (Redgraph.reachable_goto n))
 end
 
 module Derive : sig
@@ -1148,7 +1154,8 @@ module Derive : sig
   }
 
   val derive_direct : KRE.t list -> pre_derivatives
-  val derive_domain : KRE.t list -> (Lr1.n, KST.t) indexmap
+  val derive_domain : KRE.t list -> (Lr1.n, KRE.t list) indexmap
+  val derive_reduction : KST.reduction -> pre_derivatives
 end = struct
 
   type 'a pre_transition = Lr1.set * 'a
@@ -1236,11 +1243,49 @@ end = struct
     in
     visit Redgraph.derivation_root ([], kres);
     IndexMap.map (fun (rreached, rkres) ->
-        KST.make
-          ~direct:(List.map (fun clause -> KRE.make (KRE.KDone clause)) !rreached @ !rkres)
-          ~reductions:[]
-          ()
+        List.map (fun clause -> KRE.make (KRE.KDone clause)) !rreached @ !rkres
       ) !map
+
+  let derive_reduction (red : KST.reduction) =
+    let frame = Vector.get Redgraph.abstract_frames red.state in
+    let acc = [] in
+    let acc = match frame.Redgraph.parent with
+      | None -> acc
+      | Some state' ->
+        if KST.reachable red.derivations state' then
+          (Lr1.all, `R state') :: acc
+        else
+          acc
+    in
+    let visited = ref IndexSet.empty in
+    let rec visit_nt (nt : Nonterminal.t) acc =
+      if IndexSet.mem nt !visited then acc
+      else (
+        visited := IndexSet.add nt !visited;
+        let tgts =
+          IndexSet.fold (fun src acc ->
+              let tgt = Transition.find_goto_target src nt in
+              let srcs = match IndexMap.find_opt tgt acc with
+                | None -> IndexSet.singleton src
+                | Some srcs -> IndexSet.add src srcs
+              in
+              IndexMap.add tgt srcs acc
+            )
+            frame.states IndexMap.empty
+        in
+        IndexMap.fold visit_st tgts acc
+      )
+    and visit_st (tgt : Lr1.t) (srcs: Lr1.set) acc =
+      let acc = match IndexMap.find_opt tgt derivations.KST.continuations with
+        | None -> acc
+        | Some ks ->
+          let pre = derive_direct ks in
+
+          List.map (fun k -> (sg, `D k)) ks @ acc
+      in
+      ()
+    in
+    IndexSet.fold visit_nt frame.goto_nt acc
 end
 
 type kre = KRE.t
@@ -1263,11 +1308,9 @@ module DFA = struct
     transitions: transition list;
   }
 
-  let add_state dfa raw =
+  let add_state dfa ({KST. direct; reductions} as raw) =
     let id = KRETable.length dfa in
-    let {Derive. reached=clauses; direct; reduce} =
-      Derive.derive_direct raw.KST.direct
-    in
+    let {Derive. reached; direct; reduce} = Derive.derive_direct direct in
     let transitions =
       match reduce with
       | [] ->
@@ -1276,15 +1319,20 @@ module DFA = struct
           (Derive.normalize_transitions KRE.compare direct)
       | rs ->
         let derivations =
-          KST.make_derivations rs (Derive.derive_domain rs )
+          KST.make_derivations rs (Derive.derive_domain rs)
         in
         let kres = List.map (fun (k, v) -> (k, `D v)) direct in
         let kres =
           index_fold Lr1.n kres (fun lr1 acc ->
               let abs = Redgraph.AbstractState.of_lr1 lr1 in
-              if IndexSet.disjoint derivations.domain (Redgraph.reachable_goto abs)
-              then (IndexSet.singleton lr1, `R abs) :: acc
-              else acc
+              if KST.reachable derivations abs
+              then (
+                let sg = IndexSet.singleton lr1 in
+                let acc = (sg, `R abs) :: acc in
+                match IndexMap.find_opt lr1 derivations.KST.continuations with
+                | None -> acc
+                | Some ks -> List.map (fun k -> (sg, `D k)) ks @ acc
+              ) else acc
             )
         in
         let compare_dr a b =
@@ -1306,7 +1354,7 @@ module DFA = struct
           )
           (Derive.normalize_transitions compare_dr kres)
     in
-    let st = {id; raw; clauses; transitions} in
+    let st = {id; raw; clauses=reached; transitions} in
     KRETable.add dfa raw st;
     st
 

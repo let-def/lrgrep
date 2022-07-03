@@ -17,6 +17,7 @@
 
 %{
 open Syntax
+let mk_re desc pos = {desc; position = make_position pos}
 %}
 
 %token <string> IDENT
@@ -38,19 +39,12 @@ open Syntax
        LPAREN      "("
        RPAREN      ")"
        DOT         "."
-       LEFT_ARROW  "<-"
+       BANG        "!"
        COMMA       ","
        SEMI        ";"
        COLON       ":"
        AS          "as"
        (*HASH       "#"*)
-
-(*%right "as"*)
-%left "|"
-%nonassoc "?" "*" (*"+"*)
-(*%left "#"*)
-(*%nonassoc IDENT "_" "[" "("*)
-%left ";"
 
 %start <Syntax.lexer_definition> lexer_definition
 %start <Syntax.prompt_sentence> prompt_sentence
@@ -59,40 +53,34 @@ open Syntax
 
 lexer_definition:
 | header "rule" separated_list("and", definition) header EOF
-  { { header = $1; entrypoints = $3; trailer = $4 } }
+  { {header=$1; entrypoints=$3; trailer=$4} }
 ;
 
 header:
-| ACTION
-  { $1 }
-| (*epsilon*)
-  { { loc_file = "";
-      start_pos = 0;
-      end_pos = 0;
-      start_line = 1;
-      start_col = 0;
-    }, ""
-  }
+| ACTION { $1 }
+| (*empty*)
+  { ({loc_file=""; start_pos=0; end_pos=0; start_line=1; start_col=0}, "") }
 ;
 
 definition:
 | name=IDENT args=IDENT* "=" "parse" startsymbols=IDENT* error=boption("error")
-    "|" clauses=separated_list("|", case)
+    "|" clauses=cases
   { {startsymbols; error; name; args; clauses} }
 ;
 
+cases:
+| case { [$1] }
+| case "|" cases { $1 :: $3}
+;
+
 case:
-| regexp ACTION
-  { {pattern = $1; action = Some $2; reached=false} }
-| regexp UNREACHABLE
-  { {pattern = $1; action = None; reached=false} }
+| regexp ACTION      { {pattern = $1; action = Some $2} }
+| regexp UNREACHABLE { {pattern = $1; action = None} }
 ;
 
 symbol:
-| IDENT
-  { Name $1 }
-| IDENT "(" separated_list(",", symbol) ")"
-  { Apply ($1, $3) }
+| IDENT                                     { Name $1 }
+| IDENT "(" separated_list(",", symbol) ")" { Apply ($1, $3) }
 ;
 
 wild_symbol:
@@ -109,33 +97,38 @@ atom:
 
 %inline item_lhs:
 | (*empty*)  { None }
-| symbol ";" { Some $1 }
+| symbol ":" { Some $1 }
+;
+
+regleaf:
+| "(" regexp ")"             { $2 }
+| atom preceded("as",IDENT)? { mk_re (Atom ($1, $2)) $endpos }
 ;
 
 regterm:
-| atom preceded("as",IDENT)?
-  { Atom {
-      desc=$1;
-      capture=$2;
-      position=make_position $startpos;
-      reached=false;
-  } }
-| regexp "*"
-  { Repetition ($1, make_position $startpos($2)) }
-| regexp "?"
-  { Alternative ([], $1) }
-| regexp "|" regexp
-  { Alternative ($1, $3) }
-| "<-"
-  { Reduce (make_location $startpos($1) $endpos($1)) }
+| regleaf     { $1 }
+| regleaf "*" { mk_re (Repetition $1) $endpos }
+| regleaf "?" { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
+| "!"         { mk_re Reduce $endpos }
+;
+
+regseq_loop:
+| regterm                 { [$1] }
+| regseq_loop ";" regterm { $3 :: $1 }
+;
+
+regseq:
+| (*empty*) { mk_re (Concat []) $endpos }
+| regseq_loop { match $1 with [x] -> x | xs  -> mk_re (Concat xs) $endpos }
+;
+
+regsum_loop:
+| regseq                 { [$1] }
+| regseq "|" regsum_loop { $1 :: $3 }
+;
 
 regexp:
-| regterm
-  { [$1, make_position $endpos] }
-| "(" regexp ")"
-  { $2 }
-| regexp ";" regexp
-  { $1 @ $3 }
+| regsum_loop { match $1 with [x] -> x | xs -> mk_re (Alternative xs) $endpos }
 ;
 
 prompt_sentence:

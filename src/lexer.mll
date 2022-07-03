@@ -182,8 +182,8 @@ rule main = parse
 | ']' { RBRACKET }
 | '*' { STAR }
 | '?' { QUESTION }
-(*| '+' { PLUS }*)
-| "<-" { LEFT_ARROW }
+(*|'+' { PLUS }*)
+| '!' { BANG }
 | '(' { LPAREN }
 | ')' { RPAREN }
 | ':' { COLON }
