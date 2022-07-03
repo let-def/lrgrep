@@ -4,8 +4,8 @@ rule error_message = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
-| structure_item; <-; SEMI as semi;
-  LET; ext; list(attribute); rec_flag; let_binding_body; <-
+| structure_item; !; SEMI as semi;
+  LET; ext; list(attribute); rec_flag; let_binding_body; !
   { fun _ ->
     let Parser_raw.MenhirInterpreter.Element (_lr1, _val, startp, _endp) = semi in
     "Might be due to the semicolon line "
@@ -15,7 +15,7 @@ rule error_message = parse error
   }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
-| LPAREN; [. RPAREN]; <-
+| LPAREN; [. RPAREN]; !
   { fun _ ->
     "Unclosed parenthesis"
   }
@@ -23,7 +23,7 @@ rule error_message = parse error
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
-| [. LIDENT]; <-
+| [. LIDENT]; !
   { fun token ->
     match Lexer_raw.as_keyword token with
     | None ->
@@ -33,12 +33,12 @@ rule error_message = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| ([. UIDENT] | [. TYPE] | [. REC]); <-
+| ([. UIDENT] | [. TYPE] | [. REC]); !
   { fun _ ->
     "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
   }
 
-| [. seq_expr ]; <-
+| [. seq_expr ]; !
   { function
     | MODULE ->
       (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
