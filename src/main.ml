@@ -1121,12 +1121,32 @@ module RE = struct
 
   and transl {Syntax. desc; position} =
     {uid = Uid.t (); desc = transl_desc desc; position}
+
+  let rec cmon t =
+    match t.desc with
+    | Set (lr1s, var) ->
+      Cmon.construct "Set" [
+        Cmon.constant
+          ("{" ^ string_of_int (IndexSet.cardinal lr1s) ^ " states}");
+        match var with
+        | None -> Cmon.constant "None"
+        | Some x -> Cmon.constructor "Some" (Cmon.string x)
+      ]
+    | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map cmon ts)
+    | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map cmon ts)
+    | Star t -> Cmon.constructor "Star" (cmon t)
+    | Reduce -> Cmon.constant "Reduce"
 end
 
 module KRE = struct
   type t =
     | Done of {clause: int}
     | More of RE.t * t
+
+  let rec cmon = function
+    | Done {clause} -> Cmon.constructor "Done" (Cmon.int clause)
+    | More (re, t) ->
+      Cmon.cons (RE.cmon re) (cmon t)
 
   let more re t = More (re, t)
 
@@ -1205,6 +1225,13 @@ module ST = struct
     direct: KRESet.t;
     reduce: RedSet.t;
   }
+
+  let cmon t =
+    Cmon.record [
+      "direct", Cmon.list_map KRE.cmon (KRESet.elements t.direct);
+      "reduce", Cmon.constant ("{" ^ string_of_int (RedSet.cardinal t.reduce) ^
+                               " reductions}");
+    ]
 
   let compare t1 t2 =
     let c = KRESet.compare t1.direct t2.direct in
@@ -1309,6 +1336,34 @@ let gen_table oc dfa initial =
     \  let step st lr1 = table.(st) lr1\n\
      end\n" initial_id
 
+let eval_dfa dfa initial (name, stack) =
+  let eprintf = Printf.eprintf in
+  eprintf "Evaluating case %s\n" name;
+  let rec loop st stack =
+    let id, actions, tr = DFA.find st dfa in
+    eprintf "------------------------\n";
+    eprintf "Matcher in state %d:\n%a\n"
+      id (PPrint.ToChannel.pretty 0.8 80) (Cmon.print (ST.cmon st));
+    eprintf "Matching actions: [%s]\n"
+      (String.concat ";" (List.map string_of_int (BitSet.IntSet.elements actions)));
+    match stack with
+    | [] -> eprintf "End of stack\n"
+    | x :: xs ->
+      let lr1 = Index.of_int Lr1.n x in
+      eprintf "Parser in state %d - %s\n" x
+        (Option.value (Option.map Symbol.name (Lr1.incoming lr1))
+           ~default:"<initial state>");
+      begin match List.find_opt (fun (lr1s, _) -> IndexSet.mem lr1 lr1s) tr with
+        | None ->
+          eprintf "No transitions, ending analysis\n"
+        | Some (_, st') ->
+          loop st' xs
+      end
+      (*loop xs*)
+  in
+  loop initial stack;
+  eprintf "------------------------\n\n"
+
 let gen_code oc clauses =
   let arities = List.map (fun _clause -> "0") clauses in
   let print fmt = Printf.fprintf oc fmt in
@@ -1354,13 +1409,13 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
   Format.eprintf "(* %d states *)\n%!" (DFA.cardinal !dfa);
-  let print_st _ (id, _accept, tgts) =
+  (*let print_st _ (id, _accept, tgts) =
     List.iter (fun (_, tgt) ->
         let id', _, _ = DFA.find tgt !dfa in
         Format.eprintf " st_%d -> st_%d;\n" id id'
       ) tgts
   in
-  DFA.iter print_st !dfa;
+  DFA.iter print_st !dfa;*)
   begin match !output_name with
     | None ->
       prerr_endline "No output file provided (option -o). Giving up.";
@@ -1373,8 +1428,9 @@ let () = (
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      gen_table oc !dfa initial;
+      (*gen_table oc !dfa initial;*)
       close_out oc
   end;
+  Array.iter (eval_dfa !dfa initial) Sample.tests
   (* Print matching functions *)
 )
