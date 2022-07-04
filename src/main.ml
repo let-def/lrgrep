@@ -1263,6 +1263,68 @@ end
 
 module DFA = Map.Make(ST)
 
+let gen_table oc dfa initial =
+  let print fmt = Printf.fprintf oc fmt in
+  let sprint fmt = Printf.sprintf fmt in
+  print
+    "module Table : sig\n\
+    \  open Analyser_def\n\
+    \  type state\n\
+    \  val initial : state\n\
+    \  val step : state -> int -> \n\
+    \    register list * clause option * state option\n\
+     end = struct\n\
+    \  [@@@ocaml.warning \"-27\"]\n\
+    \  type state = int\n\
+    \  let table = [|\n\
+    ";
+  let states = Array.make (DFA.cardinal dfa) None in
+  DFA.iter (fun _ (id, _, _ as st) -> states.(id) <- Some st) dfa;
+  let visit opt =
+    let (_id, actions, tr) = Option.get opt in
+    print "    (fun st ->";
+    let action = match BitSet.IntSet.minimum actions with
+      | None -> "None"
+      | Some priority -> sprint "Some %d" priority
+    in
+    let print_states lr1s =
+      IndexSet.elements lr1s
+      |> List.map (string_of_int : int -> string :> _ index -> string)
+      |> String.concat "|"
+    in
+    print "\n    match st with\n";
+    List.iter begin fun (lr1s, st) ->
+      let (id, _, _) = DFA.find st dfa in
+      print "    | %s -> ([], %s, Some %d)\n" (print_states lr1s) action id;
+    end tr;
+    print "    | _ -> ([], %s, None)" action;
+    print ");\n";
+  in
+  Array.iter visit states;
+  let initial_id, _, _ = DFA.find initial dfa in
+  assert (initial_id = 0);
+  print
+    "  |]\n\
+    \  let initial = %d\n\
+    \  let step st lr1 = table.(st) lr1\n\
+     end\n" initial_id
+
+let gen_code oc clauses =
+  let arities = List.map (fun _clause -> "0") clauses in
+  let print fmt = Printf.fprintf oc fmt in
+  print
+    "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
+    (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
+  List.iteri (fun priority clause ->
+      print "  | %d, [||] -> begin\n%s\n    end\n"
+        priority
+        (match clause.Syntax.action with
+         | None -> "failwith \"Should be unreachable\""
+         | Some (_, str) -> str)
+    ) clauses;
+  print "  | _ -> failwith \"Invalid action\"\n\n";
+  print "let arities = [|%s|]\n" (String.concat ";" arities)
+
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
   let cases =
@@ -1271,6 +1333,7 @@ let () = (
     |> KRESet.of_list
   in
   let reduction_cache = ref KRESetMap.empty in
+  let next_id = ref 0 in
   let dfa = ref DFA.empty in
   let rec process_st = function
     | [] -> ()
@@ -1278,17 +1341,26 @@ let () = (
       match DFA.find_opt st !dfa with
       | Some _ -> process_st todo
       | None ->
-        let _, tgts as tr = ST.derive ~reduction_cache st in
-        dfa := DFA.add st tr !dfa;
-        process_st (List.map snd tgts @ todo)
+        let accept, targets = ST.derive ~reduction_cache st in
+        dfa := DFA.add st (!next_id, accept, targets) !dfa;
+        incr next_id;
+        process_st (List.map snd targets @ todo)
   in
-  process_st [{ST. direct = cases; reduce = RedSet.empty}];
+  let initial = {ST. direct = cases; reduce = RedSet.empty} in
+  process_st [initial];
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
   Format.eprintf "(* %d states *)\n%!" (DFA.cardinal !dfa);
+  let print_st _ (id, _accept, tgts) =
+    List.iter (fun (_, tgt) ->
+        let id', _, _ = DFA.find tgt !dfa in
+        Format.eprintf " st_%d -> st_%d;\n" id id'
+      ) tgts
+  in
+  DFA.iter print_st !dfa;
   begin match !output_name with
     | None ->
       prerr_endline "No output file provided (option -o). Giving up.";
@@ -1297,12 +1369,12 @@ let () = (
       let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
       output_char oc '\n';
-      (*let gen_table = DFA.minimize dfa in
-        Clause.gencode oc clauses;*)
+      gen_code oc entry.Syntax.clauses;
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      (*gen_table oc;*)
+      gen_table oc !dfa initial;
       close_out oc
-  end
+  end;
+  (* Print matching functions *)
 )

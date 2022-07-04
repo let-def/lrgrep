@@ -663,6 +663,8 @@ let process_result lexbuf = function
   | None -> print_endline "Successful parse"
   | Some env ->
     let stack = get_states env in
+    Format.printf "let stack = [%s]\n"
+      (String.concat ";" (List.map string_of_int (List.map fst stack)));
     Format.printf "%a, parser stack (most recent first):\n%!"
       Location.print_loc (Location.curr lexbuf);
     let reds = ref [] in

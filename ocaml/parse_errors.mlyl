@@ -7,11 +7,12 @@ rule error_message = parse error
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
   { fun _ ->
-    let Parser_raw.MenhirInterpreter.Element (_lr1, _val, startp, _endp) = semi in
+    "Might be due to the semicolon line -1, character -1"
+    (*let Parser_raw.MenhirInterpreter.Element (_lr1, _val, startp, _endp) = semi in
     "Might be due to the semicolon line "
     ^ string_of_int startp.pos_lnum
     ^ ", character "
-    ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+    ^ string_of_int (startp.pos_cnum - startp.pos_bol)*)
   }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
