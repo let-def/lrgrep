@@ -610,7 +610,6 @@ module Redgraph : sig
     val of_lr1 : Lr1.t -> n index
   end
 
-
   type goto_closure = {
     sources: Lr1.set;
     targets: Lr1.set;
@@ -656,11 +655,11 @@ end = struct
 
   (* Representation of abstract stack suffix *)
 
-  module AbstractExtra = Gensym()
+  module Extra = Gensym()
   module State = struct
-    include Sum(Lr1)(AbstractExtra)
+    include Sum(Lr1)(Extra)
     let of_lr1 = inj_l
-    let fresh () = inj_r (AbstractExtra.fresh ())
+    let fresh () = inj_r (Extra.fresh ())
   end
 
   type frame = {
@@ -956,14 +955,15 @@ end = struct
     mutable tr: t transition list option;
   }
 
-  let lift d = { d; tr=None }
+  let lift d = {d; tr=None}
   let unlift t = t.d
 
   let derive t =
     match t.tr with
     | Some tr -> tr
     | None ->
-      let tr = List.map (fun (sg, d) -> (sg, lift d)) (D.derive t.d) in
+      let dir = D.derive t.d in
+      let tr = List.map (fun (sg, d) -> (sg, lift d)) dir in
       t.tr <- Some tr;
       tr
 
@@ -983,33 +983,48 @@ sig
   type t
   type transitions = D.t transition list * t transition list
 
-  type compiled
-  val compile : D.t -> compiled
-  val cmon : compiled -> Cmon.t
+  type compilation_cache
+  val make_compilation_cache : unit -> compilation_cache
 
-  val initial : compiled -> transitions
+  type compilation
+  val compile : compilation_cache -> D.t -> compilation
+  val cmon : compilation -> Cmon.t
+
+  val initial : compilation -> transitions
   val derive : t -> transitions
   val compare : t -> t -> int
 end =
 struct
-  type derivations = {
+
+  type compilation = {
     source: D.t;
     continuations: D.t Lr1.map;
     domain: Lr1.set;
   }
 
-  type compiled = derivations
+  module DMap = Map.Make(D)
 
-  let compile d =
-    let find_tr lr1 (lr1s, x) =
-      if IndexSet.mem lr1 lr1s then Some x else None
-    in
-    let continuations = Redgraph.derive
-        ~root:d
-        ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
-        ~join:D.merge
-    in
-    { source = d; continuations; domain = IndexMap.domain continuations }
+  type compilation_cache = compilation DMap.t ref
+
+  let make_compilation_cache () = ref DMap.empty
+
+  let compile cache d =
+    match DMap.find_opt d !cache with
+    | Some c -> c
+    | None ->
+      let find_tr lr1 (lr1s, x) =
+        if IndexSet.mem lr1 lr1s then Some x else None
+      in
+      let continuations = Redgraph.derive
+          ~root:d
+          ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
+          ~join:D.merge
+      in
+      let result =
+        { source = d; continuations; domain = IndexMap.domain continuations }
+      in
+      cache := DMap.add d result !cache;
+      result
 
   let cmon compiled =
     IndexMap.fold
@@ -1020,7 +1035,7 @@ struct
     |> Cmon.list
 
   type t = {
-    derivations: derivations;
+    derivations: compilation;
     state: Redgraph.State.n index;
   }
 
@@ -1238,8 +1253,6 @@ module KRESet = struct
   let cmon t = Cmon.list_map KRE.cmon (elements t)
 end
 
-module KRESetMap = Map.Make(KRESet)
-
 module CachedKRESet = Cache(struct
     type t = KRESet.t
     let compare = KRESet.compare
@@ -1303,17 +1316,12 @@ module ST = struct
     let reduce = ref [] in
     let loop k = KRESet.prederive ~visited ~reached ~reduce ~direct k in
     KRESet.iter loop t.direct;
-    let reduce = KRESet.of_list !reduce in
     let tr =
-      match KRESetMap.find_opt reduce !reduction_cache with
-      | Some tr -> tr
-      | None ->
-        let compiled = Red.compile (CachedKRESet.lift reduce) in
-        Printf.eprintf "compiled reductions:\n%a\n"
-          print_cmon (Red.cmon compiled);
-        let tr = lift_red (Red.initial compiled) in
-        reduction_cache := KRESetMap.add reduce tr !reduction_cache;
-        tr
+      let reduce = CachedKRESet.lift (KRESet.of_list !reduce) in
+      let compiled = Red.compile reduction_cache reduce in
+      Printf.eprintf "compiled reductions:\n%a\n"
+        print_cmon (Red.cmon compiled);
+      lift_red (Red.initial compiled)
     in
     let tr = RedSet.fold add_redset t.reduce tr in
     let tr =
@@ -1343,7 +1351,7 @@ module DFA = struct
         incr k;
         id
     in
-    let reduction_cache = ref KRESetMap.empty in
+    let reduction_cache = Red.make_compilation_cache () in
     let dfa : state STMap.t ref = ref STMap.empty in
     let rec find_state st = lazy (
       match STMap.find_opt st !dfa with
@@ -1477,7 +1485,7 @@ let rec interp_kre kres reds stack =
   )*)
 
 let interp_st st stack =
-  let reduction_cache = ref KRESetMap.empty in
+  let reduction_cache = Red.make_compilation_cache () in
   let rec loop st stack =
     eprintf "------------------------\n";
     eprintf "Matcher state:\n%a\n" print_cmon (ST.cmon st);
