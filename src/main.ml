@@ -939,7 +939,7 @@ let normalize_and_merge ~compare ~merge ts =
 
 module type DERIVABLE = sig
   type t
-  val derive : t -> t transition list * t list
+  val derive : t -> t transition list
   val merge : t list -> t
   val compare : t -> t -> int
   val cmon : t -> Cmon.t
@@ -952,7 +952,7 @@ module Cache (D : DERIVABLE) : sig
 end = struct
   type t = {
     d: D.t;
-    mutable tr: (t transition list * t list) option;
+    mutable tr: t transition list option;
   }
 
   let lift d = {d; tr=None}
@@ -962,11 +962,8 @@ end = struct
     match t.tr with
     | Some tr -> tr
     | None ->
-      let dir, red = D.derive t.d in
-      let tr =
-        (List.map (fun (sg, d) -> (sg, lift d)) dir,
-         List.map lift red)
-      in
+      let dir = D.derive t.d in
+      let tr = List.map (fun (sg, d) -> (sg, lift d)) dir in
       t.tr <- Some tr;
       tr
 
@@ -999,16 +996,15 @@ sig
 end =
 struct
 
-  module DMap = Map.Make(D)
-
   type compilation = {
     source: D.t;
     continuations: D.t Lr1.map;
     domain: Lr1.set;
-    cache: compilation_cache;
   }
 
-  and compilation_cache = compilation DMap.t ref
+  module DMap = Map.Make(D)
+
+  type compilation_cache = compilation DMap.t ref
 
   let make_compilation_cache () = ref DMap.empty
 
@@ -1022,11 +1018,11 @@ struct
       let continuations =
         Redgraph.derive
           ~root:source
-          ~step:(fun d lr1 -> List.find_map (find_tr lr1) (fst (D.derive d)))
+          ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
           ~join:D.merge
       in
       let domain = IndexMap.domain continuations in
-      let result = {source; continuations; domain; cache} in
+      let result = {source; continuations; domain} in
       cache := DMap.add source result !cache;
       result
 
@@ -1087,20 +1083,17 @@ struct
         string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
         string_of_indexset ~string_of_index:Lr1.to_string targets
       );
-      IndexSet.iter begin fun target ->
-        begin match IndexMap.find_opt target t.derivations.continuations with
-          | None -> ()
-          | Some d ->
-            let dir, red = D.derive d in
-            let push_tr tr = Option.iter (push direct) (filter_tr sources tr) in
-            List.iter push_tr dir;
-            let red = D.merge red in
-            let dir, _red = initial (compile t.derivations.cache red) in
-            List.iter push_tr dir;
-        end;
-        let state = Redgraph.State.of_lr1 target in
-        reducible := add_abstract_state sources state t.derivations !reducible
-      end targets;
+      IndexSet.iter (fun target ->
+          begin match IndexMap.find_opt target t.derivations.continuations with
+            | None -> ()
+            | Some d ->
+              List.iter
+                (fun tr -> Option.iter (push direct) (filter_tr sources tr))
+                (D.derive d)
+          end;
+          let state = Redgraph.State.of_lr1 target in
+          reducible := add_abstract_state sources state t.derivations !reducible
+        ) targets;
     in
     prerr_endline "visiting goto closure";
     List.iter visit_goto (Redgraph.state_goto_closure t.state);
@@ -1242,21 +1235,20 @@ module KRESet = struct
     in
     loop k
 
-  let derive_reduce t : t transition list * t list =
+  let derive_reduce t : t transition list =
     let visited = ref empty in
     let direct = ref [] in
-    let reduce = ref [] in
     let loop k =
       match k with
       | KRE.Done _ -> push direct (Lr1.all, k)
       | k ->
         let reached = ref [] in
-        prederive ~visited ~direct ~reached ~reduce k;
+        prederive ~visited ~direct ~reached ~reduce:(ref []) k;
         let push_clause clause = push direct (Lr1.all, KRE.Done {clause}) in
         List.iter push_clause !reached
     in
     iter loop t;
-    (normalize_and_merge ~compare:KRE.compare ~merge:of_list !direct, [of_list !reduce])
+    normalize_and_merge ~compare:KRE.compare ~merge:of_list !direct
 
   let cmon t = Cmon.list_map KRE.cmon (elements t)
 end
