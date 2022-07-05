@@ -1422,21 +1422,36 @@ let rec interp_kre kres reds stack =
     eprintf "Parser in state %d - %s\n" x
       (Option.value (Option.map Symbol.name (Lr1.incoming lr1))
          ~default:"<initial state>");
+    let add_option acc = function
+      | None -> acc
+      | Some x -> IndexSet.add x acc
+    in
     let step_red red =
       assert (IndexSet.mem lr1 (Redgraph.state_lr1s red));
-      Option.fold ~none:IndexSet.empty ~some:IndexSet.singleton
-        (Redgraph.state_parent red)
-    in
-    let reds =
-      if KRESet.is_empty reduce then reds else
-        IndexSet.add (Redgraph.State.of_lr1 lr1) reds
+      let acc = add_option IndexSet.empty (Redgraph.state_parent red) in
+      let red_gc acc gc =
+        if not (IndexSet.mem lr1 gc.Redgraph.sources) then acc else (
+          IndexSet.fold (fun tgt acc ->
+              let tgt = Redgraph.State.of_lr1 tgt in
+              assert (IndexSet.mem lr1 (Redgraph.state_lr1s tgt));
+              add_option acc (Redgraph.state_parent tgt)
+            )
+            gc.Redgraph.targets
+            acc
+        )
+      in
+      List.fold_left red_gc acc (Redgraph.state_goto_closure red)
     in
     let reds = indexset_bind reds step_red in
+    let reds =
+      if KRESet.is_empty reduce
+      then reds
+      else IndexSet.add (Redgraph.State.of_lr1 lr1) reds
+    in
     let step_kre acc (sg, kre') =
-      if IndexSet.mem lr1 sg then
-        KRESet.add kre' acc
-      else
-        acc
+      if IndexSet.mem lr1 sg
+      then KRESet.add kre' acc
+      else acc
     in
     let kres = List.fold_left step_kre KRESet.empty !direct in
     interp_kre kres reds xs
@@ -1490,35 +1505,40 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
-  Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
-  (*let print_st _ (id, _accept, tgts) =
-    List.iter (fun (_, tgt) ->
-        let id', _, _ = STMap.find tgt !dfa in
-        Format.eprintf " st_%d -> st_%d;\n" id id'
-      ) tgts
-  in
-  STMap.iter print_st !dfa;*)
-  begin match !output_name with
-    | None ->
-      prerr_endline "No output file provided (option -o). Giving up.";
-      exit 1
-    | Some path ->
-      let oc = open_out_bin path in
-      output_string oc (snd lexer_definition.header);
-      output_char oc '\n';
-      gen_code oc entry.Syntax.clauses;
-      output_char oc '\n';
-      output_string oc (snd lexer_definition.trailer);
-      output_char oc '\n';
-      gen_table oc dfa initial;
-      close_out oc
+  if false then begin
+    let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
+    Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
+    let print_st _ st =
+      List.iter (fun (_, st') ->
+          if Lazy.is_val st' then
+            let lazy st' = st' in
+            Format.eprintf " st_%d -> st_%d;\n" st.DFA.id st'.DFA.id
+        ) st.DFA.transitions
+    in
+    STMap.iter print_st dfa;
+    begin match !output_name with
+      | None ->
+        prerr_endline "No output file provided (option -o). Giving up.";
+        exit 1
+      | Some path ->
+        let oc = open_out_bin path in
+        output_string oc (snd lexer_definition.header);
+        output_char oc '\n';
+        gen_code oc entry.Syntax.clauses;
+        output_char oc '\n';
+        output_string oc (snd lexer_definition.trailer);
+        output_char oc '\n';
+        gen_table oc dfa initial;
+        close_out oc
+    end;
   end;
-  (*Array.iter (fun (name, stack) ->
-      eprintf "Evaluating case %s\n" name;
-      (*eval_dfa dfa initial stack;*)
-      interp_kre cases IndexSet.empty stack;
-      eprintf "------------------------\n\n";
-    ) Sample.tests*)
+  Array.iteri (fun i (name, stack) ->
+      if i = 0 then (
+        eprintf "Evaluating case %s\n" name;
+        (*eval_dfa dfa initial stack;*)
+        interp_kre cases IndexSet.empty stack;
+        eprintf "------------------------\n\n";
+      )
+    ) Sample.tests
   (* Print matching functions *)
 )
