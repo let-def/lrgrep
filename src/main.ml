@@ -1302,7 +1302,6 @@ module DFA = struct
       let k = ref 0 in
       fun () ->
         let id = !k in
-        prerr_endline ("allocating state id " ^ string_of_int id);
         incr k;
         id
     in
@@ -1335,11 +1334,11 @@ module DFA = struct
         )
     in
     let process st =
-      let scheduled = st.scheduled in
-      st.visited <- IndexSet.union scheduled st.visited;
+      st.visited <- IndexSet.union st.scheduled st.visited;
+      let sg = lr1set_predecessors st.scheduled in
       st.scheduled <- IndexSet.empty;
       List.iter
-        (fun (sg, st) -> schedule st (IndexSet.inter scheduled sg))
+        (fun (sg', st') -> schedule st' (IndexSet.inter sg' sg))
         st.transitions
     in
     let rec loop () =
@@ -1486,28 +1485,13 @@ let () = (
     |> List.mapi (fun i case -> KRE.transl case.Syntax.pattern i)
     |> KRESet.of_list
   in
-  let reduction_cache = ref KRESetMap.empty in
-  let next_id = ref 0 in
-  let dfa = ref STMap.empty in
-  let rec process_st = function
-    | [] -> ()
-    | st :: todo ->
-      match STMap.find_opt st !dfa with
-      | Some _ -> process_st todo
-      | None ->
-        let accept, targets = ST.derive ~reduction_cache st in
-        dfa := STMap.add st (!next_id, accept, targets) !dfa;
-        incr next_id;
-        process_st (List.map snd targets @ todo)
-  in
-  let initial = {ST. direct = cases; reduce = RedSet.empty} in
-  process_st [initial];
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  Format.eprintf "(* %d states *)\n%!" (STMap.cardinal !dfa);
+  let dfa, _initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
+  Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
   (*let print_st _ (id, _accept, tgts) =
     List.iter (fun (_, tgt) ->
         let id', _, _ = STMap.find tgt !dfa in
@@ -1527,12 +1511,12 @@ let () = (
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      (*gen_table oc !dfa initial;*)
+      (*gen_table oc dfa initial;*)
       close_out oc
   end;
   Array.iter (fun (name, stack) ->
       eprintf "Evaluating case %s\n" name;
-      (*eval_dfa !dfa initial stack;*)
+      (*eval_dfa dfa initial stack;*)
       interp_kre cases IndexSet.empty stack;
       eprintf "------------------------\n\n";
     ) Sample.tests
