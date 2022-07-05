@@ -69,8 +69,6 @@ let source_file = match !source_name with
     exit 1
   | Some name -> name
 
-let string_concat_map sep f xs = String.concat sep (List.map f xs)
-
 let print_parse_error_and_exit lexbuf exn =
   let bt = Printexc.get_raw_backtrace () in
   begin match exn with
@@ -143,8 +141,13 @@ let vector_tabulate n f =
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
+let string_concat_map sep f xs = String.concat sep (List.map f xs)
+
 let string_of_index =
   (string_of_int : int -> string :> _ index -> string)
+
+let string_of_indexset ?(string_of_index=string_of_index) xs =
+  "[" ^ string_concat_map ";" string_of_index (IndexSet.elements xs) ^ "]"
 
 let cmon_index =
   (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
@@ -175,6 +178,9 @@ let rec merge_uniq cmp l1 l2 =
     else if c < 0
     then h1 :: merge_uniq cmp t1 l2
     else h2 :: merge_uniq cmp l1 t2
+
+let print_cmon oc cmon =
+  PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
 
 (* Grammar representation *)
 
@@ -297,6 +303,12 @@ module Lr1 = struct
     in
     let import_lr1 lr1 = import_red (reductions (to_g lr1)) in
     Vector.get (Vector.init n import_lr1)
+
+  let to_string lr1 =
+    string_of_index lr1 ^ ":" ^
+    match incoming lr1 with
+    | None -> "<initial state>"
+    | Some sym -> Symbol.name sym
 end
 
 (* ---------------------------------------------------------------------- *)
@@ -931,6 +943,7 @@ module type DERIVABLE = sig
   val derive : t -> t transition list
   val merge : t list -> t
   val compare : t -> t -> int
+  val cmon : t -> Cmon.t
 end
 
 module Cache (D : DERIVABLE) : sig
@@ -960,6 +973,9 @@ end = struct
 
   let compare t1 t2 =
     D.compare t1.d t2.d
+
+  let cmon t =
+    Cmon.constructor "Cache" (D.cmon t.d)
 end
 
 module Reduce_op (D : DERIVABLE) :
@@ -967,7 +983,11 @@ sig
   type t
   type transitions = D.t transition list * t transition list
 
-  val initial : D.t -> transitions
+  type compiled
+  val compile : D.t -> compiled
+  val cmon : compiled -> Cmon.t
+
+  val initial : compiled -> transitions
   val derive : t -> transitions
   val compare : t -> t -> int
 end =
@@ -978,7 +998,9 @@ struct
     domain: Lr1.set;
   }
 
-  let initial_derivations d =
+  type compiled = derivations
+
+  let compile d =
     let find_tr lr1 (lr1s, x) =
       if IndexSet.mem lr1 lr1s then Some x else None
     in
@@ -988,6 +1010,14 @@ struct
         ~join:D.merge
     in
     { source = d; continuations; domain = IndexMap.domain continuations }
+
+  let cmon compiled =
+    IndexMap.fold
+      (fun lr1 d acc ->
+         Cmon.tuple [Cmon.constant (Lr1.to_string lr1); D.cmon d] :: acc)
+      compiled.continuations []
+    |> List.rev
+    |> Cmon.list
 
   type t = {
     derivations: derivations;
@@ -1006,8 +1036,7 @@ struct
     then xs
     else (sg, {derivations; state}) :: xs
 
-  let initial d =
-    let derivations = initial_derivations d in
+  let initial derivations =
     let add_direct lr1 d xs = (IndexSet.singleton lr1, d) :: xs in
     let add_reducible lr1 xs =
       add_abstract_state
@@ -1035,6 +1064,10 @@ struct
         reducible := add_abstract_state Lr1.all state t.derivations !reducible
     end;
     let visit_goto {Redgraph. sources; targets} =
+      prerr_endline (
+        string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
+        string_of_indexset ~string_of_index:Lr1.to_string targets
+      );
       IndexSet.iter (fun target ->
           begin match IndexMap.find_opt target t.derivations.continuations with
             | None -> ()
@@ -1047,6 +1080,7 @@ struct
           reducible := add_abstract_state sources state t.derivations !reducible
         ) targets;
     in
+    prerr_endline "visiting goto closure";
     List.iter visit_goto (Redgraph.state_goto_closure t.state);
     (!direct, !reducible)
 end
@@ -1211,6 +1245,7 @@ module CachedKRESet = Cache(struct
     let compare = KRESet.compare
     let derive = KRESet.derive_reduce
     let merge ts = List.fold_left KRESet.union KRESet.empty ts
+    let cmon = KRESet.cmon
   end)
 
 module Red = Reduce_op(CachedKRESet)
@@ -1259,6 +1294,8 @@ module ST = struct
     reduce = RedSet.union t1.reduce t2.reduce;
   }
 
+  let merge xs = List.fold_left union empty xs
+
   let derive ~reduction_cache t =
     let visited = ref KRESet.empty in
     let reached = ref [] in
@@ -1271,15 +1308,16 @@ module ST = struct
       match KRESetMap.find_opt reduce !reduction_cache with
       | Some tr -> tr
       | None ->
-        let tr = lift_red (Red.initial (CachedKRESet.lift reduce)) in
+        let compiled = Red.compile (CachedKRESet.lift reduce) in
+        Printf.eprintf "compiled reductions:\n%a\n"
+          print_cmon (Red.cmon compiled);
+        let tr = lift_red (Red.initial compiled) in
         reduction_cache := KRESetMap.add reduce tr !reduction_cache;
         tr
     in
     let tr = RedSet.fold add_redset t.reduce tr in
     let tr =
-      normalize_and_merge
-        ~compare:compare
-        ~merge:(List.fold_left union empty)
+      normalize_and_merge ~compare ~merge
         (List.map lift_direct !direct @ tr)
     in
     (BitSet.IntSet.of_list !reached, tr)
@@ -1399,8 +1437,12 @@ let gen_table oc dfa initial =
     \  let step st lr1 = table.(st) lr1\n\
      end\n" initial.DFA.id
 
-let print_cmon oc cmon =
-  PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
+(*let redmap_add map k v =
+  IndexMap.add k (
+    match IndexMap.find_opt k map with
+    | None -> v
+    | Some v' -> KRESet.union v v'
+  )
 
 let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
@@ -1419,34 +1461,11 @@ let rec interp_kre kres reds stack =
   | [] -> eprintf "End of stack\n"
   | x :: xs -> (
     let lr1 = Index.of_int Lr1.n x in
-    eprintf "Parser in state %d - %s\n" x
-      (Option.value (Option.map Symbol.name (Lr1.incoming lr1))
-         ~default:"<initial state>");
-    let add_option acc = function
-      | None -> acc
-      | Some x -> IndexSet.add x acc
-    in
-    let step_red red =
-      assert (IndexSet.mem lr1 (Redgraph.state_lr1s red));
-      let acc = add_option IndexSet.empty (Redgraph.state_parent red) in
-      let red_gc acc gc =
-        if not (IndexSet.mem lr1 gc.Redgraph.sources) then acc else (
-          IndexSet.fold (fun tgt acc ->
-              let tgt = Redgraph.State.of_lr1 tgt in
-              assert (IndexSet.mem lr1 (Redgraph.state_lr1s tgt));
-              add_option acc (Redgraph.state_parent tgt)
-            )
-            gc.Redgraph.targets
-            acc
-        )
-      in
-      List.fold_left red_gc acc (Redgraph.state_goto_closure red)
-    in
-    let reds = indexset_bind reds step_red in
+    eprintf "Parser in state %d - %s\n" x (Lr1.to_string lr1);
     let reds =
       if KRESet.is_empty reduce
       then reds
-      else IndexSet.add (Redgraph.State.of_lr1 lr1) reds
+      else redmap_add reds (Redgraph.State.of_lr1 lr1) reduce
     in
     let step_kre acc (sg, kre') =
       if IndexSet.mem lr1 sg
@@ -1455,7 +1474,37 @@ let rec interp_kre kres reds stack =
     in
     let kres = List.fold_left step_kre KRESet.empty !direct in
     interp_kre kres reds xs
-  )
+  )*)
+
+let interp_st st stack =
+  let reduction_cache = ref KRESetMap.empty in
+  let rec loop st stack =
+    eprintf "------------------------\n";
+    eprintf "Matcher state:\n%a\n" print_cmon (ST.cmon st);
+    let accepted, transitions = ST.derive ~reduction_cache st in
+    eprintf "Matching actions: [%s]\n"
+      (string_concat_map ";" string_of_int (BitSet.IntSet.elements accepted));
+    match stack with
+    | [] -> eprintf "End of stack\n"
+    | x :: stack' ->
+      let lr1 = Index.of_int Lr1.n x in
+      eprintf "Parser in state %s\n" (Lr1.to_string lr1);
+      let match_transition (sg, st') =
+        if IndexSet.mem lr1 sg
+        then Some st'
+        else None
+      in
+      let targets = List.filter_map match_transition transitions in
+      let count = List.length targets in
+      eprintf "Transition: %d target%s\n" count
+        (match count with
+         | 0 -> " (ending analysis)"
+         | 1 -> " (deterministic)"
+         | _ -> "s (non-deterministic)");
+      if count > 0 then
+        loop (List.fold_left ST.union ST.empty targets) stack'
+  in
+  loop st stack
 
 let rec eval_dfa dfa st stack =
   let id, actions, tr = STMap.find st dfa in
@@ -1467,9 +1516,7 @@ let rec eval_dfa dfa st stack =
   | [] -> eprintf "End of stack\n"
   | x :: xs ->
     let lr1 = Index.of_int Lr1.n x in
-    eprintf "Parser in state %d - %s\n" x
-      (Option.value (Option.map Symbol.name (Lr1.incoming lr1))
-         ~default:"<initial state>");
+    eprintf "Parser in state %s\n" (Lr1.to_string lr1);
     begin match List.find_opt (fun (lr1s, _) -> IndexSet.mem lr1 lr1s) tr with
       | None ->
         eprintf "No transitions, ending analysis\n"
@@ -1536,7 +1583,8 @@ let () = (
       if i = 0 then (
         eprintf "Evaluating case %s\n" name;
         (*eval_dfa dfa initial stack;*)
-        interp_kre cases IndexSet.empty stack;
+        interp_st {ST.direct=cases; reduce=RedSet.empty} stack;
+        (*interp_kre cases IndexSet.empty stack;*)
         eprintf "------------------------\n\n";
       )
     ) Sample.tests
