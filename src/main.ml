@@ -1008,22 +1008,22 @@ struct
 
   let make_compilation_cache () = ref DMap.empty
 
-  let compile cache d =
-    match DMap.find_opt d !cache with
+  let compile cache source =
+    match DMap.find_opt source !cache with
     | Some c -> c
     | None ->
       let find_tr lr1 (lr1s, x) =
         if IndexSet.mem lr1 lr1s then Some x else None
       in
-      let continuations = Redgraph.derive
-          ~root:d
+      let continuations =
+        Redgraph.derive
+          ~root:source
           ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
           ~join:D.merge
       in
-      let result =
-        { source = d; continuations; domain = IndexMap.domain continuations }
-      in
-      cache := DMap.add d result !cache;
+      let domain = IndexMap.domain continuations in
+      let result = {source; continuations; domain} in
+      cache := DMap.add source result !cache;
       result
 
   let cmon compiled =
