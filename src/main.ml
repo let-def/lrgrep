@@ -1387,7 +1387,7 @@ let gen_table oc dfa initial =
       if Lazy.is_val st' then
         let lazy st' = st' in
         print "    | %s -> ([], %s, Some %d)\n"
-          (print_states lr1s) action st'.DFA.id;
+          (print_states (IndexSet.inter lr1s st'.DFA.visited)) action st'.DFA.id;
     end st.transitions;
     print "    | _ -> ([], %s, None)" action;
     print ");\n";
@@ -1490,7 +1490,7 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  let dfa, _initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
+  let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
   Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
   (*let print_st _ (id, _accept, tgts) =
     List.iter (fun (_, tgt) ->
@@ -1511,14 +1511,14 @@ let () = (
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       output_char oc '\n';
-      (*gen_table oc dfa initial;*)
+      gen_table oc dfa initial;
       close_out oc
   end;
-  Array.iter (fun (name, stack) ->
+  (*Array.iter (fun (name, stack) ->
       eprintf "Evaluating case %s\n" name;
       (*eval_dfa dfa initial stack;*)
       interp_kre cases IndexSet.empty stack;
       eprintf "------------------------\n\n";
-    ) Sample.tests
+    ) Sample.tests*)
   (* Print matching functions *)
 )
