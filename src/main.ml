@@ -1041,7 +1041,7 @@ struct
     if c <> 0 then c else
       D.compare t1.derivations.source t2.derivations.source
 
-  let add_abstract_state sg state derivations xs =
+  let add_abstract_state derivations sg state xs =
     if IndexSet.disjoint (Redgraph.state_reachable state) derivations.domain
     then xs
     else (sg, {derivations; state}) :: xs
@@ -1049,10 +1049,8 @@ struct
   let initial derivations =
     let add_direct lr1 d xs = (IndexSet.singleton lr1, d) :: xs in
     let add_reducible lr1 xs =
-      add_abstract_state
-        (IndexSet.singleton lr1)
-        (Redgraph.State.of_lr1 lr1)
-        derivations xs
+      add_abstract_state derivations
+        (IndexSet.singleton lr1) (Redgraph.State.of_lr1 lr1) xs
     in
     let direct = IndexMap.fold add_direct derivations.continuations [] in
     let reducible = index_fold Lr1.n [] add_reducible in
@@ -1071,13 +1069,13 @@ struct
     begin match Redgraph.state_parent t.state with
       | None -> ()
       | Some state ->
-        reducible := add_abstract_state Lr1.all state t.derivations !reducible
+        reducible := add_abstract_state t.derivations Lr1.all state !reducible
     end;
     let visit_goto {Redgraph. sources; targets} =
-      prerr_endline (
+      (*prerr_endline (
         string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
         string_of_indexset ~string_of_index:Lr1.to_string targets
-      );
+      );*)
       IndexSet.iter (fun target ->
           begin match IndexMap.find_opt target t.derivations.continuations with
             | None -> ()
@@ -1086,11 +1084,15 @@ struct
                 (fun tr -> Option.iter (push direct) (filter_tr sources tr))
                 (D.derive d)
           end;
-          let state = Redgraph.State.of_lr1 target in
-          reducible := add_abstract_state sources state t.derivations !reducible
+          begin match Redgraph.state_parent (Redgraph.State.of_lr1 target) with
+            | None -> ()
+            | Some st ->
+              reducible :=
+                add_abstract_state t.derivations sources st !reducible
+          end;
         ) targets;
     in
-    prerr_endline "visiting goto closure";
+    (*prerr_endline "visiting goto closure";*)
     List.iter visit_goto (Redgraph.state_goto_closure t.state);
     (!direct, !reducible)
 end
@@ -1314,8 +1316,8 @@ module ST = struct
     let tr =
       let reduce = CachedKRESet.lift (KRESet.of_list !reduce) in
       let compiled = Red.compile reduction_cache reduce in
-      Printf.eprintf "compiled reductions:\n%a\n"
-        print_cmon (Red.cmon compiled);
+      (*Printf.eprintf "compiled reductions:\n%a\n"
+        print_cmon (Red.cmon compiled);*)
       lift_red (Red.initial compiled)
     in
     let tr = RedSet.fold add_redset t.reduce tr in
@@ -1348,7 +1350,7 @@ module DFA = struct
     in
     let reduction_cache = Red.make_compilation_cache () in
     let dfa : state STMap.t ref = ref STMap.empty in
-    let rec find_state st = lazy (
+    let rec find_state st =
       match STMap.find_opt st !dfa with
       | Some state -> state
       | None ->
@@ -1358,28 +1360,31 @@ module DFA = struct
           visited = IndexSet.empty;
           scheduled = IndexSet.empty;
           accepted;
-          transitions = List.map (fun (k, v) -> (k, find_state v)) transitions;
+          transitions = List.map make_transition transitions;
         } in
         dfa := STMap.add st state !dfa;
         state
-    )
+    and make_transition (k, v) =
+      (k, lazy (find_state v))
     in
     let todo = ref [] in
     let schedule st sg =
-      if not (IndexSet.is_empty sg) then
+      if not (IndexSet.is_empty sg) then (
         let lazy st = st in
         let unvisited = IndexSet.diff sg st.visited in
         if not (IndexSet.is_empty unvisited) then (
           if IndexSet.is_empty st.scheduled then push todo st;
-          st.scheduled <- IndexSet.union st.scheduled unvisited
+          st.scheduled <- IndexSet.union st.scheduled unvisited;
         )
+      )
     in
     let process st =
-      st.visited <- IndexSet.union st.scheduled st.visited;
-      let sg = lr1set_predecessors st.scheduled in
+      let sg = st.scheduled in
+      st.visited <- IndexSet.union sg st.visited;
       st.scheduled <- IndexSet.empty;
       List.iter
-        (fun (sg', st') -> schedule st' (IndexSet.inter sg' sg))
+        (fun (sg', st') ->
+           schedule st' (lr1set_predecessors (IndexSet.inter sg' sg)))
         st.transitions
     in
     let rec loop () =
@@ -1391,9 +1396,9 @@ module DFA = struct
         loop ()
     in
     let initial = find_state expr in
-    schedule initial Lr1.all;
+    schedule (lazy initial) Lr1.all;
     loop ();
-    (!dfa, Lazy.force initial)
+    (!dfa, initial)
 end
 
 let gen_table oc dfa initial =
@@ -1427,8 +1432,10 @@ let gen_table oc dfa initial =
     List.iter begin fun (lr1s, st') ->
       if Lazy.is_val st' then
         let lazy st' = st' in
-        print "    | %s -> ([], %s, Some %d)\n"
-          (print_states (IndexSet.inter lr1s st'.DFA.visited)) action st'.DFA.id;
+        let cases = IndexSet.inter st.DFA.visited lr1s in
+        if not (IndexSet.is_empty cases) then
+          print "    | %s -> ([], %s, Some %d)\n"
+            (print_states cases) action st'.DFA.id;
     end st.transitions;
     print "    | _ -> ([], %s, None)" action;
     print ");\n";
@@ -1555,9 +1562,9 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  if false then begin
+  if true then begin
     let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
-    Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
+    (*Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
     let print_st _ st =
       List.iter (fun (_, st') ->
           if Lazy.is_val st' then
@@ -1565,7 +1572,7 @@ let () = (
             Format.eprintf " st_%d -> st_%d;\n" st.DFA.id st'.DFA.id
         ) st.DFA.transitions
     in
-    STMap.iter print_st dfa;
+    STMap.iter print_st dfa;*)
     begin match !output_name with
       | None ->
         prerr_endline "No output file provided (option -o). Giving up.";
@@ -1582,14 +1589,12 @@ let () = (
         close_out oc
     end;
   end;
-  Array.iteri (fun i (name, stack) ->
-      if i = 0 then (
-        eprintf "Evaluating case %s\n" name;
-        (*eval_dfa dfa initial stack;*)
-        interp_st {ST.direct=cases; reduce=RedSet.empty} stack;
-        (*interp_kre cases IndexSet.empty stack;*)
-        eprintf "------------------------\n\n";
-      )
+  Array.iter (fun (name, stack) ->
+      eprintf "Evaluating case %s\n" name;
+      (*eval_dfa dfa initial stack;*)
+      interp_st {ST.direct=cases; reduce=RedSet.empty} stack;
+      (*interp_kre cases IndexSet.empty stack;*)
+      eprintf "------------------------\n\n";
     ) Sample.tests
   (* Print matching functions *)
 )

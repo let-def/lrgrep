@@ -50,6 +50,6 @@ rule error_message = parse error
   }
 
 (* FIXME: goto closure is incomplete *)
-(*| test 07
-  { fun _ -> "Expecting `in'" }*)
+| [. IN]; !
+  { fun _ -> "Expecting `in'" }
 
