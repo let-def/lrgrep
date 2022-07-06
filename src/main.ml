@@ -896,22 +896,17 @@ end = struct
     IndexMap.map (fun cell -> join !cell) !map
 
   let () =
-    let string_of_state lr1 =
-      (match Lr1.incoming lr1 with
-       | None -> "<entrypoint>"
-       | Some s -> Symbol.name s) ^
-      " (" ^ string_of_index lr1 ^ ")"
-    in
-    let rec visit path node =
-      IndexSet.iter (fun lr1 ->
+    if false then
+      let rec visit path node =
+        let print_target lr1 =
           eprintf "%s <- %s\n"
-            (string_concat_map " -> " string_of_state (List.rev path))
-            (string_of_state lr1)
-        )
-        node.goto_targets;
-      IndexMap.iter (fun lr1 tgt -> visit (lr1 :: path) tgt) node.children
-    in
-    visit [] derivation_root
+            (string_concat_map " -> " Lr1.to_string (List.rev path))
+            (Lr1.to_string lr1)
+        in
+        IndexSet.iter print_target node.goto_targets;
+        IndexMap.iter (fun lr1 tgt -> visit (lr1 :: path) tgt) node.children
+      in
+      visit [] derivation_root
 
   let state_lr1s x = (Vector.get frames x).states
   let state_parent x = (Vector.get frames x).parent
