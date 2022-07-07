@@ -157,6 +157,9 @@ let cmon_indexset xs =
     "[" ^ string_concat_map ";" string_of_index (IndexSet.elements xs) ^ "]"
   )
 
+let indexmap_update map k f =
+  IndexMap.add k (f (IndexMap.find_opt k map)) map
+
 let push xs x = xs := x :: !xs
 
 let pushs xs = function
@@ -218,6 +221,7 @@ module Nonterminal = struct
   include (val const count)
   type t = n index
   type set = n indexset
+  type 'a map = (n, 'a) indexmap
   let of_g x = Index.of_int n (to_int x)
   let to_g x = of_int (Index.to_int x)
 
@@ -621,26 +625,27 @@ module Redgraph : sig
   val state_reachable : State.n index -> Lr1.set
 end = struct
   let reductions = Vector.init Lr1.n (fun lr1 ->
-      let prepare_goto p =
-        (Array.length (Production.rhs p), Production.lhs p)
+      let prepare_goto (p, la) =
+        match Production.kind p with
+        | `REGULAR ->
+          Some (Array.length (Production.rhs p), Production.lhs p, la)
+        | `START -> None
       in
-      let order (d1, n1) (d2, n2) =
-        match Int.compare d1 d2 with
-        | 0 -> compare_index n1 n2
-        | c -> c
+      let order (d1, n1, la1) (d2, n2, la2) =
+        let c = Int.compare d1 d2 in
+        if c <> 0 then c else
+          let c = compare_index n1 n2 in
+          if c <> 0 then c else
+            IndexSet.compare la1 la2
       in
       let productions =
         Lr1.reductions lr1
-        |> List.filter_map (fun (p, _) ->
-            match Production.kind p with
-            | `REGULAR -> Some (prepare_goto p)
-            | `START -> None
-          )
+        |> List.filter_map prepare_goto
         |> List.sort_uniq order
       in
-      let depth = List.fold_left (fun x (d, _) -> max x d) (-1) productions in
+      let depth = List.fold_left (fun x (d, _, _) -> max x d) (-1) productions in
       let vector = Array.make (depth + 1) [] in
-      List.iter (fun (d,n) -> array_cons vector d n) productions;
+      List.iter (fun (d,n,la) -> array_cons vector d (n,la)) productions;
       assert (depth = -1 || vector.(depth) <> []);
       vector
     )
@@ -650,6 +655,7 @@ end = struct
   type concrete_frame = {
     state: Lr1.t;
     mutable goto: concrete_frame Lr1.map;
+    mutable lookahead: Terminal.set;
     parent: concrete_frame option;
   }
 
@@ -664,19 +670,19 @@ end = struct
 
   type frame = {
     states: Lr1.set;
-    mutable goto_nt: Nonterminal.set;
+    mutable goto_nt: Terminal.set Nonterminal.map;
     mutable parent: State.n index option;
   }
 
   let frames : (State.n, frame) IndexBuffer.t =
     IndexBuffer.make {
       states = IndexSet.empty;
-      goto_nt = IndexSet.empty;
+      goto_nt = IndexMap.empty;
       parent = None;
     }
 
   let make_abstract_frame states =
-    { states; goto_nt = IndexSet.empty; parent = None }
+    { states; goto_nt = IndexMap.empty; parent = None }
 
   (* Initialize abstract frames associated to each lr1 state *)
   let () = Index.iter Lr1.n (fun lr1 ->
@@ -711,29 +717,43 @@ end = struct
           frame.parent <- Some t';
           Abstract t'
     in
-    let rec goto parent nt =
-      match parent with
-      | Abstract t ->
-        let frame = IndexBuffer.get frames t in
-        frame.goto_nt <- IndexSet.add nt frame.goto_nt
-      | Concrete t ->
-        let state = Transition.find_goto_target t.state nt in
-        if not (IndexMap.mem state t.goto) then (
-          let target = {state; goto = IndexMap.empty; parent = Some t} in
-          t.goto <- IndexMap.add state target t.goto;
-          populate target
-        )
-    and populate state =
-      let frame = ref (Concrete state) in
-      let reductions = Vector.get reductions state.state in
-      for i = 0 to Array.length reductions - 1 do
-        if i <> 0 then frame := pop !frame;
-        List.iter (goto !frame) reductions.(i);
-      done
+    let make_frame state parent =
+      {state; parent; goto=IndexMap.empty; lookahead=IndexSet.empty}
+    in
+    let rec goto parent la (nt, la') =
+      let la = IndexSet.inter la la' in
+      if not (IndexSet.is_empty la) then (
+        match parent with
+        | Abstract t ->
+          let frame = IndexBuffer.get frames t in
+          frame.goto_nt <- indexmap_update frame.goto_nt nt (function
+              | None -> la
+              | Some la' -> IndexSet.union la la'
+            )
+        | Concrete t ->
+          let state = Transition.find_goto_target t.state nt in
+          begin match IndexMap.find_opt state t.goto with
+            | Some t' -> populate la t'
+            | None ->
+              let target = make_frame state (Some t) in
+              t.goto <- IndexMap.add state target t.goto;
+              populate la target
+          end
+      )
+    and populate la state =
+      if not (IndexSet.subset la state.lookahead) then (
+        state.lookahead <- IndexSet.union la state.lookahead;
+        let frame = ref (Concrete state) in
+        let reductions = Vector.get reductions state.state in
+        for i = 0 to Array.length reductions - 1 do
+          if i <> 0 then frame := pop !frame;
+          List.iter (goto !frame la) reductions.(i);
+        done
+      )
     in
     vector_tabulate Lr1.n (fun state ->
-        let frame = {state; goto = IndexMap.empty; parent = None} in
-        populate frame;
+        let frame = make_frame state None in
+        populate Terminal.all frame;
         frame
       )
 
@@ -1446,13 +1466,6 @@ let gen_table oc dfa initial =
     \  let initial = %d\n\
     \  let step st lr1 = table.(st) lr1\n\
      end\n" initial.DFA.id
-
-(*let redmap_add map k v =
-  IndexMap.add k (
-    match IndexMap.find_opt k map with
-    | None -> v
-    | Some v' -> KRESet.union v v'
-  )
 
 let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
