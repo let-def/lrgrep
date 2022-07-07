@@ -617,6 +617,7 @@ module Redgraph : sig
   type goto_closure = {
     sources: Lr1.set;
     targets: Lr1.set;
+    lookahead: Terminal.set;
   }
 
   val state_lr1s : State.n index -> Lr1.set
@@ -808,58 +809,83 @@ end = struct
   (* Force the AbstractFrames set, no new frames should be added from now on *)
   let frames = IndexBuffer.contents frames State.n
 
-  let abstract_root lr1 = Vector.get frames (State.of_lr1 lr1)
+  let state_lr1s x = (Vector.get frames x).states
+  let state_parent x = (Vector.get frames x).parent
+  let state_goto_nt x = (Vector.get frames x).goto_nt
 
   type goto_closure = {
     sources: Lr1.set;
     targets: Lr1.set;
+    lookahead: Terminal.set;
   }
 
   let goto_closure =
     let table = Vector.make State.n [] in
     let close i =
-      let frame = Vector.get frames i in
-      let close_st st =
-        let visited = ref IndexSet.empty in
-        let rec visit_nt nt =
-          let st' =
-            try Transition.find_goto_target st nt
-            with Not_found -> assert false
-          in
-          if not (IndexSet.mem st' !visited) then (
-            visited := IndexSet.add st' !visited;
-            visit_nts (abstract_root st').goto_nt
-          )
-        and visit_nts nts =
-          IndexSet.iter visit_nt nts
+      let close_lr1 lr1_src =
+        let visited = ref IndexMap.empty in
+        let rec visit_nt la0 nt la =
+          let la = IndexSet.inter la0 la in
+          if not (IndexSet.is_empty la) then
+            let lr1_tgt =
+              try Transition.find_goto_target lr1_src nt
+              with Not_found -> assert false
+            in
+            match IndexMap.find_opt lr1_tgt !visited with
+            | None ->
+              visited := IndexMap.add lr1_tgt la !visited;
+              visit_goto (State.of_lr1 lr1_tgt) la
+            | Some la' ->
+              if not (IndexSet.subset la la') then (
+                visited := IndexMap.add lr1_tgt (IndexSet.union la la') !visited;
+                visit_goto (State.of_lr1 lr1_tgt) la'
+              )
+        and visit_goto st la =
+          IndexMap.iter (visit_nt la) (state_goto_nt st)
         in
-        visit_nts frame.goto_nt;
+        visit_goto i Terminal.all;
         !visited
       in
-      let add_st st acc = (close_st st, st) :: acc in
-      if not (IndexSet.is_empty frame.goto_nt) then
-        let wrap (targets, srcs) = {sources=IndexSet.of_list srcs; targets} in
+      let add_lr1 st acc = (close_lr1 st, st) :: acc in
+      if not (IndexMap.is_empty (state_goto_nt i)) then
         Vector.set table i (
-          IndexSet.fold add_st frame.states []
+          IndexSet.fold add_lr1 (state_lr1s i) []
+          |> List.concat_map (fun (map, src) ->
+              let by_lookhead tgt la acc = (tgt, la, src) :: acc in
+              IndexMap.fold by_lookhead map []
+            )
+          |> Misc.group_by
+            ~compare:(fun (_tgt, la1, src1) (_tgt, la2, src2) ->
+                let c = IndexSet.compare la1 la2 in
+                if c <> 0 then c else
+                  compare_index src1 src2
+              )
+            ~group:(fun (tgt, la, src) others ->
+                List.fold_left
+                  (fun acc (tgt, _, _) -> IndexSet.add tgt acc)
+                  (IndexSet.singleton tgt) others,
+                (la, src)
+              )
           |> IndexRefine.annotated_partition
-          |> List.map wrap
+          |> List.concat_map (fun (targets, la_src) ->
+              IndexRefine.annotated_partition la_src
+              |> List.map (fun (lookahead, srcs) ->
+                  {lookahead; targets; sources = IndexSet.of_list srcs}
+                )
+            )
         )
     in
-    let rec close_all i =
-      close i;
-      Option.iter close_all (Vector.get frames i).parent
-    in
-    Index.iter Lr1.n (fun lr1 -> close_all (State.of_lr1 lr1));
+    Index.iter State.n close;
     table
 
-  let () =
+  (*let () =
     let count = ref 0 in
     vector_iter goto_closure (fun trs ->
         count := List.fold_left
             (fun acc gc -> IndexSet.cardinal gc.targets + acc)
             !count trs
       );
-    eprintf "GOTO CLOSURE: %d\n" !count
+    eprintf "GOTO CLOSURE: %d\n" !count*)
 
   let reachable_goto =
     (* Compute reachable goto closure *)
@@ -928,8 +954,6 @@ end = struct
       in
       visit [] derivation_root
 
-  let state_lr1s x = (Vector.get frames x).states
-  let state_parent x = (Vector.get frames x).parent
   let state_goto_closure x = Vector.get goto_closure x
   let state_reachable = reachable_goto
 end
@@ -1052,6 +1076,7 @@ struct
   type t = {
     derivations: compilation;
     state: Redgraph.State.n index;
+    lookahead: Terminal.set;
   }
 
   type transitions = D.t transition list * t transition list
@@ -1059,17 +1084,19 @@ struct
   let compare t1 t2 =
     let c = compare_index t1.state t2.state in
     if c <> 0 then c else
-      D.compare t1.derivations.source t2.derivations.source
+      let c = IndexSet.compare t1.lookahead t2.lookahead in
+      if c <> 0 then c else
+        D.compare t1.derivations.source t2.derivations.source
 
-  let add_abstract_state derivations sg state xs =
+  let add_abstract_state derivations lookahead sg state xs =
     if IndexSet.disjoint (Redgraph.state_reachable state) derivations.domain
     then xs
-    else (sg, {derivations; state}) :: xs
+    else (sg, {derivations; state; lookahead}) :: xs
 
   let initial derivations =
     let add_direct lr1 d xs = (IndexSet.singleton lr1, d) :: xs in
     let add_reducible lr1 xs =
-      add_abstract_state derivations
+      add_abstract_state derivations Terminal.all
         (IndexSet.singleton lr1) (Redgraph.State.of_lr1 lr1) xs
     in
     let direct = IndexMap.fold add_direct derivations.continuations [] in
@@ -1089,14 +1116,17 @@ struct
     begin match Redgraph.state_parent t.state with
       | None -> ()
       | Some state ->
-        reducible := add_abstract_state t.derivations Lr1.all state !reducible
+        reducible :=
+          add_abstract_state t.derivations Terminal.all Lr1.all state !reducible
     end;
-    let visit_goto {Redgraph. sources; targets} =
+    let visit_goto {Redgraph. sources; targets; lookahead} =
       (*prerr_endline (
         string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
         string_of_indexset ~string_of_index:Lr1.to_string targets
       );*)
-      IndexSet.iter (fun target ->
+      let lookahead = IndexSet.inter lookahead t.lookahead in
+      if not (IndexSet.is_empty lookahead) then
+        IndexSet.iter begin fun target ->
           begin match IndexMap.find_opt target t.derivations.continuations with
             | None -> ()
             | Some d ->
@@ -1108,9 +1138,9 @@ struct
             | None -> ()
             | Some st ->
               reducible :=
-                add_abstract_state t.derivations sources st !reducible
+                add_abstract_state t.derivations lookahead sources st !reducible
           end;
-        ) targets;
+        end targets;
     in
     (*prerr_endline "visiting goto closure";*)
     List.iter visit_goto (Redgraph.state_goto_closure t.state);
@@ -1467,7 +1497,7 @@ let gen_table oc dfa initial =
     \  let step st lr1 = table.(st) lr1\n\
      end\n" initial.DFA.id
 
-let rec interp_kre kres reds stack =
+(*let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
   let reached = ref [] and direct = ref [] and reduce = ref [] in
   let kderive kre = KRESet.prederive ~visited ~reached ~direct ~reduce kre in
@@ -1577,8 +1607,8 @@ let () = (
   );*)
   if true then begin
     let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
-    (*Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
-    let print_st _ st =
+    Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
+    (*let print_st _ st =
       List.iter (fun (_, st') ->
           if Lazy.is_val st' then
             let lazy st' = st' in
