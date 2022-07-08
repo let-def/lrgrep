@@ -1158,13 +1158,15 @@ module RE = struct
     let compare = Int.compare
   end
 
+  type var = int * int
+
   type t = {
     uid: Uid.t;
     desc: desc;
     position: Syntax.position;
   }
   and desc =
-    | Set of Lr1.set * string option
+    | Set of Lr1.set * var option
     | Alt of t list
     | Seq of t list
     | Star of t
@@ -1203,30 +1205,37 @@ module RE = struct
     | Syntax.Wildcard ->
       Lr1.all
 
-  let rec transl_desc = function
-    | Syntax.Atom (ad, var) -> Set (transl_atom ad, var)
-    | Syntax.Alternative rs -> Alt (List.map transl rs)
-    | Syntax.Repetition r -> Star (transl r)
+  let transl_capture alloc = function
+    | None -> None
+    | Some name -> Some (alloc name)
+
+  let rec transl_desc alloc = function
+    | Syntax.Atom (ad, var) -> Set (transl_atom ad, transl_capture alloc var)
+    | Syntax.Alternative rs -> Alt (List.map (transl alloc) rs)
+    | Syntax.Repetition r -> Star (transl alloc r)
     | Syntax.Reduce -> Reduce
-    | Syntax.Concat rs -> Seq (List.map transl rs)
+    | Syntax.Concat rs -> Seq (List.map (transl alloc) rs)
 
-  and transl {Syntax. desc; position} =
-    {uid = Uid.t (); desc = transl_desc desc; position}
+  and transl alloc {Syntax. desc; position} =
+    {uid = Uid.t (); desc = transl_desc alloc desc; position}
 
-  let rec cmon t =
-    match t.desc with
-    | Set (lr1s, var) ->
-      Cmon.construct "Set" [
-        Cmon.constant
-          ("{" ^ string_of_int (IndexSet.cardinal lr1s) ^ " states}");
-        match var with
-        | None -> Cmon.constant "None"
-        | Some x -> Cmon.constructor "Some" (Cmon.string x)
-      ]
-    | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map cmon ts)
-    | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map cmon ts)
-    | Star t -> Cmon.constructor "Star" (cmon t)
-    | Reduce -> Cmon.constant "Reduce"
+  let cmon ?(var=fun (x,y) -> Cmon.tuple [Cmon.int x; Cmon.int y]) t =
+    let rec aux t =
+      match t.desc with
+      | Set (lr1s, v) ->
+        Cmon.construct "Set" [
+          Cmon.constant
+            ("{" ^ string_of_int (IndexSet.cardinal lr1s) ^ " states}");
+          match v with
+          | None -> Cmon.constant "None"
+          | Some x -> Cmon.constructor "Some" (var x)
+        ]
+      | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
+      | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
+      | Star t -> Cmon.constructor "Star" (aux t)
+      | Reduce -> Cmon.constant "Reduce"
+    in
+    aux t
 end
 
 module KRE = struct
@@ -1251,8 +1260,8 @@ module KRE = struct
       if c <> 0 then c else
         compare k1' k2'
 
-  let transl pattern index =
-    More (RE.transl pattern, Done {clause=index})
+  let transl alloc pattern index =
+    More (RE.transl alloc pattern, Done {clause=index})
 end
 
 module KRESet = struct
@@ -1266,8 +1275,8 @@ module KRESet = struct
         | Done {clause} -> push reached clause
         | More (re, k') ->
           match re.desc with
-          | Set (s, _) ->
-            push direct (s, k')
+          | Set (s, var) ->
+            push direct (s, Option.to_list var, k')
           | Alt es ->
             List.iter (fun e -> loop (KRE.more e k')) es
           | Star r ->
@@ -1285,17 +1294,18 @@ module KRESet = struct
   let derive_reduce t : t transition list =
     let visited = ref empty in
     let direct = ref [] in
+    let push_k k = push direct (Lr1.all, [], k) in
     let loop k =
       match k with
-      | KRE.Done _ -> push direct (Lr1.all, k)
+      | KRE.Done _ -> push_k k
       | k ->
         let reached = ref [] in
         prederive ~visited ~direct ~reached ~reduce:(ref []) k;
-        let push_clause clause = push direct (Lr1.all, KRE.Done {clause}) in
-        List.iter push_clause !reached
+        List.iter (fun clause -> push_k (KRE.Done {clause})) !reached
     in
     iter loop t;
-    normalize_and_merge ~compare:KRE.compare ~merge:of_list !direct
+    normalize_and_merge ~compare:KRE.compare ~merge:of_list
+      (List.map (fun (s, _v, k) -> (s, k)) !direct)
 
   let cmon t = Cmon.list_map KRE.cmon (elements t)
 end
@@ -1319,25 +1329,22 @@ module ST = struct
   }
 
   let cmon t =
-    Cmon.record [
-      "direct", KRESet.cmon t.direct;
-      "reduce", Cmon.constant ("{" ^ string_of_int (RedSet.cardinal t.reduce) ^
-                               " reductions}");
-    ]
+    let rs = "{" ^ string_of_int (RedSet.cardinal t.reduce) ^ " reductions}" in
+    Cmon.record ["direct", KRESet.cmon t.direct; "reduce", Cmon.constant rs]
 
   let compare t1 t2 =
     let c = KRESet.compare t1.direct t2.direct in
     if c <> 0 then c else
       RedSet.compare t1.reduce t2.reduce
 
-  let lift_direct (k, v) =
-    (k, {direct = KRESet.singleton v; reduce = RedSet.empty})
+  let lift_direct (sg, vars, k) =
+    (sg, (vars, {direct = KRESet.singleton k; reduce = RedSet.empty}))
 
-  let lift_cached (k, v) =
-    (k, {direct = CachedKRESet.unlift v; reduce = RedSet.empty})
+  let lift_cached (sg, k) =
+    (sg, ([], {direct = CachedKRESet.unlift k; reduce = RedSet.empty}))
 
-  let lift_reduce (k, v) =
-    (k, {direct = KRESet.empty; reduce = RedSet.singleton v})
+  let lift_reduce (sg, k) =
+    (sg, ([], {direct = KRESet.empty; reduce = RedSet.singleton k}))
 
   let lift_red (d, r) =
     List.map lift_cached d @ List.map lift_reduce r
@@ -1354,7 +1361,12 @@ module ST = struct
     reduce = RedSet.union t1.reduce t2.reduce;
   }
 
-  let merge xs = List.fold_left union empty xs
+  let compare_transition (_v1, k1) (_v2, k2) =
+    compare k1 k2
+
+  let merge_transition xs =
+    let merge_one (vars, ks) (var, k) = (var @ vars, union ks k) in
+    List.fold_left merge_one ([], empty) xs
 
   let derive ~reduction_cache t =
     let visited = ref KRESet.empty in
@@ -1372,7 +1384,9 @@ module ST = struct
     in
     let tr = RedSet.fold add_redset t.reduce tr in
     let tr =
-      normalize_and_merge ~compare ~merge
+      normalize_and_merge
+        ~compare:compare_transition
+        ~merge:merge_transition
         (List.map lift_direct !direct @ tr)
     in
     (BitSet.IntSet.of_list !reached, tr)
@@ -1385,7 +1399,7 @@ module DFA = struct
     st: ST.t;
     id: int;
     accepted: BitSet.IntSet.t;
-    transitions: (Lr1.set * state lazy_t) list;
+    transitions: (Lr1.set * RE.var list * state lazy_t) list;
     mutable visited: Lr1.set;
     mutable scheduled: Lr1.set;
   }
@@ -1414,8 +1428,8 @@ module DFA = struct
         } in
         dfa := STMap.add st state !dfa;
         state
-    and make_transition (k, v) =
-      (k, lazy (find_state v))
+    and make_transition (sg, (vars, k)) =
+      (sg, vars, lazy (find_state k))
     in
     let todo = ref [] in
     let schedule st sg =
@@ -1433,7 +1447,7 @@ module DFA = struct
       st.visited <- IndexSet.union sg st.visited;
       st.scheduled <- IndexSet.empty;
       List.iter
-        (fun (sg', st') ->
+        (fun (sg', _vars, st') ->
            schedule st' (lr1set_predecessors (IndexSet.inter sg' sg)))
         st.transitions
     in
@@ -1479,13 +1493,16 @@ let gen_table oc dfa initial =
       string_concat_map "|" string_of_index (IndexSet.elements lr1s)
     in
     print "\n    match st with\n";
-    List.iter begin fun (lr1s, st') ->
+    List.iter begin fun (lr1s, vars, st') ->
       if Lazy.is_val st' then
         let lazy st' = st' in
         let cases = IndexSet.inter st.DFA.visited lr1s in
         if not (IndexSet.is_empty cases) then
-          print "    | %s -> ([], %s, Some %d)\n"
-            (print_states cases) action st'.DFA.id;
+          let print_var (k,v) = Printf.sprintf "%d,%d" k v in
+          print "    | %s -> ([%s], %s, Some %d)\n"
+            (print_states cases)
+            (string_concat_map ";" print_var vars)
+            action st'.DFA.id;
     end st.transitions;
     print "    | _ -> ([], %s, None)" action;
     print ");\n";
@@ -1555,7 +1572,7 @@ let interp_st st stack =
          | 1 -> " (deterministic)"
          | _ -> "s (non-deterministic)");
       if count > 0 then
-        loop (List.fold_left ST.union ST.empty targets) stack'
+        loop (List.fold_left ST.union ST.empty (List.map snd targets)) stack'
   in
   loop st stack
 
@@ -1595,11 +1612,23 @@ let gen_code oc clauses =
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  let cases =
-    entry.Syntax.clauses
-    |> List.mapi (fun i case -> KRE.transl case.Syntax.pattern i)
-    |> KRESet.of_list
+  let cases, _vars =
+    let transl_case i case =
+      let var_count = ref 0 in
+      let vars = ref [] in
+      let alloc name =
+        let id = !var_count in
+        push vars name;
+        incr var_count;
+        (i, id)
+      in
+      let kre = KRE.transl alloc case.Syntax.pattern i in
+      let vars = Array.of_list (List.rev !vars) in
+      (kre, vars)
+    in
+    List.split (List.mapi transl_case entry.Syntax.clauses)
   in
+  let cases = KRESet.of_list cases in
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
@@ -1632,12 +1661,12 @@ let () = (
         close_out oc
     end;
   end;
-  Array.iter (fun (name, stack) ->
+  (*Array.iter (fun (name, stack) ->
       eprintf "Evaluating case %s\n" name;
       (*eval_dfa dfa initial stack;*)
       interp_st {ST.direct=cases; reduce=RedSet.empty} stack;
       (*interp_kre cases IndexSet.empty stack;*)
       eprintf "------------------------\n\n";
-    ) Sample.tests
+    ) Sample.tests*)
   (* Print matching functions *)
 )
