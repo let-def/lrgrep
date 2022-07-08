@@ -1594,25 +1594,26 @@ let rec eval_dfa dfa st stack =
         eval_dfa dfa st' xs
     end
 
-let gen_code oc clauses =
-  let arities = List.map (fun _clause -> "0") clauses in
+let gen_code oc vars clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
     "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
     (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
-  List.iteri (fun priority clause ->
-      print "  | %d, [||] -> begin\n%s\n    end\n"
-        priority
+  List.iteri (fun index (vars, clause) ->
+      print "  | %d, [|%s|] -> begin\n%s\n    end\n"
+        index
+        (String.concat ";" vars)
         (match clause.Syntax.action with
          | None -> "failwith \"Should be unreachable\""
          | Some (_, str) -> str)
-    ) clauses;
+    ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n";
-  print "let arities = [|%s|]\n" (String.concat ";" arities)
+  print "let arities = [|%s|]\n"
+    (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars)
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
-  let cases, _vars =
+  let cases, vars =
     let transl_case i case =
       let var_count = ref 0 in
       let vars = ref [] in
@@ -1623,7 +1624,7 @@ let () = (
         (i, id)
       in
       let kre = KRE.transl alloc case.Syntax.pattern i in
-      let vars = Array.of_list (List.rev !vars) in
+      let vars = List.rev !vars in
       (kre, vars)
     in
     List.split (List.mapi transl_case entry.Syntax.clauses)
@@ -1653,7 +1654,7 @@ let () = (
         let oc = open_out_bin path in
         output_string oc (snd lexer_definition.header);
         output_char oc '\n';
-        gen_code oc entry.Syntax.clauses;
+        gen_code oc vars entry.Syntax.clauses;
         output_char oc '\n';
         output_string oc (snd lexer_definition.trailer);
         output_char oc '\n';
