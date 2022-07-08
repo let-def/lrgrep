@@ -4,5 +4,5 @@
 (executable
  (name main)
  (public_name lrgrep)
- (modules :standard \ main_legacy)
+ (modules :standard)
  (libraries fix utils middle menhirSdk))
