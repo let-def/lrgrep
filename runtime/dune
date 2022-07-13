@@ -1,4 +1,0 @@
-(library
- (name runtime)
- (wrapped false)
- (public_name lrgrep.runtime))

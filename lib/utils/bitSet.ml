@@ -523,7 +523,8 @@ module IntSet = struct
 end
 
 module type S1_int = S1 with type 'a element = int
-module type S1_index = S1 with type 'a element = 'a Fix.Indexing.index
+module type S1_index = S1 with type 'a t = private IntSet.t
+                           and type 'a element = 'a Fix.Indexing.index
 
 module IndexSeq_int : S1_int = struct
   type 'a element = int

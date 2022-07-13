@@ -1,0 +1,11 @@
+(library
+  (name support)
+  (wrapped false)
+  (modules lrgrep_support)
+  (libraries utils runtime))
+
+(library
+ (name runtime)
+ (wrapped false)
+ (modules lrgrep_runtime)
+ (public_name lrgrep.runtime))

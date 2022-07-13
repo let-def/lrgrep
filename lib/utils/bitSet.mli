@@ -169,7 +169,8 @@ module IntSet :
   S0 with type element = int
 
 module IndexSet :
-  S1 with type 'a element = 'a Fix.Indexing.index
+  S1 with type 'a t = private IntSet.t
+      and type 'a element = 'a Fix.Indexing.index
 
 module Make (Element : sig
     type t = private int
