@@ -14,6 +14,7 @@
 (**************************************************************************)
 
 open Utils
+
 let filename_of_position _ = failwith "TODO"
 
 (* The lexer generator. Command-line parsing. *)
@@ -1465,6 +1466,16 @@ module DFA = struct
     (!dfa, initial)
 end
 
+let iter_transitions st f =
+  let visit_transition (lr1s, vars, st') =
+    if Lazy.is_val st' then
+      let lazy st' = st' in
+      let cases = IndexSet.inter st.DFA.visited lr1s in
+      if not (IndexSet.is_empty cases) then
+        f cases vars st'
+  in
+  List.iter visit_transition st.transitions
+
 let gen_table oc dfa initial =
   let print fmt = Printf.fprintf oc fmt in
   let sprint fmt = Printf.sprintf fmt in
@@ -1480,39 +1491,15 @@ let gen_table oc dfa initial =
     \  type state = int\n\
     \  let table = [|\n\
     ";
-  let states = Array.make (STMap.cardinal dfa) None in
-  STMap.iter (fun _ st -> states.(st.DFA.id) <- Some st) dfa;
-  let visit opt =
-    let st = Option.get opt in
-    print "    (fun st ->";
-    let action = match BitSet.IntSet.minimum st.DFA.accepted with
-      | None -> "None"
-      | Some priority -> sprint "Some %d" priority
-    in
-    let print_states lr1s =
-      string_concat_map "|" string_of_index (IndexSet.elements lr1s)
-    in
-    print "\n    match st with\n";
-    List.iter begin fun (lr1s, vars, st') ->
-      if Lazy.is_val st' then
-        let lazy st' = st' in
-        let cases = IndexSet.inter st.DFA.visited lr1s in
-        if not (IndexSet.is_empty cases) then
-          let print_var (k,v) = Printf.sprintf "%d,%d" k v in
-          print "    | %s -> ([%s], %s, Some %d)\n"
-            (print_states cases)
-            (string_concat_map ";" print_var vars)
-            action st'.DFA.id;
-    end st.transitions;
-    print "    | _ -> ([], %s, None)" action;
-    print ");\n";
-  in
-  Array.iter visit states;
-  print
-    "  |]\n\
-    \  let initial = %d\n\
-    \  let step st lr1 = table.(st) lr1\n\
-     end\n" initial.DFA.id
+  let states = Array.make (STMap.cardinal dfa) (None, []) in
+  STMap.iter (fun _ st ->
+      let accept = BitSet.IntSet.minimum st.DFA.accepted in
+      let transitions = ref [] in
+      iter_transitions st
+        (fun is vars target -> push transitions (is, (vars, target.DFA.id)));
+      states.(st.DFA.id) <- (accept, !transitions)
+    ) dfa;
+  let Tablerepr.compact states
 
 (*let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
@@ -1610,6 +1597,40 @@ let gen_code oc vars clauses =
   print "  | _ -> failwith \"Invalid action\"\n\n";
   print "let arities = [|%s|]\n"
     (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars)
+
+module CompactTable = struct
+  let group_states_by_default_target dfa =
+    let cardinal = STMap.cardinal dfa in
+    let group_by_default = Array.make cardinal [] in
+    let counters = Hashtbl.create 7 in
+    STMap.iter begin fun _ st ->
+      let most_common_count = ref 0 in
+      let most_common_target = ref (-1) in
+      iter_transitions st begin fun lr1s vars st ->
+        match vars with
+        | [] ->
+          let id = st.DFA.id in
+          let count = IndexSet.cardinal lr1s in
+          let r = match Hashtbl.find_opt counters id with
+            | Some r -> r
+            | None ->
+              let r = ref 0 in
+              Hashtbl.add counters id r;
+              r
+          in
+          r := !r + count;
+          if !r > !most_common_count then (
+            most_common_count := !r;
+            most_common_target := id;
+          )
+        | _ -> ()
+      end;
+      Hashtbl.reset counters;
+      array_cons group_by_default !most_common_target st;
+    end dfa;
+    group_by_default
+
+end
 
 let () = (
   let entry = List.hd lexer_definition.entrypoints in
