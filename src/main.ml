@@ -1476,15 +1476,18 @@ let iter_transitions st f =
   List.iter visit_transition st.transitions
 
 let gen_table oc vars dfa initial =
-  let states = Array.make (STMap.cardinal dfa) (None, []) in
+  let states = Array.make (STMap.cardinal dfa) (None, IntSet.empty, []) in
   STMap.iter (fun _ st ->
       let accept = IntSet.minimum st.DFA.accepted in
       let transitions = ref [] in
+      let halting = ref (st.DFA.visited :> IntSet.t) in
       iter_transitions st
         (fun is vars target ->
            let is = (is : _ IndexSet.t :> IntSet.t) in
-           push transitions (is, (vars, target.DFA.id)));
-      states.(st.DFA.id) <- (accept, !transitions)
+           halting := IntSet.diff !halting is;
+           push transitions (is, (vars, target.DFA.id));
+        );
+      states.(st.DFA.id) <- (accept, !halting, !transitions)
     ) dfa;
   let program, table, remap = Lrgrep_support.compact states in
   let print fmt = Printf.fprintf oc fmt in

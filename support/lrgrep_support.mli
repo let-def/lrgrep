@@ -1,4 +1,5 @@
 module RT = Lrgrep_runtime
+module IS = Utils.BitSet.IntSet
 
 module Sparse_packer : sig
   type 'a t
@@ -19,5 +20,5 @@ end
 type transition_action = RT.register list * int
 
 val compact :
-  (int option * (Utils.BitSet.IntSet.t * transition_action) list) array ->
+  (int option * IS.t * (IS.t * transition_action) list) array ->
   RT.program * RT.sparse_table * RT.program_counter array

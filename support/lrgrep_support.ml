@@ -185,11 +185,15 @@ let compare_transition_action (v1, t1) (v2, t2) =
   if c <> 0 then c else
     List.compare compare_ints v1 v2
 
+let same_action a1 a2 = compare_transition_action a1 a2 = 0
+
 module IS = Utils.BitSet.IntSet
 
-let compact (dfa : (int option * (IS.t * transition_action) list) array) =
+let compact (dfa : (int option * IS.t * (IS.t * transition_action) list) array) =
   let code = Code_emitter.make () in
   let index = Sparse_packer.make () in
+  let halt_pc = ref (Code_emitter.position code) in
+  Code_emitter.emit code Halt;
   let pcs = Array.init (Array.length dfa) (fun _ -> ref (-1)) in
   let emit_action (vars, target) =
     List.iter (fun (i, j) -> Code_emitter.emit code (Store (i, j))) vars;
@@ -204,28 +208,29 @@ let compact (dfa : (int option * (IS.t * transition_action) list) array) =
   in
   let transition_count = ref 0 in
   let cell_count = ref 0 in
-  Array.iter2 (fun (accept, transitions) pc ->
-      let transitions = match transitions with
-        | [] -> None
-        | [(_, t)] -> Some (t, [])
-        | ((_, t) :: _) ->
-          let _, most_frequent_action =
-            List.fold_left (fun (count, _ as default) (dom, action) ->
-                let count' = IS.cardinal dom in
-                transition_count := !transition_count + count';
-                if count' > count
-                then (count', action)
-                else default
-              ) (0, t) transitions
-          in
-          let other_transitions =
-            List.filter_map (fun (dom, action) ->
-                if compare_transition_action action most_frequent_action = 0
-                then None
-                else (Some (dom, goto_action action))
-              ) transitions
-          in
-          Some (most_frequent_action, other_transitions)
+  Array.iter2 (fun (accept, halting, transitions) pc ->
+      let default, other_transitions =
+        let _, most_frequent_action =
+          List.fold_left (fun (count, _ as default) (dom, action) ->
+              let count' = IS.cardinal dom in
+              transition_count := !transition_count + count';
+              if count' > count
+              then (count', Some action)
+              else default
+            ) (IS.cardinal halting, None) transitions
+        in
+        let prepare_transition (dom, action) =
+          match most_frequent_action with
+          | Some action' when same_action action action' -> None
+          | _ -> Some (dom, goto_action action)
+        in
+        let other = List.filter_map prepare_transition transitions in
+        let other =
+          if Option.is_some most_frequent_action && IS.cardinal halting > 0
+          then (halting, halt_pc) :: other
+          else other
+        in
+        (most_frequent_action, other)
       in
       assert (!pc = -1);
       pc := Code_emitter.position code;
@@ -233,22 +238,21 @@ let compact (dfa : (int option * (IS.t * transition_action) list) array) =
         | None -> ()
         | Some clause -> Code_emitter.emit code (Accept clause)
       end;
-      begin match transitions with
-        | None ->
-          Code_emitter.emit code Halt
-        | Some (default, []) ->
-          emit_action default
-        | Some (default, cells) ->
-          let cells =
-            List.concat_map
-              (fun (dom, target) ->
-                 List.map (fun x -> (x, target)) (IS.elements dom))
-              cells
-          in
+      begin match
+        List.concat_map
+          (fun (dom, target) ->
+             List.map (fun x -> (x, target)) (IS.elements dom))
+          other_transitions
+        with
+        | [] -> ()
+        | cells ->
           cell_count := !cell_count + List.length cells;
           let i = Sparse_packer.add_vector index cells in
           Code_emitter.emit code (Match i);
-          emit_action default
+      end;
+      begin match default with
+        | None -> Code_emitter.emit code Halt
+        | Some default -> emit_action default
       end
     ) dfa pcs;
   Printf.eprintf "total transitions: %d, non-default: %d\n%!"
