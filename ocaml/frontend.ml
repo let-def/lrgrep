@@ -39,7 +39,7 @@ let do_parse
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
   =
   let module I = Parser_raw.MenhirInterpreter in
-  let module PE = Analyser_def.Interpreter(Parse_errors)(I) in
+  let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table)(I) in
   let error_and_exit msg =
     let loc = Location.curr lexbuf in
     let report = {

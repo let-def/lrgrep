@@ -12,7 +12,7 @@ module Code_emitter : sig
   val make : unit -> t
   val position : t -> int
   val emit : t -> RT.program_instruction -> unit
-  val emit_goto_reloc : t -> RT.program_counter ref -> unit
+  val emit_yield_reloc : t -> RT.program_counter ref -> unit
   val link : t -> RT.program
 end
 

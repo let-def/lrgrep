@@ -5,4 +5,4 @@
  (name main)
  (public_name lrgrep)
  (modules :standard)
- (libraries fix utils middle menhirSdk))
+ (libraries fix utils middle menhirSdk support))

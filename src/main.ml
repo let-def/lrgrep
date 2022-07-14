@@ -102,8 +102,7 @@ let lexer_definition =
 (* General purpose definitions *)
 
 open Fix.Indexing
-
-module IndexSet = BitSet.IndexSet
+open BitSet
 
 let (@) l1 l2 =
   match l1, l2 with
@@ -1390,7 +1389,7 @@ module ST = struct
         ~merge:merge_transition
         (List.map lift_direct !direct @ tr)
     in
-    (BitSet.IntSet.of_list !reached, tr)
+    (IntSet.of_list !reached, tr)
 end
 
 module STMap = Map.Make(ST)
@@ -1399,7 +1398,7 @@ module DFA = struct
   type state = {
     st: ST.t;
     id: int;
-    accepted: BitSet.IntSet.t;
+    accepted: IntSet.t;
     transitions: (Lr1.set * RE.var list * state lazy_t) list;
     mutable visited: Lr1.set;
     mutable scheduled: Lr1.set;
@@ -1476,30 +1475,26 @@ let iter_transitions st f =
   in
   List.iter visit_transition st.transitions
 
-let gen_table oc dfa initial =
-  let print fmt = Printf.fprintf oc fmt in
-  let sprint fmt = Printf.sprintf fmt in
-  print
-    "module Table : sig\n\
-    \  open Analyser_def\n\
-    \  type state\n\
-    \  val initial : state\n\
-    \  val step : state -> int -> \n\
-    \    register list * clause option * state option\n\
-     end = struct\n\
-    \  [@@@ocaml.warning \"-27\"]\n\
-    \  type state = int\n\
-    \  let table = [|\n\
-    ";
+let gen_table oc vars dfa initial =
   let states = Array.make (STMap.cardinal dfa) (None, []) in
   STMap.iter (fun _ st ->
-      let accept = BitSet.IntSet.minimum st.DFA.accepted in
+      let accept = IntSet.minimum st.DFA.accepted in
       let transitions = ref [] in
       iter_transitions st
-        (fun is vars target -> push transitions (is, (vars, target.DFA.id)));
+        (fun is vars target ->
+           let is = (is : _ IndexSet.t :> IntSet.t) in
+           push transitions (is, (vars, target.DFA.id)));
       states.(st.DFA.id) <- (accept, !transitions)
     ) dfa;
-  let Tablerepr.compact states
+  let program, table, remap = Lrgrep_support.compact states in
+  let print fmt = Printf.fprintf oc fmt in
+  print "module Table : Lrgrep_runtime.Parse_errors = struct\n";
+  print "  let arities = [|%s|]\n"
+    (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
+  print "  let initial = %d\n" remap.(initial.DFA.id);
+  print "  let table = %S\n" table;
+  print "  let program = %S\n" program;
+  print "end\n"
 
 (*let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
@@ -1540,7 +1535,7 @@ let interp_st st stack =
     eprintf "Matcher state:\n%a\n" print_cmon (ST.cmon st);
     let accepted, transitions = ST.derive ~reduction_cache st in
     eprintf "Matching actions: [%s]\n"
-      (string_concat_map ";" string_of_int (BitSet.IntSet.elements accepted));
+      (string_concat_map ";" string_of_int (IntSet.elements accepted));
     match stack with
     | [] -> eprintf "End of stack\n"
     | x :: stack' ->
@@ -1568,7 +1563,7 @@ let rec eval_dfa dfa st stack =
   eprintf "------------------------\n";
   eprintf "Matcher in state %d:\n%a\n" id print_cmon (ST.cmon st);
   eprintf "Matching actions: [%s]\n"
-    (string_concat_map ";" string_of_int (BitSet.IntSet.elements actions));
+    (string_concat_map ";" string_of_int (IntSet.elements actions));
   match stack with
   | [] -> eprintf "End of stack\n"
   | x :: xs ->
@@ -1584,7 +1579,7 @@ let rec eval_dfa dfa st stack =
 let gen_code oc vars clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
-    "let execute : int * %s.MenhirInterpreter.element Analyser_def.Registers.t -> _ = function\n"
+    "let execute : int * %s.MenhirInterpreter.element option array -> _ = function\n"
     (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
   List.iteri (fun index (vars, clause) ->
       print "  | %d, [|%s|] -> begin\n%s\n    end\n"
@@ -1594,9 +1589,7 @@ let gen_code oc vars clauses =
          | None -> "failwith \"Should be unreachable\""
          | Some (_, str) -> str)
     ) (List.combine vars clauses);
-  print "  | _ -> failwith \"Invalid action\"\n\n";
-  print "let arities = [|%s|]\n"
-    (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars)
+  print "  | _ -> failwith \"Invalid action\"\n\n"
 
 module CompactTable = struct
   let group_states_by_default_target dfa =
@@ -1679,7 +1672,7 @@ let () = (
         output_char oc '\n';
         output_string oc (snd lexer_definition.trailer);
         output_char oc '\n';
-        gen_table oc dfa initial;
+        gen_table oc vars dfa initial;
         close_out oc
     end;
   end;

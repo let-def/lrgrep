@@ -14,7 +14,7 @@ type program_counter = int
 
 type program_instruction =
   | Store of register
-  | Goto of program_counter
+  | Yield of program_counter
   | Accept of clause
   | Match of sparse_index
   | Halt
@@ -49,13 +49,13 @@ let program_step (t : program) (r : program_counter ref)
     Store (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
   | '\x02' ->
     r := !r + 3;
-    Goto (String.get_uint16_be t (pc + 1))
+    Yield (String.get_uint16_be t (pc + 1))
   | '\x03' ->
     r := !r + 2;
     Accept (String.get_uint8 t (pc + 1))
   | '\x04' ->
-    r := !r + 5;
-    Match (String.get_uint16_be t (pc + 3))
+    r := !r + 3;
+    Match (String.get_uint16_be t (pc + 1))
   | '\x05' ->
     r := !r + 1;
     Halt
@@ -79,28 +79,38 @@ end
 module Interpreter (PE : Parse_errors) (P : Parser) =
 struct
 
-  let step bank env candidate (pc : program_counter) =
+  let interpret bank env candidate (pc : program_counter) =
+    let pc = ref pc in
     let rec loop () =
-      let pc = ref pc in
       match program_step PE.program pc with
       | Store (clause, var) ->
+        prerr_endline "Store";
         bank.(clause).(var) <- P.top env;
         loop ()
-      | Goto pc' -> Some pc'
+      | Yield pc' ->
+        prerr_endline "Yield";
+        Some pc'
       | Accept clause ->
+        prerr_endline "Accept";
         begin match !candidate with
           | Some clause' when clause >= clause' -> ()
           | _ -> candidate := Some clause
         end;
         loop ()
       | Match index ->
+        prerr_endline "Match";
         begin
           match sparse_lookup PE.table index (P.current_state_number env) with
-          | Some pc' -> pc := pc'
-          | None -> ()
+          | Some pc' ->
+            prerr_endline "Match success";
+            pc := pc'
+          | None ->
+            prerr_endline "Match failure";
+            ()
         end;
         loop ()
       | Halt ->
+        prerr_endline "Halt";
         None
     in
     loop ()
@@ -109,9 +119,14 @@ struct
     let bank = Array.map (fun a -> Array.make a None) PE.arities in
     let candidate = ref None in
     let rec loop env pc =
-      match step bank env candidate pc with
+      match interpret bank env candidate pc with
       | None -> ()
-      | Some pc' -> loop env pc'
+      | Some pc' ->
+        let env = match P.pop env with
+          | None -> env
+          | Some env -> env
+        in
+        loop env pc'
     in
     loop env PE.initial;
     match !candidate with

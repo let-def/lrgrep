@@ -81,7 +81,17 @@ end = struct
     let max_k = ref 0 in
     let max_v = ref 0 in
     let table =
-      Array.map (function
+      let length = ref (Array.length packer.table) in
+      while !length > 0 && (
+          match packer.table.(!length - 1) with
+          | Unused -> true
+          | _ -> false
+        )
+      do
+        decr length;
+      done;
+      Array.init !length (fun i ->
+          match packer.table.(i) with
           | Unused -> Unused
           | Used (k, v) ->
             let v = value_repr v in
@@ -90,13 +100,12 @@ end = struct
             if v > !max_v then max_v := v;
             Used (k, v)
         )
-        packer.table
     in
     let k_size = int_size !max_k in
     let v_size = int_size !max_v in
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
-    set_int repr ~offset:0 ~value:v_size 1;
+    set_int repr ~offset:1 ~value:v_size 1;
     Array.iteri (fun i cell ->
         let offset = 2 + i * (k_size + v_size) in
         match cell with
@@ -105,6 +114,7 @@ end = struct
           set_int repr ~offset ~value:k k_size;
           set_int repr ~offset:(offset + k_size) ~value:v v_size;
       ) table;
+    Printf.eprintf "key size: %d\nvalue size: %d\ntable size:%d\n" k_size v_size (Array.length table);
     Bytes.unsafe_to_string repr
 end
 
@@ -113,7 +123,7 @@ module Code_emitter : sig
   val make : unit -> t
   val position : t -> int
   val emit : t -> RT.program_instruction -> unit
-  val emit_goto_reloc : t -> RT.program_counter ref -> unit
+  val emit_yield_reloc : t -> RT.program_counter ref -> unit
   val link : t -> RT.program
 end = struct
   type t = {
@@ -134,7 +144,7 @@ end = struct
       Buffer.add_char t.buffer '\x01';
       Buffer.add_uint8 t.buffer i;
       Buffer.add_uint8 t.buffer j
-    | Goto pos ->
+    | Yield pos ->
       assert (pos <= 0xFFFF);
       Buffer.add_char t.buffer '\x02';
       Buffer.add_uint16_be t.buffer pos
@@ -148,7 +158,7 @@ end = struct
     | Halt ->
       Buffer.add_char t.buffer '\x05'
 
-  let emit_goto_reloc t reloc =
+  let emit_yield_reloc t reloc =
     Buffer.add_char t.buffer '\x02';
     let pos = Buffer.length t.buffer in
     Buffer.add_uint16_be t.buffer 0;
@@ -175,23 +185,25 @@ let compare_transition_action (v1, t1) (v2, t2) =
   if c <> 0 then c else
     List.compare compare_ints v1 v2
 
-module IS = Utils.BitSet.IndexSet
+module IS = Utils.BitSet.IntSet
 
-let compact (dfa : (int option * (_ IS.t * transition_action) list) array) =
+let compact (dfa : (int option * (IS.t * transition_action) list) array) =
   let code = Code_emitter.make () in
   let index = Sparse_packer.make () in
   let pcs = Array.init (Array.length dfa) (fun _ -> ref (-1)) in
   let emit_action (vars, target) =
     List.iter (fun (i, j) -> Code_emitter.emit code (Store (i, j))) vars;
-    Code_emitter.emit_goto_reloc code pcs.(target);
+    Code_emitter.emit_yield_reloc code pcs.(target);
   in
-  let goto_action = function
+  let goto_action action = (*function
     | ([], target) -> pcs.(target)
-    | action ->
+    | action ->*)
       let position = Code_emitter.position code in
       emit_action action;
       ref position
   in
+  let transition_count = ref 0 in
+  let cell_count = ref 0 in
   Array.iter2 (fun (accept, transitions) pc ->
       let transitions = match transitions with
         | [] -> None
@@ -200,6 +212,7 @@ let compact (dfa : (int option * (_ IS.t * transition_action) list) array) =
           let _, most_frequent_action =
             List.fold_left (fun (count, _ as default) (dom, action) ->
                 let count' = IS.cardinal dom in
+                transition_count := !transition_count + count';
                 if count' > count
                 then (count', action)
                 else default
@@ -209,9 +222,7 @@ let compact (dfa : (int option * (_ IS.t * transition_action) list) array) =
             List.filter_map (fun (dom, action) ->
                 if compare_transition_action action most_frequent_action = 0
                 then None
-                else (
-                  Some (dom, goto_action action)
-                )
+                else (Some (dom, goto_action action))
               ) transitions
           in
           Some (most_frequent_action, other_transitions)
@@ -223,21 +234,23 @@ let compact (dfa : (int option * (_ IS.t * transition_action) list) array) =
         | Some clause -> Code_emitter.emit code (Accept clause)
       end;
       begin match transitions with
-        | None -> Code_emitter.emit code Halt
+        | None ->
+          Code_emitter.emit code Halt
         | Some (default, []) ->
           emit_action default
         | Some (default, cells) ->
           let cells =
             List.concat_map
               (fun (dom, target) ->
-                 List.map
-                   (fun x -> (x, target))
-                   (IS.elements dom : _ Fix.Indexing.index list :> int list))
+                 List.map (fun x -> (x, target)) (IS.elements dom))
               cells
           in
+          cell_count := !cell_count + List.length cells;
           let i = Sparse_packer.add_vector index cells in
           Code_emitter.emit code (Match i);
           emit_action default
       end
     ) dfa pcs;
+  Printf.eprintf "total transitions: %d, non-default: %d\n%!"
+    !transition_count !cell_count;
   (Code_emitter.link code, Sparse_packer.pack index (!), Array.map (!) pcs)

@@ -14,7 +14,7 @@ type program_counter = int
 
 type program_instruction =
   | Store of register
-  | Goto of program_counter
+  | Yield of program_counter
   | Accept of clause
   | Match of sparse_index
   | Halt
