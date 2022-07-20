@@ -84,33 +84,33 @@ struct
     let rec loop () =
       match program_step PE.program pc with
       | Store (clause, var) ->
-        prerr_endline "Store";
+        (*prerr_endline "Store";*)
         bank.(clause).(var) <- P.top env;
         loop ()
       | Yield pc' ->
-        prerr_endline "Yield";
+        (*prerr_endline "Yield";*)
         Some pc'
       | Accept clause ->
-        prerr_endline "Accept";
+        (*prerr_endline "Accept";*)
         begin match !candidate with
           | Some clause' when clause >= clause' -> ()
           | _ -> candidate := Some clause
         end;
         loop ()
       | Match index ->
-        prerr_endline "Match";
+        (*prerr_endline "Match";*)
         begin
           match sparse_lookup PE.table index (P.current_state_number env) with
           | Some pc' ->
-            prerr_endline "Match success";
+            (*prerr_endline "Match success";*)
             pc := pc'
           | None ->
-            prerr_endline "Match failure";
+            (*prerr_endline "Match failure";*)
             ()
         end;
         loop ()
       | Halt ->
-        prerr_endline "Halt";
+        (*prerr_endline "Halt";*)
         None
     in
     loop ()
