@@ -582,11 +582,6 @@ module Redgraph = struct
       (fun lr1 -> Option.iter close_all (get_root_parent lr1))
 end
 
-let lexbuf =
-  let lexbuf = Lexing.from_channel ~with_positions:true stdin in
-  Lexing.set_filename lexbuf "<stdin>";
-  lexbuf
-
 let get_token =
   let state = Lexer_raw.make Lexer_raw.keyword_table in
   let rec extract_token = function
@@ -602,6 +597,7 @@ let get_token =
 let do_parse
     (type a)
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
+    lexbuf
   =
   let module I = Parser_raw.MenhirInterpreter in
   let rec loop : _ I.env -> _ I.checkpoint -> _ = fun env -> function
@@ -720,10 +716,22 @@ let () =
     Arg.usage specs usage;
   | Some file ->
     let is_intf = !opt_parse_intf || Filename.check_suffix file "i" in
-    let ic = if file = "-" then stdin else open_in_bin file in
+    let ic, filename, close_ic =
+      if file = "-" then
+        (stdin, "<stdin>", false)
+      else
+        (open_in_bin file, file, true)
+    in
+    let lexbuf =
+      let lexbuf = Lexing.from_channel ~with_positions:true ic in
+      Lexing.set_filename lexbuf filename;
+      lexbuf
+    in
     if is_intf then
-      process_result lexbuf (do_parse Parser_raw.Incremental.interface)
+      process_result lexbuf
+        (do_parse Parser_raw.Incremental.interface lexbuf)
     else
-      process_result lexbuf (do_parse Parser_raw.Incremental.implementation);
-    if file <> "-" then
+      process_result lexbuf
+        (do_parse Parser_raw.Incremental.implementation lexbuf);
+    if close_ic then
       close_in_noerr ic
