@@ -54,3 +54,8 @@ rule error_message = parse error
 | [. IN]; !
   { fun _ -> "Expecting `in'" }
 
+| OF; constructor_arguments; !
+  { function
+    | MINUSGREATER -> "Issue #11445: in constructor arguments, arrow types should be wrapped between parentheses"
+    | _ -> "oops"
+  }
