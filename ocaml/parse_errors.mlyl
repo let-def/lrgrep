@@ -32,25 +32,29 @@ rule error_message token = parse error
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
 | ([. UIDENT] | [. TYPE] | [. REC]); !
-  { "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
+  { "Expecting `type', `rec' or a module name beginning with an uppercase letter"
   }
 
+(* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
 | [. seq_expr ]; !
   { match token with
     | MODULE ->
-      (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
       "`module' keyword cannot appear in an expression, \
        use `(module M)' to pack a first class-module \
        or `let module M = ... in ...' to define a local module"
     | _ -> "Expecting expression"
   }
 
-(* FIXME: goto closure is incomplete *)
+(* https://github.com/ocaml/ocaml/issues/11445 *)
+| OF; constructor_arguments; !
+  partial { 
+    match token with
+    | MINUSGREATER ->
+      Some "Issue #11445: in constructor arguments, \
+            arrow types should be wrapped between parentheses"
+    | _ -> None
+  }
+
 | [. IN]; !
   { "Expecting `in'" }
 
-| OF; constructor_arguments; !
-  { match token with
-    | MINUSGREATER -> "Issue #11445: in constructor arguments, arrow types should be wrapped between parentheses"
-    | _ -> "oops"
-  }
