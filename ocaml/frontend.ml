@@ -64,12 +64,16 @@ let do_parse
     | I.Rejected -> assert false
     | I.HandlingError _ ->
       match PE.run env with
-      | None -> error_and_exit "Syntax error (no handler for it)"
-      | Some state ->
-        match Parse_errors.execute_error_message tok state with
-        | None ->
-          error_and_exit "Syntax error (partial handler did not handle the case)"
-        | Some err -> error_and_exit err
+      | [] -> error_and_exit "Syntax error (no handler for it)"
+      | matches ->
+        let rec loop = function
+          | [] -> error_and_exit "Syntax error (partial handler did not handle the case)"
+          | m :: ms ->
+            match Parse_errors.execute_error_message tok m with
+            | None -> loop ms
+            | Some err -> error_and_exit err
+        in
+        loop matches
   in
   let start cp =
     match cp with

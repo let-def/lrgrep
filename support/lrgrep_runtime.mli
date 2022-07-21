@@ -39,5 +39,5 @@ module type Parser = sig
 end
 
 module Interpreter (PE : Parse_errors) (P : Parser) : sig
-  val run : 'a P.env -> (program_counter * P.element option array) option
+  val run : 'a P.env -> (clause * P.element option array) list
 end

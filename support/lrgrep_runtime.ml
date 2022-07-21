@@ -92,10 +92,7 @@ struct
         Some pc'
       | Accept clause ->
         (*prerr_endline "Accept";*)
-        begin match !candidate with
-          | Some clause' when clause >= clause' -> ()
-          | _ -> candidate := Some clause
-        end;
+        candidate := clause :: !candidate;
         loop ()
       | Match index ->
         (*prerr_endline "Match";*)
@@ -117,7 +114,7 @@ struct
 
   let run env =
     let bank = Array.map (fun a -> Array.make a None) PE.arities in
-    let candidate = ref None in
+    let candidate = ref [] in
     let rec loop env pc =
       match interpret bank env candidate pc with
       | None -> ()
@@ -129,7 +126,7 @@ struct
         loop env pc'
     in
     loop env PE.initial;
-    match !candidate with
-    | None -> None
-    | Some clause -> Some (clause, bank.(clause))
+    !candidate
+    |> List.sort_uniq Int.compare
+    |> List.map (fun clause -> clause, bank.(clause))
 end
