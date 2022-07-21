@@ -156,6 +156,7 @@ rule main = parse
     | "error" -> ERROR
     | "and" -> AND
     | "as" -> AS
+    | "partial" -> PARTIAL
     | s -> IDENT s
   }
 | '{' [' ' '\009']* '.' [' ' '\009']* '}'

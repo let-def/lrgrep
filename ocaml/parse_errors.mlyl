@@ -1,13 +1,12 @@
 {}
 
-rule error_message = parse error
+rule error_message token = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
-  { fun _ ->
-    match semi with
+  { match semi with
     | None -> assert false
     | Some (Parser_raw.MenhirInterpreter.Element (_, _, startp, _endp)) ->
       "Might be due to the semicolon line "
@@ -18,16 +17,13 @@ rule error_message = parse error
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | LPAREN; [. RPAREN]; !
-  { fun _ ->
-    "Unclosed parenthesis"
-  }
+  { "Unclosed parenthesis" }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
 | [. LIDENT]; !
-  { fun token ->
-    match Lexer_raw.as_keyword token with
+  { match Lexer_raw.as_keyword token with
     | None ->
     "Not expecting a lower-case identifier (TODO: support partial match)"
     | Some kw ->
@@ -36,12 +32,11 @@ rule error_message = parse error
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
 | ([. UIDENT] | [. TYPE] | [. REC]); !
-  { fun _ ->
-    "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
+  { "Expecting `type', `rec' or a module name beginning with an uppercaser letter"
   }
 
 | [. seq_expr ]; !
-  { function
+  { match token with
     | MODULE ->
       (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
       "`module' keyword cannot appear in an expression, \
@@ -52,10 +47,10 @@ rule error_message = parse error
 
 (* FIXME: goto closure is incomplete *)
 | [. IN]; !
-  { fun _ -> "Expecting `in'" }
+  { "Expecting `in'" }
 
 | OF; constructor_arguments; !
-  { function
+  { match token with
     | MINUSGREATER -> "Issue #11445: in constructor arguments, arrow types should be wrapped between parentheses"
     | _ -> "oops"
   }

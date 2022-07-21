@@ -1475,7 +1475,7 @@ let iter_transitions st f =
   in
   List.iter visit_transition st.transitions
 
-let gen_table oc vars dfa initial =
+let gen_table entry oc vars dfa initial =
   let states = Array.make (STMap.cardinal dfa) (None, IntSet.empty, []) in
   STMap.iter (fun _ st ->
       let accept = IntSet.minimum st.DFA.accepted in
@@ -1491,7 +1491,8 @@ let gen_table oc vars dfa initial =
     ) dfa;
   let program, table, remap = Lrgrep_support.compact states in
   let print fmt = Printf.fprintf oc fmt in
-  print "module Table : Lrgrep_runtime.Parse_errors = struct\n";
+  print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
+    entry.Syntax.name;
   print "  let arities = [|%s|]\n"
     (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
   print "  let initial = %d\n" remap.(initial.DFA.id);
@@ -1579,18 +1580,21 @@ let rec eval_dfa dfa st stack =
         eval_dfa dfa st' xs
     end
 
-let gen_code oc vars clauses =
+let gen_code entry oc vars clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
-    "let execute : int * %s.MenhirInterpreter.element option array -> _ = function\n"
+    "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
+    entry.Syntax.name
+    (String.concat " " entry.Syntax.args)
     (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
   List.iteri (fun index (vars, clause) ->
       print "  | %d, [|%s|] -> begin\n%s\n    end\n"
         index
         (String.concat ";" vars)
         (match clause.Syntax.action with
-         | None -> "failwith \"Should be unreachable\""
-         | Some (_, str) -> str)
+         | Unreachable -> "failwith \"Should be unreachable\""
+         | Partial (_, str) -> str
+         | Total (_, str) -> "Some (" ^ str ^ ")")
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
@@ -1628,8 +1632,7 @@ module CompactTable = struct
 
 end
 
-let () = (
-  let entry = List.hd lexer_definition.entrypoints in
+let process_entry oc entry =
   let cases, vars =
     let transl_case i case =
       let var_count = ref 0 in
@@ -1647,37 +1650,30 @@ let () = (
     List.split (List.mapi transl_case entry.Syntax.clauses)
   in
   let cases = KRESet.of_list cases in
+  let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
+  Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
+  output_char oc '\n';
+  gen_code entry oc vars entry.Syntax.clauses;
+  output_char oc '\n';
+  gen_table entry oc vars dfa initial
+
+let () = (
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  if true then begin
-    let dfa, initial = DFA.gen {ST. direct=cases; reduce=RedSet.empty} in
-    Format.eprintf "(* %d states *)\n%!" (STMap.cardinal dfa);
-    (*let print_st _ st =
-      List.iter (fun (_, st') ->
-          if Lazy.is_val st' then
-            let lazy st' = st' in
-            Format.eprintf " st_%d -> st_%d;\n" st.DFA.id st'.DFA.id
-        ) st.DFA.transitions
-    in
-    STMap.iter print_st dfa;*)
-    begin match !output_name with
-      | None ->
-        prerr_endline "No output file provided (option -o). Giving up.";
-        exit 1
-      | Some path ->
-        let oc = open_out_bin path in
-        output_string oc (snd lexer_definition.header);
-        output_char oc '\n';
-        gen_code oc vars entry.Syntax.clauses;
-        output_char oc '\n';
-        output_string oc (snd lexer_definition.trailer);
-        output_char oc '\n';
-        gen_table oc vars dfa initial;
-        close_out oc
-    end;
+  begin match !output_name with
+    | None ->
+      prerr_endline "No output file provided (option -o). Giving up.";
+      exit 1
+    | Some path ->
+      let oc = open_out_bin path in
+      output_string oc (snd lexer_definition.header);
+      List.iter (process_entry oc) lexer_definition.entrypoints;
+      output_char oc '\n';
+      output_string oc (snd lexer_definition.trailer);
+      close_out oc
   end;
   (*Array.iter (fun (name, stack) ->
       eprintf "Evaluating case %s\n" name;

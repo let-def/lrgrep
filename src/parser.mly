@@ -44,6 +44,7 @@ let mk_re desc pos = {desc; position = make_position pos}
        SEMI        ";"
        COLON       ":"
        AS          "as"
+       PARTIAL     "partial"
        (*HASH       "#"*)
 
 %start <Syntax.lexer_definition> lexer_definition
@@ -74,8 +75,9 @@ cases:
 ;
 
 case:
-| regexp ACTION      { {pattern = $1; action = Some $2} }
-| regexp UNREACHABLE { {pattern = $1; action = None} }
+| regexp ACTION           { {pattern = $1; action = Total $2} }
+| regexp "partial" ACTION { {pattern = $1; action = Partial $3} }
+| regexp UNREACHABLE      { {pattern = $1; action = Unreachable} }
 ;
 
 symbol:

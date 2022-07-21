@@ -39,7 +39,7 @@ let do_parse
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
   =
   let module I = Parser_raw.MenhirInterpreter in
-  let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table)(I) in
+  let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
   let error_and_exit msg =
     let loc = Location.curr lexbuf in
     let report = {
@@ -66,7 +66,10 @@ let do_parse
       match PE.run env with
       | None -> error_and_exit "Syntax error (no handler for it)"
       | Some state ->
-        error_and_exit (Parse_errors.execute state tok)
+        match Parse_errors.execute_error_message tok state with
+        | None ->
+          error_and_exit "Syntax error (partial handler did not handle the case)"
+        | Some err -> error_and_exit err
   in
   let start cp =
     match cp with

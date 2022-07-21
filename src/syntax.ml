@@ -37,9 +37,14 @@ and regular_expr = {
   position: position;
 }
 
+type clause_action =
+  | Unreachable
+  | Partial of ocaml_code
+  | Total of ocaml_code
+
 type clause = {
   pattern: regular_expr;
-  action: ocaml_code option;
+  action: clause_action;
 }
 
 type entry = {
@@ -130,10 +135,15 @@ and print_regular_expression re =
     "position", print_position re.position;
   ]
 
+let print_clause_action = function
+  | Unreachable -> Cmon.constant "Unreachable"
+  | Total code -> Cmon.constructor "Total" (print_ocamlcode code)
+  | Partial code -> Cmon.constructor "Partial" (print_ocamlcode code)
+
 let print_clause {pattern; action} =
   Cmon.record [
     "pattern", print_regular_expression pattern;
-    "action", print_option print_ocamlcode action;
+    "action", print_clause_action action;
   ]
 
 let print_entrypoints {error; startsymbols; name; args; clauses} =
