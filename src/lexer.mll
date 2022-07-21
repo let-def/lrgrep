@@ -32,6 +32,14 @@ exception Lexical_error of {msg: string; file: string; line: int; col: int}
 
 let string_buff = Buffer.create 256
 
+let read_location ic loc =
+  let pos = pos_in ic in
+  let start = loc.start_pos and stop = loc.end_pos in
+  seek_in ic start;
+  let txt = really_input_string ic (stop - start) in
+  seek_in ic pos;
+  txt
+
 let reset_string_buffer () = Buffer.clear string_buff
 
 let store_string_char c = Buffer.add_char string_buff c
@@ -173,7 +181,7 @@ rule main = parse
     let code =
       match !ic with
       | None -> assert false
-      | Some ic -> Common.read_location ic location
+      | Some ic -> read_location ic location
     in
     ACTION (location, code)
   }

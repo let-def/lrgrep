@@ -8,7 +8,7 @@
 (*                                                                            *)
 (******************************************************************************)
 
-(*open Fix.Indexing
+open Fix.Indexing
 open Utils
 open BitSet
 
@@ -1141,4 +1141,3 @@ struct
     include Fix.DataFlow.ForCustomMaps(Property)(Graph)(CostMap)(MarkMap)
   end
 end
-  *)

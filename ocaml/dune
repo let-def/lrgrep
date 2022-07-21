@@ -28,7 +28,7 @@
 
 (ocamllex lexer_raw)
 
-(menhir 
+(menhir
   (modules parser_raw)
   (flags :standard --inspection --table --cmly))
 
@@ -37,5 +37,5 @@
   (deps    parser_raw.cmly parse_errors.mlyl)
   (action
     (with-stdout-to %{targets}
-       (run %{exe:../src/main.exe} -n -d parse_errors.mlyl -g parser_raw.cmly 
+       (run %{exe:../src/main.exe} parse_errors.mlyl -g parser_raw.cmly
             -o parse_errors.ml))))
