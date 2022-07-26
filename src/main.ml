@@ -13,10 +13,95 @@
 (*                                                                        *)
 (**************************************************************************)
 
-(* General purpose definitions *)
-
-open Cmdline
 open Utils.Misc
+
+(* Command-line parsing. *)
+
+let source_name = ref None
+let output_name = ref None
+let grammar_file = ref None
+
+let usage =
+  Printf.sprintf
+    "lrgrep, a menhir lexer\n\
+     usage: %s [options] <source>"
+    Sys.argv.(0)
+
+let print_version_num () =
+  print_endline "0.1";
+  exit 0
+
+let print_version_string () =
+  print_string "The Menhir parser lexer generator :-], version ";
+  print_version_num ()
+
+let eprintf = Printf.eprintf
+
+let specs = [
+  "-o", Arg.String (fun x -> output_name := Some x),
+  " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
+  "-g", Arg.String (fun x -> grammar_file := Some x),
+  " <file.cmly>  Path of the Menhir compiled grammar to analyse (*.cmly)";
+  "-v",  Arg.Unit print_version_string,
+  " Print version and exit";
+  "-version",  Arg.Unit print_version_string,
+  " Print version and exit";
+  "-vnum",  Arg.Unit print_version_num,
+  " Print version number and exit";
+]
+
+let () = Arg.parse specs (fun name -> source_name := Some name) usage
+
+let source_file = match !source_name with
+  | None ->
+    Format.eprintf "No source provided, stopping now.\n";
+    Arg.usage specs usage;
+    exit 1
+  | Some name -> name
+
+let grammar_file = match !grammar_file with
+  | Some filename -> filename
+  | None ->
+    Format.eprintf "No grammar provided (-g), stopping now.\n";
+    Arg.usage specs usage;
+    exit 1
+
+let print_parse_error_and_exit lexbuf exn =
+  let bt = Printexc.get_raw_backtrace () in
+  begin match exn with
+    | Parser.Error ->
+      let p = Lexing.lexeme_start_p lexbuf in
+      Printf.fprintf stderr
+        "File \"%s\", line %d, character %d: syntax error.\n"
+        p.Lexing.pos_fname p.Lexing.pos_lnum
+        (p.Lexing.pos_cnum - p.Lexing.pos_bol)
+    | Lexer.Lexical_error {msg; file; line; col} ->
+      Printf.fprintf stderr
+        "File \"%s\", line %d, character %d: %s.\n"
+        file line col msg
+    | _ -> Printexc.raise_with_backtrace exn bt
+  end;
+  exit 3
+
+let lexer_definition =
+  let ic = open_in_bin source_file in
+  Lexer.ic := Some ic;
+  let lexbuf = Lexing.from_channel ~with_positions:true ic in
+  Lexing.set_filename lexbuf source_file;
+  let result =
+    try Parser.lexer_definition Lexer.main lexbuf
+    with exn -> print_parse_error_and_exit lexbuf exn
+  in
+  Lexer.ic := None;
+  result
+
+module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
+
+module Info = Grammar_info.Make(Grammar)
+
+module Regexp = Regexp.Make(Info)
+
+module Dfa = Dfa.Make(Regexp)()
 
 (*let rec interp_kre kres reds stack =
   let visited = ref KRESet.empty in
@@ -56,7 +141,7 @@ let gen_code entry oc vars clauses =
     "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
     entry.Syntax.name
     (String.concat " " entry.Syntax.args)
-    (String.capitalize_ascii (Filename.basename Grammar_raw.Grammar.basename));
+    (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
   List.iteri (fun index (vars, clause) ->
       print "  | %d, [|%s|] -> begin\n%s\n    end\n"
         index
@@ -90,7 +175,7 @@ let process_entry oc entry =
         incr var_count;
         (i, id)
       in
-      let kre = Transl.transl_kre alloc case.Syntax.pattern i in
+      let kre = Regexp.transl ~alloc ~clause:i case.Syntax.pattern in
       let vars = List.rev !vars in
       (kre, vars)
     in
