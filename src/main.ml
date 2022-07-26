@@ -189,6 +189,90 @@ let process_entry oc entry =
   output_char oc '\n';
   output_table oc entry vars initial (Dfa.gen_table dfa)
 
+module LRijkstra = LRijkstraFast.Make(Info)()
+
+open Fix.Indexing
+open Utils.BitSet
+
+let () =
+  Index.iter Info.Transition.goto (fun tr ->
+      let tr' = Info.Transition.of_goto tr in
+      let src = Info.Transition.source tr' in
+      let tgt = Info.Transition.target tr' in
+      let src_classes = LRijkstra.Classes.for_lr1 src in
+      let tr_classes = LRijkstra.Classes.for_edge tr in
+      let tgt_classes = LRijkstra.Classes.for_lr1 tgt in
+      if Array.length tr_classes <> Array.length tgt_classes then (
+        Printf.eprintf
+          "source:%d classes ----> transition:%d classes ----> target:%d classes\n"
+          (Array.length src_classes)
+          (Array.length tr_classes)
+          (Array.length tgt_classes);
+        let card set = string_of_int (IndexSet.cardinal set) in
+        Printf.eprintf
+          "----> {%s} ----> {%s}\n"
+          (string_concat_map "," card (Array.to_list tr_classes))
+          (string_concat_map "," card (Array.to_list tgt_classes))
+      )
+    )
+
+module LRC = struct
+  open Info
+  open Utils.BitSet
+
+  include Const(struct
+      let cardinal =
+        let count lr1 = Array.length (LRijkstra.Classes.for_lr1 lr1) in
+        let sum = ref 0 in
+        Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
+        !sum
+    end)
+
+  let first_lrc_of_lr1 =
+    let count = ref 0 in
+    Vector.init Lr1.n @@ fun lr1 ->
+    let classes = LRijkstra.Classes.for_lr1 lr1 in
+    assert (Array.length classes > 0);
+    let first = Index.of_int n !count in
+    count := !count + Array.length classes;
+    first
+
+  let predecessors = Vector.make n IndexSet.empty
+
+  let interval n i j =
+    let rec loop i j acc =
+      if j >= i
+      then loop i (j - 1) (IndexSet.add (Index.of_int n j) acc)
+      else acc
+    in
+    loop (Index.to_int i) (Index.to_int j) IndexSet.empty
+
+  let () =
+    Index.iter Lr1.n @@ fun lr1 ->
+    match Lr1.incoming lr1 with
+    | None ->
+      Vector.set predecessors (Vector.get first_lrc_of_lr1 lr1) @@
+      IndexSet.empty
+    | Some (Symbol.T _) ->
+      Vector.set predecessors (Vector.get first_lrc_of_lr1 lr1) @@
+      List.fold_left (fun acc tr ->
+          let src = Transition.source tr in
+          let lrc_first = Vector.get first_lrc_of_lr1 src in
+          let count = Array.length (LRijkstra.Classes.for_lr1 src) in
+          let lrc_last = Index.of_int n ((lrc_first :> int) + count) in
+          IndexSet.union acc (interval n lrc_first lrc_last)
+        ) IndexSet.empty (Transition.predecessors lr1)
+    | Some (Symbol.N _) ->
+      (* For each transition tr : src -> lr1, compute the
+         LRijkstra.Coercion.infix from the [post_classes tr] to the
+         [Classes.for_lr1 lr1]
+
+         Then, for each non-0 cell of the cost matrix of tr,
+         add the lrc of src+row
+      *)
+      failwith "TODO"
+end
+
 let () = (
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (
