@@ -164,6 +164,208 @@ let output_table oc entry vars (initial : Dfa.Repr.t) (program, table, remap) =
   print "  let program = %S\n" program;
   print "end\n"
 
+module Coverage = struct
+  open Fix.Indexing
+  open Utils
+  open BitSet
+  open Info
+
+  module LRijkstra = LRijkstraFast.Make(Info)()
+
+  module Lrc = struct
+    let index_shift n i offset =
+      Index.of_int n ((i : _ index :> int) + offset)
+
+    let index_delta (type n) (i : n index) (j : n index) =
+      (i :> int) - (j :> int)
+
+    include Const(struct
+        let cardinal =
+          let count lr1 = Array.length (LRijkstra.Classes.for_lr1 lr1) in
+          let sum = ref 0 in
+          Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
+          !sum
+      end)
+
+    let lr1_of_lrc, first_lrc_of_lr1 =
+      let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0) in
+      let count = ref 0 in
+      let init_lr1 lr1 =
+        let classes = LRijkstra.Classes.for_lr1 lr1 in
+        assert (Array.length classes > 0);
+        let first = Index.of_int n !count in
+        count := !count + Array.length classes;
+        for i = 0 to Array.length classes - 1 do
+          Vector.set lr1_of_lrc (index_shift n first i) lr1
+        done;
+        first
+      in
+      let first_lrc_of_lr1 = Vector.init Lr1.n init_lr1 in
+      (Vector.get lr1_of_lrc, Vector.get first_lrc_of_lr1)
+
+
+    let predecessors =
+      let predecessors = Vector.make n IndexSet.empty in
+      let t0 = Sys.time () in
+      let interval n i j =
+        let rec loop i j acc =
+          if j >= i
+          then loop i (j - 1) (IndexSet.add (Index.of_int n j) acc)
+          else acc
+        in
+        loop (Index.to_int i) (Index.to_int j) IndexSet.empty
+      in
+      let process lr1 =
+        let first_lrc = first_lrc_of_lr1 lr1 in
+        match Lr1.incoming lr1 with
+        | None ->
+          Vector.set predecessors first_lrc @@
+          IndexSet.empty
+        | Some (Symbol.T _) ->
+          Vector.set predecessors first_lrc @@
+          List.fold_left (fun acc tr ->
+              let src = Transition.source tr in
+              let lrc_first = first_lrc_of_lr1 src in
+              let count = Array.length (LRijkstra.Classes.for_lr1 src) in
+              let lrc_last = Index.of_int n ((lrc_first :> int) + count) in
+              IndexSet.union acc (interval n lrc_first lrc_last)
+            ) IndexSet.empty (Transition.predecessors lr1)
+        | Some (Symbol.N _) ->
+          let process_transition tr =
+            let source_lrc = first_lrc_of_lr1 (Transition.source tr) in
+            let node = LRijkstra.Tree.leaf tr in
+            let table = Vector.get LRijkstra.Cells.table node in
+            let pre_classes = LRijkstra.Classes.pre_transition tr in
+            let post_classes = LRijkstra.Classes.post_transition tr in
+            let coercion =
+              LRijkstra.Coercion.infix post_classes (LRijkstra.Classes.for_lr1 lr1)
+            in
+            let pre_classes = Array.length pre_classes in
+            let post_classes = Array.length post_classes in
+            for post = 0 to post_classes - 1 do
+              let reachable = ref IndexSet.empty in
+              for pre = 0 to pre_classes - 1 do
+                let index = LRijkstra.Cells.table_index ~post_classes ~pre ~post in
+                if table.(index) < max_int then (
+                  let source_lrc = Index.of_int n ((source_lrc :> int) + pre) in
+                  reachable := IndexSet.add source_lrc !reachable
+                )
+              done;
+              let reachable = !reachable in
+              Array.iter (fun index ->
+                  let target_lrc = Index.of_int n ((first_lrc :> int) + index) in
+                  Vector.set predecessors target_lrc reachable
+                ) coercion.forward.(post)
+            done
+          in
+          List.iter process_transition (Transition.predecessors lr1)
+      in
+      Index.iter Lr1.n process;
+      Printf.eprintf "computed predecessors in %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.0);
+      Vector.get predecessors
+
+    let decompose lrc =
+      let lr1 = lr1_of_lrc lrc in
+      let classe = index_delta lrc (first_lrc_of_lr1 lr1) in
+      (lr1, (LRijkstra.Classes.for_lr1 lr1).(classe))
+  end
+
+  module Offering_stacks = struct
+    type n = Lrc.n
+    type set = n indexset
+    type 'a map = (n, 'a) indexmap
+
+    let initials =
+      let all = ref IndexSet.empty in
+      Index.iter Lr1.n (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | Some (N _) -> ()
+          | None | Some (T _) ->
+            assert (Array.length (LRijkstra.Classes.for_lr1 lr1) = 1);
+            all := IndexSet.add (Lrc.first_lrc_of_lr1 lr1) !all
+        );
+      !all
+
+    let accepting state =
+      Option.is_none (Lr1.incoming (Lrc.lr1_of_lrc state))
+
+    let transition = Lrc.predecessors
+  end
+
+  module Offering_check = struct
+
+    type mark = {
+      state: Dfa.Repr.t;
+      transitions: mark lazy_t Lr1.map;
+      mutable visited: Offering_stacks.set;
+      mutable scheduled: Offering_stacks.set;
+      mutable known_partial: bool;
+    }
+
+    let visit initial =
+      let get_mark =
+        let table = Hashtbl.create 7 in
+        let rec aux state =
+          match Hashtbl.find_opt table state.Dfa.Repr.id with
+          | Some t -> t
+          | None ->
+            let map = ref IndexMap.empty in
+            Dfa.iter_transitions state (fun lr1s _vars target ->
+                let target = lazy (aux target) in
+                let add_lr1 lr1 = map := IndexMap.add lr1 target !map in
+                IndexSet.iter add_lr1 lr1s
+              );
+            let t = {
+              state;
+              transitions = !map;
+              visited = IndexSet.empty;
+              scheduled = IndexSet.empty;
+              known_partial = false;
+            } in
+            Hashtbl.add table state.Dfa.Repr.id t;
+            t
+        in
+        aux
+      in
+      let todo = ref [] in
+      let schedule target lrcs =
+        let lrcs = IndexSet.diff lrcs target.visited in
+        if not (IndexSet.is_empty lrcs) then (
+          if IndexSet.is_empty target.scheduled then push todo target;
+          target.scheduled <- IndexSet.union target.scheduled lrcs;
+        )
+      in
+      let process mark =
+        let lrcs = mark.scheduled in
+        mark.visited <- IndexSet.union mark.visited lrcs;
+        mark.scheduled <- IndexSet.empty;
+        if IntSet.is_empty mark.state.accepted then
+          IndexSet.iter (fun lrc ->
+              let lr1 = Lrc.lr1_of_lrc lrc in
+              match IndexMap.find_opt lr1 mark.transitions with
+              | None ->
+                if not mark.known_partial then (
+                  mark.known_partial <- true;
+                  prerr_endline "Found uncovered case";
+                )
+              | Some (lazy target) -> schedule target (Lrc.predecessors lrc)
+            ) lrcs
+      in
+      let rec loop () =
+        match List.rev !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter process todo';
+          loop ()
+      in
+      schedule (get_mark initial) Offering_stacks.initials;
+      loop ()
+  end
+
+end
+
 let process_entry oc entry =
   let cases, vars =
     let transl_case i case =
@@ -183,17 +385,15 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
+  Coverage.Offering_check.visit initial;
   Format.eprintf "(* %d states *)\n%!" (Dfa.StateMap.cardinal dfa);
   output_char oc '\n';
   gen_code entry oc vars entry.Syntax.clauses;
   output_char oc '\n';
   output_table oc entry vars initial (Dfa.gen_table dfa)
 
-module LRijkstra = LRijkstraFast.Make(Info)()
 
-open Fix.Indexing
-open Utils.BitSet
-
+(*
 let () =
   Index.iter Info.Transition.goto (fun tr ->
       let tr' = Info.Transition.of_goto tr in
@@ -215,64 +415,7 @@ let () =
           (string_concat_map "," card (Array.to_list tgt_classes))
       )
     )
-
-module LRC = struct
-  open Info
-  open Utils.BitSet
-
-  include Const(struct
-      let cardinal =
-        let count lr1 = Array.length (LRijkstra.Classes.for_lr1 lr1) in
-        let sum = ref 0 in
-        Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
-        !sum
-    end)
-
-  let first_lrc_of_lr1 =
-    let count = ref 0 in
-    Vector.init Lr1.n @@ fun lr1 ->
-    let classes = LRijkstra.Classes.for_lr1 lr1 in
-    assert (Array.length classes > 0);
-    let first = Index.of_int n !count in
-    count := !count + Array.length classes;
-    first
-
-  let predecessors = Vector.make n IndexSet.empty
-
-  let interval n i j =
-    let rec loop i j acc =
-      if j >= i
-      then loop i (j - 1) (IndexSet.add (Index.of_int n j) acc)
-      else acc
-    in
-    loop (Index.to_int i) (Index.to_int j) IndexSet.empty
-
-  let () =
-    Index.iter Lr1.n @@ fun lr1 ->
-    match Lr1.incoming lr1 with
-    | None ->
-      Vector.set predecessors (Vector.get first_lrc_of_lr1 lr1) @@
-      IndexSet.empty
-    | Some (Symbol.T _) ->
-      Vector.set predecessors (Vector.get first_lrc_of_lr1 lr1) @@
-      List.fold_left (fun acc tr ->
-          let src = Transition.source tr in
-          let lrc_first = Vector.get first_lrc_of_lr1 src in
-          let count = Array.length (LRijkstra.Classes.for_lr1 src) in
-          let lrc_last = Index.of_int n ((lrc_first :> int) + count) in
-          IndexSet.union acc (interval n lrc_first lrc_last)
-        ) IndexSet.empty (Transition.predecessors lr1)
-    | Some (Symbol.N _) ->
-      (* For each transition tr : src -> lr1, compute the
-         LRijkstra.Coercion.infix from the [post_classes tr] to the
-         [Classes.for_lr1 lr1]
-
-         Then, for each non-0 cell of the cost matrix of tr,
-         add the lrc of src+row
-      *)
-      failwith "TODO"
-end
-
+*)
 let () = (
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
   if verbose then (

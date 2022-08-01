@@ -519,6 +519,9 @@ struct
        DataFlow solver). *)
     val cost : t -> int
 
+    (* Compute an index in a table *)
+    val table_index : post_classes:int -> pre:int -> post:int -> int
+
     (* Compute a linear offset from a node a row and a column *)
     val offset : Tree.n index -> row -> column -> offset
 
@@ -568,9 +571,12 @@ struct
     let encode_offset node cell =
       Index.to_int node lor (cell lsl shift)
 
+    let table_index ~post_classes ~pre ~post =
+      pre * post_classes + post
+
     let offset node =
-      let sz = Array.length (Tree.post_classes node) in
-      fun i_pre i_post -> (i_pre * sz + i_post)
+      let post_classes = Array.length (Tree.post_classes node) in
+      fun pre post -> table_index ~post_classes ~pre ~post
 
     let encode node =
       let offset_of = offset node in
