@@ -107,7 +107,7 @@ val fold: ('n index -> 'a -> 'b -> 'b) -> ('n, 'a) t -> 'b -> 'b
     @since 3.12.0
 *)
 
-(*val filter: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t*)
+val filter: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t
 (** [filter f m] returns the map with all the bindings in [m]
     that satisfy predicate [p]. If every binding in [m] satisfies [f],
     [m] is returned unchanged (the result of the function is then

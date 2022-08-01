@@ -43,6 +43,11 @@ let fold (type n) f ma acc =
     (Obj.magic (f : n index -> 'a -> 'b -> 'b) : int -> 'a -> 'b -> 'b)
     ma acc
 
+let filter (type n) (f : (n index -> 'a -> bool)) (m: (n, 'a) t) : (n, 'a) t =
+  IntMap.filter
+    (Obj.magic (f : n index -> 'a -> bool) : int -> 'a -> bool)
+    m
+
 (*let for_all: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool = IntMap.for_all
 let exists: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool = IntMap.exists
 let filter: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t = IntMap.filter

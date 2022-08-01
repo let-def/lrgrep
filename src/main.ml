@@ -227,7 +227,7 @@ module Coverage = struct
               let src = Transition.source tr in
               let lrc_first = first_lrc_of_lr1 src in
               let count = Array.length (LRijkstra.Classes.for_lr1 src) in
-              let lrc_last = Index.of_int n ((lrc_first :> int) + count) in
+              let lrc_last = index_shift n lrc_first (count - 1) in
               IndexSet.union acc (interval n lrc_first lrc_last)
             ) IndexSet.empty (Transition.predecessors lr1)
         | Some (Symbol.N _) ->
@@ -298,8 +298,8 @@ module Coverage = struct
     type mark = {
       state: Dfa.Repr.t;
       transitions: mark lazy_t Lr1.map;
-      mutable visited: Offering_stacks.set;
-      mutable scheduled: Offering_stacks.set;
+      mutable visited: Lr1.t list Offering_stacks.map;
+      mutable scheduled: Lr1.t list Offering_stacks.map;
       mutable known_partial: bool;
     }
 
@@ -319,8 +319,8 @@ module Coverage = struct
             let t = {
               state;
               transitions = !map;
-              visited = IndexSet.empty;
-              scheduled = IndexSet.empty;
+              visited = IndexMap.empty;
+              scheduled = IndexMap.empty;
               known_partial = false;
             } in
             Hashtbl.add table state.Dfa.Repr.id t;
@@ -329,27 +329,43 @@ module Coverage = struct
         aux
       in
       let todo = ref [] in
-      let schedule target lrcs =
-        let lrcs = IndexSet.diff lrcs target.visited in
-        if not (IndexSet.is_empty lrcs) then (
-          if IndexSet.is_empty target.scheduled then push todo target;
-          target.scheduled <- IndexSet.union target.scheduled lrcs;
+      let schedule target path lrcs =
+        let scheduled =
+          IndexSet.fold (fun n acc ->
+              if IndexMap.mem n target.visited
+              then acc
+              else IndexMap.add n path acc
+            ) lrcs target.scheduled
+        in
+        if scheduled != target.scheduled then (
+          if IndexMap.is_empty target.scheduled then push todo target;
+          target.scheduled <- scheduled
         )
       in
       let process mark =
         let lrcs = mark.scheduled in
-        mark.visited <- IndexSet.union mark.visited lrcs;
-        mark.scheduled <- IndexSet.empty;
+        mark.visited <- IndexMap.union (fun _ _ _ -> assert false) mark.visited lrcs;
+        mark.scheduled <- IndexMap.empty;
         if IntSet.is_empty mark.state.accepted then
-          IndexSet.iter (fun lrc ->
+          IndexMap.iter (fun lrc path ->
               let lr1 = Lrc.lr1_of_lrc lrc in
+              let path = lr1 :: path in
               match IndexMap.find_opt lr1 mark.transitions with
               | None ->
                 if not mark.known_partial then (
                   mark.known_partial <- true;
-                  prerr_endline "Found uncovered case";
+                  let path =
+                    "... " ^ string_concat_map " " Lr1.to_string path
+                  in
+                  prerr_endline ("Found uncovered case: " ^ path)
                 )
-              | Some (lazy target) -> schedule target (Lrc.predecessors lrc)
+              | Some (lazy target) ->
+                let lrcs = Lrc.predecessors lrc in
+                if false && IndexSet.mem lrc lrcs then (
+                  let lr1 = Lrc.lr1_of_lrc lrc in
+                  prerr_endline (Lr1.to_string lr1 ^ " in pred(" ^ Lr1.to_string lr1 ^")")
+                );
+                schedule target path lrcs
             ) lrcs
       in
       let rec loop () =
@@ -360,7 +376,7 @@ module Coverage = struct
           List.iter process todo';
           loop ()
       in
-      schedule (get_mark initial) Offering_stacks.initials;
+      schedule (get_mark initial) [] Offering_stacks.initials;
       loop ()
   end
 
