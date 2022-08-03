@@ -18,11 +18,13 @@ module type INFO = sig
 
   module Terminal : sig
     include INDEXED with type raw = Grammar.terminal
+    val to_string : t -> string
     val all : set
   end
 
   module Nonterminal : sig
     include INDEXED with type raw = Grammar.nonterminal
+    val to_string : t -> string
     val all : set
   end
 
@@ -47,6 +49,9 @@ module type INFO = sig
     val items : t -> (Production.t * int) list
     val reductions : t -> (Production.t * Terminal.set) list
     val to_string : t -> string
+    val shift_on : t -> Terminal.set
+    val reduce_on : t -> Terminal.set
+    val fail_on : t -> Terminal.set
   end
 
   module Transition : sig
@@ -184,6 +189,8 @@ module type REDGRAPH = sig
     include CARDINAL
     val of_lr1 : Lr1.t -> n index
   end
+
+  val fail_on_closure : Lr1.t -> Terminal.set
 
   type goto_closure = {
     sources: Lr1.set;

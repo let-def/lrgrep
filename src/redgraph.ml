@@ -45,8 +45,8 @@ struct
 
   (* Representation of abstract stack suffix *)
 
-  module Extra = Gensym()
   module State = struct
+    module Extra = Gensym()
     include Sum(Lr1)(Extra)
     let of_lr1 = inj_l
     let fresh () = inj_r (Extra.fresh ())
@@ -84,6 +84,8 @@ struct
     | Concrete of concrete_frame
     | Abstract of State.n index
 
+  let fail_on_closure = Vector.make Lr1.n IndexSet.empty
+
   (* Tabulate the roots, populating all concrete and abstract stacks *)
   let concrete_frames =
     let pop = function
@@ -104,41 +106,65 @@ struct
     let make_frame state parent =
       {state; parent; goto=IndexMap.empty; lookahead=IndexSet.empty}
     in
-    let rec goto parent la (nt, la') =
-      let la = IndexSet.inter la la' in
-      if not (IndexSet.is_empty la) then (
-        match parent with
-        | Abstract t ->
-          let frame = IndexBuffer.get frames t in
-          frame.goto_nt <- indexmap_update frame.goto_nt nt (function
-              | None -> la
-              | Some la' -> IndexSet.union la la'
-            )
-        | Concrete t ->
-          let state = Transition.find_goto_target t.state nt in
-          begin match IndexMap.find_opt state t.goto with
-            | Some t' -> populate la t'
-            | None ->
-              let target = make_frame state (Some t) in
-              t.goto <- IndexMap.add state target t.goto;
-              populate la target
-          end
-      )
-    and populate la state =
-      if not (IndexSet.subset la state.lookahead) then (
-        state.lookahead <- IndexSet.union la state.lookahead;
-        let frame = ref (Concrete state) in
-        let reductions = Vector.get reductions state.state in
-        for i = 0 to Array.length reductions - 1 do
-          if i <> 0 then frame := pop !frame;
-          List.iter (goto !frame la) reductions.(i);
-        done
-      )
-    in
     vector_tabulate Lr1.n (fun state ->
+        let fails = ref (Lr1.fail_on state) in
         let frame = make_frame state None in
-        populate Terminal.all frame;
+        let rec goto parent la (nt, la') =
+          let la = IndexSet.inter la la' in
+          if not (IndexSet.is_empty la) then (
+            match parent with
+            | Abstract t ->
+              let frame = IndexBuffer.get frames t in
+              frame.goto_nt <- indexmap_update frame.goto_nt nt (function
+                  | None -> la
+                  | Some la' -> IndexSet.union la la'
+                )
+            | Concrete t ->
+              let state = Transition.find_goto_target t.state nt in
+              begin match IndexMap.find_opt state t.goto with
+                | Some t' -> populate la t'
+                | None ->
+                  let target = make_frame state (Some t) in
+                  t.goto <- IndexMap.add state target t.goto;
+                  populate la target
+              end
+          )
+        and populate la state =
+          if not (IndexSet.subset la state.lookahead) then (
+            fails := IndexSet.union !fails (IndexSet.inter la (Lr1.fail_on state.state));
+            state.lookahead <- IndexSet.union la state.lookahead;
+            let frame = ref (Concrete state) in
+            let reductions = Vector.get reductions state.state in
+            for i = 0 to Array.length reductions - 1 do
+              if i <> 0 then frame := pop !frame;
+              List.iter (goto !frame la) reductions.(i);
+            done
+          )
+        in
+        populate (Lr1.reduce_on state) frame;
+        Vector.set fail_on_closure state !fails;
         frame
+      )
+
+  let fail_on_closure = Vector.get fail_on_closure
+
+  let () =
+    (* In theory, fail_on and fail_on_closure can differ if a transition that
+       follows a nullable-reduction has been removed because of a conflict.
+       That should not be a problem in practice.
+
+       Haven't seen this in the wild yet, I will leave this code to check that
+       for now... *)
+    Index.iter Lr1.n (fun lr1 ->
+        let fail_on = Lr1.fail_on lr1 in
+        let fail_on' = fail_on_closure lr1 in
+        if not (IndexSet.equal fail_on fail_on')
+        then (
+          prerr_endline ("fail_on and fail_on_closure differs for state " ^ Lr1.to_string lr1 ^ ":");
+          prerr_endline (string_concat_map ", " Terminal.to_string (IndexSet.elements fail_on));
+          prerr_endline (string_concat_map ", " Terminal.to_string (IndexSet.elements fail_on'));
+          exit 1
+        )
       )
 
   (* Compute the trie of derivations *)
@@ -216,16 +242,16 @@ struct
             match IndexMap.find_opt lr1_tgt !visited with
             | None ->
               visited := IndexMap.add lr1_tgt la !visited;
-              visit_goto (State.of_lr1 lr1_tgt) la
+              visit_goto la (State.of_lr1 lr1_tgt)
             | Some la' ->
               if not (IndexSet.subset la la') then (
                 visited := IndexMap.add lr1_tgt (IndexSet.union la la') !visited;
-                visit_goto (State.of_lr1 lr1_tgt) la'
+                visit_goto la' (State.of_lr1 lr1_tgt)
               )
-        and visit_goto st la =
+        and visit_goto la st =
           IndexMap.iter (visit_nt la) (state_goto_nt st)
         in
-        visit_goto i Terminal.all;
+        visit_goto Terminal.all i;
         !visited
       in
       let add_lr1 st acc = (close_lr1 st, st) :: acc in
@@ -250,6 +276,12 @@ struct
               )
           |> IndexRefine.annotated_partition
           |> List.concat_map (fun (targets, la_src) ->
+              (*if not (IndexSet.is_singleton targets) then (
+                prerr_endline ("multiple targets in goto_closure: {" ^
+                               string_concat_map ", " Lr1.to_string
+                                 (IndexSet.elements targets) ^
+                               "}")
+              );*)
               IndexRefine.annotated_partition la_src
               |> List.map (fun (lookahead, srcs) ->
                   {lookahead; targets; sources = IndexSet.of_list srcs}

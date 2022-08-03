@@ -42,11 +42,13 @@ struct
 
   module Terminal = struct
     include Indexed(Grammar.Terminal)
+    let to_string i = Grammar.Terminal.name (to_g i)
     let all = all n
   end
 
   module Nonterminal = struct
     include Indexed(Grammar.Nonterminal)
+    let to_string i = Grammar.Nonterminal.name (to_g i)
     let all = all n
   end
 
@@ -115,6 +117,31 @@ struct
       match incoming lr1 with
       | None -> "<initial state>"
       | Some sym -> Symbol.name sym
+
+    let reduce_on =
+      vector_tabulate n (fun lr1 ->
+          List.fold_left
+            (fun acc (t, _) -> IndexSet.add (Terminal.of_g t) acc)
+            IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
+        )
+
+    let shift_on =
+      vector_tabulate n (fun lr1 ->
+          List.fold_left
+            (fun acc (sym, _raw) ->
+               match sym with
+               | Grammar.T t -> IndexSet.add (Terminal.of_g t) acc
+               | Grammar.N _ -> acc)
+            IndexSet.empty (Grammar.Lr1.transitions (to_g lr1))
+        )
+
+    let fail_on =
+      vector_tabulate n (fun lr1 ->
+          let result = Terminal.all in
+          let result = IndexSet.diff result (reduce_on lr1) in
+          let result = IndexSet.diff result (shift_on lr1) in
+          result
+        )
   end
 
   (* Transitions are represented as finite sets with auxiliary functions

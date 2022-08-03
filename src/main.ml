@@ -42,11 +42,11 @@ let specs = [
   " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
   "-g", Arg.String (fun x -> grammar_file := Some x),
   " <file.cmly>  Path of the Menhir compiled grammar to analyse (*.cmly)";
-  "-v",  Arg.Unit print_version_string,
+  "-v", Arg.Unit print_version_string,
   " Print version and exit";
-  "-version",  Arg.Unit print_version_string,
+  "-version", Arg.Unit print_version_string,
   " Print version and exit";
-  "-vnum",  Arg.Unit print_version_num,
+  "-vnum", Arg.Unit print_version_num,
   " Print version number and exit";
 ]
 
@@ -293,6 +293,123 @@ module Coverage = struct
     let transition = Lrc.predecessors
   end
 
+  module Check_dfa(Intersector : sig
+      type t
+      val compare : t -> t -> int
+      val initial : (Lr1.t * t) list
+      val transitions : t -> (Lr1.t * t) list
+      val reachable : t -> bool
+    end) :
+  sig
+    val analyse : Dfa.Repr.t -> (Dfa.Repr.t * Lr1.t list * Intersector.t) list
+  end = struct
+    (*module Transition = struct
+      type t = Lr1.t * Intersector.t
+
+      let compare (l1, i1) (l2, i2) =
+        let c = compare_index l1 l2 in
+        if c <> 0 then c else
+          Intersector.compare i1 i2
+    end*)
+
+    module Set = Set.Make(Intersector)
+    module Map = Map.Make(Intersector)
+
+    type mark = {
+      state: Dfa.Repr.t;
+      transitions: mark lazy_t Lr1.map;
+      mutable visited: Lr1.t list Map.t;
+      mutable scheduled: Lr1.t list Map.t;
+      mutable reported: bool;
+    }
+
+    let analyse initial =
+      let reports = ref [] in
+      let get_mark =
+        let table = Hashtbl.create 7 in
+        let rec aux state =
+          match Hashtbl.find_opt table state.Dfa.Repr.id with
+          | Some t -> t
+          | None ->
+            let map = ref IndexMap.empty in
+            Dfa.iter_transitions state (fun lr1s _vars target ->
+                let target = lazy (aux target) in
+                let add_lr1 lr1 = map := IndexMap.add lr1 target !map in
+                IndexSet.iter add_lr1 lr1s
+              );
+            let t = {
+              state;
+              transitions = !map;
+              visited = Map.empty;
+              scheduled = Map.empty;
+              reported = false;
+            } in
+            Hashtbl.add table state.Dfa.Repr.id t;
+            t
+        in
+        aux
+      in
+      let todo = ref [] in
+      let schedule target path isector =
+        if not (Map.mem isector target.visited) &&
+           not (Map.mem isector target.scheduled)
+        then (
+          if Map.is_empty target.scheduled then push todo target;
+          target.scheduled <- Map.add isector path target.scheduled;
+        )
+      in
+      let process_transition mark path (lr1, isector) =
+        let path = lr1 :: path in
+        match IndexMap.find_opt lr1 mark.transitions with
+        | None ->
+          if not mark.reported && Intersector.reachable isector then (
+            mark.reported <- true;
+            push reports (mark.state, path, isector);
+          )
+        | Some (lazy target) ->
+          schedule target path isector
+      in
+      let process_mark mark =
+        let to_visit = mark.scheduled in
+        mark.visited <-
+          Map.union (fun _ _ _ -> assert false) mark.visited to_visit;
+        mark.scheduled <- Map.empty;
+        if IntSet.is_empty mark.state.accepted then
+          Map.iter (fun isector0 path ->
+              List.iter (process_transition mark path)
+                (Intersector.transitions isector0)
+            ) to_visit
+      in
+      let rec loop () =
+        match List.rev !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter process_mark todo';
+          loop ()
+      in
+      List.iter (process_transition (get_mark initial) []) Intersector.initial;
+      loop ();
+      !reports
+  end
+
+  module Offering_intersector = struct
+    type t = Offering_stacks.n index
+
+    let compare = compare_index
+
+    let explicit_transitions ts =
+      IndexSet.fold
+        (fun lrc acc -> (Lrc.lr1_of_lrc lrc, lrc) :: acc)
+        ts []
+
+    let initial = explicit_transitions Offering_stacks.initials
+
+    let transitions t = explicit_transitions (Offering_stacks.transition t)
+
+    let reachable _ = true
+  end
+
   module Offering_check = struct
 
     type mark = {
@@ -380,6 +497,58 @@ module Coverage = struct
       loop ()
   end
 
+  module Error_stacks = struct
+    type t =
+      | Normal of {
+          state: Dfa.Redgraph.State.n index;
+          lookahead: Terminal.set;
+        }
+      | Fail
+
+    let initial lr1 =
+      let state = Dfa.Redgraph.State.of_lr1 lr1 in
+      LRijkstra.Classes.for_lr1 lr1
+      |> Array.to_list
+      |> List.map (fun lookahead -> Normal {state; lookahead})
+
+    let transitions = function
+      | Fail -> [Lr1.all, Fail]
+      | Normal t ->
+        let acc =
+          match Dfa.Redgraph.state_parent t.state with
+          | None -> []
+          | Some state ->
+            [Lr1.all, Normal {state; lookahead = t.lookahead}]
+        in
+        let add_goto acc {Dfa.Redgraph. sources; targets; lookahead} =
+          let lookahead = IndexSet.inter lookahead t.lookahead in
+          if IndexSet.is_empty lookahead then acc else
+            IndexSet.fold (fun target acc ->
+                let fail_la =
+                  IndexSet.inter lookahead
+                    (Dfa.Redgraph.fail_on_closure target)
+                in
+                let acc =
+                  if IndexSet.is_empty fail_la then acc else (
+                    prerr_endline
+                      ("non-empty fail_la for " ^ Lr1.to_string target);
+                    (sources, Fail) :: acc
+                    )
+                in
+                let acc =
+                  match Dfa.Redgraph.state_parent
+                          (Dfa.Redgraph.State.of_lr1 target)
+                  with
+                  | None -> acc
+                  | Some state ->
+                    (sources, Normal {lookahead; state}) :: acc
+                in
+                acc
+              ) targets acc
+        in
+        List.fold_left add_goto acc
+          (Dfa.Redgraph.state_goto_closure t.state)
+  end
 end
 
 let process_entry oc entry =
@@ -401,7 +570,14 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
-  Coverage.Offering_check.visit initial;
+  let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
+  let reports = Check.analyse initial in
+  List.iter (fun (_, path, _) ->
+      let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
+      prerr_endline ("Found uncovered case: " ^ path)
+    ) reports;
+  (*Coverage.Offering_check.visit initial;*)
+
   Format.eprintf "(* %d states *)\n%!" (Dfa.StateMap.cardinal dfa);
   output_char oc '\n';
   gen_code entry oc vars entry.Syntax.clauses;
