@@ -187,22 +187,45 @@ module Coverage = struct
           !sum
       end)
 
-    let lr1_of_lrc, first_lrc_of_lr1 =
+    type t = n index
+    type set = n indexset
+    type 'a map = (n, 'a) indexmap
+    type 'a vector = (n, 'a) Vector.t
+
+    let lr1_of_lrc, lrcs_of_lr1, first_lrc_of_lr1 =
       let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0) in
       let count = ref 0 in
       let init_lr1 lr1 =
         let classes = LRijkstra.Classes.for_lr1 lr1 in
         assert (Array.length classes > 0);
         let first = Index.of_int n !count in
+        let all = ref IndexSet.empty in
         count := !count + Array.length classes;
-        for i = 0 to Array.length classes - 1 do
-          Vector.set lr1_of_lrc (index_shift n first i) lr1
+        for i = Array.length classes - 1 downto 0 do
+          let lrc = index_shift n first i in
+          all := IndexSet.add lrc !all;
+          Vector.set lr1_of_lrc lrc lr1
         done;
-        first
+        !all
       in
-      let first_lrc_of_lr1 = Vector.init Lr1.n init_lr1 in
-      (Vector.get lr1_of_lrc, Vector.get first_lrc_of_lr1)
+      let lrcs_of_lr1 = Vector.init Lr1.n init_lr1 in
+      (Vector.get lr1_of_lrc,
+       Vector.get lrcs_of_lr1,
+       (fun lr1 -> Option.get (IndexSet.minimum (Vector.get lrcs_of_lr1 lr1)))
+      )
 
+    let offering_states =
+      let all = ref IndexSet.empty in
+      Index.iter Lr1.n (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | Some (N _) -> ()
+          | Some (T t) when
+              Grammar.Terminal.kind (Terminal.to_g t) = `EOF -> ()
+          | None | Some (T _) ->
+            assert (Array.length (LRijkstra.Classes.for_lr1 lr1) = 1);
+            all := IndexSet.add (first_lrc_of_lr1 lr1) !all
+        );
+      !all
 
     let predecessors =
       let predecessors = Vector.make n IndexSet.empty in
@@ -271,29 +294,8 @@ module Coverage = struct
       (lr1, (LRijkstra.Classes.for_lr1 lr1).(classe))
   end
 
-  module Offering_stacks = struct
-    type n = Lrc.n
-    type set = n indexset
-    type 'a map = (n, 'a) indexmap
-
-    let initials =
-      let all = ref IndexSet.empty in
-      Index.iter Lr1.n (fun lr1 ->
-          match Lr1.incoming lr1 with
-          | Some (N _) -> ()
-          | None | Some (T _) ->
-            assert (Array.length (LRijkstra.Classes.for_lr1 lr1) = 1);
-            all := IndexSet.add (Lrc.first_lrc_of_lr1 lr1) !all
-        );
-      !all
-
-    let accepting state =
-      Option.is_none (Lr1.incoming (Lrc.lr1_of_lrc state))
-
-    let transition = Lrc.predecessors
-  end
-
   module Check_dfa(Intersector : sig
+      include Map.OrderedType
       type t
       val compare : t -> t -> int
       val initial : (Lr1.t * t) list
@@ -301,83 +303,113 @@ module Coverage = struct
       val reachable : t -> bool
     end) :
   sig
-    val analyse : Dfa.Repr.t -> (Dfa.Repr.t * Lr1.t list * Intersector.t) list
+    type t
+    val state : t -> Dfa.Repr.t
+    val unhandled : t -> Lr1.t list Lrc.map
+
+    val analyse : Dfa.Repr.t -> t list
   end = struct
-    (*module Transition = struct
-      type t = Lr1.t * Intersector.t
-
-      let compare (l1, i1) (l2, i2) =
-        let c = compare_index l1 l2 in
-        if c <> 0 then c else
-          Intersector.compare i1 i2
-    end*)
-
     module Set = Set.Make(Intersector)
     module Map = Map.Make(Intersector)
 
     type mark = {
       state: Dfa.Repr.t;
       transitions: mark lazy_t Lr1.map;
-      mutable visited: Lr1.t list Map.t;
-      mutable scheduled: Lr1.t list Map.t;
-      mutable reported: bool;
+      mutable visited: Lr1.t list Lrc.map Map.t;
+      mutable scheduled: Lr1.t list Lrc.map Map.t;
+      mutable unhandled: Lr1.t list Lrc.map;
     }
 
-    let analyse initial =
-      let reports = ref [] in
-      let get_mark =
-        let table = Hashtbl.create 7 in
-        let rec aux state =
-          match Hashtbl.find_opt table state.Dfa.Repr.id with
-          | Some t -> t
-          | None ->
-            let map = ref IndexMap.empty in
-            Dfa.iter_transitions state (fun lr1s _vars target ->
-                let target = lazy (aux target) in
-                let add_lr1 lr1 = map := IndexMap.add lr1 target !map in
-                IndexSet.iter add_lr1 lr1s
-              );
-            let t = {
-              state;
-              transitions = !map;
-              visited = Map.empty;
-              scheduled = Map.empty;
-              reported = false;
-            } in
-            Hashtbl.add table state.Dfa.Repr.id t;
-            t
-        in
-        aux
+    let make_mark state transitions = {
+      state; transitions;
+      visited = Map.empty;
+      scheduled = Map.empty;
+      unhandled = IndexMap.empty;
+    }
+
+    let make_mark_table () =
+      let table = Hashtbl.create 7 in
+      let rec aux state =
+        match Hashtbl.find_opt table state.Dfa.Repr.id with
+        | Some t -> t
+        | None ->
+          let trs = ref IndexMap.empty in
+          let add_lr1 target lr1 = trs := IndexMap.add lr1 target !trs in
+          Dfa.iter_transitions state (fun lr1s _vars target ->
+              let target = lazy (aux target) in
+              IndexSet.iter (add_lr1 target) lr1s
+            );
+          let t = make_mark state !trs in
+          Hashtbl.add table state.Dfa.Repr.id t;
+          t
       in
+      aux
+
+    let unmapped map isector lrcs =
+      match Map.find_opt isector map with
+      | None -> lrcs
+      | Some lrcs_map ->
+        IndexSet.fold (fun n acc ->
+            if IndexMap.mem n lrcs_map
+            then IndexSet.remove n acc
+            else acc
+          ) lrcs lrcs
+
+    let make_scheduler () =
       let todo = ref [] in
-      let schedule target path isector =
-        if not (Map.mem isector target.visited) &&
-           not (Map.mem isector target.scheduled)
-        then (
+      let schedule target path (lrcs, isector) =
+        let lrcs =
+          lrcs
+          |> unmapped target.visited isector
+          |> unmapped target.scheduled isector
+        in
+        if not (IndexSet.is_empty lrcs) then (
           if Map.is_empty target.scheduled then push todo target;
-          target.scheduled <- Map.add isector path target.scheduled;
+          target.scheduled <- Map.update isector (fun m ->
+              let m = Option.value m ~default:IndexMap.empty in
+              Some (IndexSet.fold (fun n m -> IndexMap.add n path m) lrcs m)
+            ) target.scheduled;
         )
       in
-      let process_transition mark path (lr1, isector) =
+      (todo, schedule)
+
+    let analyse initial =
+      let get_mark = make_mark_table () in
+      let todo, schedule = make_scheduler () in
+      let partial = ref [] in
+      let process_transition mark path lrcs (lr1, isector) =
+        let lrcs' = Lrc.lrcs_of_lr1 lr1 in
+        let lrcs = match lrcs with
+          | None -> lrcs'
+          | Some lrcs -> IndexSet.inter lrcs lrcs'
+        in
         let path = lr1 :: path in
         match IndexMap.find_opt lr1 mark.transitions with
         | None ->
-          if not mark.reported && Intersector.reachable isector then (
-            mark.reported <- true;
-            push reports (mark.state, path, isector);
+          if Intersector.reachable isector then (
+            if IndexMap.is_empty mark.unhandled then push partial mark;
+            IndexSet.iter (fun n ->
+                if not (IndexMap.mem n mark.unhandled) then
+                  mark.unhandled <- IndexMap.add n path mark.unhandled
+              ) lrcs
           )
         | Some (lazy target) ->
-          schedule target path isector
+          schedule target path (lrcs, isector)
       in
       let process_mark mark =
         let to_visit = mark.scheduled in
         mark.visited <-
-          Map.union (fun _ _ _ -> assert false) mark.visited to_visit;
+          Map.union (fun _isector m1 m2 ->
+              Some (IndexMap.union (fun _ _ _ -> assert false) m1 m2))
+            mark.visited to_visit;
         mark.scheduled <- Map.empty;
         if IntSet.is_empty mark.state.accepted then
-          Map.iter (fun isector0 path ->
-              List.iter (process_transition mark path)
-                (Intersector.transitions isector0)
+          Map.iter (fun isector lrcm ->
+              let trs = Intersector.transitions isector in
+              IndexMap.iter (fun lrc path ->
+                  let lrcs = Lrc.predecessors lrc in
+                  List.iter (process_transition mark path (Some lrcs)) trs
+                ) lrcm
             ) to_visit
       in
       let rec loop () =
@@ -388,13 +420,17 @@ module Coverage = struct
           List.iter process_mark todo';
           loop ()
       in
-      List.iter (process_transition (get_mark initial) []) Intersector.initial;
+      List.iter (process_transition (get_mark initial) [] None) Intersector.initial;
       loop ();
-      !reports
+      !partial
+
+    type t = mark
+    let state t = t.state
+    let unhandled t = t.unhandled
   end
 
   module Offering_intersector = struct
-    type t = Offering_stacks.n index
+    type t = Lrc.t
 
     let compare = compare_index
 
@@ -403,98 +439,11 @@ module Coverage = struct
         (fun lrc acc -> (Lrc.lr1_of_lrc lrc, lrc) :: acc)
         ts []
 
-    let initial = explicit_transitions Offering_stacks.initials
+    let initial = explicit_transitions Lrc.offering_states
 
-    let transitions t = explicit_transitions (Offering_stacks.transition t)
+    let transitions t = explicit_transitions (Lrc.predecessors t)
 
     let reachable _ = true
-  end
-
-  module Offering_check = struct
-
-    type mark = {
-      state: Dfa.Repr.t;
-      transitions: mark lazy_t Lr1.map;
-      mutable visited: Lr1.t list Offering_stacks.map;
-      mutable scheduled: Lr1.t list Offering_stacks.map;
-      mutable known_partial: bool;
-    }
-
-    let visit initial =
-      let get_mark =
-        let table = Hashtbl.create 7 in
-        let rec aux state =
-          match Hashtbl.find_opt table state.Dfa.Repr.id with
-          | Some t -> t
-          | None ->
-            let map = ref IndexMap.empty in
-            Dfa.iter_transitions state (fun lr1s _vars target ->
-                let target = lazy (aux target) in
-                let add_lr1 lr1 = map := IndexMap.add lr1 target !map in
-                IndexSet.iter add_lr1 lr1s
-              );
-            let t = {
-              state;
-              transitions = !map;
-              visited = IndexMap.empty;
-              scheduled = IndexMap.empty;
-              known_partial = false;
-            } in
-            Hashtbl.add table state.Dfa.Repr.id t;
-            t
-        in
-        aux
-      in
-      let todo = ref [] in
-      let schedule target path lrcs =
-        let scheduled =
-          IndexSet.fold (fun n acc ->
-              if IndexMap.mem n target.visited
-              then acc
-              else IndexMap.add n path acc
-            ) lrcs target.scheduled
-        in
-        if scheduled != target.scheduled then (
-          if IndexMap.is_empty target.scheduled then push todo target;
-          target.scheduled <- scheduled
-        )
-      in
-      let process mark =
-        let lrcs = mark.scheduled in
-        mark.visited <- IndexMap.union (fun _ _ _ -> assert false) mark.visited lrcs;
-        mark.scheduled <- IndexMap.empty;
-        if IntSet.is_empty mark.state.accepted then
-          IndexMap.iter (fun lrc path ->
-              let lr1 = Lrc.lr1_of_lrc lrc in
-              let path = lr1 :: path in
-              match IndexMap.find_opt lr1 mark.transitions with
-              | None ->
-                if not mark.known_partial then (
-                  mark.known_partial <- true;
-                  let path =
-                    "... " ^ string_concat_map " " Lr1.to_string path
-                  in
-                  prerr_endline ("Found uncovered case: " ^ path)
-                )
-              | Some (lazy target) ->
-                let lrcs = Lrc.predecessors lrc in
-                if false && IndexSet.mem lrc lrcs then (
-                  let lr1 = Lrc.lr1_of_lrc lrc in
-                  prerr_endline (Lr1.to_string lr1 ^ " in pred(" ^ Lr1.to_string lr1 ^")")
-                );
-                schedule target path lrcs
-            ) lrcs
-      in
-      let rec loop () =
-        match List.rev !todo with
-        | [] -> ()
-        | todo' ->
-          todo := [];
-          List.iter process todo';
-          loop ()
-      in
-      schedule (get_mark initial) [] Offering_stacks.initials;
-      loop ()
   end
 
   module Error_stacks = struct
@@ -532,7 +481,7 @@ module Coverage = struct
                   if IndexSet.is_empty fail_la then acc else (
                     prerr_endline
                       ("non-empty fail_la for " ^ Lr1.to_string target);
-                    (sources, Fail) :: acc
+                    (sources, Fail ) :: acc
                     )
                 in
                 let acc =
@@ -572,9 +521,15 @@ let process_entry oc entry =
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
   let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
   let reports = Check.analyse initial in
-  List.iter (fun (_, path, _) ->
-      let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
-      prerr_endline ("Found uncovered case: " ^ path)
+  List.iter (fun check ->
+      Utils.IndexMap.iter (fun lrc path ->
+          let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
+          prerr_endline ("Found uncovered case: " ^ path);
+          prerr_endline ("when looking ahead at: " ^
+                         string_concat_map ", " Info.Terminal.to_string
+                           (Utils.BitSet.IndexSet.elements
+                              (snd (Coverage.Lrc.decompose lrc))))
+        ) (Check.unhandled check)
     ) reports;
   (*Coverage.Offering_check.visit initial;*)
 

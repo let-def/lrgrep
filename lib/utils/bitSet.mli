@@ -95,7 +95,7 @@ module type S1 = sig
 
   val fold: ('a element -> 'b -> 'b) -> 'a t -> 'b -> 'b
 
-  val map: ('a element -> 'a element) -> 'a t -> 'a t
+  val map: ('a element -> 'b element) -> 'a t -> 'b t
 
   val exists: ('a element -> bool) -> 'a t -> bool
 

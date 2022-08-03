@@ -118,6 +118,12 @@ struct
       | None -> "<initial state>"
       | Some sym -> Symbol.name sym
 
+    let list_to_string lr1s =
+      "[" ^ string_concat_map "; " to_string lr1s ^ "]"
+
+    let set_to_string lr1s =
+      "{" ^ string_concat_map ", " to_string (IndexSet.elements lr1s) ^ "}"
+
     let reduce_on =
       vector_tabulate n (fun lr1 ->
           List.fold_left
@@ -278,15 +284,16 @@ struct
       target (of_goto (find_goto source nt))
   end
 
-  let lr1_predecessors = Vector.init Lr1.n (fun lr1 ->
-      List.fold_left
-        (fun acc tr -> IndexSet.add (Transition.source tr) acc)
-        IndexSet.empty
-        (Transition.predecessors lr1)
-    )
+  let lr1_predecessors =
+    vector_tabulate Lr1.n (fun lr1 ->
+        List.fold_left
+          (fun acc tr -> IndexSet.add (Transition.source tr) acc)
+          IndexSet.empty
+          (Transition.predecessors lr1)
+      )
 
   let lr1set_predecessors lr1s =
-    indexset_bind lr1s (Vector.get lr1_predecessors)
+    indexset_bind lr1s lr1_predecessors
 
   type 'a dfa_transition = Lr1.set * 'a
 

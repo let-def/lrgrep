@@ -49,6 +49,8 @@ module type INFO = sig
     val items : t -> (Production.t * int) list
     val reductions : t -> (Production.t * Terminal.set) list
     val to_string : t -> string
+    val list_to_string : t list -> string
+    val set_to_string : set -> string
     val shift_on : t -> Terminal.set
     val reduce_on : t -> Terminal.set
     val fail_on : t -> Terminal.set
@@ -111,7 +113,7 @@ module type INFO = sig
     val predecessors : Lr1.t -> any index list
   end
 
-  val lr1_predecessors : (Lr1.n, Lr1.set) vector
+  val lr1_predecessors : Lr1.t -> Lr1.set
   val lr1set_predecessors : Lr1.set -> Lr1.set
 
   type 'a dfa_transition = Lr1.set * 'a

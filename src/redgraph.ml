@@ -71,7 +71,7 @@ struct
   (* Initialize abstract frames associated to each lr1 state *)
   let () = Index.iter Lr1.n (fun lr1 ->
       IndexBuffer.set frames (State.inj_l lr1)
-        (make_abstract_frame (Vector.get lr1_predecessors lr1))
+        (make_abstract_frame (lr1_predecessors lr1))
     )
 
   let fresh_abstract_frame states =
