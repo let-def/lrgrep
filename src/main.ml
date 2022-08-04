@@ -497,72 +497,114 @@ module Coverage = struct
   end
 
   module Error_stacks = struct
-    type t =
-      | Normal of {
-          state: Dfa.Redgraph.State.n index;
-          lookahead: Terminal.set;
-        }
-      | Fail
+    module State = struct
+      type status =
+        | Reducing of Dfa.Redgraph.State.n index
+        | Errored
 
-    let compare t1 t2 =
-      match t1, t2 with
-      | Fail, Fail -> 0
-      | Fail, Normal _ -> -1
-      | Normal _, Fail -> 1
-      | Normal t1, Normal t2 ->
-        let c = compare_index t1.state t2.state in
+      let compare_status t1 t2 =
+        match t1, t2 with
+        | Errored, Errored -> 0
+        | Reducing i1, Reducing i2 -> compare_index i1 i2
+        | Errored, Reducing _ -> -1
+        | Reducing _, Errored -> 1
+
+      type t = {
+        lrc: Lrc.n index;
+        lookahead: Terminal.set;
+        status: status;
+      }
+
+      let compare t1 t2 =
+        let c = compare_index t1.lrc t2.lrc in
         if c <> 0 then c else
-          IndexSet.compare t1.lookahead t2.lookahead
+          let c = compare_status t1.status t2.status in
+          if c <> 0 then c else
+              IndexSet.compare t1.lookahead t2.lookahead
+    end
+
+    module StateSet = Set.Make(State)
+
+    let label (st : State.t) = Lrc.lr1_of_lrc st.State.lrc
+
+    let register_failure_if_any lookahead lrc target acc =
+      let fail_on = Dfa.Redgraph.fail_on_closure target in
+      if IndexSet.is_empty fail_on then
+        lookahead, acc
+      else
+        IndexSet.diff lookahead fail_on,
+        {State. lrc; status = State.Errored; lookahead = fail_on} :: acc
 
 
-    let initial =
+    let initials =
       IndexSet.fold (fun lrc acc ->
-          let lr1, lookahead = Lrc.decompose lrc in
-          let state = Dfa.Redgraph.State.of_lr1 lr1 in
-          (lr1, Normal {state; lookahead}) :: acc
-        ) Lrc.offering_states []
+          let lr1 = Lrc.lr1_of_lrc lrc in
+          let lookahead, acc =
+            register_failure_if_any Terminal.all lrc lr1 acc
+          in
+          let status = State.Reducing (Dfa.Redgraph.State.of_lr1 lr1) in
+          {State. lrc; status; lookahead} :: acc
+         ) Lrc.offering_states []
 
-    let accepting = function
-      | Normal _ -> false
-      | Fail -> true
+    let transitions (st : State.t) =
+      match st.status with
+      | Errored -> []
+      | Reducing red ->
+        let lrcs = Lrc.predecessors st.lrc in
+        let acc = [] in
+        let acc = match Dfa.Redgraph.state_parent red with
+          | None -> acc
+          | Some red' ->
+            let lr1s = Dfa.Redgraph.state_lr1s red in
+            let status = State.Reducing red' in
+            IndexSet.fold (fun lrc' acc ->
+                assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s);
+                {State. lrc=lrc'; status; lookahead=st.lookahead} :: acc
+              ) lrcs acc
+        in
+        List.fold_left (fun acc (gc : Dfa.Redgraph.goto_closure) ->
+            let lookahead = IndexSet.inter st.lookahead gc.lookahead in
+            if IndexSet.is_empty lookahead then acc else
+              IndexSet.fold (fun source acc ->
+                  let lrcs = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 source) in
+                  IndexSet.fold (fun target acc ->
+                      IndexSet.fold (fun lrc acc ->
+                          let lookahead, acc =
+                            register_failure_if_any lookahead lrc target acc
+                          in
+                          match Dfa.Redgraph.state_parent
+                                  (Dfa.Redgraph.State.of_lr1 target)
+                          with
+                          | None -> acc
+                          | Some red ->
+                            let status = State.Reducing red in
+                            {State. lrc; status; lookahead} :: acc
+                        ) lrcs acc
+                    ) gc.targets acc
+                ) gc.sources acc
+          ) acc (Dfa.Redgraph.state_goto_closure red)
 
-    let transitions = function
-      | Fail -> [Lr1.all, Fail]
-      | Normal t ->
-        let acc =
-          match Dfa.Redgraph.state_parent t.state with
-          | None -> []
-          | Some state ->
-            [Lr1.all, Normal {state; lookahead = t.lookahead}]
-        in
-        let add_goto acc {Dfa.Redgraph. sources; targets; lookahead} =
-          let lookahead = IndexSet.inter lookahead t.lookahead in
-          if IndexSet.is_empty lookahead then acc else
-            IndexSet.fold (fun target acc ->
-                let fail_la =
-                  IndexSet.inter lookahead
-                    (Dfa.Redgraph.fail_on_closure target)
-                in
-                let acc =
-                  if IndexSet.is_empty fail_la then acc else (
-                    prerr_endline
-                      ("non-empty fail_la for " ^ Lr1.to_string target);
-                    (sources, Fail ) :: acc
-                    )
-                in
-                let acc =
-                  match Dfa.Redgraph.state_parent
-                          (Dfa.Redgraph.State.of_lr1 target)
-                  with
-                  | None -> acc
-                  | Some state ->
-                    (sources, Normal {lookahead; state}) :: acc
-                in
-                acc
-              ) targets acc
-        in
-        List.fold_left add_goto acc
-          (Dfa.Redgraph.state_goto_closure t.state)
+    let explore_nfa () =
+      let visited = ref (StateSet.of_list initials) in
+      let todo = ref initials in
+      let add st =
+        let visited' = StateSet.add st !visited in
+        if visited' != !visited then push todo st;
+        visited := visited'
+      in
+      let rec loop () =
+        match !todo with
+        | [] -> ()
+        | xs ->
+          todo := [];
+          List.iter (fun st -> List.iter add (transitions st)) xs;
+          loop ()
+      in
+      loop ();
+      Printf.eprintf "error nfa has %d states\n%!" (StateSet.cardinal !visited)
+
+    let () = explore_nfa ()
+
   end
 end
 
@@ -587,13 +629,13 @@ let process_entry oc entry =
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
   let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
   let check = Check.analyse initial in
-  Seq.iter (fun (_st, nfa, path) ->
+  Seq.iter (fun (_st, _nfa, path) ->
       let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
       prerr_endline ("Found uncovered case: " ^ path);
-      prerr_endline ("when looking ahead at: " ^
+      (*prerr_endline ("when looking ahead at: " ^
                      string_concat_map ", " Info.Terminal.to_string
                        (Utils.BitSet.IndexSet.elements
-                          (snd (Coverage.Lrc.decompose nfa))))
+                          (snd (Coverage.Lrc.decompose nfa))))*)
     ) (Check.paths check);
   (*Coverage.Offering_check.visit initial;*)
 
