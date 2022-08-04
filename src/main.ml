@@ -299,8 +299,8 @@ module Coverage = struct
       type t
       val compare : t -> t -> int
       val initial : (Lr1.t * t) list
-      val transitions : t -> (Lr1.t * t) list
-      val reachable : t -> bool
+      val transitions : t -> (Lr1.set * t) list
+      val accepting : t -> bool
     end) :
   sig
     type t
@@ -326,6 +326,32 @@ module Coverage = struct
       scheduled = Map.empty;
       unhandled = IndexMap.empty;
     }
+
+    let indexset_find f set =
+      match IndexSet.iter (fun n -> if f n then raise Exit) set with
+      | () -> false
+      | exception Exit -> true
+
+    module ReachFix =
+      Fix.Fix.ForOrderedType(struct
+        type t = Lrc.t * Intersector.t
+        let compare (i1, l1) (i2, l2) =
+          let c = compare_index i1 i2 in
+          if c <> 0 then c else
+            Intersector.compare l1 l2
+      end)(Fix.Prop.Boolean)
+
+    let reachability_cache () =
+      ReachFix.lfp (fun (lrc, isector) ->
+          if Intersector.accepting isector then
+            (fun _valuation -> true)
+          else fun valuation ->
+            let lrcs = Lrc.predecessors lrc in
+            List.exists (fun (lr1, isector') ->
+                indexset_find (fun lrc' -> valuation (lrc', isector'))
+                  (IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1))
+              ) (Intersector.transitions isector)
+        )
 
     let make_mark_table () =
       let table = Hashtbl.create 7 in
@@ -374,6 +400,7 @@ module Coverage = struct
       (todo, schedule)
 
     let analyse initial =
+      let reachable = reachability_cache () in
       let get_mark = make_mark_table () in
       let todo, schedule = make_scheduler () in
       let partial = ref [] in
@@ -386,7 +413,7 @@ module Coverage = struct
         let path = lr1 :: path in
         match IndexMap.find_opt lr1 mark.transitions with
         | None ->
-          if Intersector.reachable isector then (
+          if indexset_find (fun lrc -> reachable (lrc, isector)) lrcs then (
             if IndexMap.is_empty mark.unhandled then push partial mark;
             IndexSet.iter (fun n ->
                 if not (IndexMap.mem n mark.unhandled) then
@@ -443,7 +470,7 @@ module Coverage = struct
 
     let transitions t = explicit_transitions (Lrc.predecessors t)
 
-    let reachable _ = true
+    let accepting _ = true
   end
 
   module Error_stacks = struct
@@ -454,11 +481,27 @@ module Coverage = struct
         }
       | Fail
 
-    let initial lr1 =
-      let state = Dfa.Redgraph.State.of_lr1 lr1 in
-      LRijkstra.Classes.for_lr1 lr1
-      |> Array.to_list
-      |> List.map (fun lookahead -> Normal {state; lookahead})
+    let compare t1 t2 =
+      match t1, t2 with
+      | Fail, Fail -> 0
+      | Fail, Normal _ -> -1
+      | Normal _, Fail -> 1
+      | Normal t1, Normal t2 ->
+        let c = compare_index t1.state t2.state in
+        if c <> 0 then c else
+          IndexSet.compare t1.lookahead t2.lookahead
+
+
+    let initial =
+      IndexSet.fold (fun lrc acc ->
+          let lr1, lookahead = Lrc.decompose lrc in
+          let state = Dfa.Redgraph.State.of_lr1 lr1 in
+          (lr1, Normal {state; lookahead}) :: acc
+        ) Lrc.offering_states []
+
+    let accepting = function
+      | Normal _ -> false
+      | Fail -> true
 
     let transitions = function
       | Fail -> [Lr1.all, Fail]
@@ -519,7 +562,7 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
-  let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
+  let module Check = Coverage.Check_dfa(Coverage.Error_stacks) in
   let reports = Check.analyse initial in
   List.iter (fun check ->
       Utils.IndexMap.iter (fun lrc path ->
