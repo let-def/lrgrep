@@ -575,15 +575,22 @@ module Coverage = struct
       in
       loop ()
 
-    let () =
-      let t0 = Sys.time () in
-      fill ();
-      let t1 = Sys.time () in
-      Printf.eprintf "populated unred failure graph in %.02fms\n"
-        ((t1 -. t0) *. 1000.0)
-
     let can_fail_on = Vector.get can_fail_on
     let failure_paths = Vector.make Transition.any []
+
+    let epsilon_transitions = ref IndexMap.empty
+
+    let populate_epsilon_transition tr (unred : LRijkstra.Unreduce.t) =
+      assert (unred.steps = []);
+      assert (unred.state = Transition.source tr);
+      let rec loop tr =
+        let source = Transition.source tr in
+        Transition.predecessors source
+
+      in
+      loop tr
+
+
 
     let () =
       Index.iter Transition.goto (fun tr ->
@@ -593,10 +600,18 @@ module Coverage = struct
               if not (IndexSet.is_empty lookahead) then
                 match List.rev unred.steps with
                 | last :: _ as steps ->
-                  Vector.set_cons failure_paths last (lookahead, steps)
+                  Vector.set_cons failure_paths last (lookahead, steps, tr)
                 | [] -> ()
             ) (LRijkstra.Unreduce.goto_transition tr)
         )
+
+    let () =
+      let t0 = Sys.time () in
+      fill ();
+      let t1 = Sys.time () in
+      Printf.eprintf "populated unred failure graph in %.02fms\n"
+        ((t1 -. t0) *. 1000.0)
+
   end
 
   (*module Error_stacks = struct
