@@ -496,7 +496,110 @@ module Coverage = struct
     let label = Lrc.lr1_of_lrc
   end
 
-  module Error_stacks = struct
+  module Unreduced_fail_graph = struct
+    type failure = {
+      rev_steps: Transition.any index list;
+      lookahead: Terminal.set;
+      target: Transition.goto index;
+    }
+
+    let can_fail_on = Vector.make Transition.any IndexSet.empty
+    let new_fail_on = Vector.make Transition.goto IndexSet.empty
+    let direct_fail tr = Dfa.Redgraph.fail_on_closure (Transition.target tr)
+
+    let initials = ref IndexMap.empty
+
+    let fill () =
+      let todo = ref [] in
+      let register_fail_on lookahead tr =
+        let can_fail = Vector.get can_fail_on tr in
+        let new_fail = IndexSet.diff lookahead can_fail in
+        if not (IndexSet.is_empty new_fail) then (
+          match Transition.split tr with
+          | R _shift ->
+            Vector.set can_fail_on tr (IndexSet.union can_fail new_fail)
+          | L goto ->
+            let new_fail' = Vector.get new_fail_on goto in
+            if IndexSet.is_empty new_fail' then push todo goto;
+            Vector.set new_fail_on goto (IndexSet.union new_fail new_fail')
+        )
+      in
+      let rec add_failure goto lookahead = function
+        | [tr] -> register_fail_on lookahead tr
+        | _ :: xs -> add_failure goto lookahead xs
+        | [] ->
+          (* No producer, it is a nullable-transition *)
+          let source = Transition.source (Transition.of_goto goto) in
+          match Transition.predecessors source with
+          | [] ->
+            (* Nullable transition starting from an initial state *)
+            begin match Lr1.incoming source with
+              | Some _ ->
+                (* This is not an initial state?! Maybe a transition has been
+                   removed because of a conflict *)
+                assert false
+              | None ->
+                initials := IndexMap.update source
+                    (function None -> Some lookahead
+                            | Some lookahead' ->
+                              Some (IndexSet.union lookahead lookahead'))
+                    !initials
+            end
+          | trs -> List.iter (register_fail_on lookahead) trs
+      in
+      let process_todo goto =
+        let new_fail = Vector.get new_fail_on goto in
+        Vector.set new_fail_on goto IndexSet.empty;
+        let tr = Transition.of_goto goto in
+        Vector.set can_fail_on tr
+          (IndexSet.union new_fail (Vector.get can_fail_on tr));
+        List.iter (fun (unred : LRijkstra.Unreduce.t) ->
+            let lookahead = IndexSet.inter new_fail unred.lookahead in
+            if not (IndexSet.is_empty lookahead) then
+              add_failure goto lookahead unred.steps
+          ) (LRijkstra.Unreduce.goto_transition goto)
+      in
+      Index.iter Transition.goto (fun goto ->
+          let tr = Transition.of_goto goto in
+          let la = direct_fail tr in
+          if not (IndexSet.is_empty la) then
+            register_fail_on la tr
+        );
+      let rec loop () =
+        match List.rev !todo with
+        | [] -> ()
+        | xs ->
+          todo := [];
+          List.iter process_todo xs;
+          loop ()
+      in
+      loop ()
+
+    let () =
+      let t0 = Sys.time () in
+      fill ();
+      let t1 = Sys.time () in
+      Printf.eprintf "populated unred failure graph in %.02fms\n"
+        ((t1 -. t0) *. 1000.0)
+
+    let can_fail_on = Vector.get can_fail_on
+    let failure_paths = Vector.make Transition.any []
+
+    let () =
+      Index.iter Transition.goto (fun tr ->
+          let can_fail_on = can_fail_on (Transition.of_goto tr) in
+          List.iter (fun (unred : LRijkstra.Unreduce.t) ->
+              let lookahead = IndexSet.inter can_fail_on unred.lookahead in
+              if not (IndexSet.is_empty lookahead) then
+                match List.rev unred.steps with
+                | last :: _ as steps ->
+                  Vector.set_cons failure_paths last (lookahead, steps)
+                | [] -> ()
+            ) (LRijkstra.Unreduce.goto_transition tr)
+        )
+  end
+
+  (*module Error_stacks = struct
     module State = struct
       type status =
         | Reducing of Dfa.Redgraph.State.n index
@@ -605,7 +708,7 @@ module Coverage = struct
 
     let () = explore_nfa ()
 
-  end
+  end*)
 end
 
 let process_entry oc entry =
@@ -629,6 +732,7 @@ let process_entry oc entry =
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
   let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
   let check = Check.analyse initial in
+  if false then
   Seq.iter (fun (_st, _nfa, path) ->
       let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
       prerr_endline ("Found uncovered case: " ^ path);

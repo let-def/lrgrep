@@ -398,16 +398,17 @@ module IntSet = struct
       Some x
 
   let rec compare s1 s2 =
-    match s1, s2 with
-      N, N ->  0
-    | _, N ->  1
-    | N, _ -> -1
-    | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
-      if addr1 < addr2 then -1
-      else if addr1 > addr2 then 1
-      else if ss1 < ss2 then -1
-      else if ss1 > ss2 then 1
-      else compare qs1 qs2
+    if s1 == s2 then 0 else
+      match s1, s2 with
+        N, N ->  0
+      | _, N ->  1
+      | N, _ -> -1
+      | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+        if addr1 < addr2 then -1
+        else if addr1 > addr2 then 1
+        else if ss1 < ss2 then -1
+        else if ss1 > ss2 then 1
+        else compare qs1 qs2
 
   let equal s1 s2 =
     compare s1 s2 = 0
