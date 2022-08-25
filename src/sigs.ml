@@ -26,6 +26,7 @@ module type INFO = sig
     include INDEXED with type raw = Grammar.nonterminal
     val to_string : t -> string
     val all : set
+    val kind : t -> [`REGULAR | `START]
   end
 
   module Symbol : sig

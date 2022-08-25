@@ -419,12 +419,58 @@ module Coverage = struct
         ((Sys.time () -. t0) *. 1000.)
     module Extra = Gensym()
 
-    type paths =
+    type lr1_paths = Lr1_paths of {
+        goto: Terminal.set Lr1.map;
+        pops: lr1_paths Lr1.map;
+      }
+
+    let t0 = Sys.time ()
+
+    let intermediate_lr1_steps lr1 =
+      let rec process n lr1 = function
+        | [] ->
+          Lr1_paths {goto = IndexMap.empty; pops = IndexMap.empty}
+
+        | (n', nt, ts) :: reds when n = n' ->
+          assert (not (IndexSet.is_empty ts));
+          let paths = process n lr1 reds in
+          begin match Nonterminal.kind nt with
+            | `START -> paths
+            | `REGULAR ->
+              let Lr1_paths paths = paths in
+              let target = Transition.find_goto_target lr1 nt in
+              let goto =
+                IndexMap.update target (function
+                    | None -> Some ts
+                    | Some ts' -> Some (IndexSet.union ts ts')
+                  ) paths.goto
+              in
+              Lr1_paths {paths with goto}
+          end
+
+        | ((n', _, _) :: _) as reds  ->
+          assert (n' > n);
+          let preds = Lr1.predecessors lr1 in
+          let process_predecessor lr1' acc =
+            IndexMap.add lr1' (process (n + 1) lr1' reds) acc
+          in
+          let pops = IndexSet.fold process_predecessor preds IndexMap.empty in
+          Lr1_paths {goto = IndexMap.empty; pops}
+      in
+      process (-1) lr1 (Lr1.closed_reductions lr1)
+
+    let () = Index.iter Lr1.n (fun lr1 -> ignore (intermediate_lr1_steps lr1))
+    let () = Printf.eprintf "computed intermediate steps in %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.)
+
+    type ('n, 'goto) paths =
       | Fail
       | Continue of {
-          goto: Lrc.set;
-          pops: paths Lrc.map;
+          goto: 'goto;
+          pops: ('n, ('n, 'goto) paths) indexmap;
         }
+
+    let empty_lr1 = Continue {goto = IndexMap.empty; pops = IndexMap.empty}
 
     let empty = Continue {goto = IndexSet.empty; pops = IndexMap.empty}
 
@@ -445,6 +491,7 @@ module Coverage = struct
             goto = IndexSet.union c1.goto c2.goto;
             pops = IndexMap.union sub_merge c1.pops c2.pops;
           }
+
 
     let intermediate_steps =
       vector_tabulate Lrc.n @@ fun lrc ->
@@ -543,9 +590,6 @@ module Coverage = struct
           (fun acc prod -> merge acc (reduction_paths prod))
           empty (Lr1.reductions lr1)
       )*)
-
-    let () = Printf.eprintf "computed intermediate steps in %.02fms\n"
-        ((Sys.time () -. t0) *. 1000.)
 
     module NFA = Sum(Lrc)(Extra)
   end

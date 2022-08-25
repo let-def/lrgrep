@@ -50,6 +50,7 @@ struct
     include Indexed(Grammar.Nonterminal)
     let to_string i = Grammar.Nonterminal.name (to_g i)
     let all = all n
+    let kind i = Grammar.Nonterminal.kind (to_g i)
   end
 
   module Symbol = struct
