@@ -299,9 +299,19 @@ module Coverage = struct
         let all = predecessors lrc in
         IndexSet.fold (fun lr1 acc ->
             let preds = IndexSet.inter (lrcs_of_lr1 lr1) all in
-            cons_if (not (IndexSet.is_empty preds)) preds acc
-          ) (Lr1.predecessors (lr1_of_lrc lrc)) []
+            if IndexSet.is_empty preds
+            then acc
+            else IndexMap.add lr1 preds acc
+          ) (Lr1.predecessors (lr1_of_lrc lrc)) IndexMap.empty
       end
+
+    let predecessors_set_by_lr1 lrcs =
+      IndexSet.fold (fun lrc acc ->
+          IndexMap.union
+            (fun _ s1 s2 -> Some (IndexSet.union s1 s2))
+            (predecessors_by_lr1 lrc)
+            acc
+        ) lrcs IndexMap.empty
 
     let () =
       Printf.eprintf "classified Lrc predecessors in %.02fms\n"
@@ -415,21 +425,20 @@ module Coverage = struct
     let failing_offering_states =
       IndexSet.inter Lrc.offering_states can_fail_states
 
-    let () = Printf.eprintf "computed can fail %.02fms\n"
+    let () = Printf.eprintf "computed can fail in %.02fms\n"
         ((Sys.time () -. t0) *. 1000.)
+
     module Extra = Gensym()
 
-    type lr1_paths = Lr1_paths of {
-        goto: Terminal.set Lr1.map;
-        pops: lr1_paths Lr1.map;
-      }
-
-    let t0 = Sys.time ()
+    type lr1_paths = {
+      goto: Terminal.set Lr1.map;
+      pops: lr1_paths Lr1.map;
+    }
 
     let intermediate_lr1_steps lr1 =
       let rec process n lr1 = function
         | [] ->
-          Lr1_paths {goto = IndexMap.empty; pops = IndexMap.empty}
+          {goto = IndexMap.empty; pops = IndexMap.empty}
 
         | (n', nt, ts) :: reds when n = n' ->
           assert (not (IndexSet.is_empty ts));
@@ -437,7 +446,6 @@ module Coverage = struct
           begin match Nonterminal.kind nt with
             | `START -> paths
             | `REGULAR ->
-              let Lr1_paths paths = paths in
               let target = Transition.find_goto_target lr1 nt in
               let goto =
                 IndexMap.update target (function
@@ -445,151 +453,98 @@ module Coverage = struct
                     | Some ts' -> Some (IndexSet.union ts ts')
                   ) paths.goto
               in
-              Lr1_paths {paths with goto}
+              {paths with goto}
           end
 
         | ((n', _, _) :: _) as reds  ->
           assert (n' > n);
-          let preds = Lr1.predecessors lr1 in
-          let process_predecessor lr1' acc =
-            IndexMap.add lr1' (process (n + 1) lr1' reds) acc
-          in
-          let pops = IndexSet.fold process_predecessor preds IndexMap.empty in
-          Lr1_paths {goto = IndexMap.empty; pops}
+          process_predecessors (n + 1) (Lr1.predecessors lr1) reds
+
+      and process_predecessor n reds lr1' acc =
+        IndexMap.add lr1' (process n lr1' reds) acc
+
+      and process_predecessors n lr1s reds = {
+        goto = IndexMap.empty;
+        pops = IndexSet.fold (process_predecessor n reds) lr1s IndexMap.empty
+      }
+
       in
-      process (-1) lr1 (Lr1.closed_reductions lr1)
+      process_predecessors 0 (Lr1.predecessors lr1) (Lr1.closed_reductions lr1)
 
-    let () = Index.iter Lr1.n (fun lr1 -> ignore (intermediate_lr1_steps lr1))
-    let () = Printf.eprintf "computed intermediate steps in %.02fms\n"
-        ((Sys.time () -. t0) *. 1000.)
-
-    type ('n, 'goto) paths =
+    type lrc_paths =
       | Fail
-      | Continue of {
-          goto: 'goto;
-          pops: ('n, ('n, 'goto) paths) indexmap;
+      | Empty
+      | Step of {
+          state: Extra.n index;
+          goto: Lrc.set;
+          pops: lrc_paths Lr1.map;
         }
 
-    let empty_lr1 = Continue {goto = IndexMap.empty; pops = IndexMap.empty}
+    let mk_step goto pops =
+      if IndexSet.is_empty goto && IndexMap.is_empty pops then
+        Empty
+      else
+        Step {state = Extra.fresh(); goto; pops}
 
-    let empty = Continue {goto = IndexSet.empty; pops = IndexMap.empty}
+    let intermediate_steps = Vector.make Lrc.n Empty
 
-    let is_empty x = x == empty || match x with
-      | Continue {goto; pops} ->
-        IndexSet.is_empty goto && IndexMap.is_empty pops
-      | Fail -> false
+    let t0 = Sys.time ()
 
-    let rec merge p1 p2 =
-      match p1, p2 with
-      | Fail, _ | _, Fail -> Fail
-      | Continue c1, Continue c2 ->
-        if is_empty p1 then p2
-        else if is_empty p2 then p1
-        else
-          let sub_merge _ p1' p2' = Some (merge p1' p2') in
-          Continue {
-            goto = IndexSet.union c1.goto c2.goto;
-            pops = IndexMap.union sub_merge c1.pops c2.pops;
-          }
-
-
-    let intermediate_steps =
-      vector_tabulate Lrc.n @@ fun lrc ->
-      if IndexSet.mem lrc fail_states then (
-        Fail
-      ) else (
-        let lr1, la = Lrc.decompose lrc in
-        let reduction_paths (prod, ts) =
-          let ts = IndexSet.inter la ts in
-          if IndexSet.is_empty ts
-          then empty
-          else
+    let () =
+      let process_lr1 lr1 =
+        let lr1_steps = intermediate_lr1_steps lr1 in
+        let compute_paths lrc =
+          let la = Lrc.lookahead lrc in
+          let rec visit ipaths lrcs =
             let exception Can_fail in
-            let rec simulate_prod lrc = function
-              | 0 ->
-                (* Consumed all producers, follow goto transitions *)
-                let lr1 = Lrc.lr1_of_lrc lrc in
-                let lr1' = Transition.find_goto_target lr1 (Production.lhs prod) in
-                let reachability_pred lrc' =
-                  if IndexSet.disjoint ts (Lrc.lookahead lrc')
-                  then false
-                  else if IndexSet.disjoint ts (Lr1.reject (Lrc.lr1_of_lrc lrc'))
-                  then true
-                  else raise Can_fail
-                in
-                begin match
-                    IndexSet.filter reachability_pred (Lrc.lrcs_of_lr1 lr1')
-                  with
-                  | exception Can_fail -> Fail
-                  | goto -> Continue {goto; pops = IndexMap.empty}
-                end
-              | n ->
-                (* Follow each predecessor *)
-                IndexSet.fold
-                  (fun predecessor acc ->
-                     let paths = simulate_prod predecessor (n - 1) in
-                     if is_empty paths
-                     then acc
-                     else
-                       let pops = IndexMap.singleton predecessor paths in
-                       merge acc (Continue {goto = IndexSet.empty; pops})
-                  ) (Lrc.predecessors lrc) empty
+            let process_goto target la' acc =
+              if IndexSet.disjoint la la' then acc else (
+                if not (IndexSet.disjoint la (Lr1.closed_reject target)) then
+                  raise Can_fail;
+                IndexSet.union acc (
+                  IndexSet.filter (fun lrc ->
+                      IndexSet.mem lrc can_fail_states &&
+                      let la' = Lrc.lookahead lrc in
+                      not (IndexSet.disjoint la la')
+                    ) (Lrc.lrcs_of_lr1 target)
+                )
+              )
             in
-            simulate_prod lrc (Array.length (Production.rhs prod))
+            match IndexMap.fold process_goto ipaths.goto IndexSet.empty with
+            | exception Can_fail -> Fail
+            | goto ->
+              let pops =
+                IndexMap.fold (fun lr1 lrcs' opops ->
+                    match IndexMap.find_opt lr1 ipaths.pops with
+                    | None -> opops
+                    | Some ipaths' ->
+                      match visit ipaths' lrcs' with
+                      | Empty -> opops
+                      | Fail | Step _ as opaths ->
+                        IndexMap.add lr1 opaths opops
+                  ) (Lrc.predecessors_set_by_lr1 lrcs) IndexMap.empty
+              in
+              mk_step goto pops
+          in
+          visit lr1_steps lr1 (IndexSet.singleton lrc)
         in
-        List.fold_left
-          (fun acc prod -> merge acc (reduction_paths prod))
-          empty (Lr1.reductions lr1)
-      )
+        let process_lrc lrc =
+          assert (lr1 = Lrc.lr1_of_lrc lrc);
+          let paths =
+            if IndexSet.mem lrc fail_states
+            then Fail
+            else compute_paths lrc
+          in
+          Vector.set intermediate_steps lrc paths
+        in
+        IndexSet.iter process_lrc (Lrc.lrcs_of_lr1 lr1)
+      in
+      Index.iter Lr1.n process_lr1
 
-    (*let intermediate_steps =
-      vector_tabulate Lrc.n @@ fun lrc ->
-      if IndexSet.mem lrc fail_states then (
-        Fail
-      ) else (
-        let lr1, la = Lrc.decompose lrc in
-        let reduction_paths (prod, ts) =
-          let ts = IndexSet.inter la ts in
-          if IndexSet.is_empty ts
-          then empty
-          else
-            (*let exception Can_fail in*)
-            let rec simulate_prod lr1 = function
-              | 0 ->
-                (* Consumed all producers, follow goto transitions *)
-                let lr1' = Transition.find_goto_target lr1 (Production.lhs prod) in
-                Continue {goto = IndexSet.singleton lr1'; pops = IndexMap.empty}
-                (*let reachability_pred lrc' =
-                  if IndexSet.disjoint ts (Lrc.lookahead lrc')
-                  then false
-                  else if IndexSet.disjoint ts (Lr1.reject (Lrc.lr1_of_lrc lrc'))
-                  then true
-                  else raise Can_fail
-                in
-                begin match
-                    IndexSet.filter reachability_pred (Lrc.lrcs_of_lr1 lr1')
-                  with
-                  | exception Can_fail -> Fail
-                  | goto -> Continue {goto; pops = IndexMap.empty}
-                end*)
-              | n ->
-                (* Follow each predecessor *)
-                IndexSet.fold
-                  (fun predecessor acc ->
-                     let paths = simulate_prod predecessor (n - 1) in
-                     if is_empty paths
-                     then acc
-                     else
-                       let pops = IndexMap.singleton predecessor paths in
-                       merge acc (Continue {goto = IndexSet.empty; pops})
-                  ) (Lr1.predecessors lr1) empty
-            in
-            simulate_prod lr1 (Array.length (Production.rhs prod))
-        in
-        List.fold_left
-          (fun acc prod -> merge acc (reduction_paths prod))
-          empty (Lr1.reductions lr1)
-      )*)
+    let () = Printf.eprintf "computed lrc steps in %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.)
+
+    let () = Printf.eprintf "%d intermediate steps\n" (cardinal Extra.n)
 
     module NFA = Sum(Lrc)(Extra)
   end
