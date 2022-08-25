@@ -156,6 +156,10 @@ module type S1 = sig
   val sorted_union : 'a t list -> 'a t
 
   val of_list : 'a element list -> 'a t
+
+  val init_interval : 'a element -> 'a element -> 'a t
+  val init_subset : 'a element -> 'a element -> ('a element -> bool) -> 'a t
+  val filter : ('a element -> bool) -> 'a t -> 'a t
 end
 
 module type S0 = sig

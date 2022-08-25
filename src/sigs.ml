@@ -51,9 +51,16 @@ module type INFO = sig
     val to_string : t -> string
     val list_to_string : t list -> string
     val set_to_string : set -> string
+
     val shift_on : t -> Terminal.set
     val reduce_on : t -> Terminal.set
-    val fail_on : t -> Terminal.set
+    val reject : t -> Terminal.set
+
+    val closed_reductions : t -> (int * Nonterminal.t * Terminal.set) list
+    val closed_reject : t -> Terminal.set
+
+    val predecessors : t -> set
+    val set_predecessors : set -> set
   end
 
   module Transition : sig
@@ -112,9 +119,6 @@ module type INFO = sig
        [target tr = s] *)
     val predecessors : Lr1.t -> any index list
   end
-
-  val lr1_predecessors : Lr1.t -> Lr1.set
-  val lr1set_predecessors : Lr1.set -> Lr1.set
 
   type 'a dfa_transition = Lr1.set * 'a
 
@@ -193,6 +197,7 @@ module type REDGRAPH = sig
   end
 
   val fail_on_closure : Lr1.t -> Terminal.set
+  val reduce_on : Lr1.t -> Terminal.set
 
   type goto_closure = {
     sources: Lr1.set;

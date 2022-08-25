@@ -128,3 +128,6 @@ let rec merge_uniq cmp l1 l2 =
 
 let print_cmon oc cmon =
   PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
+
+let cons_if cond x xs =
+  if cond then x :: xs else xs

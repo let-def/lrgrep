@@ -71,7 +71,7 @@ struct
   (* Initialize abstract frames associated to each lr1 state *)
   let () = Index.iter Lr1.n (fun lr1 ->
       IndexBuffer.set frames (State.inj_l lr1)
-        (make_abstract_frame (lr1_predecessors lr1))
+        (make_abstract_frame (Lr1.predecessors lr1))
     )
 
   let fresh_abstract_frame states =
@@ -99,7 +99,7 @@ struct
         match frame.parent with
         | Some t' -> Abstract t'
         | None ->
-          let t' = fresh_abstract_frame (lr1set_predecessors frame.states) in
+          let t' = fresh_abstract_frame (Lr1.set_predecessors frame.states) in
           frame.parent <- Some t';
           Abstract t'
     in
@@ -107,7 +107,7 @@ struct
       {state; parent; goto=IndexMap.empty; lookahead=IndexSet.empty}
     in
     vector_tabulate Lr1.n (fun state ->
-        let fails = ref (Lr1.fail_on state) in
+        let fails = ref (Lr1.reject state) in
         let frame = make_frame state None in
         let rec goto parent la (nt, la') =
           let la = IndexSet.inter la la' in
@@ -131,7 +131,7 @@ struct
           )
         and populate la state =
           if not (IndexSet.subset la state.lookahead) then (
-            fails := IndexSet.union !fails (IndexSet.inter la (Lr1.fail_on state.state));
+            fails := IndexSet.union !fails (IndexSet.inter la (Lr1.reject state.state));
             state.lookahead <- IndexSet.union la state.lookahead;
             let frame = ref (Concrete state) in
             let reductions = Vector.get reductions state.state in
@@ -156,7 +156,7 @@ struct
        Haven't seen this in the wild yet, I will leave this code to check that
        for now... *)
     Index.iter Lr1.n (fun lr1 ->
-        let fail_on = Lr1.fail_on lr1 in
+        let fail_on = Lr1.reject lr1 in
         let fail_on' = fail_on_closure lr1 in
         if not (IndexSet.equal fail_on fail_on')
         then (
@@ -361,4 +361,19 @@ struct
 
   let state_goto_closure x = Vector.get goto_closure x
   let state_reachable = reachable_goto
+
+  let reduce_on = vector_tabulate Lr1.n (fun lr1 ->
+      let rec loop acc = function
+        | None -> acc
+        | Some st ->
+          let acc =
+            List.fold_left
+              (fun acc red -> IndexSet.union acc red.lookahead)
+              acc (state_goto_closure st)
+          in
+          loop acc (state_parent st)
+      in
+      loop IndexSet.empty (Some (State.of_lr1 lr1))
+    )
+
 end

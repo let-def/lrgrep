@@ -180,7 +180,7 @@ struct
         st.scheduled <- IndexSet.empty;
         List.iter
           (fun (sg', _vars, st') ->
-             schedule st' (lr1set_predecessors (IndexSet.inter sg' sg)))
+             schedule st' (Lr1.set_predecessors (IndexSet.inter sg' sg)))
           st.transitions
       in
       let rec loop () =

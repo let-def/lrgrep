@@ -158,6 +158,10 @@ module type S1 = sig
   val sorted_union : 'a t list -> 'a t
 
   val of_list : 'a element list -> 'a t
+
+  val init_interval : 'a element -> 'a element -> 'a t
+  val init_subset : 'a element -> 'a element -> ('a element -> bool) -> 'a t
+  val filter : ('a element -> bool) -> 'a t -> 'a t
 end
 
 module type S0 = sig
@@ -521,6 +525,50 @@ module IntSet = struct
   let extract_shared_prefix l r = extract_shared_prefix (l, r)
 
   let of_list xs = List.fold_left (fun xs x -> add x xs) empty xs
+
+  let init_interval i j =
+    let i, j = if i < j then i, j else j, i in
+    let addr = j - j mod word_size in
+    if addr <= i then
+      let word = (1 lsl (j - i + 1) - 1) lsl (i - addr) in
+      C (addr, word, N)
+    else
+      let rec loop acc addr =
+        if addr <= i
+        then C (addr, -1 lsl (i - addr), acc)
+        else loop (C (addr, -1, acc)) (addr - word_size)
+      in
+      loop (C (addr, (-1) lsr (word_size - j - addr + 1), N)) (addr - word_size)
+
+  let init_subset i j f =
+    let i, j = if i < j then i, j else j, i in
+    let rec loop i addr =
+      if addr > j then N else
+        let addr' = addr + word_size in
+        let k = if j < addr' then j else (addr' - 1) in
+        let word = ref 0 in
+        for i = i to k do
+          if f i then word := !word lor (1 lsl (i - addr))
+        done;
+        let word = !word in
+        if word = 0
+        then loop addr' addr'
+        else C (j, word, loop addr' addr')
+    in
+    loop i (i - i mod word_size)
+
+  let rec filter f = function
+    | N -> N
+    | C (addr, word0, ss) ->
+      let word = ref 0 in
+      for i = 0 to word_size - 1 do
+        if word0 land (1 lsl i) <> 0 && f (addr + i) then
+          word := !word lor (1 lsl i)
+      done;
+      if !word = 0 then
+        filter f ss
+      else
+        C (addr, !word, filter f ss)
 end
 
 module type S1_int = S1 with type 'a element = int
@@ -578,5 +626,12 @@ struct
   let extract_shared_prefix  = IntSet.extract_shared_prefix
 
   let of_list = (IntSet.of_list :> element list -> t)
+  let init_interval i j =
+    IntSet.init_interval (i : element :> int) (j : element :> int)
+  let init_subset i j f =
+    IntSet.init_subset (i : element :> int) (j : element :> int)
+      (fun i -> f (Element.of_int i))
+  let filter f t =
+    IntSet.filter (fun i -> f (Element.of_int i)) (t :> t)
 end
 

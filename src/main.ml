@@ -187,6 +187,10 @@ module Coverage = struct
           !sum
       end)
 
+    let () =
+      Printf.eprintf "%d lr1 states, %d lrc states\n"
+        (cardinal Lr1.n) (cardinal n)
+
     type t = n index
     type set = n indexset
     type 'a map = (n, 'a) indexmap
@@ -284,9 +288,29 @@ module Coverage = struct
           List.iter process_transition (Transition.predecessors lr1)
       in
       Index.iter Lr1.n process;
-      Printf.eprintf "computed predecessors in %.02fms\n"
+      Printf.eprintf "computed Lrc predecessors in %.02fms\n"
         ((Sys.time () -. t0) *. 1000.0);
       Vector.get predecessors
+
+    let t0 = Sys.time ()
+
+    let predecessors_by_lr1 =
+      vector_tabulate n begin fun lrc ->
+        let all = predecessors lrc in
+        IndexSet.fold (fun lr1 acc ->
+            let preds = IndexSet.inter (lrcs_of_lr1 lr1) all in
+            cons_if (not (IndexSet.is_empty preds)) preds acc
+          ) (Lr1.predecessors (lr1_of_lrc lrc)) []
+      end
+
+    let () =
+      Printf.eprintf "classified Lrc predecessors in %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.0)
+
+    let lookahead lrc =
+      let lr1 = lr1_of_lrc lrc in
+      let classe = index_delta lrc (first_lrc_of_lr1 lr1) in
+      (LRijkstra.Classes.for_lr1 lr1).(classe)
 
     let decompose lrc =
       let lr1 = lr1_of_lrc lrc in
@@ -294,7 +318,240 @@ module Coverage = struct
       (lr1, (LRijkstra.Classes.for_lr1 lr1).(classe))
   end
 
-  module Check_dfa(NFA : sig
+  module Lrce = struct
+
+    type lazy_stream = Scons of Lrc.set * lazy_stream lazy_t
+
+    let rec predecessor_stream lrcs = Scons (
+        lrcs,
+        lazy (predecessor_stream (indexset_bind lrcs Lrc.predecessors))
+      )
+
+    let rec stream_nth (Scons (v, vs)) = function
+      | 0 -> v
+      | n -> stream_nth (Lazy.force vs) (n - 1)
+
+    let reached_from = Vector.make Lrc.n IndexSet.empty
+
+    let print_item (prod, dot) =
+      let rhs = Production.rhs prod in
+      let symbols = ref [] in
+      for i = Array.length rhs - 1 downto 0 do
+        push symbols (Symbol.name rhs.(i));
+        if i = dot then push symbols ".";
+      done;
+      String.concat " " !symbols
+
+    let lrc_goto nt lrc =
+      let lr1 = Lrc.lr1_of_lrc lrc in
+      try Transition.find_goto_target lr1 nt
+      with Not_found ->
+        Printf.eprintf "Failed to go non-terminal nt %s from state %s, with items:\n%s\n"
+          (Nonterminal.to_string nt)
+          (Lr1.to_string lr1)
+          (string_concat_map "\n" print_item (Lr1.items lr1));
+        exit 1
+
+    let check_target source ts target =
+      let ts' = Lrc.lookahead target in
+      let ts' = IndexSet.diff ts' (Lr1.reject (Lrc.lr1_of_lrc target)) in
+      if IndexSet.subset ts' ts then
+        vector_set_add reached_from target source
+      else if not (IndexSet.disjoint ts ts') then (
+        Printf.eprintf "EXPECTED RELATED SETS\n\
+                        INCOMPATIBLE ON %s\n\
+                        INTERSECT ON %s\n"
+          (string_of_indexset ~string_of_index:Terminal.to_string
+             (IndexSet.diff ts' ts))
+          (string_of_indexset ~string_of_index:Terminal.to_string
+             (IndexSet.inter ts' ts))
+      )
+
+    let check_reductions lrc =
+      let (lr1, ts) = Lrc.decompose lrc in
+      let preds = predecessor_stream (IndexSet.singleton lrc) in
+      let check_reduction (prod, ts') =
+        if Production.kind prod = `REGULAR then
+          let ts = IndexSet.inter ts ts' in
+          if not (IndexSet.is_empty ts) then (
+            let preds = stream_nth preds (Array.length (Production.rhs prod)) in
+            let targets = IndexSet.map (lrc_goto (Production.lhs prod)) preds in
+            let check_target = check_target lrc ts in
+            IndexSet.iter
+              (fun target -> IndexSet.iter check_target (Lrc.lrcs_of_lr1 target))
+              targets
+          )
+      in
+      List.iter check_reduction (Lr1.reductions lr1)
+
+    let () = Index.iter Lrc.n check_reductions
+
+    let filtered_subset n f =
+      let set = ref IndexSet.empty in
+      for i = cardinal n - 1 downto 0 do
+        let i = Index.of_int n i in
+        if f i then set := IndexSet.add i !set
+      done;
+      !set
+
+    let fail_states =
+      filtered_subset Lrc.n
+        (fun lrc ->
+           let lr1, la = Lrc.decompose lrc in
+           not (IndexSet.disjoint la (Lr1.reject lr1)))
+
+    let t0 = Sys.time ()
+
+    let can_fail_states =
+      let rec loop states =
+        let states' = indexset_bind states (Vector.get reached_from) in
+        if IndexSet.equal states states' then
+          states
+        else
+          loop states'
+      in
+      loop fail_states
+
+    let failing_offering_states =
+      IndexSet.inter Lrc.offering_states can_fail_states
+
+    let () = Printf.eprintf "computed can fail %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.)
+    module Extra = Gensym()
+
+    type paths =
+      | Fail
+      | Continue of {
+          goto: Lrc.set;
+          pops: paths Lrc.map;
+        }
+
+    let empty = Continue {goto = IndexSet.empty; pops = IndexMap.empty}
+
+    let is_empty x = x == empty || match x with
+      | Continue {goto; pops} ->
+        IndexSet.is_empty goto && IndexMap.is_empty pops
+      | Fail -> false
+
+    let rec merge p1 p2 =
+      match p1, p2 with
+      | Fail, _ | _, Fail -> Fail
+      | Continue c1, Continue c2 ->
+        if is_empty p1 then p2
+        else if is_empty p2 then p1
+        else
+          let sub_merge _ p1' p2' = Some (merge p1' p2') in
+          Continue {
+            goto = IndexSet.union c1.goto c2.goto;
+            pops = IndexMap.union sub_merge c1.pops c2.pops;
+          }
+
+    let intermediate_steps =
+      vector_tabulate Lrc.n @@ fun lrc ->
+      if IndexSet.mem lrc fail_states then (
+        Fail
+      ) else (
+        let lr1, la = Lrc.decompose lrc in
+        let reduction_paths (prod, ts) =
+          let ts = IndexSet.inter la ts in
+          if IndexSet.is_empty ts
+          then empty
+          else
+            let exception Can_fail in
+            let rec simulate_prod lrc = function
+              | 0 ->
+                (* Consumed all producers, follow goto transitions *)
+                let lr1 = Lrc.lr1_of_lrc lrc in
+                let lr1' = Transition.find_goto_target lr1 (Production.lhs prod) in
+                let reachability_pred lrc' =
+                  if IndexSet.disjoint ts (Lrc.lookahead lrc')
+                  then false
+                  else if IndexSet.disjoint ts (Lr1.reject (Lrc.lr1_of_lrc lrc'))
+                  then true
+                  else raise Can_fail
+                in
+                begin match
+                    IndexSet.filter reachability_pred (Lrc.lrcs_of_lr1 lr1')
+                  with
+                  | exception Can_fail -> Fail
+                  | goto -> Continue {goto; pops = IndexMap.empty}
+                end
+              | n ->
+                (* Follow each predecessor *)
+                IndexSet.fold
+                  (fun predecessor acc ->
+                     let paths = simulate_prod predecessor (n - 1) in
+                     if is_empty paths
+                     then acc
+                     else
+                       let pops = IndexMap.singleton predecessor paths in
+                       merge acc (Continue {goto = IndexSet.empty; pops})
+                  ) (Lrc.predecessors lrc) empty
+            in
+            simulate_prod lrc (Array.length (Production.rhs prod))
+        in
+        List.fold_left
+          (fun acc prod -> merge acc (reduction_paths prod))
+          empty (Lr1.reductions lr1)
+      )
+
+    (*let intermediate_steps =
+      vector_tabulate Lrc.n @@ fun lrc ->
+      if IndexSet.mem lrc fail_states then (
+        Fail
+      ) else (
+        let lr1, la = Lrc.decompose lrc in
+        let reduction_paths (prod, ts) =
+          let ts = IndexSet.inter la ts in
+          if IndexSet.is_empty ts
+          then empty
+          else
+            (*let exception Can_fail in*)
+            let rec simulate_prod lr1 = function
+              | 0 ->
+                (* Consumed all producers, follow goto transitions *)
+                let lr1' = Transition.find_goto_target lr1 (Production.lhs prod) in
+                Continue {goto = IndexSet.singleton lr1'; pops = IndexMap.empty}
+                (*let reachability_pred lrc' =
+                  if IndexSet.disjoint ts (Lrc.lookahead lrc')
+                  then false
+                  else if IndexSet.disjoint ts (Lr1.reject (Lrc.lr1_of_lrc lrc'))
+                  then true
+                  else raise Can_fail
+                in
+                begin match
+                    IndexSet.filter reachability_pred (Lrc.lrcs_of_lr1 lr1')
+                  with
+                  | exception Can_fail -> Fail
+                  | goto -> Continue {goto; pops = IndexMap.empty}
+                end*)
+              | n ->
+                (* Follow each predecessor *)
+                IndexSet.fold
+                  (fun predecessor acc ->
+                     let paths = simulate_prod predecessor (n - 1) in
+                     if is_empty paths
+                     then acc
+                     else
+                       let pops = IndexMap.singleton predecessor paths in
+                       merge acc (Continue {goto = IndexSet.empty; pops})
+                  ) (Lr1.predecessors lr1) empty
+            in
+            simulate_prod lr1 (Array.length (Production.rhs prod))
+        in
+        List.fold_left
+          (fun acc prod -> merge acc (reduction_paths prod))
+          empty (Lr1.reductions lr1)
+      )*)
+
+    let () = Printf.eprintf "computed intermediate steps in %.02fms\n"
+        ((Sys.time () -. t0) *. 1000.)
+
+    module NFA = Sum(Lrc)(Extra)
+  end
+
+
+  (*module Check_dfa(NFA : sig
       include CARDINAL
       val initials : n indexset
       val label : n index -> Lr1.t
@@ -496,234 +753,157 @@ module Coverage = struct
     let label = Lrc.lr1_of_lrc
   end
 
-  module Unreduced_fail_graph = struct
-    type failure = {
-      rev_steps: Transition.any index list;
-      lookahead: Terminal.set;
-      target: Transition.goto index;
-    }
+  module Refined_redgraph = struct
+    module RG = Dfa.Redgraph
 
-    let can_fail_on = Vector.make Transition.any IndexSet.empty
-    let new_fail_on = Vector.make Transition.goto IndexSet.empty
-    let direct_fail tr = Dfa.Redgraph.fail_on_closure (Transition.target tr)
-
-    let initials = ref IndexMap.empty
-
-    let fill () =
-      let todo = ref [] in
-      let register_fail_on lookahead tr =
-        let can_fail = Vector.get can_fail_on tr in
-        let new_fail = IndexSet.diff lookahead can_fail in
-        if not (IndexSet.is_empty new_fail) then (
-          match Transition.split tr with
-          | R _shift ->
-            Vector.set can_fail_on tr (IndexSet.union can_fail new_fail)
-          | L goto ->
-            let new_fail' = Vector.get new_fail_on goto in
-            if IndexSet.is_empty new_fail' then push todo goto;
-            Vector.set new_fail_on goto (IndexSet.union new_fail new_fail')
-        )
-      in
-      let rec add_failure goto lookahead = function
-        | [tr] -> register_fail_on lookahead tr
-        | _ :: xs -> add_failure goto lookahead xs
-        | [] ->
-          (* No producer, it is a nullable-transition *)
-          let source = Transition.source (Transition.of_goto goto) in
-          match Transition.predecessors source with
-          | [] ->
-            (* Nullable transition starting from an initial state *)
-            begin match Lr1.incoming source with
-              | Some _ ->
-                (* This is not an initial state?! Maybe a transition has been
-                   removed because of a conflict *)
-                assert false
-              | None ->
-                initials := IndexMap.update source
-                    (function None -> Some lookahead
-                            | Some lookahead' ->
-                              Some (IndexSet.union lookahead lookahead'))
-                    !initials
-            end
-          | trs -> List.iter (register_fail_on lookahead) trs
-      in
-      let process_todo goto =
-        let new_fail = Vector.get new_fail_on goto in
-        Vector.set new_fail_on goto IndexSet.empty;
-        let tr = Transition.of_goto goto in
-        Vector.set can_fail_on tr
-          (IndexSet.union new_fail (Vector.get can_fail_on tr));
-        List.iter (fun (unred : LRijkstra.Unreduce.t) ->
-            let lookahead = IndexSet.inter new_fail unred.lookahead in
-            if not (IndexSet.is_empty lookahead) then
-              add_failure goto lookahead unred.steps
-          ) (LRijkstra.Unreduce.goto_transition goto)
-      in
-      Index.iter Transition.goto (fun goto ->
-          let tr = Transition.of_goto goto in
-          let la = direct_fail tr in
-          if not (IndexSet.is_empty la) then
-            register_fail_on la tr
-        );
-      let rec loop () =
-        match List.rev !todo with
-        | [] -> ()
-        | xs ->
-          todo := [];
-          List.iter process_todo xs;
-          loop ()
-      in
-      loop ()
-
-    let can_fail_on = Vector.get can_fail_on
-    let failure_paths = Vector.make Transition.any []
-
-    let epsilon_transitions = ref IndexMap.empty
-
-    let populate_epsilon_transition tr (unred : LRijkstra.Unreduce.t) =
-      assert (unred.steps = []);
-      assert (unred.state = Transition.source tr);
-      let rec loop tr =
-        let source = Transition.source tr in
-        Transition.predecessors source
-
-      in
-      loop tr
-
-
-
-    let () =
-      Index.iter Transition.goto (fun tr ->
-          let can_fail_on = can_fail_on (Transition.of_goto tr) in
-          List.iter (fun (unred : LRijkstra.Unreduce.t) ->
-              let lookahead = IndexSet.inter can_fail_on unred.lookahead in
-              if not (IndexSet.is_empty lookahead) then
-                match List.rev unred.steps with
-                | last :: _ as steps ->
-                  Vector.set_cons failure_paths last (lookahead, steps, tr)
-                | [] -> ()
-            ) (LRijkstra.Unreduce.goto_transition tr)
-        )
-
-    let () =
-      let t0 = Sys.time () in
-      fill ();
-      let t1 = Sys.time () in
-      Printf.eprintf "populated unred failure graph in %.02fms\n"
-        ((t1 -. t0) *. 1000.0)
-
-  end
-
-  (*module Error_stacks = struct
-    module State = struct
-      type status =
-        | Reducing of Dfa.Redgraph.State.n index
-        | Errored
-
-      let compare_status t1 t2 =
-        match t1, t2 with
-        | Errored, Errored -> 0
-        | Reducing i1, Reducing i2 -> compare_index i1 i2
-        | Errored, Reducing _ -> -1
-        | Reducing _, Errored -> 1
-
-      type t = {
-        lrc: Lrc.n index;
-        lookahead: Terminal.set;
-        status: status;
-      }
-
-      let compare t1 t2 =
-        let c = compare_index t1.lrc t2.lrc in
-        if c <> 0 then c else
-          let c = compare_status t1.status t2.status in
-          if c <> 0 then c else
-              IndexSet.compare t1.lookahead t2.lookahead
-    end
-
-    module StateSet = Set.Make(State)
-
-    let label (st : State.t) = Lrc.lr1_of_lrc st.State.lrc
-
-    let register_failure_if_any lookahead lrc target acc =
-      let fail_on = Dfa.Redgraph.fail_on_closure target in
-      if IndexSet.is_empty fail_on then
-        lookahead, acc
-      else
-        IndexSet.diff lookahead fail_on,
-        {State. lrc; status = State.Errored; lookahead = fail_on} :: acc
-
-
-    let initials =
-      IndexSet.fold (fun lrc acc ->
-          let lr1 = Lrc.lr1_of_lrc lrc in
-          let lookahead, acc =
-            register_failure_if_any Terminal.all lrc lr1 acc
+    let visit lr1 =
+      let fail_on = RG.fail_on_closure lr1 in
+      let rec reductions acc path = function
+        | None -> acc
+        | Some st ->
+          let path = st :: path in
+          let acc =
+            match RG.state_goto_closure st with
+            | [] -> acc
+            | gcs ->
+              let lookahead, fail_on =
+                List.fold_left
+                  (fun (lookahead, fail_on) (gc : RG.goto_closure) ->
+                     let lookahead = IndexSet.union lookahead gc.lookahead in
+                     let fail_on =
+                       IndexSet.fold (fun tgt acc ->
+                           IndexSet.union acc (RG.fail_on_closure tgt))
+                         gc.targets fail_on
+                     in
+                     (lookahead, fail_on))
+                  (IndexSet.empty, IndexSet.empty) gcs
+              in
+              (lookahead, IndexSet.inter fail_on lookahead, path) :: acc
           in
-          let status = State.Reducing (Dfa.Redgraph.State.of_lr1 lr1) in
-          {State. lrc; status; lookahead} :: acc
-         ) Lrc.offering_states []
-
-    let transitions (st : State.t) =
-      match st.status with
-      | Errored -> []
-      | Reducing red ->
-        let lrcs = Lrc.predecessors st.lrc in
-        let acc = [] in
-        let acc = match Dfa.Redgraph.state_parent red with
-          | None -> acc
-          | Some red' ->
-            let lr1s = Dfa.Redgraph.state_lr1s red in
-            let status = State.Reducing red' in
-            IndexSet.fold (fun lrc' acc ->
-                assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s);
-                {State. lrc=lrc'; status; lookahead=st.lookahead} :: acc
-              ) lrcs acc
-        in
-        List.fold_left (fun acc (gc : Dfa.Redgraph.goto_closure) ->
-            let lookahead = IndexSet.inter st.lookahead gc.lookahead in
-            if IndexSet.is_empty lookahead then acc else
-              IndexSet.fold (fun source acc ->
-                  let lrcs = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 source) in
-                  IndexSet.fold (fun target acc ->
-                      IndexSet.fold (fun lrc acc ->
-                          let lookahead, acc =
-                            register_failure_if_any lookahead lrc target acc
-                          in
-                          match Dfa.Redgraph.state_parent
-                                  (Dfa.Redgraph.State.of_lr1 target)
-                          with
-                          | None -> acc
-                          | Some red ->
-                            let status = State.Reducing red in
-                            {State. lrc; status; lookahead} :: acc
-                        ) lrcs acc
-                    ) gc.targets acc
-                ) gc.sources acc
-          ) acc (Dfa.Redgraph.state_goto_closure red)
-
-    let explore_nfa () =
-      let visited = ref (StateSet.of_list initials) in
-      let todo = ref initials in
-      let add st =
-        let visited' = StateSet.add st !visited in
-        if visited' != !visited then push todo st;
-        visited := visited'
+          reductions acc path (RG.state_parent st)
       in
-      let rec loop () =
-        match !todo with
-        | [] -> ()
-        | xs ->
-          todo := [];
-          List.iter (fun st -> List.iter add (transitions st)) xs;
-          loop ()
+      let paths = reductions [] [] (Some (RG.State.of_lr1 lr1)) in
+      let _ =
+        List.fold_left (fun acc (lookahead, _fail_on, _path) ->
+            assert (IndexSet.disjoint acc lookahead);
+            IndexSet.inter lookahead acc
+          ) fail_on paths
       in
-      loop ();
-      Printf.eprintf "error nfa has %d states\n%!" (StateSet.cardinal !visited)
+      let count = List.length paths in
+      if count > 0 then (
+        Printf.eprintf "Reduction for %s has %d paths\n"
+          (Lr1.to_string lr1) count;
+        List.iter (fun (lookahead, fail_on, path) ->
+            prerr_endline (
+              "- " ^
+              string_concat_map "; " (fun st ->
+                  st |>
+                  RG.state_lr1s |> IndexSet.minimum |>
+                  Option.get |> Lr1.to_string
+                ) path;
+            );
+            Printf.eprintf
+              "  %d lookahead tokens, with %d failings, %d transitions\n"
+              (IndexSet.cardinal lookahead)
+              (IndexSet.cardinal fail_on)
+              (List.length (RG.state_goto_closure (List.hd path)))
+          ) paths
+      )
 
-    let () = explore_nfa ()
+    let () = Index.iter Lr1.n visit
 
-  end*)
+
+
+    (*let terms_to_ignore =
+      Grammar.Terminal.fold (fun raw acc ->
+          let ignore =
+            (match Grammar.Terminal.kind raw with
+             | `EOF | `PSEUDO | `ERROR -> true
+             | _ -> false)
+          in
+          if ignore then
+            IndexSet.add (Terminal.of_g raw) acc
+          else
+            acc
+        ) IndexSet.empty
+
+    let rec check_terminal_partitions partitions = function
+      | None -> ()
+      | Some st ->
+        List.iter (fun (gc : RG.goto_closure) ->
+            let partitions =
+              partitions
+              |> List.map (fun la -> IndexSet.inter la gc.lookahead)
+              |> List.filter (fun set -> not (IndexSet.is_empty set))
+            in
+            IndexSet.iter (fun src ->
+                IndexSet.iter (fun tgt ->
+                    let nt = match Lr1.incoming tgt with
+                      | None | Some (T _) -> assert false
+                      | Some (N nt) -> nt
+                    in
+                    let tr = Transition.find_goto src nt in
+                    let classes = LRijkstra.Classes.for_edge tr in
+                    Array.iter (fun classe ->
+                        let classe = IndexSet.diff classe terms_to_ignore in
+                        List.iter (fun classe' ->
+                            if not (IndexSet.subset classe' classe ||
+                                    IndexSet.disjoint classe classe') then (
+                              prerr_endline "Incompatible classes: ";
+                              prerr_endline (
+                                "{" ^
+                                string_concat_map ", "
+                                  Terminal.to_string (IndexSet.elements classe) ^
+                                "}"
+                              );
+                              prerr_endline (
+                                "{" ^
+                                string_concat_map ", "
+                                  Terminal.to_string (IndexSet.elements classe') ^
+                                "}"
+                              );
+                            )
+                          ) partitions
+                      ) classes
+                  ) gc.targets
+              ) gc.sources
+          ) (RG.state_goto_closure st);
+        check_terminal_partitions partitions (RG.state_parent st)*)
+
+    (*let () =
+      Index.iter Lr1.n (fun lr1 ->
+          check_terminal_partitions
+            (Array.to_list (LRijkstra.Classes.for_lr1 lr1)
+             |> List.map (fun c -> IndexSet.diff c terms_to_ignore))
+            (Some (RG.State.of_lr1 lr1)))*)
+
+    (*let expand_lrcs path lrcs acc =
+      IndexSet.fold (fun lrc acc -> (lrc :: path) :: acc) lrcs acc
+
+    let lrc_refinement lr1 =
+      let rec loop all_lrcs paths = function
+        | None -> (all_lrcs, paths)
+        | Some st ->
+          let paths =
+            List.concat_map (fun path ->
+                let lrc = List.hd path in
+                expand_lrcs path (Lrc.predecessors lrc) []
+              ) paths
+          in
+          let all_lrcs = indexset_bind all_lrcs Lrc.predecessors in
+          loop all_lrcs paths (RG.state_parent st)
+      in
+      let all_lrcs = (Lrc.lrcs_of_lr1 lr1) in
+      let paths = expand_lrcs [] all_lrcs [] in
+      let st = RG.State.of_lr1 lr1 in
+      let all_lrcs, all_paths = loop all_lrcs paths (Some st) in
+      Printf.eprintf "state %s has %d paths / %d lrcs\n"
+        (Lr1.to_string lr1) (List.length all_paths) (IndexSet.cardinal all_lrcs)
+
+    let () =
+      Index.iter Lr1.n lrc_refinement*)
+  end
+*)
 end
 
 let process_entry oc entry =
@@ -745,17 +925,17 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
-  let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
+  (*let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
   let check = Check.analyse initial in
   if false then
-  Seq.iter (fun (_st, _nfa, path) ->
-      let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
-      prerr_endline ("Found uncovered case: " ^ path);
-      (*prerr_endline ("when looking ahead at: " ^
-                     string_concat_map ", " Info.Terminal.to_string
-                       (Utils.BitSet.IndexSet.elements
-                          (snd (Coverage.Lrc.decompose nfa))))*)
-    ) (Check.paths check);
+    Seq.iter (fun (_st, _nfa, path) ->
+        let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
+        prerr_endline ("Found uncovered case: " ^ path);
+        (*prerr_endline ("when looking ahead at: " ^
+                       string_concat_map ", " Info.Terminal.to_string
+                         (Utils.BitSet.IndexSet.elements
+                            (snd (Coverage.Lrc.decompose nfa))))*)
+      ) (Check.paths check);*)
   (*Coverage.Offering_check.visit initial;*)
 
   Format.eprintf "(* %d states *)\n%!" (Dfa.StateMap.cardinal dfa);
