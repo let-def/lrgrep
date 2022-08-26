@@ -428,7 +428,7 @@ module Coverage = struct
     let () = Printf.eprintf "computed can fail in %.02fms\n"
         ((Sys.time () -. t0) *. 1000.)
 
-    module Extra = Gensym()
+    module Intermediate = Gensym()
 
     type lr1_paths = {
       goto: Terminal.set Lr1.map;
@@ -471,22 +471,31 @@ module Coverage = struct
       in
       process_predecessors 0 (Lr1.predecessors lr1) (Lr1.closed_reductions lr1)
 
+    module Paths = Sum(Lrc)(Intermediate)
+
     type lrc_paths =
-      | Fail
+      | Fail of Lrc.set
       | Empty
       | Step of {
-          state: Extra.n index;
+          states: Lrc.set;
+          path: Paths.n index;
           goto: Lrc.set;
           pops: lrc_paths Lr1.map;
         }
 
-    let mk_step goto pops =
+    let paths = IndexBuffer.make Empty
+
+    let mk_step initial states goto pops =
       if IndexSet.is_empty goto && IndexMap.is_empty pops then
         Empty
       else
-        Step {state = Extra.fresh(); goto; pops}
-
-    let intermediate_steps = Vector.make Lrc.n Empty
+        let path = match initial with
+          | None -> Paths.inj_r (Intermediate.fresh ())
+          | Some lrc -> Paths.inj_l lrc
+        in
+        let result = Step {states; path; goto; pops} in
+        IndexBuffer.set paths path result;
+        result
 
     let t0 = Sys.time ()
 
@@ -495,7 +504,7 @@ module Coverage = struct
         let lr1_steps = intermediate_lr1_steps lr1 in
         let compute_paths lrc =
           let la = Lrc.lookahead lrc in
-          let rec visit ipaths lrcs =
+          let rec visit initial ipaths lrcs =
             let exception Can_fail in
             let process_goto target la' acc =
               if IndexSet.disjoint la la' then acc else (
@@ -511,42 +520,143 @@ module Coverage = struct
               )
             in
             match IndexMap.fold process_goto ipaths.goto IndexSet.empty with
-            | exception Can_fail -> Fail
+            | exception Can_fail -> Fail lrcs
             | goto ->
               let pops =
                 IndexMap.fold (fun lr1 lrcs' opops ->
                     match IndexMap.find_opt lr1 ipaths.pops with
                     | None -> opops
                     | Some ipaths' ->
-                      match visit ipaths' lrcs' with
+                      match visit None ipaths' lrcs' with
                       | Empty -> opops
-                      | Fail | Step _ as opaths ->
+                      | Fail _ | Step _ as opaths ->
                         IndexMap.add lr1 opaths opops
                   ) (Lrc.predecessors_set_by_lr1 lrcs) IndexMap.empty
               in
-              mk_step goto pops
+              mk_step initial lrcs goto pops
           in
-          visit lr1_steps lr1 (IndexSet.singleton lrc)
+          visit (Some lrc) lr1_steps (IndexSet.singleton lrc)
         in
         let process_lrc lrc =
           assert (lr1 = Lrc.lr1_of_lrc lrc);
-          let paths =
-            if IndexSet.mem lrc fail_states
-            then Fail
-            else compute_paths lrc
-          in
-          Vector.set intermediate_steps lrc paths
+          if IndexSet.mem lrc fail_states then
+            IndexBuffer.set paths (Paths.inj_l lrc) (Fail (IndexSet.singleton lrc))
+          else if IndexSet.mem lrc can_fail_states then
+            ignore (compute_paths lrc : _)
         in
         IndexSet.iter process_lrc (Lrc.lrcs_of_lr1 lr1)
       in
       Index.iter Lr1.n process_lr1
 
-    let () = Printf.eprintf "computed lrc steps in %.02fms\n"
+    let paths = Vector.get (IndexBuffer.contents paths Paths.n)
+
+    let () = Printf.eprintf "computed lrc paths in %.02fms\n"
         ((Sys.time () -. t0) *. 1000.)
 
-    let () = Printf.eprintf "%d intermediate steps\n" (cardinal Extra.n)
+    let () = Printf.eprintf "%d intermediate steps\n" (cardinal Intermediate.n)
 
-    module NFA = Sum(Lrc)(Extra)
+    module NFA = struct
+      include Sum(Lrc)(Paths)
+
+      type state =
+        | Normal of Lrc.t
+        | Path of Paths.n index
+
+      let decode t =
+        match prj t with
+        | L x -> Normal x
+        | R x -> Path x
+
+      let encode = function
+        | Normal x -> inj_l x
+        | Path x -> inj_r x
+
+      let encode_normal_set lrcs =
+        (* TODO: This encoding is actually the identity, find a way to skip
+             it at some point *)
+        IndexSet.map inj_l lrcs
+
+      let initials : n indexset =
+        IndexSet.fold (fun lrc acc ->
+            let p = Paths.inj_l lrc in
+            match paths p with
+            | Empty -> acc
+            | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
+            | Step _ -> IndexSet.add (encode (Path p)) acc
+          )
+          (IndexSet.inter can_fail_states Lrc.offering_states) IndexSet.empty
+
+      let label n =
+        match decode n with
+        | Normal l -> Lrc.lr1_of_lrc l
+        | Path p ->
+          match paths p with
+          | Empty | Fail _ -> assert false
+          | Step s -> Lrc.lr1_of_lrc (IndexSet.choose s.states)
+
+      (* { lr1; state: Intermediate.n index; goto: Lrc.set; pops: lrc_paths Lr1.map; } *)
+
+      let normal_transitions n =
+        (* TODO: This encoding is actually the identity, find a way to skip
+             it at some point *)
+        encode_normal_set (Lrc.predecessors n)
+
+      let step_transitions = function
+        | Empty | Fail _ -> assert false
+        | Step {states; goto; pops; _} ->
+          let lr1 = Lrc.lr1_of_lrc (IndexSet.choose states) in
+          let result =
+            IndexMap.fold (fun lr1' step acc ->
+                match step with
+                | Empty -> assert false
+                | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
+                | (Step {path; _}) ->
+                  failwith "TODO"
+              ) pops IndexSet.empty
+          in
+          let from_goto =
+            if IndexSet.is_empty goto then
+              IndexSet.empty
+            else
+              let visited = ref IndexSet.empty in
+              let rec visit lrc acc =
+                if IndexSet.mem lrc !visited then acc else  (
+                  visited := IndexSet.add lrc !visited;
+                  match paths (Paths.inj_l lrc) with
+                  | Empty -> acc
+                  | Fail -> raise Failed
+                  | Step {pops; _} ->
+                    match IndexMap.find_opt lr1 pops with
+                    | None -> acc
+                    | Some Empty -> assert false
+                    | Some Fail -> raise Failed
+                    | Some (Step {pops; goto}) ->
+                      visit_goto
+
+                )
+              and visit_set set acc =
+                IndexSet.fold visit set acc
+              in
+          in
+
+
+      let initial_transitions n =
+        match initial_paths n with
+        | Empty -> IndexSet.empty
+        | Fail -> normal_transitions n
+        | Step {goto; pops} ->
+          assert
+
+      let intermediate_paths n =
+        match intermediate_paths n with
+        | _ -> assert false
+
+      let transitions n =
+        match decode n with
+        | Normal n -> normal_transitions n
+        | Intermediate n -> intermediate_transitions n
+        | Initial n -> initial_transitions n
+    end
   end
 
 
