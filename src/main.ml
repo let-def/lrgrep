@@ -542,7 +542,10 @@ module Coverage = struct
           if IndexSet.mem lrc fail_states then
             IndexBuffer.set paths (Paths.inj_l lrc) (Fail (IndexSet.singleton lrc))
           else if IndexSet.mem lrc can_fail_states then
-            ignore (compute_paths lrc : _)
+            match compute_paths lrc with
+            | Empty -> ()
+            | Fail _ as x -> IndexBuffer.set paths (Paths.inj_l lrc) x
+            | Step x -> assert (IndexSet.is_empty x.goto)
         in
         IndexSet.iter process_lrc (Lrc.lrcs_of_lr1 lr1)
       in
@@ -558,22 +561,9 @@ module Coverage = struct
     module NFA = struct
       include Sum(Lrc)(Paths)
 
-      type state =
-        | Normal of Lrc.t
-        | Path of Paths.n index
-
-      let decode t =
-        match prj t with
-        | L x -> Normal x
-        | R x -> Path x
-
-      let encode = function
-        | Normal x -> inj_l x
-        | Path x -> inj_r x
-
       let encode_normal_set lrcs =
-        (* TODO: This encoding is actually the identity, find a way to skip
-             it at some point *)
+        (* TODO: This encoding is actually the identity,
+                 find a way to skip it at some point *)
         IndexSet.map inj_l lrcs
 
       let initials : n indexset =
@@ -582,85 +572,109 @@ module Coverage = struct
             match paths p with
             | Empty -> acc
             | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
-            | Step _ -> IndexSet.add (encode (Path p)) acc
+            | Step _ -> IndexSet.add (inj_r p) acc
           )
           (IndexSet.inter can_fail_states Lrc.offering_states) IndexSet.empty
-
-      let label n =
-        match decode n with
-        | Normal l -> Lrc.lr1_of_lrc l
-        | Path p ->
-          match paths p with
-          | Empty | Fail _ -> assert false
-          | Step s -> Lrc.lr1_of_lrc (IndexSet.choose s.states)
-
-      (* { lr1; state: Intermediate.n index; goto: Lrc.set; pops: lrc_paths Lr1.map; } *)
-
-      let normal_transitions n =
-        (* TODO: This encoding is actually the identity, find a way to skip
-             it at some point *)
-        encode_normal_set (Lrc.predecessors n)
 
       let step_transitions = function
         | Empty | Fail _ -> assert false
         | Step {states; goto; pops; _} ->
           let lr1 = Lrc.lr1_of_lrc (IndexSet.choose states) in
           let result =
-            IndexMap.fold (fun lr1' step acc ->
+            IndexMap.fold (fun _lr1 step acc ->
                 match step with
                 | Empty -> assert false
                 | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
-                | (Step {path; _}) ->
-                  failwith "TODO"
+                | Step s' -> IndexSet.add (inj_r s'.path) acc
               ) pops IndexSet.empty
           in
-          let from_goto =
-            if IndexSet.is_empty goto then
-              IndexSet.empty
-            else
-              let visited = ref IndexSet.empty in
-              let rec visit lrc acc =
-                if IndexSet.mem lrc !visited then acc else  (
-                  visited := IndexSet.add lrc !visited;
-                  match paths (Paths.inj_l lrc) with
-                  | Empty -> acc
-                  | Fail -> raise Failed
-                  | Step {pops; _} ->
-                    match IndexMap.find_opt lr1 pops with
+          let result =
+            let visited = ref IndexSet.empty in
+            let rec visit lrc acc =
+              if IndexSet.mem lrc !visited then acc else  (
+                visited := IndexSet.add lrc !visited;
+                match paths (Paths.inj_l lrc) with
+                | Empty -> acc
+                | Fail lrcs ->
+                  IndexSet.fold begin fun lrc acc ->
+                    match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
+                    | None -> assert false
+                    | Some lrcs -> IndexSet.union (encode_normal_set lrcs) acc
+                  end lrcs acc
+                | Step t0 ->
+                  assert (IndexSet.is_empty t0.goto);
+                  begin match IndexMap.find_opt lr1 t0.pops with
                     | None -> acc
                     | Some Empty -> assert false
-                    | Some Fail -> raise Failed
-                    | Some (Step {pops; goto}) ->
-                      visit_goto
-
-                )
-              and visit_set set acc =
-                IndexSet.fold visit set acc
-              in
+                    | Some (Fail lrcs) -> IndexSet.union (encode_normal_set lrcs) acc
+                    | Some (Step t) ->
+                      let acc = IndexSet.add (inj_r t.path) acc in
+                      visit_set t.goto acc
+                  end
+              )
+            and visit_set set acc =
+              IndexSet.fold visit set acc
+            in
+            visit_set goto result
           in
+          result
 
+      let validate set =
+        IndexSet.iter (fun elt -> match prj elt with
+            | L _ -> ()
+            | R n -> match paths n with
+              | Empty | Fail _ -> assert false
+              | Step _ -> ()
+          ) set;
+        set
 
-      let initial_transitions n =
-        match initial_paths n with
-        | Empty -> IndexSet.empty
-        | Fail -> normal_transitions n
-        | Step {goto; pops} ->
-          assert
-
-      let intermediate_paths n =
-        match intermediate_paths n with
-        | _ -> assert false
+      let initials = validate initials
 
       let transitions n =
-        match decode n with
-        | Normal n -> normal_transitions n
-        | Intermediate n -> intermediate_transitions n
-        | Initial n -> initial_transitions n
+        validate @@
+        match prj n with
+        | L n -> encode_normal_set (Lrc.predecessors n)
+        | R n ->
+          begin match paths n with
+            | Empty -> IndexSet.empty
+            | Fail _ ->
+              begin match Paths.prj n with
+                | L (n : Lrc.t) -> encode_normal_set (Lrc.predecessors n)
+                | R (_ : Intermediate.n index) -> assert false
+              end
+            | Step _ as paths -> step_transitions paths
+          end
+
+      let label n =
+        match prj n with
+        | L l -> Lrc.lr1_of_lrc l
+        | R p ->
+          match paths p with
+          | Empty | Fail _ -> assert false
+          | Step s -> Lrc.lr1_of_lrc (IndexSet.choose s.states)
+
+      let () =
+        Index.iter Paths.n (fun p ->
+            match paths p with
+            | Step t -> assert (t.path == p)
+            | _ -> ())
+
+      (*let () =
+        let done_ = ref IndexSet.empty in
+        let todo = ref initials in
+        let iter = ref 0 in
+        while not (IndexSet.equal !done_ (validate !todo)) || !iter < 10 do
+          done_ := !todo;
+          todo := IndexSet.union !todo (indexset_bind !todo transitions);
+          incr iter
+        done;
+        Printf.eprintf "Explored all transitions in %d iterations" !iter*)
+
     end
   end
 
 
-  (*module Check_dfa(NFA : sig
+  module Check_dfa(NFA : sig
       include CARDINAL
       val initials : n indexset
       val label : n index -> Lr1.t
@@ -862,7 +876,7 @@ module Coverage = struct
     let label = Lrc.lr1_of_lrc
   end
 
-  module Refined_redgraph = struct
+  (*module Refined_redgraph = struct
     module RG = Dfa.Redgraph
 
     let visit lr1 =
@@ -1011,8 +1025,8 @@ module Coverage = struct
 
     let () =
       Index.iter Lr1.n lrc_refinement*)
-  end
-*)
+  end*)
+
 end
 
 let process_entry oc entry =
@@ -1034,9 +1048,9 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
-  (*let module Check = Coverage.Check_dfa(Coverage.Offering_intersector) in
-  let check = Check.analyse initial in
-  if false then
+  if true then
+    let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
+    let check = Check.analyse initial in
     Seq.iter (fun (_st, _nfa, path) ->
         let path = "... " ^ string_concat_map " " Info.Lr1.to_string path in
         prerr_endline ("Found uncovered case: " ^ path);
@@ -1044,8 +1058,7 @@ let process_entry oc entry =
                        string_concat_map ", " Info.Terminal.to_string
                          (Utils.BitSet.IndexSet.elements
                             (snd (Coverage.Lrc.decompose nfa))))*)
-      ) (Check.paths check);*)
-  (*Coverage.Offering_check.visit initial;*)
+      ) (Check.paths check);
 
   Format.eprintf "(* %d states *)\n%!" (Dfa.StateMap.cardinal dfa);
   output_char oc '\n';
