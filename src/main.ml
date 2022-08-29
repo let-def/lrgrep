@@ -563,7 +563,9 @@ module Coverage = struct
 
       let encode_normal_set lrcs =
         (* TODO: This encoding is actually the identity,
-                 find a way to skip it at some point *)
+                 find a way to skip it at some point.
+           Measurement indicates a 3% decrease of total runtime for OCaml
+           grammar coverage. *)
         IndexSet.map inj_l lrcs
 
       let initials : n indexset =
@@ -588,36 +590,29 @@ module Coverage = struct
                 | Step s' -> IndexSet.add (inj_r s'.path) acc
               ) pops IndexSet.empty
           in
-          let result =
-            let visited = ref IndexSet.empty in
-            let rec visit lrc acc =
-              if IndexSet.mem lrc !visited then acc else  (
-                visited := IndexSet.add lrc !visited;
-                match paths (Paths.inj_l lrc) with
-                | Empty -> acc
-                | Fail lrcs ->
-                  IndexSet.fold begin fun lrc acc ->
-                    match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
-                    | None -> assert false
-                    | Some lrcs -> IndexSet.union (encode_normal_set lrcs) acc
-                  end lrcs acc
-                | Step t0 ->
-                  assert (IndexSet.is_empty t0.goto);
-                  begin match IndexMap.find_opt lr1 t0.pops with
-                    | None -> acc
-                    | Some Empty -> assert false
-                    | Some (Fail lrcs) -> IndexSet.union (encode_normal_set lrcs) acc
-                    | Some (Step t) ->
-                      let acc = IndexSet.add (inj_r t.path) acc in
-                      visit_set t.goto acc
-                  end
-              )
-            and visit_set set acc =
-              IndexSet.fold visit set acc
-            in
-            visit_set goto result
+          let rec visit lrc acc =
+            match paths (Paths.inj_l lrc) with
+            | Empty -> acc
+            | Fail lrcs ->
+              IndexSet.fold begin fun lrc acc ->
+                match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
+                | None -> assert false
+                | Some lrcs -> IndexSet.union (encode_normal_set lrcs) acc
+              end lrcs acc
+            | Step t0 ->
+              assert (IndexSet.is_empty t0.goto);
+              begin match IndexMap.find_opt lr1 t0.pops with
+                | None -> acc
+                | Some Empty -> assert false
+                | Some (Fail lrcs) -> IndexSet.union (encode_normal_set lrcs) acc
+                | Some (Step t) ->
+                  let acc = IndexSet.add (inj_r t.path) acc in
+                  visit_set t.goto acc
+              end
+          and visit_set set acc =
+            IndexSet.fold visit set acc
           in
-          result
+          visit_set goto result
 
       let validate set =
         IndexSet.iter (fun elt -> match prj elt with
