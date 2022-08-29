@@ -578,41 +578,50 @@ module Coverage = struct
           )
           (IndexSet.inter can_fail_states Lrc.offering_states) IndexSet.empty
 
-      let step_transitions = function
+      let fold_path_transitions ~lookahead ~acc ~follow_goto ~reach ~fail =
+        function
         | Empty | Fail _ -> assert false
         | Step {states; goto; pops; _} ->
           let lr1 = Lrc.lr1_of_lrc (IndexSet.choose states) in
-          let result =
+          let acc =
             IndexMap.fold (fun _lr1 step acc ->
                 match step with
                 | Empty -> assert false
-                | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
-                | Step s' -> IndexSet.add (inj_r s'.path) acc
-              ) pops IndexSet.empty
+                | Fail lrcs -> fail lrcs lookahead acc
+                | Step s' -> reach s'.path lookahead acc
+              ) pops acc
           in
-          let rec visit lrc acc =
+          let rec visit lookahead lrc acc =
+            let lookahead = follow_goto lrc lookahead in
             match paths (Paths.inj_l lrc) with
             | Empty -> acc
             | Fail lrcs ->
               IndexSet.fold begin fun lrc acc ->
                 match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
                 | None -> assert false
-                | Some lrcs -> IndexSet.union (encode_normal_set lrcs) acc
+                | Some lrcs -> fail lrcs lookahead acc
               end lrcs acc
             | Step t0 ->
               assert (IndexSet.is_empty t0.goto);
               begin match IndexMap.find_opt lr1 t0.pops with
                 | None -> acc
                 | Some Empty -> assert false
-                | Some (Fail lrcs) -> IndexSet.union (encode_normal_set lrcs) acc
+                | Some (Fail lrcs) -> fail lrcs lookahead acc
                 | Some (Step t) ->
-                  let acc = IndexSet.add (inj_r t.path) acc in
-                  visit_set t.goto acc
+                  visit_set lookahead t.goto (reach t.path lookahead acc)
               end
-          and visit_set set acc =
-            IndexSet.fold visit set acc
+          and visit_set lookahead set acc =
+            IndexSet.fold (visit lookahead) set acc
           in
-          visit_set goto result
+          visit_set lookahead goto acc
+
+      let step_transitions path =
+        fold_path_transitions path
+          ~lookahead:()
+          ~acc:IndexSet.empty
+          ~follow_goto:(fun _ () -> ())
+          ~reach:(fun step () acc -> IndexSet.add (inj_r step) acc)
+          ~fail:(fun lrcs () acc -> IndexSet.union (encode_normal_set lrcs) acc)
 
       let validate set =
         IndexSet.iter (fun elt -> match prj elt with
