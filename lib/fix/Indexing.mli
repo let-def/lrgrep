@@ -152,6 +152,13 @@ module Index : sig
      raised. *)
   val enumerate : 'n cardinal -> (unit -> 'n index)
 
+  (** To implement clever datastructures (for instance using bit-packing),
+      it is useful to manipulate indices as integers. See [IndexSet] or
+      [IndexMap] for usage examples. Refrain from using it if you are not sure
+      of what you are doing since this can break some modular abstraction.
+
+      To be safe, the coerced module should never introduce new indices; that
+      is, it should not return an index that it did not receive as argument. *)
   module Unsafe : sig
     module type T = sig type 'a t end
     module type F = functor (X : T) -> sig module type S end

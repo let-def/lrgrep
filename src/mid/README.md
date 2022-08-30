@@ -13,3 +13,5 @@ The [Regexp](regexp.ml) defines the intermediate representation of regular expre
 The [Redgraph](redgraph.ml) module computes information necessary to implement reduction efficiently.
 
 The [Reduction](reduction.ml) module connects Regexp and Redgraph to implement derivation modulo reductoin. 
+
+**TODO:** Redgraph recomputes some information from [Info], notably the [closed_reductions]. Cleanup.
