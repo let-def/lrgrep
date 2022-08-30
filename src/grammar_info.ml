@@ -250,10 +250,19 @@ struct
       Vector.get (Vector.init n import_lr1)
 
     let to_string lr1 =
-      string_of_index lr1 ^ ":" ^
       match incoming lr1 with
-      | None -> "<initial state>"
-      | Some sym -> Symbol.name sym
+      | Some sym -> string_of_index lr1 ^ ":" ^ Symbol.name sym
+      | None -> (
+          match items lr1 with
+          | [p, 0] ->
+            let p = Production.to_g p in
+            assert (Grammar.Production.kind p = `START);
+            let name = Grammar.Nonterminal.name (Grammar.Production.lhs p) in
+            let name = Bytes.of_string name in
+            Bytes.set name (Bytes.length name - 1) ':';
+            Bytes.unsafe_to_string name
+          | _ -> assert false
+        )
 
     let list_to_string lr1s =
       "[" ^ string_concat_map "; " to_string lr1s ^ "]"

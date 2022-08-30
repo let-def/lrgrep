@@ -882,6 +882,60 @@ module Coverage = struct
 
 end
 
+open Utils.BitSet
+
+let rec follow_lookahead_path lookahead state = function
+  | [] -> lookahead
+  | x :: xs ->
+    let open Coverage in
+    match Lrce.NFA.prj state with
+    | L _ -> lookahead
+    | R path ->
+      let lookahead =
+        Lrce.NFA.fold_path_transitions (Lrce.paths path)
+          ~lookahead ~acc:IndexSet.empty
+          ~follow_goto:(fun lrc la ->
+              let lr1 = Lrc.lr1_of_lrc lrc in
+              let la = IndexSet.inter (Lrc.lookahead lrc) la in
+              let la = IndexSet.diff la (Info.Lr1.closed_reject lr1) in
+              la
+            )
+          ~reach:(fun path lookahead acc ->
+              if compare_index path x = 0
+              then IndexSet.union acc lookahead
+              else acc
+            )
+          ~fail:(fun lrcs lookahead acc ->
+              match Lrce.NFA.prj x with
+              | L lrc' ->
+                if IndexSet.mem lrc' lrcs then
+                  IndexSet.union acc lookahead
+                else
+                  acc
+              | R _ -> acc
+            )
+      in
+      follow_lookahead_path lookahead x xs
+
+let compute_lookahead = function
+  | [] -> assert false
+  | entry :: rest ->
+    match Coverage.Lrce.NFA.prj entry with
+    | L lrc ->
+      let la = Coverage.Lrc.lookahead lrc in
+      let la =
+        IndexSet.inter la (Info.Lr1.closed_reject (Coverage.Lrc.lr1_of_lrc lrc))
+      in
+      assert (not (IndexSet.is_empty la));
+      la
+    | R path ->
+      match Coverage.Lrce.paths path with
+      | Empty | Fail _ -> assert false
+      | Step s ->
+        assert (IndexSet.is_singleton s.states);
+        let lrc = IndexSet.choose s.states in
+        follow_lookahead_path (Coverage.Lrc.lookahead lrc) entry rest
+
 let process_entry oc entry =
   let cases, vars =
     let transl_case i case =
@@ -908,38 +962,27 @@ let process_entry oc entry =
     try Seq.iter (fun (_st, _nfa, nfa_path) ->
         let initial = ref false in
         let print nfa =
-          match Info.Lr1.incoming (Coverage.Lrce.NFA.label nfa) with
-          | None -> initial := true; "<entry point>"
+          let lr1 = Coverage.Lrce.NFA.label nfa in
+          match Info.Lr1.incoming lr1 with
+          | None -> initial := true; Info.Lr1.to_string lr1
           | Some sym -> Info.Symbol.name sym
         in
         let path = List.rev_map print nfa_path in
         let path = if !initial then path else "..." :: path in
         let path = String.concat " " path in
         prerr_endline ("Found uncovered case:\n  " ^ path);
-        let la = match nfa_path with
-          | [] -> assert false
-          | entry :: _ ->
-            match Coverage.Lrce.NFA.prj entry with
-            | L lrc -> Coverage.Lrc.lookahead lrc
-            | R path ->
-              match Coverage.Lrce.paths path with
-              | Empty | Fail _ -> assert false
-              | Step s ->
-                assert (Utils.BitSet.IndexSet.is_singleton s.states);
-                let lrc = Utils.BitSet.IndexSet.choose s.states in
-                Coverage.Lrc.lookahead lrc
-        in
+        let la = compute_lookahead nfa_path in
         prerr_endline ("Looking ahead at:\n  {" ^
                        string_concat_map ", " Info.Terminal.to_string
                          (Utils.BitSet.IndexSet.elements la) ^ "}\n");
         decr count;
-        if !count = 0 then (
+        (*if !count = 0 then (
           prerr_endline "Press enter to get more cases, \
                          type anything else to stop";
           match read_line () with
           | "" -> count := 6
           | _ -> raise Exit
-        )
+        )*)
       ) (Check.paths check)
     with Exit -> ()
   );
