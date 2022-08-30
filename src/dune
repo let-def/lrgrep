@@ -1,8 +1,4 @@
-(menhir (modules parser))
-(ocamllex lexer)
-
 (executable
  (name main)
  (public_name lrgrep)
- (modules :standard)
- (libraries cmon fix utils menhirSdk support))
+ (libraries mid front support fix cmon utils menhirSdk lrijkstra))

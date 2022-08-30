@@ -1,5 +1,7 @@
+open Front
+open Utils
+open Misc
 open Fix.Indexing
-open Utils.Misc
 
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 

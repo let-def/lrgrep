@@ -70,13 +70,13 @@ let grammar_file = match !grammar_file with
 let print_parse_error_and_exit lexbuf exn =
   let bt = Printexc.get_raw_backtrace () in
   begin match exn with
-    | Parser.Error ->
+    | Front.Parser.Error ->
       let p = Lexing.lexeme_start_p lexbuf in
       Printf.fprintf stderr
         "File \"%s\", line %d, character %d: syntax error.\n"
         p.Lexing.pos_fname p.Lexing.pos_lnum
         (p.Lexing.pos_cnum - p.Lexing.pos_bol)
-    | Lexer.Lexical_error {msg; file; line; col} ->
+    | Front.Lexer.Lexical_error {msg; file; line; col} ->
       Printf.fprintf stderr
         "File \"%s\", line %d, character %d: %s.\n"
         file line col msg
@@ -86,55 +86,25 @@ let print_parse_error_and_exit lexbuf exn =
 
 let lexer_definition =
   let ic = open_in_bin source_file in
-  Lexer.ic := Some ic;
+  Front.Lexer.ic := Some ic;
   let lexbuf = Lexing.from_channel ~with_positions:true ic in
   Lexing.set_filename lexbuf source_file;
   let result =
-    try Parser.lexer_definition Lexer.main lexbuf
+    try Front.Parser.lexer_definition Front.Lexer.main lexbuf
     with exn -> print_parse_error_and_exit lexbuf exn
   in
-  Lexer.ic := None;
+  Front.Lexer.ic := None;
   result
 
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
 
-module Info = Grammar_info.Make(Grammar)
+module Info = Mid.Info.Make(Grammar)
 
-module Regexp = Regexp.Make(Info)
+module Regexp = Mid.Regexp.Make(Info)
 
-module Dfa = Dfa.Make(Regexp)()
+module Dfa = Mid.Dfa.Make(Regexp)()
 
-(*let rec interp_kre kres reds stack =
-  let visited = ref KRESet.empty in
-  let reached = ref [] and direct = ref [] and reduce = ref [] in
-  let kderive kre = KRESet.prederive ~visited ~reached ~direct ~reduce kre in
-  KRESet.iter kderive kres;
-  let reduce = KRESet.of_list !reduce in
-  eprintf "------------------------\n";
-  eprintf "Matcher definition:\n%a\n" print_cmon (KRESet.cmon kres);
-  eprintf "Ongoing reductions: [%s]\n"
-    (string_concat_map ";" string_of_index (IndexSet.elements reds));
-  eprintf "Matching actions: [%s]\n"
-    (string_concat_map ";" string_of_int !reached);
-  eprintf "New reductions:\n%a\n" print_cmon (KRESet.cmon reduce);
-  match stack with
-  | [] -> eprintf "End of stack\n"
-  | x :: xs -> (
-    let lr1 = Index.of_int Lr1.n x in
-    eprintf "Parser in state %d - %s\n" x (Lr1.to_string lr1);
-    let reds =
-      if KRESet.is_empty reduce
-      then reds
-      else redmap_add reds (Redgraph.State.of_lr1 lr1) reduce
-    in
-    let step_kre acc (sg, kre') =
-      if IndexSet.mem lr1 sg
-      then KRESet.add kre' acc
-      else acc
-    in
-    let kres = List.fold_left step_kre KRESet.empty !direct in
-    interp_kre kres reds xs
-  )*)
+open Front
 
 let gen_code entry oc vars clauses =
   let print fmt = Printf.fprintf oc fmt in

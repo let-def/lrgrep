@@ -1,6 +1,7 @@
-open Fix.Indexing
+open Front
 open Utils
 open Misc
+open Fix.Indexing
 
 module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   module Info = Info

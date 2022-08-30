@@ -12,7 +12,7 @@ open Fix.Indexing
 open Utils
 open Misc
 
-module Make (Info : Sigs.INFO)() =
+module Make (Info : Mid.Sigs.INFO)() =
 struct
   open Info
 
