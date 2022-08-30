@@ -102,7 +102,7 @@ module Info = Mid.Info.Make(Grammar)
 
 module Regexp = Mid.Regexp.Make(Info)
 
-module Dfa = Mid.Dfa.Make(Regexp)()
+module Dfa = Back.Dfa.Make(Regexp)()
 
 open Front
 

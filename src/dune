@@ -1,4 +1,5 @@
 (executable
  (name main)
  (public_name lrgrep)
- (libraries mid front support fix cmon utils menhirSdk lrijkstra))
+ (libraries front mid back support 
+            fix cmon utils menhirSdk lrijkstra))

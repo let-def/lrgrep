@@ -1,0 +1,3 @@
+(library
+ (name mid)
+ (libraries front utils fix support menhirSdk))

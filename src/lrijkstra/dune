@@ -1,0 +1,4 @@
+(library
+ (name lrijkstra)
+ (wrapped false)
+ (libraries mid utils fix))
