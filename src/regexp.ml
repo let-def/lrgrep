@@ -1,6 +1,5 @@
 open Fix.Indexing
 open Utils
-open BitSet
 open Misc
 
 module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct

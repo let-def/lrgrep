@@ -1,1 +1,1 @@
-include Refine.Make(BitSet.IndexSet)
+include Refine.Make(IndexSet)

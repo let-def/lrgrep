@@ -11,7 +11,6 @@
 open Fix.Indexing
 open Utils
 open Misc
-open BitSet
 
 module Make (Info : Sigs.INFO)() =
 struct

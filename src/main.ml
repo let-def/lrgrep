@@ -13,7 +13,8 @@
 (*                                                                        *)
 (**************************************************************************)
 
-open Utils.Misc
+open Utils
+open Misc
 
 (* Command-line parsing. *)
 
@@ -167,7 +168,6 @@ let output_table oc entry vars (initial : Dfa.Repr.t) (program, table, remap) =
 module Coverage = struct
   open Fix.Indexing
   open Utils
-  open BitSet
   open Info
 
   module LRijkstra = LRijkstraFast.Make(Info)()
@@ -882,8 +882,6 @@ module Coverage = struct
 
 end
 
-open Utils.BitSet
-
 let rec follow_lookahead_path lookahead state = function
   | [] -> lookahead
   | x :: xs ->
@@ -974,7 +972,7 @@ let process_entry oc entry =
         let la = compute_lookahead nfa_path in
         prerr_endline ("Looking ahead at:\n  {" ^
                        string_concat_map ", " Info.Terminal.to_string
-                         (Utils.BitSet.IndexSet.elements la) ^ "}\n");
+                         (IndexSet.elements la) ^ "}\n");
         decr count;
         (*if !count = 0 then (
           prerr_endline "Press enter to get more cases, \

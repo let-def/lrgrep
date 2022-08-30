@@ -45,7 +45,6 @@ let merge_group
     loop [] [s1] k1 rest
 
 open Fix.Indexing
-open BitSet
 
 type 'a indexset = 'a IndexSet.t
 
@@ -82,6 +81,9 @@ let vector_iter v f =
 let vector_tabulate n f =
   Vector.get (Vector.init n f)
 
+let equal_index =
+  (Int.equal : int -> int -> bool :> _ index -> _ index -> bool)
+
 let compare_index =
   (Int.compare : int -> int -> int :> _ index -> _ index -> int)
 
@@ -92,14 +94,6 @@ let string_of_index =
 
 let string_of_indexset ?(string_of_index=string_of_index) xs =
   "[" ^ string_concat_map ";" string_of_index (IndexSet.elements xs) ^ "]"
-
-let cmon_index =
-  (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
-
-let cmon_indexset xs =
-  Cmon.constant (
-    "[" ^ string_concat_map ";" string_of_index (IndexSet.elements xs) ^ "]"
-  )
 
 let indexmap_update map k f =
   IndexMap.add k (f (IndexMap.find_opt k map)) map
@@ -126,8 +120,19 @@ let rec merge_uniq cmp l1 l2 =
     then h1 :: merge_uniq cmp t1 l2
     else h2 :: merge_uniq cmp l1 t2
 
+let cons_option x xs =
+  match x with
+  | None -> xs
+  | Some x -> x :: xs
+
+let cmon_index =
+  (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
+
+let cmon_indexset xs =
+  Cmon.constant (
+    "[" ^ string_concat_map ";" string_of_index (IndexSet.elements xs) ^ "]"
+  )
+
 let print_cmon oc cmon =
   PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
 
-let cons_if cond x xs =
-  if cond then x :: xs else xs

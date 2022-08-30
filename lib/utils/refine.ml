@@ -1,5 +1,3 @@
-module IntSet = BitSet.IntSet
-
 module type DECOMPOSABLE = sig
   type 'a t
   val is_empty : 'a t -> bool

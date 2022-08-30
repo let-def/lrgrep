@@ -1,7 +1,7 @@
 open Fix.Indexing
 
-type ('n, !+'a) t
-(** The type of maps from type [key] to type ['a]. *)
+type (+'n, !+'a) t
+(** The type of maps from type ['n index] to type ['a]. *)
 
 val empty: ('n, 'a) t
 (** The empty map. *)
@@ -95,13 +95,13 @@ val fold: ('n index -> 'a -> 'b -> 'b) -> ('n, 'a) t -> 'b -> 'b
     where [k1 ... kN] are the keys of all bindings in [m]
     (in increasing order), and [d1 ... dN] are the associated data. *)
 
-(*val for_all: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool*)
+val for_all: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool
 (** [for_all f m] checks if all the bindings of the map
     satisfy the predicate [f].
     @since 3.12.0
 *)
 
-(*val exists: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool*)
+val exists: ('n index -> 'a -> bool) -> ('n, 'a) t -> bool
 (** [exists f m] checks if at least one binding of the map
     satisfies the predicate [f].
     @since 3.12.0
@@ -116,7 +116,7 @@ val filter: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t
     @before 4.03 Physical equality was not ensured.
 *)
 
-(*val filter_map: ('n index -> 'a -> 'b option) -> ('n, 'a) t -> ('n, 'b) t*)
+val filter_map: ('n index -> 'a -> 'b option) -> ('n, 'a) t -> ('n, 'b) t
 (** [filter_map f m] applies the function [f] to every binding of
     [m], and builds a map from the results. For each binding
     [(k, v)] in the input map:
@@ -136,7 +136,7 @@ val filter: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t
     @since 4.11.0
 *)
 
-(*val partition: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t * ('n, 'a) t*)
+val partition: ('n index -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t * ('n, 'a) t
 (** [partition f m] returns a pair of maps [(m1, m2)], where
     [m1] contains all the bindings of [m] that satisfy the
     predicate [f], and [m2] is the map with all the bindings of
@@ -149,7 +149,7 @@ val cardinal: ('n, 'a) t -> int
     @since 3.12.0
 *)
 
-(*val bindings: ('n, 'a) t -> ('n index * 'a) list*)
+val bindings: ('n, 'a) t -> ('n index * 'a) list
 (** Return the list of all bindings of the given map.
     The returned list is sorted in increasing order of keys with respect
     to the ordering [Ord.compare], where [Ord] is the argument
@@ -157,40 +157,40 @@ val cardinal: ('n, 'a) t -> int
     @since 3.12.0
 *)
 
-(*val min_binding: ('n, 'a) t -> ('n index * 'a)*)
+val min_binding: ('n, 'a) t -> ('n index * 'a)
 (** Return the binding with the smallest key in a given map
     (with respect to the [Ord.compare] ordering), or raise
     [Not_found] if the map is empty.
     @since 3.12.0
 *)
 
-(*val min_binding_opt: ('n, 'a) t -> ('n index * 'a) option*)
+val min_binding_opt: ('n, 'a) t -> ('n index * 'a) option
 (** Return the binding with the smallest key in the given map
     (with respect to the [Ord.compare] ordering), or [None]
     if the map is empty.
     @since 4.05
 *)
 
-(*val max_binding: ('n, 'a) t -> ('n index * 'a)*)
+val max_binding: ('n, 'a) t -> ('n index * 'a)
 (** Same as {!S.min_binding}, but returns the binding with
     the largest key in the given map.
     @since 3.12.0
 *)
 
-(*val max_binding_opt: ('n, 'a) t -> ('n index * 'a) option*)
+val max_binding_opt: ('n, 'a) t -> ('n index * 'a) option
 (** Same as {!S.min_binding_opt}, but returns the binding with
     the largest key in the given map.
     @since 4.05
 *)
 
-(*val choose: ('n, 'a) t -> ('n index * 'a)*)
+val choose: ('n, 'a) t -> ('n index * 'a)
 (** Return one binding of the given map, or raise [Not_found] if
     the map is empty. Which binding is chosen is unspecified,
     but equal bindings will be chosen for equal maps.
     @since 3.12.0
 *)
 
-(*val choose_opt: ('n, 'a) t -> ('n index * 'a) option*)
+val choose_opt: ('n, 'a) t -> ('n index * 'a) option
 (** Return one binding of the given map, or [None] if
     the map is empty. Which binding is chosen is unspecified,
     but equal bindings will be chosen for equal maps.
@@ -218,7 +218,7 @@ val find_opt: 'n index -> ('n, 'a) t -> 'a option
     @since 4.05
 *)
 
-(*val find_first: ('n index -> bool) -> ('n, 'a) t -> 'n index * 'a*)
+val find_first: ('n index -> bool) -> ('n, 'a) t -> 'n index * 'a
 (** [find_first f m], where [f] is a monotonically increasing function,
     returns the binding of [m] with the lowest key [k] such that [f k],
     or raises [Not_found] if no such key exists.
@@ -231,21 +231,21 @@ val find_opt: 'n index -> ('n, 'a) t -> 'a option
     @since 4.05
 *)
 
-(*val find_first_opt: ('n index -> bool) -> ('n, 'a) t -> ('n index * 'a) option*)
+val find_first_opt: ('n index -> bool) -> ('n, 'a) t -> ('n index * 'a) option
 (** [find_first_opt f m], where [f] is a monotonically increasing
     function, returns an option containing the binding of [m] with the
     lowest key [k] such that [f k], or [None] if no such key exists.
     @since 4.05
 *)
 
-(*val find_last: ('n index -> bool) -> ('n, 'a) t -> 'n index * 'a*)
+val find_last: ('n index -> bool) -> ('n, 'a) t -> 'n index * 'a
 (** [find_last f m], where [f] is a monotonically decreasing function,
     returns the binding of [m] with the highest key [k] such that [f k],
     or raises [Not_found] if no such key exists.
     @since 4.05
 *)
 
-(*val find_last_opt: ('n index -> bool) -> ('n, 'a) t -> ('n index * 'a) option*)
+val find_last_opt: ('n index -> bool) -> ('n, 'a) t -> ('n index * 'a) option
 (** [find_last_opt f m], where [f] is a monotonically decreasing
     function, returns an option containing the binding of [m] with
     the highest key [k] such that [f k], or [None] if no such key
@@ -260,31 +260,31 @@ val map: ('a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
     The bindings are passed to [f] in increasing order
     with respect to the ordering over the type of the keys. *)
 
-(*val mapi: ('n index -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t*)
+val mapi: ('n index -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
 (** Same as {!S.map}, but the function receives as arguments both the
     key and the associated value for each binding of the map. *)
 
 (** {1 Maps and Sequences} *)
 
-(*val to_seq : ('n, 'a) t -> ('n index * 'a) Seq.t*)
+val to_seq : ('n, 'a) t -> ('n index * 'a) Seq.t
 (** Iterate on the whole map, in ascending order of keys
     @since 4.07 *)
 
-(*val to_rev_seq : ('n, 'a) t -> ('n index * 'a) Seq.t*)
+val to_rev_seq : ('n, 'a) t -> ('n index * 'a) Seq.t
 (** Iterate on the whole map, in descending order of keys
     @since 4.12 *)
 
-(*val to_seq_from : 'n index -> ('n, 'a) t -> ('n index * 'a) Seq.t*)
+val to_seq_from : 'n index -> ('n, 'a) t -> ('n index * 'a) Seq.t
 (** [to_seq_from k m] iterates on a subset of the bindings of [m],
     in ascending order of keys, from key [k] or above.
     @since 4.07 *)
 
-(*val add_seq : ('n index * 'a) Seq.t -> ('n, 'a) t -> ('n, 'a) t*)
+val add_seq : ('n index * 'a) Seq.t -> ('n, 'a) t -> ('n, 'a) t
 (** Add the given bindings to the map, in order.
     @since 4.07 *)
 
-(*val of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t*)
+val of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t
 (** Build a map from the given bindings
     @since 4.07 *)
 
-val domain : ('n, _) t -> 'n BitSet.IndexSet.t
+val domain : ('n, _) t -> 'n IndexSet.t

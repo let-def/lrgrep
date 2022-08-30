@@ -1,3 +1,5 @@
+open Utils
+
 module RT = Lrgrep_runtime
 
 module Sparse_packer : sig
@@ -187,9 +189,7 @@ let compare_transition_action (v1, t1) (v2, t2) =
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
-module IS = Utils.BitSet.IntSet
-
-let compact (dfa : (int option * IS.t * (IS.t * transition_action) list) array) =
+let compact (dfa : (int option * IntSet.t * (IntSet.t * transition_action) list) array) =
   let code = Code_emitter.make () in
   let index = Sparse_packer.make () in
   let halt_pc = ref (Code_emitter.position code) in
@@ -212,12 +212,12 @@ let compact (dfa : (int option * IS.t * (IS.t * transition_action) list) array) 
       let default, other_transitions =
         let _, most_frequent_action =
           List.fold_left (fun (count, _ as default) (dom, action) ->
-              let count' = IS.cardinal dom in
+              let count' = IntSet.cardinal dom in
               transition_count := !transition_count + count';
               if count' > count
               then (count', Some action)
               else default
-            ) (IS.cardinal halting, None) transitions
+            ) (IntSet.cardinal halting, None) transitions
         in
         let prepare_transition (dom, action) =
           match most_frequent_action with
@@ -226,7 +226,7 @@ let compact (dfa : (int option * IS.t * (IS.t * transition_action) list) array) 
         in
         let other = List.filter_map prepare_transition transitions in
         let other =
-          if Option.is_some most_frequent_action && IS.cardinal halting > 0
+          if Option.is_some most_frequent_action && IntSet.cardinal halting > 0
           then (halting, halt_pc) :: other
           else other
         in
@@ -241,7 +241,7 @@ let compact (dfa : (int option * IS.t * (IS.t * transition_action) list) array) 
       begin match
         List.concat_map
           (fun (dom, target) ->
-             List.map (fun x -> (x, target)) (IS.elements dom))
+             List.map (fun x -> (x, target)) (IntSet.elements dom))
           other_transitions
         with
         | [] -> ()

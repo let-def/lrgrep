@@ -1,6 +1,5 @@
 open Fix.Indexing
 open Utils
-open BitSet
 open Misc
 
 module Make(Redgraph : Sigs.REDGRAPH) :

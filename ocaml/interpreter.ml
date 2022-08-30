@@ -1,7 +1,6 @@
 open Utils
-module IndexSet = BitSet.IndexSet
-type 'a indexset = 'a IndexSet.t
-type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
+open Misc
+open Fix.Indexing
 
 (* The lexer generator. Command-line parsing. *)
 
@@ -55,36 +54,6 @@ let grammar : MenhirSdk.Cmly_format.grammar =
     failwith "Internal error: grammar has invalid magic number";
   Marshal.from_string Interpreter_data.grammar magic_length
 
-open Fix.Indexing
-
-let cons_option x xs =
-  match x with
-  | None -> xs
-  | Some x -> x :: xs
-
-let array_set_add arr index value =
-  arr.(index) <- IndexSet.add value arr.(index)
-
-let array_cons arr index value =
-  arr.(index) <- value :: arr.(index)
-
-let vector_iter v f =
-  Index.iter (Vector.length v) (fun i -> f (Vector.get v i ))
-
-let compare_index =
-  (Int.compare : int -> int -> int :> _ index -> _ index -> int)
-
-let string_of_index =
-  (string_of_int : int -> string :> _ index -> string)
-
-let cmon_index =
-  (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
-
-let cmon_indexset xs =
-  Cmon.constant (
-    "[" ^ String.concat ";" (List.map string_of_index (IndexSet.elements xs)) ^ "]"
-  )
-
 let rec merge_uniq cmp l1 l2 =
   match l1, l2 with
   | [], l2 -> l2
@@ -129,12 +98,10 @@ let symbol_name = function
   | T t -> Terminal.print t
   | N n -> Nonterminal.print n
 
-module TerminalSet = BitSet.Make(Terminal)
-
 let all_terminals =
-  let acc = ref TerminalSet.empty in
+  let acc = ref IndexSet.empty in
   for i = Terminal.count - 1 downto 0
-  do acc := TerminalSet.add (Terminal.of_int i) !acc done;
+  do acc := IndexSet.add (Terminal.of_int i) !acc done;
   !acc
 
 module Production = struct
