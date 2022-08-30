@@ -150,14 +150,14 @@ rule main = parse
   { update_loc lexbuf name (int_of_string num);
     main lexbuf
   }
-| "(*"
+| "(*" (* Ignore comments *)
   { comment_depth := 1;
     handle_lexical_error comment lexbuf;
     main lexbuf
   }
-| '_'
+| '_' (* For wildcards *)
   { UNDERSCORE }
-| ident
+| ident (* All names *)
   { match Lexing.lexeme lexbuf with
     | "rule" -> RULE
     | "parse" -> PARSE
@@ -167,7 +167,7 @@ rule main = parse
     | "partial" -> PARTIAL
     | s -> IDENT s
   }
-| '{' [' ' '\009']* '.' [' ' '\009']* '}'
+| '{' [' ' '\009']* '.' [' ' '\009']* '}' (* unreachable clause *)
   { UNREACHABLE }
 | '{'
   { let p = Lexing.lexeme_end_p lexbuf in
@@ -191,8 +191,7 @@ rule main = parse
 | ']' { RBRACKET }
 | '*' { STAR }
 | '?' { QUESTION }
-(*|'+' { PLUS }*)
-| '!' { BANG }
+| '!' { BANG } (* the "reduction" operator *)
 | '(' { LPAREN }
 | ')' { RPAREN }
 | ':' { COLON }

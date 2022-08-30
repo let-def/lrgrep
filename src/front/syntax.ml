@@ -1,5 +1,8 @@
-(* The shallow abstract syntax *)
+(** {1 The shallow abstract syntax} *)
 
+(** A location represents a range of characters from the input file.
+    TODO: this is inherited from ocamllex and not really used anymore, cleanup.
+*)
 type location = {
   loc_file : string;
   start_pos : int;
@@ -8,58 +11,119 @@ type location = {
   start_col : int;
 }
 
+(** This represents a piece of OCaml code, as appearing in semantic
+    actions, as well as in the header and trailer. *)
 type ocaml_code = location * string
 
+(** A position in the input file. *)
 type position = {line: int; col: int}
 
+(** A grammar symbol (a terminal or a non-terminal) *)
 type symbol =
   | Name of string
+  (** Symbols are usually simples names, like a or X *)
   | Apply of string * symbol list
+  (** Menhir supports higher-order non-terminals. In this case, a symbol is
+      the application of the higher-order non-terminal to a some arguments.
+      E.g separated_list(sep, X) is represented as:
+        [Apply ("separated_list", [Name "sep"; Name "X"])] *)
 
+(** An optional symbol, used to represents wildcards "_" *)
+type wild_symbol = symbol option
+
+(** Atomic pattern element (the "characters" of our regular expresssions) *)
 type atom_desc =
   | Symbol of symbol
-  | Item of {
-      lhs: symbol option;
-      prefix: symbol option list;
-      suffix: symbol option list;
-    }
+  (** [Symbol s] matches all states whose incoming transitions are labelled
+      with symbol [s] *)
+  | Item of
+      (** [Item {lhs; prefix; suffix}] matches all states that have a
+          corresponding an item of the form [lhs ::= ... prefix . suffix ... ]
+          in their item set. They are all optional, and for prefix and suffix,
+          longer productions are allowed.
+          For instance, [. INT] will match an actual item of the form
+          [foo: BAR . INT baz]. *)
+      {
+        lhs: symbol option;
+        (** if specified, the item must have this non-terminal as lhs *)
+        prefix: symbol option list;
+        (** the list of producers before the dot *)
+        suffix: symbol option list;
+        (** the list of producers after the dot *)
+      }
   | Wildcard
+    (* Matches all states *)
 
+(** [regular_desc] describes the different cases of the regular expression
+    syntax. *)
 type regular_desc =
   | Atom of atom_desc * string option
+  (** Leaves of regular expressions, and an optional name to bind the state
+      too. [_ as x] is represented as [Atom (Wildcard, Some "x")]. *)
   | Alternative of regular_expr list
+  (** A disjunction of multiple expressions.
+      [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
   | Repetition of regular_expr
+  (** [Repetition e] represents [e*] *)
   | Reduce
+  (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
+  (** [Concat [e1; e2; ..]] is [e1; e2; ...] *)
 
+(** [regular_expr] adds position information to [regular_desc] for error
+    reporting purposes. *)
 and regular_expr = {
   desc: regular_desc;
-  position: position;
+  position: position; (** the position where this term ends *)
 }
 
+(** The semantic action associated to a pattern *)
 type clause_action =
-  | Unreachable
-  | Partial of ocaml_code
-  | Total of ocaml_code
+  | Total of ocaml_code   (** ... { code }, normal semantic action **)
+  | Partial of ocaml_code (** ... partial { ... }, a semantic action that can
+                              return [None] to continue matching *)
+  | Unreachable           (** [... { . }] the pattern should never match *)
 
+(** A clause is a pair of a pattern and an action, representing one rule *)
 type clause = {
-  pattern: regular_expr;
-  action: clause_action;
+  pattern: regular_expr; (** the pattern *)
+  action: clause_action; (** the semantic action *)
 }
 
+(** An .mlyl file can contain multiple entrypoints, each is represented as an
+    instance of [entry] *)
 type entry = {
-  startsymbols: string list;
-  error   : bool;
-  name    : string;
-  args    : string list;
-  clauses : clause list;
+  startsymbols: string list; (** TODO: unused for now, the list of startsymbols
+                                 of the grammar that this rule applies on. *)
+  error   : bool; (** true if the entry is of the form
+                        rule x ... = parse error
+                        | ...
+                      This entrypoint only matches stack that ended up in an
+                      error. *)
+  name    : string; (** the name of this entry point *)
+  args    : string list; (** the list of OCaml arguments to abstract over,
+                             e.g the [x y] in [rule foo x y = ...] *)
+  clauses : clause list; (** the list of clause that are matched *)
 }
 
+(** An .mlyl file is an header containing some OCaml code, one or more entries,
+    and a trailer with some other OCaml code. *)
 type lexer_definition = {
   header      : ocaml_code;
   entrypoints : entry list;
   trailer     : ocaml_code;
 }
+
+(** This definition is used by the interpreter, not the analyser.
+    The interpreter reads a list of [prompt_sentence] commands from
+    standard input. *)
+type prompt_sentence =
+  | Prompt_entrypoint of symbol
+  (** Starts interpretation from this grammar entrypoint *)
+  | Prompt_interpret of symbol list
+  (** Interpret this list of symbol *)
+
+(** {1 Helper and printing functions} *)
 
 let make_position {Lexing. pos_lnum; pos_cnum; pos_bol; _} =
   {line = pos_lnum; col = pos_cnum - pos_bol + 1}
@@ -162,6 +226,3 @@ let print_definition {header; entrypoints; trailer} : Cmon.t =
     "trailer", print_ocamlcode trailer;
   ]
 
-type prompt_sentence =
-  | Prompt_interpret of symbol list
-  | Prompt_entrypoint of symbol
