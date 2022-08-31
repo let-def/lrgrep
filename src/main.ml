@@ -120,7 +120,7 @@ let output_table oc entry vars (initial : Dfa.Repr.t) (program, table, remap) =
   print "  let program = %S\n" program;
   print "end\n"
 
-module Coverage = struct
+module Coverage() = struct
   open Fix.Indexing
   open Utils
   open Info
@@ -832,59 +832,58 @@ module Coverage = struct
     let label = Lrc.lr1_of_lrc
   end
 
+  let rec follow_lookahead_path lookahead state = function
+    | [] -> lookahead
+    | x :: xs ->
+      match Lrce.NFA.prj state with
+      | L _ -> lookahead
+      | R path ->
+        let lookahead =
+          Lrce.NFA.fold_path_transitions (Lrce.paths path)
+            ~lookahead ~acc:IndexSet.empty
+            ~follow_goto:(fun lrc la ->
+                let lr1 = Lrc.lr1_of_lrc lrc in
+                let la = IndexSet.inter (Lrc.lookahead lrc) la in
+                let la = IndexSet.diff la (Info.Lr1.closed_reject lr1) in
+                la
+              )
+            ~reach:(fun path lookahead acc ->
+                if compare_index path x = 0
+                then IndexSet.union acc lookahead
+                else acc
+              )
+            ~fail:(fun lrcs lookahead acc ->
+                match Lrce.NFA.prj x with
+                | L lrc' ->
+                  if IndexSet.mem lrc' lrcs then
+                    IndexSet.union acc lookahead
+                  else
+                    acc
+                | R _ -> acc
+              )
+        in
+        follow_lookahead_path lookahead x xs
+
+  let compute_lookahead = function
+    | [] -> assert false
+    | entry :: rest ->
+      match Lrce.NFA.prj entry with
+      | L lrc ->
+        let la = Lrc.lookahead lrc in
+        let la =
+          IndexSet.inter la (Info.Lr1.closed_reject (Lrc.lr1_of_lrc lrc))
+        in
+        assert (not (IndexSet.is_empty la));
+        la
+      | R path ->
+        match Lrce.paths path with
+        | Empty | Fail _ -> assert false
+        | Step s ->
+          assert (IndexSet.is_singleton s.states);
+          let lrc = IndexSet.choose s.states in
+          follow_lookahead_path (Lrc.lookahead lrc) entry rest
+
 end
-
-let rec follow_lookahead_path lookahead state = function
-  | [] -> lookahead
-  | x :: xs ->
-    let open Coverage in
-    match Lrce.NFA.prj state with
-    | L _ -> lookahead
-    | R path ->
-      let lookahead =
-        Lrce.NFA.fold_path_transitions (Lrce.paths path)
-          ~lookahead ~acc:IndexSet.empty
-          ~follow_goto:(fun lrc la ->
-              let lr1 = Lrc.lr1_of_lrc lrc in
-              let la = IndexSet.inter (Lrc.lookahead lrc) la in
-              let la = IndexSet.diff la (Info.Lr1.closed_reject lr1) in
-              la
-            )
-          ~reach:(fun path lookahead acc ->
-              if compare_index path x = 0
-              then IndexSet.union acc lookahead
-              else acc
-            )
-          ~fail:(fun lrcs lookahead acc ->
-              match Lrce.NFA.prj x with
-              | L lrc' ->
-                if IndexSet.mem lrc' lrcs then
-                  IndexSet.union acc lookahead
-                else
-                  acc
-              | R _ -> acc
-            )
-      in
-      follow_lookahead_path lookahead x xs
-
-let compute_lookahead = function
-  | [] -> assert false
-  | entry :: rest ->
-    match Coverage.Lrce.NFA.prj entry with
-    | L lrc ->
-      let la = Coverage.Lrc.lookahead lrc in
-      let la =
-        IndexSet.inter la (Info.Lr1.closed_reject (Coverage.Lrc.lr1_of_lrc lrc))
-      in
-      assert (not (IndexSet.is_empty la));
-      la
-    | R path ->
-      match Coverage.Lrce.paths path with
-      | Empty | Fail _ -> assert false
-      | Step s ->
-        assert (IndexSet.is_singleton s.states);
-        let lrc = IndexSet.choose s.states in
-        follow_lookahead_path (Coverage.Lrc.lookahead lrc) entry rest
 
 let process_entry oc entry =
   let cases, vars =
@@ -906,6 +905,7 @@ let process_entry oc entry =
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
   if false then (
+    let module Coverage = Coverage() in
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
     let check = Check.analyse initial in
     let count = ref 6 in
@@ -921,7 +921,7 @@ let process_entry oc entry =
         let path = if !initial then path else "..." :: path in
         let path = String.concat " " path in
         prerr_endline ("Found uncovered case:\n  " ^ path);
-        let la = compute_lookahead nfa_path in
+        let la = Coverage.compute_lookahead nfa_path in
         prerr_endline ("Looking ahead at:\n  {" ^
                        string_concat_map ", " Info.Terminal.to_string
                          (IndexSet.elements la) ^ "}\n");
