@@ -37,12 +37,6 @@ type atom_desc =
   (** [Symbol s] matches all states whose incoming transitions are labelled
       with symbol [s] *)
   | Item of
-      (** [Item {lhs; prefix; suffix}] matches all states that have a
-          corresponding an item of the form [lhs ::= ... prefix . suffix ... ]
-          in their item set. They are all optional, and for prefix and suffix,
-          longer productions are allowed.
-          For instance, [. INT] will match an actual item of the form
-          [foo: BAR . INT baz]. *)
       {
         lhs: symbol option;
         (** if specified, the item must have this non-terminal as lhs *)
@@ -51,6 +45,12 @@ type atom_desc =
         suffix: symbol option list;
         (** the list of producers after the dot *)
       }
+  (** [Item {lhs; prefix; suffix}] matches all states that have a
+      corresponding an item of the form [lhs ::= ... prefix . suffix ... ]
+      in their item set. They are all optional, and for prefix and suffix,
+      longer productions are allowed.
+      For instance, [. INT] will match an actual item of the form
+      [foo: BAR . INT baz]. *)
   | Wildcard
     (* Matches all states *)
 

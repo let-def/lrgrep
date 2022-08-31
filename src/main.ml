@@ -264,8 +264,7 @@ module Coverage = struct
 
     let t0 = Sys.time ()
 
-    let predecessors_by_lr1 =
-      vector_tabulate n begin fun lrc ->
+    let predecessors_by_lr1 = tabulate_finset n (fun lrc ->
         let all = predecessors lrc in
         IndexSet.fold (fun lr1 acc ->
             let preds = IndexSet.inter (lrcs_of_lr1 lr1) all in
@@ -273,7 +272,7 @@ module Coverage = struct
             then acc
             else IndexMap.add lr1 preds acc
           ) (Lr1.predecessors (lr1_of_lrc lrc)) IndexMap.empty
-      end
+      )
 
     let predecessors_set_by_lr1 lrcs =
       IndexSet.fold (fun lrc acc ->
@@ -341,10 +340,8 @@ module Coverage = struct
         Printf.eprintf "EXPECTED RELATED SETS\n\
                         INCOMPATIBLE ON %s\n\
                         INTERSECT ON %s\n"
-          (string_of_indexset ~string_of_index:Terminal.to_string
-             (IndexSet.diff ts' ts))
-          (string_of_indexset ~string_of_index:Terminal.to_string
-             (IndexSet.inter ts' ts))
+          (string_of_indexset ~index:Terminal.to_string (IndexSet.diff ts' ts))
+          (string_of_indexset ~index:Terminal.to_string (IndexSet.inter ts' ts))
       )
 
     let check_reductions lrc =

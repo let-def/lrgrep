@@ -105,7 +105,7 @@ struct
     let make_frame state parent =
       {state; parent; goto=IndexMap.empty; lookahead=IndexSet.empty}
     in
-    vector_tabulate Lr1.n (fun state ->
+    tabulate_finset Lr1.n (fun state ->
         let fails = ref (Lr1.reject state) in
         let frame = make_frame state None in
         let rec goto parent la (nt, la') =
@@ -114,10 +114,10 @@ struct
             match parent with
             | Abstract t ->
               let frame = IndexBuffer.get frames t in
-              frame.goto_nt <- indexmap_update frame.goto_nt nt (function
-                  | None -> la
-                  | Some la' -> IndexSet.union la la'
-                )
+              frame.goto_nt <- IndexMap.update nt (function
+                  | None -> Some la
+                  | Some la' -> Some (IndexSet.union la la')
+                ) frame.goto_nt
             | Concrete t ->
               let state = Transition.find_goto_target t.state nt in
               begin match IndexMap.find_opt state t.goto with
@@ -326,7 +326,7 @@ struct
           (fun target acc -> IndexSet.union (valuation target) acc)
           targets acc
     in
-    vector_tabulate State.n (X.lfp equations)
+    tabulate_finset State.n (X.lfp equations)
 
   let derive ~root ~step ~join =
     let map = ref IndexMap.empty in
@@ -361,7 +361,7 @@ struct
   let state_goto_closure x = Vector.get goto_closure x
   let state_reachable = reachable_goto
 
-  let reduce_on = vector_tabulate Lr1.n (fun lr1 ->
+  let reduce_on = tabulate_finset Lr1.n (fun lr1 ->
       let rec loop acc = function
         | None -> acc
         | Some st ->

@@ -264,35 +264,32 @@ struct
         )
 
     let list_to_string lr1s =
-      "[" ^ string_concat_map "; " to_string lr1s ^ "]"
+      string_concat_map ~wrap:("[","]") "; " to_string lr1s
 
     let set_to_string lr1s =
-      "{" ^ string_concat_map ", " to_string (IndexSet.elements lr1s) ^ "}"
+      string_concat_map ~wrap:("{","}") ", " to_string (IndexSet.elements lr1s)
 
-    let reduce_on =
-      vector_tabulate n (fun lr1 ->
-          List.fold_left
-            (fun acc (t, _) -> IndexSet.add (Terminal.of_g t) acc)
-            IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
-        )
+    let reduce_on = tabulate_finset n (fun lr1 ->
+        List.fold_left
+          (fun acc (t, _) -> IndexSet.add (Terminal.of_g t) acc)
+          IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
+      )
 
-    let shift_on =
-      vector_tabulate n (fun lr1 ->
-          List.fold_left
-            (fun acc (sym, _raw) ->
-               match sym with
-               | Grammar.T t -> IndexSet.add (Terminal.of_g t) acc
-               | Grammar.N _ -> acc)
-            IndexSet.empty (Grammar.Lr1.transitions (to_g lr1))
-        )
+    let shift_on = tabulate_finset n (fun lr1 ->
+        List.fold_left
+          (fun acc (sym, _raw) ->
+             match sym with
+             | Grammar.T t -> IndexSet.add (Terminal.of_g t) acc
+             | Grammar.N _ -> acc)
+          IndexSet.empty (Grammar.Lr1.transitions (to_g lr1))
+      )
 
-    let reject =
-      vector_tabulate n (fun lr1 ->
-          let result = Terminal.all in
-          let result = IndexSet.diff result (reduce_on lr1) in
-          let result = IndexSet.diff result (shift_on lr1) in
-          result
-        )
+    let reject = tabulate_finset n (fun lr1 ->
+        let result = Terminal.all in
+        let result = IndexSet.diff result (reduce_on lr1) in
+        let result = IndexSet.diff result (shift_on lr1) in
+        result
+      )
 
     let rec close_reduction rreject stack n nt ts acc =
       match stack with
@@ -323,62 +320,63 @@ struct
 
     let t0 = Sys.time ()
 
-    let closed_reductions =
-      vector_tabulate n (fun lr1 ->
-          let reject = reject lr1 in
-          let rreject = ref reject in
-          let result = close_reductions rreject lr1 [] Terminal.all [] in
-          Vector.set closed_reject lr1 !rreject;
-          (* In theory, fail_on and fail_on_closure can differ if a transition
-             that follows a nullable-reduction has been removed because of a
-             conflict. That should not be a problem in practice.
-             Haven't seen this in the wild yet, I will leave this code to check
-             that for now...
-          *)
-          if not (IndexSet.equal !rreject reject) then (
-            prerr_endline ("reject and closed_reject differ for state " ^ to_string lr1 ^ ":");
-            prerr_endline (string_concat_map ", " Terminal.to_string (IndexSet.elements reject));
-            prerr_endline (string_concat_map ", " Terminal.to_string (IndexSet.elements !rreject));
-            exit 1
-          );
-          let order_reductions (n1, nt1, _) (n2, nt2, _) =
-            let c = Int.compare n1 n2 in
-            if c <> 0 then c else
-              compare_index nt1 nt2
+    let closed_reductions = tabulate_finset n (fun lr1 ->
+        let reject = reject lr1 in
+        let rreject = ref reject in
+        let result = close_reductions rreject lr1 [] Terminal.all [] in
+        Vector.set closed_reject lr1 !rreject;
+        (* In theory, reject and closed_reject can differ if a transition
+           that follows a nullable-reduction has been removed because of a
+           conflict. That should not be a problem in practice.
+           Haven't seen this in the wild yet, I will leave this code to check
+           that for now...
+        *)
+        if not (IndexSet.equal !rreject reject) then (
+          Printf.eprintf
+            "reject and closed_reject differ for state %s:\n%s\n%s\n"
+            (to_string lr1)
+            (string_of_indexset ~index:Terminal.to_string reject)
+            (string_of_indexset ~index:Terminal.to_string !rreject);
+          exit 1
+        );
+        let order_reductions (n1, nt1, _) (n2, nt2, _) =
+          let c = Int.compare n1 n2 in
+          if c <> 0 then c else
+            compare_index nt1 nt2
+        in
+        let result = List.sort order_reductions result in
+        let rec merge = function
+          | (n1, nt1, ts1) :: (n2, nt2, ts2) :: result
+            when n1 = n2 && nt1 = nt2 ->
+            merge ((n1, nt1, IndexSet.union ts1 ts2) :: result)
+          | [] -> []
+          | r :: rest -> r :: merge rest
+        in
+        let result = merge result in
+        if false then (
+          let unclosed_reductions =
+            reductions lr1
+            |> List.map (fun (prod, ts) ->
+                (Array.length (Production.rhs prod), Production.lhs prod, ts))
+            |> List.sort order_reductions
           in
-          let result = List.sort order_reductions result in
-          let rec merge = function
-            | (n1, nt1, ts1) :: (n2, nt2, ts2) :: result
-              when n1 = n2 && nt1 = nt2 ->
-              merge ((n1, nt1, IndexSet.union ts1 ts2) :: result)
-            | [] -> []
-            | r :: rest -> r :: merge rest
-          in
-          let result = merge result in
-          if false then (
-            let unclosed_reductions =
-              reductions lr1
-              |> List.map (fun (prod, ts) ->
-                  (Array.length (Production.rhs prod), Production.lhs prod, ts))
-              |> List.sort order_reductions
-            in
-            if not (List.equal (=) unclosed_reductions result) then (
-              Printf.eprintf "%s reductions went from %d to %d after closure\n"
-                (to_string lr1) (List.length (reductions lr1)) (List.length result);
-              List.iter (fun (n, nt, _) ->
-                  Printf.eprintf "  %s ::= ...%d...\n"
-                    (Nonterminal.to_string nt) n
-                ) unclosed_reductions;
-              Printf.eprintf "->\n";
-              List.iter (fun (n, nt, _) ->
-                  Printf.eprintf "  %s ::= ...%d...\n"
-                    (Nonterminal.to_string nt) n
-                ) result;
-              Printf.eprintf "\n";
-            );
+          if not (List.equal (=) unclosed_reductions result) then (
+            Printf.eprintf "%s reductions went from %d to %d after closure\n"
+              (to_string lr1) (List.length (reductions lr1)) (List.length result);
+            List.iter (fun (n, nt, _) ->
+                Printf.eprintf "  %s ::= ...%d...\n"
+                  (Nonterminal.to_string nt) n
+              ) unclosed_reductions;
+            Printf.eprintf "->\n";
+            List.iter (fun (n, nt, _) ->
+                Printf.eprintf "  %s ::= ...%d...\n"
+                  (Nonterminal.to_string nt) n
+              ) result;
+            Printf.eprintf "\n";
           );
-          result
-        )
+        );
+        result
+      )
 
     let () =
       Printf.eprintf "%.02fms spent to close reductions\n"
@@ -386,13 +384,12 @@ struct
 
     let closed_reject = Vector.get closed_reject
 
-    let predecessors =
-      vector_tabulate n (fun lr1 ->
-          List.fold_left
-            (fun acc tr -> IndexSet.add (Transition.source tr) acc)
-            IndexSet.empty
-            (Transition.predecessors lr1)
-        )
+    let predecessors = tabulate_finset n (fun lr1 ->
+        List.fold_left
+          (fun acc tr -> IndexSet.add (Transition.source tr) acc)
+          IndexSet.empty
+          (Transition.predecessors lr1)
+      )
 
     let set_predecessors lr1s =
       indexset_bind lr1s predecessors
