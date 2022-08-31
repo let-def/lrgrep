@@ -104,3 +104,15 @@ Now you are ready to iterate on [ocaml/parse_errors.mlyl]() to produce new rules
 
 ## Devising a new rule
 
+**TODO**
+
+# Getting started with LRGrep codebase
+
+I am trying to document the code. Each of the [src](src), [lib](lib), [ocaml](ocaml), and [support](support) directories contain a README.md that briefly explains the purpose of this directory.
+
+External dependencies that are worth knowing:
+
+- [MenhirSdk](https://opam.ocaml.org/packages/menhirSdk/) is a part of the [Menhir](http://gitlab.inria.fr/fpottier/menhir) parser generator that allows external tool to post-process compiled grammars
+- [Cmon](https://opam.ocaml.org/packages/cmon/) is a pretty-printer for recursive values
+- [Fix](https://gitlab.inria.fr/fpottier/fix) is a library for computing fixed points; it also provides a convenient representation of finite sets
+- [LRijkstra](https://gitlab.inria.fr/fpottier/menhir/-/blob/master/src/LRijkstraFast.mli) is taken from Menhir and implements the algorithm described in ["Faster Reachability Analysis for LR(1) Parsers"](https://dl.acm.org/doi/10.1145/3486608.3486903), though we apply it for a slightly different purpose than the one described in the articles

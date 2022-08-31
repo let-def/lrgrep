@@ -48,8 +48,11 @@ end
 
     Finally, it defines a useful function for working with partial derivatives
     with respect to Lr1 states.
+
+    Implemented by [Info] module.
 *)
 module type INFO = sig
+  (** The grammar for which information were computed *)
   module Grammar : GRAMMAR
 
   module Terminal : sig
@@ -207,52 +210,159 @@ module type INFO = sig
     'a partial_derivative list -> 'b partial_derivative list
 end
 
+(** Syntax and Antimirov's derivative for the different flavors of regular
+    expressions used by LRgrep.
+    Implemented by [Regexp] module. *)
 module type REGEXP = sig
+  (** The grammar and derived information on which regular expresssions are
+      implemented. *)
   module Info : INFO
   open Info
 
+  (* Syntax for regular expression extended with reduction operator *)
   module RE : sig
+    (** Integers that serves has unique id to identify sub-terms.
+        Thanks to properties of Antimirov's derivatives, no new term is
+        introduced during derivation. All terms are produced during initial
+        parsing. *)
     type uid = private int
 
+    (** A variable is a pair of a clause number and an integer that identify
+        the variable within this clause.
+        These integers are unique within a clause and are sequentially
+        allocated. *)
     type var = int * int
 
+    (** A regular expression term with its unique ID, its description and its
+        position. *)
     type t = { uid : uid; desc : desc; position : Syntax.position; }
 
+    (** The different constructors of regular expressions*)
     and desc =
       | Set of Lr1.set * var option
+      (** Recognise a set of states, and optionally bind the matching state to
+          a variable. *)
       | Alt of t list
+      (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
+          [Alt []] represents the empty language. *)
       | Seq of t list
+      (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
+          [Seq []] represents the {ε}. *)
       | Star of t
+      (** [Star t] is represents the Kleene star of [t] *)
       | Reduce
+      (** The reduction operator *)
 
+    (** Introduce a new term, allocating a unique ID *)
     val make : Syntax.position -> desc -> t
+
+    (** Compare two terms *)
     val compare : t -> t -> int
+
+    (** Print a term to a [Cmon] document. [var] arguments allow to customize
+        printing of variables. *)
     val cmon : ?var:(var -> Cmon.t) -> t -> Cmon.t
   end
 
+  (** Represent stacks of regular expression continuations (plain [RE.t]s are
+      never used directly in the derivation process, they are always wrapped
+      in [KRE.t]).
+      Formally, the stack is interpreted as the concatenation of all stacked
+      expressions.
+  *)
   module KRE : sig
+
+    (** A stack of regular expression continuations *)
     type t =
       | Done of { clause : int }
+      (** [Done {clause=i}] represents the bottom of the stack matching the
+          clause number [i]. When reached, it means nothing more has to be
+          matched and so clause [i] succeeded. *)
       | More of RE.t * t
+      (** [More (re,t)] is the stack [t] with expression [re] added on top.
+          [re] should match before trying to match [t]. *)
 
-    val cmon : t -> Cmon.t
-    val more : RE.t -> t -> t
+    (** Compare two stacks. *)
     val compare : t -> t -> int
+
+    (** Print a stack to a Cmon document. *)
+    val cmon : t -> Cmon.t
   end
 
+  (** A set of RE stacks.
+      The set usually denotes the union of the denotation of all KREs in it,
+      though in [derive_kre] it is just used to mark already visited KREs. *)
   module KRESet : sig
     include Set.S with type elt = KRE.t
 
-    val prederive :
-      visited:t ref ->
-      reached:int list ref ->
-      direct:(Lr1.set * RE.var list * KRE.t) list ref ->
-      reduce:KRE.t list ref -> elt -> unit
+    (** [derive_kre ~visited ~reached ~direct ~reduce] computes the partial
+        derivatives of [kre]. Output is done by mutating arguments.
+        - [visited] is used to remember which [kre]'s have been visited.
+          If [mem kre !visited] then it is skipped.
+        - [accept] is the list of clauses that are accepted by [kre].
+        - [direct] is the list of Antimirov derivatives.
+          Each element has the form [(lr1s, vars, kre')], meaning that the
+          derivative of [kre] with respect to [lr1s] contains [kre'] and that
+          when matching, the member of [lr1s] that was matched should be saved
+          to [vars]
+        - [reduce] is the list of KREs that should be matched modulo reduction
 
-    val derive_reduce : t -> t partial_derivative list
+        For instance, input:
+          (st0 as var | ! st1)? { ... } (* clause 1 *)
+        is represented by:
+          kre = More(Alt [Set (st0, Some var);
+                          Seq [Reduce; Set (st1, None)];
+                          Seq []],
+                     Done {clause = 1})
+        And [derive_kre ~visited ~accept ~direct ~reduce kre] produces:
+        - accept := [1], since the RE is optional the clause matches
+          immediately
+        - direct := [(st0, [var], Done {clause = 1})
+                     (st1, [], Done {clause = 1})]
+          * consuming [st0] from input let us reaches a new expression that
+            will succeed immediately, and we want to capture the input consumed
+            in variable [var]
+          * consuming [st1] is also possible (by matching immediately rather
+            than modulo reductions "! st1")
+        - reduce := [More (Set (st1, None), Done {clause = 1})], because this
+          one should now be matched modulo reductions
+    *)
+    val derive_kre :
+      visited:t ref ->
+      accept:int list ref ->
+      direct:(Lr1.set * RE.var list * KRE.t) list ref ->
+      reduce:KRE.t list ref -> KRE.t -> unit
+
+    (** When simulating reductions, we have a slightly simpler notion of
+        derivation:
+        - It is not possible to accept, since we are not matching actual input
+          but just rewriting regular expresssions; so when simulating
+          reductions, the derivation doesn't accept but remembers that the
+          expression should succeed as soon as normal matching resumes.
+        - As a simplification, LRgrep doesn't accept simulating new reductions
+          when already simulating reductions.
+          For instance, it means that in our implementation, [! ! re] = [! re]
+          ([!] is idempotent). This diverges from the formal specification:
+          [!] simulates sequence of reductions for all possible lookaheads, but
+          within a sequence, the lookahead cannot change. [! !] introduces a
+          new degree of liberty: the sequence of reduction can start from a
+          first lookahead token, and then switch to another sequence using a
+          second lookahead.
+          This is difficult (and expensive) to compute, and the benefits are
+          unclear. So we depart from the formalism and simplify [!] that
+          appears inside a reduction ([! ! re] is one of such examples, but
+          more generally [! re1 ! re2] can also be simplified if [re1] is
+          consumed by one of the reduction simulated by the first [!]).
+        [derive_in_reduction] implements this simpler notion.
+    *)
+    val derive_in_reduction : t -> t partial_derivative list
+
+    (** Print a set of KREs to a cmon document. *)
     val cmon : t -> Cmon.t
   end
 
+  (* Translate a clause in shallow syntax (defined in [Front.Syntax]) to a
+     [KRE.t]. [alloc] is called to allocate variables *)
   val transl :
     alloc:(string -> RE.var) -> clause:int ->
     Syntax.regular_expr -> KRE.t

@@ -10,7 +10,7 @@ struct
 
   module type DERIVABLE = sig
     type t
-    val derive : t -> t dfa_transition list
+    val derive : t -> t partial_derivative list
     val merge : t list -> t
     val compare : t -> t -> int
     val cmon : t -> Cmon.t
@@ -19,7 +19,7 @@ struct
   module Cache (D : DERIVABLE) = struct
     type t = {
       d: D.t;
-      mutable tr: t dfa_transition list option;
+      mutable tr: t partial_derivative list option;
     }
 
     let lift d = {d; tr=None}
@@ -91,7 +91,7 @@ struct
       lookahead: Terminal.set;
     }
 
-    type transitions = D.t dfa_transition list * t dfa_transition list
+    type transitions = D.t partial_derivative list * t partial_derivative list
 
     let compare t1 t2 =
       let c = compare_index t1.state t2.state in

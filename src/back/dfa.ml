@@ -14,7 +14,7 @@ struct
   module CachedKRESet = Reduction.Cache(struct
       type t = KRESet.t
       let compare = KRESet.compare
-      let derive = KRESet.derive_reduce
+      let derive = KRESet.derive_in_reduction
       let merge ts = List.fold_left KRESet.union KRESet.empty ts
       let cmon = KRESet.cmon
     end)
@@ -73,10 +73,10 @@ struct
 
     let derive ~reduction_cache t =
       let visited = ref KRESet.empty in
-      let reached = ref [] in
+      let accept = ref [] in
       let direct = ref [] in
       let reduce = ref [] in
-      let loop k = KRESet.prederive ~visited ~reached ~reduce ~direct k in
+      let loop k = KRESet.derive_kre ~visited ~accept ~reduce ~direct k in
       KRESet.iter loop t.direct;
       let tr =
         let reduce = CachedKRESet.lift (KRESet.of_list !reduce) in
@@ -87,12 +87,12 @@ struct
       in
       let tr = RedSet.fold add_redset t.reduce tr in
       let tr =
-        dfa_normalize_and_merge
+        determinize_derivatives
           ~compare:compare_transition
           ~merge:merge_transition
           (List.map lift_direct !direct @ tr)
       in
-      (IntSet.of_list !reached, tr)
+      (IntSet.of_list !accept, tr)
 
     let interpret st stack =
       let reduction_cache = Red.make_compilation_cache () in

@@ -57,8 +57,6 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       | More (re, t) ->
         Cmon.cons (RE.cmon re) (cmon t)
 
-    let more re t = More (re, t)
-
     let rec compare k1 k2 =
       match k1, k2 with
       | Done _, More _ -> -1
@@ -73,23 +71,23 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   module KRESet = struct
     include Set.Make(KRE)
 
-    let prederive ~visited ~reached ~direct ~reduce k =
+    let derive_kre ~visited ~accept ~direct ~reduce k =
       let rec loop k =
         if not (mem k !visited) then (
           visited := add k !visited;
           match k with
-          | Done {clause} -> push reached clause
+          | Done {clause} -> push accept clause
           | More (re, k') ->
             match re.desc with
             | Set (s, var) ->
               push direct (s, Option.to_list var, k')
             | Alt es ->
-              List.iter (fun e -> loop (KRE.more e k')) es
+              List.iter (fun e -> loop (KRE.More (e, k'))) es
             | Star r ->
               loop k';
               loop (More (r, k))
             | Seq es ->
-              loop (List.fold_right KRE.more es k')
+              loop (List.fold_right (fun e k -> KRE.More (e, k)) es k')
             | Reduce ->
               push reduce k';
               loop k'
@@ -97,7 +95,7 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       in
       loop k
 
-    let derive_reduce t : t dfa_transition list =
+    let derive_in_reduction t : t partial_derivative list =
       let visited = ref empty in
       let direct = ref [] in
       let push_k k = push direct (Lr1.all, [], k) in
@@ -105,12 +103,12 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
         match k with
         | KRE.Done _ -> push_k k
         | k ->
-          let reached = ref [] in
-          prederive ~visited ~direct ~reached ~reduce:(ref []) k;
-          List.iter (fun clause -> push_k (KRE.Done {clause})) !reached
+          let accept = ref [] in
+          derive_kre ~visited ~direct ~accept ~reduce:(ref []) k;
+          List.iter (fun clause -> push_k (KRE.Done {clause})) !accept
       in
       iter loop t;
-      dfa_normalize_and_merge ~compare:KRE.compare ~merge:of_list
+      determinize_derivatives ~compare:KRE.compare ~merge:of_list
         (List.map (fun (s, _v, k) -> (s, k)) !direct)
 
     let cmon t = Cmon.list_map KRE.cmon (elements t)

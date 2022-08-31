@@ -905,7 +905,7 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
-  if true then (
+  if false then (
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
     let check = Check.analyse initial in
     let count = ref 6 in
