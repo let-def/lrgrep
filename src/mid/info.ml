@@ -395,23 +395,22 @@ struct
       indexset_bind lr1s predecessors
   end
 
-  type 'a dfa_transition = Lr1.set * 'a
+  type 'a partial_derivative = Lr1.set * 'a
 
-  let dfa_normalize_transitions
-      cmp (tr : 'a dfa_transition list)
-    : 'a list dfa_transition list
+  let determinize_derivatives
+      ~compare ~merge (tr : 'a partial_derivative list)
+    : 'b partial_derivative list
     =
     IndexRefine.annotated_partition tr
-    |> List.map (fun (sg, a) -> sg, List.sort_uniq cmp a)
+    |> List.map (fun (sg, a) -> sg, List.sort_uniq compare a)
     |> Misc.group_by
-      ~compare:(fun (_, a1) (_, a2) -> List.compare cmp a1 a2)
+      ~compare:(fun (_, a1) (_, a2) -> List.compare compare a1 a2)
       ~group:(fun (sg0, a) sgs ->
-          (List.fold_left
-             (fun sg (sg', _) -> IndexSet.union sg sg')
-             sg0 sgs, a)
+          let states =
+            List.fold_left
+              (fun sg (sg', _) -> IndexSet.union sg sg')
+              sg0 sgs
+          in
+          states, merge a
         )
-
-  let dfa_normalize_and_merge ~compare ~merge ts =
-    dfa_normalize_transitions compare ts
-    |> List.map (fun (k, v) -> (k, merge v))
 end

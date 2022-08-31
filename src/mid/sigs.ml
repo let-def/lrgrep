@@ -3,18 +3,52 @@ open Utils
 open Misc
 open Fix.Indexing
 
+(** The representation of (compiled) grammars exported by Menhir *)
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
+(** The grammar defines many fixed sets (for terminals, non-terminals,
+    productions, LR states, ...).
+    For convenience, we will represent each of those sets using [Fix.Indexing].
+    The [INDEXED] module type is the common interface shared by all these
+    encodings: set definition and bijection with Menhir's representation. *)
 module type INDEXED = sig
-  type raw
+
+  (** This module defines a finite set *)
   include CARDINAL
+
+  (** The type of Menhir's representation for elements of this finite set *)
+  type raw
+
+  (** An element of the set *)
   type t = n index
+
+  (** A subset of elements *)
   type set = n indexset
+
+  (** A partial map from elements to values of type ['a] *)
   type 'a map = (n, 'a) indexmap
+
+  (** Import an element from the grammar representation *)
   val of_g : raw -> t
+
+  (** Export an element to the grammar representation *)
   val to_g : t -> raw
 end
 
+(** The [INFO] module type first exposes a convenient interface for accessing
+    all components of the [GRAMMAR] (using [INDEXED] interface).
+
+    It also computes a few information that proves useful for later passes.
+    For each [Lr1] state, the set of predecessors, the reductions grouped by
+    lookahead tokens, the ε-closure of reductions, etc.
+
+    It defines a reification of automaton's [Transition]s.
+    Each transition is classified (shift or goto), given a name, and various
+    useful operations are defined on it.
+
+    Finally, it defines a useful function for working with partial derivatives
+    with respect to Lr1 states.
+*)
 module type INFO = sig
   module Grammar : GRAMMAR
 
@@ -51,18 +85,56 @@ module type INFO = sig
     val incoming : t -> Symbol.t option
     val items : t -> (Production.t * int) list
     val reductions : t -> (Production.t * Terminal.set) list
+
+    (* Printing functions, for debug purposes *)
+
     val to_string : t -> string
     val list_to_string : t list -> string
     val set_to_string : set -> string
 
+    (** [shift_on t] is the set of terminals that the state [t] can shift *)
     val shift_on : t -> Terminal.set
+
+    (** [reduce_on t] is the set of terminals that triggers a reduction in
+        state [t] *)
     val reduce_on : t -> Terminal.set
+
+    (** [reject t] is set of terminals that will immediately cause the
+        automaton to fail when in state [t] *)
     val reject : t -> Terminal.set
 
+    (** The list of reductions after ε-closure.
+        The reductions are represented as triples [(pop, nt, lookahead)] where:
+        - the reduction triggers when lookahead token is in [lookahead]
+        - the action of the reduction is to pop [pop] states from the stack
+        - then following the goto transition labelled by [nt]
+
+        This list contains all the non-ε reduction and a bunch of "virtual"
+        reductions.
+        Such a "virtual" reduction is a sequence of one or more reduction
+        starting from an ε-one and finishing by a normal reduction that will
+        pop enough states such that the current state is popped.
+
+        Therefore, [pop >= 1].
+    *)
     val closed_reductions : t -> (int * Nonterminal.t * Terminal.set) list
+
+    (** Like [reject], but also including all [reject] sets from the Lr1 state
+        that where reached when following the sequences of reductions during
+        ε-closure.
+
+        TODO:
+        - we can also define [closed_shift_on]
+        - [closed_reduce t] is actually the union of lookaheads in
+          [closed_reductions t].
+    *)
     val closed_reject : t -> Terminal.set
 
+    (** [predecessors t] is the set of LR(1) states that have transition going
+        to [t]. *)
     val predecessors : t -> set
+
+    (** [predecessors] but lifted to operate on a set of LR(1) states. *)
     val set_predecessors : set -> set
   end
 
@@ -123,14 +195,16 @@ module type INFO = sig
     val predecessors : Lr1.t -> any index list
   end
 
-  type 'a dfa_transition = Lr1.set * 'a
+  (** A simple type to represent a derivative of type ['a] with respect to a
+      set of states. *)
+  type 'a partial_derivative = Lr1.set * 'a
 
-  val dfa_normalize_transitions :
-    ('a -> 'a -> int) -> 'a dfa_transition list -> 'a list dfa_transition list
-
-  val dfa_normalize_and_merge :
+  (** Given a list of non-deterministic derivatives (the same state can appear
+      in different derivation), return a list of deterministic ones
+      where derivations that sharing the same states are grouped together. *)
+  val determinize_derivatives :
     compare:('a -> 'a -> int) -> merge:('a list -> 'b) ->
-    'a dfa_transition list -> (Lr1.set * 'b) list
+    'a partial_derivative list -> 'b partial_derivative list
 end
 
 module type REGEXP = sig
@@ -175,7 +249,7 @@ module type REGEXP = sig
       direct:(Lr1.set * RE.var list * KRE.t) list ref ->
       reduce:KRE.t list ref -> elt -> unit
 
-    val derive_reduce : t -> t dfa_transition list
+    val derive_reduce : t -> t partial_derivative list
     val cmon : t -> Cmon.t
   end
 
@@ -220,7 +294,7 @@ module type REDUCTION = sig
 
   module type DERIVABLE = sig
     type t
-    val derive : t -> t dfa_transition list
+    val derive : t -> t partial_derivative list
     val merge : t list -> t
     val compare : t -> t -> int
     val cmon : t -> Cmon.t
@@ -235,7 +309,7 @@ module type REDUCTION = sig
   module Make (D : DERIVABLE) :
   sig
     type t
-    type transitions = D.t dfa_transition list * t dfa_transition list
+    type transitions = D.t partial_derivative list * t partial_derivative list
 
     type compilation_cache
     val make_compilation_cache : unit -> compilation_cache
