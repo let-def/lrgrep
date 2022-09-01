@@ -211,6 +211,24 @@ struct
           ) derivations;
       )
 
+  let () =
+    let all = ref [] in
+    let rec internal_stacks stack frame =
+      let stack' = frame.state :: stack in
+      if stack <> [] then
+        push all stack';
+      IndexMap.iter (fun _ frame' -> internal_stacks stack' frame') frame.goto
+    in
+    Index.iter Lr1.n (fun lr1 ->
+        all := [];
+        internal_stacks [] (concrete_frames lr1);
+        Printf.eprintf "deriving root %s\n" (Lr1.to_string lr1);
+        List.iter (fun stack ->
+            Printf.eprintf "deriving stack %s\n" (Lr1.list_to_string stack);
+          ) !all;
+      )
+
+
   (* Goto closure *)
 
   (* Force the AbstractFrames set, no new frames should be added from now on *)
