@@ -198,8 +198,11 @@ struct
     in
     let rec process_stack d = function
       | [] -> assert false
-      | [lr1] -> d.goto_targets <- IndexSet.add lr1 d.goto_targets
-      | lr1' :: stack -> process_stack (delta d lr1') stack
+      | lr1 :: stack ->
+        let d = delta d lr1 in
+        match stack with
+        | [] -> d.goto_targets <- IndexSet.add lr1 d.goto_targets
+        | stack -> process_stack d stack
     in
     let process_root lr1 =
       List.iter (process_stack derivation_root) (Lr1.internal_stacks lr1)

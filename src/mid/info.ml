@@ -312,7 +312,6 @@ struct
         | top :: _ when n = 0 ->
           let target = Transition.find_goto_target top (Production.lhs prod) in
           let stack = target :: stack in
-          push rinternal stack;
           close_stack (prod :: prods) ts stack
         | _ :: stack ->
           close_prod prod prods ts (n - 1) stack
@@ -322,6 +321,7 @@ struct
         | (lr1 :: _) as stack ->
           rreject := IndexSet.union !rreject (intersect_terms (reject lr1) ts);
           rshift := IndexSet.union !rshift (intersect_terms (shift_on lr1) ts);
+          push rinternal stack;
           let visit_reduction (prod, ts') =
             let ts = intersect_terms ts ts' in
             if not (IndexSet.is_empty ts) then
