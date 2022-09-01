@@ -388,16 +388,17 @@ module Coverage() = struct
     }
 
     let intermediate_lr1_steps lr1 =
-      let rec process n lr1 = function
+      let rec process_reduction n lr1 = function
         | [] ->
           {goto = IndexMap.empty; pops = IndexMap.empty}
 
-        | (n', nt, ts) :: reds when n = n' ->
+        | (n', prod, _prods, ts) :: reds when n = n' ->
           assert (not (IndexSet.is_empty ts));
-          let paths = process n lr1 reds in
-          begin match Nonterminal.kind nt with
+          let paths = process_reduction n lr1 reds in
+          begin match Production.kind prod with
             | `START -> paths
             | `REGULAR ->
+              let nt = Production.lhs prod in
               let target = Transition.find_goto_target lr1 nt in
               let goto =
                 IndexMap.update target (function
@@ -408,20 +409,19 @@ module Coverage() = struct
               {paths with goto}
           end
 
-        | ((n', _, _) :: _) as reds  ->
+        | ((n', _, _, _) :: _) as reds  ->
           assert (n' > n);
           process_predecessors (n + 1) (Lr1.predecessors lr1) reds
 
       and process_predecessor n reds lr1' acc =
-        IndexMap.add lr1' (process n lr1' reds) acc
+        IndexMap.add lr1' (process_reduction n lr1' reds) acc
 
       and process_predecessors n lr1s reds = {
         goto = IndexMap.empty;
         pops = IndexSet.fold (process_predecessor n reds) lr1s IndexMap.empty
       }
-
       in
-      process_predecessors 0 (Lr1.predecessors lr1) (Lr1.closed_reductions lr1)
+      process_predecessors 1 (Lr1.predecessors lr1) (Lr1.closed_reductions lr1)
 
     module Paths = Sum(Lrc)(Intermediate)
 

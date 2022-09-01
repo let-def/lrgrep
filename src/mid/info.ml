@@ -239,8 +239,12 @@ struct
     let reductions =
       let import_red reds =
         reds
-        |> List.map
-          (fun (t, ps) -> (Production.of_g (List.hd ps), Terminal.of_g t))
+        |> List.filter_map (fun (t, ps) ->
+             let p = Production.of_g (List.hd ps) in
+             match Production.kind p with
+             | `START -> None
+             | `REGULAR -> Some (p, Terminal.of_g t)
+          )
         |> Misc.group_by
           ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
           ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
@@ -291,91 +295,72 @@ struct
         result
       )
 
-    let rec close_reduction rreject stack n nt ts acc =
-      match stack with
-      | [] -> (n, nt, ts) :: acc
-      | top :: _ when n = 0 ->
-        let tgt = Transition.find_goto_target top nt in
-        close_reductions rreject tgt stack ts acc
-      | _ :: stack ->
-        close_reduction rreject stack (n - 1) nt ts acc
+    let intersect_terms a b =
+      if a == Terminal.all then b
+      else if b == Terminal.all then a
+      else IndexSet.inter a b
 
-    and close_reductions rreject lr1 stack ts (acc : _ list) =
-      rreject := IndexSet.union !rreject (IndexSet.inter (reject lr1) ts);
-      let stack = lr1 :: stack in
-      List.fold_left (fun acc (prod, ts') ->
-          let ts = IndexSet.inter ts ts' in
-          if IndexSet.is_empty ts then
-            (acc : _ list)
-          else
-            close_reduction rreject stack
-              (Array.length (Production.rhs prod))
-              (Production.lhs prod)
-              ts
-              acc
-        ) acc (reductions lr1)
+    let close_reductions lr1 =
+      let rresult = ref [] in
+      let rreject = ref IndexSet.empty in
+      let rshift = ref IndexSet.empty in
+      let rinternal = ref [] in
+      let rec close_prod prod prods ts n stack =
+        match stack with
+        | [] ->
+          push rresult (n + 1, prod, prods, ts)
+        | top :: _ when n = 0 ->
+          let target = Transition.find_goto_target top (Production.lhs prod) in
+          let stack = target :: stack in
+          push rinternal stack;
+          close_stack (prod :: prods) ts stack
+        | _ :: stack ->
+          close_prod prod prods ts (n - 1) stack
 
-    let closed_reject =
-      Vector.make n IndexSet.empty
+      and close_stack prods ts = function
+        | [] -> ()
+        | (lr1 :: _) as stack ->
+          rreject := IndexSet.union !rreject (intersect_terms (reject lr1) ts);
+          rshift := IndexSet.union !rshift (intersect_terms (shift_on lr1) ts);
+          let visit_reduction (prod, ts') =
+            let ts = intersect_terms ts ts' in
+            if not (IndexSet.is_empty ts) then
+              let n = Array.length (Production.rhs prod) in
+              close_prod prod prods ts n stack
+          in
+          List.iter visit_reduction (reductions lr1)
+      in
+      close_stack [] Terminal.all [lr1];
+      (!rreject, !rshift, !rinternal, !rresult)
+
+    let closed_reject = Vector.make n IndexSet.empty
+    let closed_shift_on = Vector.make n IndexSet.empty
+
+    let internal_stacks = Vector.make n []
 
     let t0 = Sys.time ()
 
     let closed_reductions = tabulate_finset n (fun lr1 ->
-        let reject = reject lr1 in
-        let rreject = ref reject in
-        let result = close_reductions rreject lr1 [] Terminal.all [] in
-        Vector.set closed_reject lr1 !rreject;
+        let reject', shift_on', internal, reductions = close_reductions lr1 in
+        Vector.set closed_reject lr1 reject';
+        Vector.set closed_shift_on lr1 shift_on';
+        Vector.set internal_stacks lr1 internal;
         (* In theory, reject and closed_reject can differ if a transition
            that follows a nullable-reduction has been removed because of a
            conflict. That should not be a problem in practice.
            Haven't seen this in the wild yet, I will leave this code to check
            that for now...
         *)
-        if not (IndexSet.equal !rreject reject) then (
+        if not (IndexSet.equal (reject lr1) reject') then (
           Printf.eprintf
             "reject and closed_reject differ for state %s:\n%s\n%s\n"
             (to_string lr1)
-            (string_of_indexset ~index:Terminal.to_string reject)
-            (string_of_indexset ~index:Terminal.to_string !rreject);
+            (string_of_indexset ~index:Terminal.to_string (reject lr1))
+            (string_of_indexset ~index:Terminal.to_string reject');
           exit 1
         );
-        let order_reductions (n1, nt1, _) (n2, nt2, _) =
-          let c = Int.compare n1 n2 in
-          if c <> 0 then c else
-            compare_index nt1 nt2
-        in
-        let result = List.sort order_reductions result in
-        let rec merge = function
-          | (n1, nt1, ts1) :: (n2, nt2, ts2) :: result
-            when n1 = n2 && nt1 = nt2 ->
-            merge ((n1, nt1, IndexSet.union ts1 ts2) :: result)
-          | [] -> []
-          | r :: rest -> r :: merge rest
-        in
-        let result = merge result in
-        if false then (
-          let unclosed_reductions =
-            reductions lr1
-            |> List.map (fun (prod, ts) ->
-                (Array.length (Production.rhs prod), Production.lhs prod, ts))
-            |> List.sort order_reductions
-          in
-          if not (List.equal (=) unclosed_reductions result) then (
-            Printf.eprintf "%s reductions went from %d to %d after closure\n"
-              (to_string lr1) (List.length (reductions lr1)) (List.length result);
-            List.iter (fun (n, nt, _) ->
-                Printf.eprintf "  %s ::= ...%d...\n"
-                  (Nonterminal.to_string nt) n
-              ) unclosed_reductions;
-            Printf.eprintf "->\n";
-            List.iter (fun (n, nt, _) ->
-                Printf.eprintf "  %s ::= ...%d...\n"
-                  (Nonterminal.to_string nt) n
-              ) result;
-            Printf.eprintf "\n";
-          );
-        );
-        result
+        let order_by_length (n1, _, _, _) (n2, _, _ ,_) = Int.compare n1 n2 in
+        List.sort order_by_length reductions
       )
 
     let () =
@@ -383,6 +368,8 @@ struct
         ((Sys.time () -. t0) *. 1000.0)
 
     let closed_reject = Vector.get closed_reject
+    let closed_shift_on = Vector.get closed_shift_on
+    let internal_stacks = Vector.get internal_stacks
 
     let predecessors = tabulate_finset n (fun lr1 ->
         List.fold_left

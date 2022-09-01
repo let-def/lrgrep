@@ -107,20 +107,27 @@ module type INFO = sig
     val reject : t -> Terminal.set
 
     (** The list of reductions after ε-closure.
-        The reductions are represented as triples [(pop, nt, lookahead)] where:
+        They are represented by tuples [(pop, prod, prods, lookahead)]:
         - the reduction triggers when lookahead token is in [lookahead]
         - the action of the reduction is to pop [pop] states from the stack
-        - then following the goto transition labelled by [nt]
+        - [prod], is the last reduction of the sequence, so after popping,
+          the goto transition followed is labelled by [Production.lhs prod]
+        - [prods] is the list of internal reductions in this sequence, if any,
+          in reverse order (the reduction that came immediately before [prod]
+          is the first element of [prods])
 
         This list contains all the non-ε reduction and a bunch of "virtual"
         reductions.
         Such a "virtual" reduction is a sequence of one or more reduction
         starting from an ε-one and finishing by a normal reduction that will
         pop enough states such that the current state is popped.
-
         Therefore, [pop >= 1].
     *)
-    val closed_reductions : t -> (int * Nonterminal.t * Terminal.set) list
+    val closed_reductions : t ->
+      (int * Production.t * Production.t list * Terminal.set) list
+
+    (** TODO *)
+    val internal_stacks : t -> t list list
 
     (** Like [reject], but also including all [reject] sets from the Lr1 state
         that where reached when following the sequences of reductions during
@@ -132,6 +139,7 @@ module type INFO = sig
           [closed_reductions t].
     *)
     val closed_reject : t -> Terminal.set
+    val closed_shift_on : t -> Terminal.set
 
     (** [predecessors t] is the set of LR(1) states that have transition going
         to [t]. *)
@@ -382,9 +390,6 @@ module type REDGRAPH = sig
     include CARDINAL
     val of_lr1 : Lr1.t -> n index
   end
-
-  val fail_on_closure : Lr1.t -> Terminal.set
-  val reduce_on : Lr1.t -> Terminal.set
 
   type goto_closure = {
     sources: Lr1.set;

@@ -204,12 +204,9 @@ rule main = parse
       ("illegal character " ^ String.escaped(Lexing.lexeme lexbuf))
   }
 
-(*
-   Lexers comment and action are quite similar.
+(* Lexers comment and action are quite similar.
    They should lex strings, quoted strings and characters,
-   in order not to be confused by what is inside them.
-*)
-
+   in order not to be confused by what is inside them. *)
 and comment = parse
     "(*"
     { incr comment_depth; comment lexbuf }
@@ -237,6 +234,8 @@ and comment = parse
   | _
     { comment lexbuf }
 
+(* Lex semantic actions: skip everything before finding '}', accounting
+   for nested '{' '}' *)
 and action = parse
     '{'
     { incr brace_depth;
