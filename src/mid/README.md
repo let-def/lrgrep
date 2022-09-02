@@ -10,8 +10,6 @@ The [Info](info.ml) module processes the Menhir automaton to present a more conv
 
 The [Regexp](regexp.ml) defines the intermediate representation of regular expressions and implements Antimirov's derivative. It does not compute reductions directly, but normalize regular expressions into parts that should be matched directly and parts that should be reduced.
 
-The [Redgraph](redgraph.ml) module computes information necessary to implement reduction efficiently.
+The [Redgraph](redgraph.ml) module computes information necessary to implement reduction efficiently. These are used to implement reduction for regular expression as well as by the direct interpreter (see [ocaml/interpreter.ml](../../ocaml/interpreter.ml)) for annotating possibles reductions.
 
-The [Reduction](reduction.ml) module connects Regexp and Redgraph to implement derivation modulo reductoin. 
-
-**TODO:** Redgraph recomputes some information from [Info], notably the [closed_reductions]. Cleanup.
+The [Reduction](reduction.ml) module connects Regexp and Redgraph to implement derivation modulo reduction.
