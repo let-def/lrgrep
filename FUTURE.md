@@ -1,8 +1,12 @@
+
+
 # Future work
 
 ---
 
 Some thoughts on things that can be improved.
+
+[TOC]
 
 ## Features
 
@@ -44,3 +48,14 @@ Right now we only use Menhir's `CompressedBitSet`. Idea to test:
   complementation
 - a mix between `CompressedBitSet` and Patricia trie might help with large
   sparse sets
+
+## Examples / Applications
+
+It is important to find convincing applications of LRgrep beyond OCaml syntax.
+
+I struggled to find parser's with actually good error messages (rather than using "having good error messages" as a strawman's argument againt LR 🙃), but Elm's parser stand out. Real work went into making the error messages good.
+
+I think that an LR parser for Elm syntax with comparable error messages quality might be a good argument in favor of LRgrep. It would require a lot of work and might not be enough, but still good. For reference:
+
+- [Elm's parser](https://github.com/elm/compiler/tree/master/compiler/src/Parse)
+- [Elm's syntax errors](https://github.com/elm/compiler/blob/master/compiler/src/Reporting/Error/Syntax.hs)
