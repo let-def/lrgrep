@@ -35,3 +35,12 @@ Some thoughts on things that can be improved.
   - Maybe we don't need DFA at all, runtime matching performance might be sufficient with an NFA? We can experiment if DFA size becomes problematic.
   - Keeping an NFA will help implementing the **correct capture semantics**.
 - The automaton we produce is not optimized at the moment. Some dead branches could be cleaned up, and a minimization algorithm will help (an extension of Valmari to "partial transition functions", or some heuristics applied either on the NFA or the DFA)
+
+### Datastructures
+
+Play a bit with various datastructures for representing finite sets.
+Right now we only use Menhir's `CompressedBitSet`. Idea to test:
+- `CoBitSet` (WIP) might improve performance when we deal with a lot of
+  complementation
+- a mix between `CompressedBitSet` and Patricia trie might help with large
+  sparse sets

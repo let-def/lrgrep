@@ -1,3 +1,4 @@
 (library
  (name utils)
+ (modules (:standard \ coBitSet))
  (libraries cmon fix))
