@@ -1,0 +1,37 @@
+# Future work
+
+---
+
+Some thoughts on things that can be improved.
+
+## Features
+
+- Allow **matching on lookahead** tokens too
+  This can be worked-around using partial matching with an extra argument, but we lose the benefits of coverage checks
+- Report **unused/unreachable patterns**
+
+- **Factorize coverage** reports
+  Right now (02/09/2022), one example is reported for each state that does not handle some possible transitions. 
+  1. This by itself is quite arbitrary, it might be worth thinking of something better
+  2. Even if we keep this approach, reports should avoid reliance on the automaton and focus on grammatical concepts. Error paths with different states but similar symbols can be displayed together, and rather than printing a raw path, it might be preferable to display the sequence of reduction that led to the problematic state
+  3. The item set of the last goto transition of this sequence of reduction might be a nice way       to explain an error very shortly, e.g. "paths reaching `LPAREN expr . RPAREN` are not covered".
+- Maybe implement **interactive exploration** (TUI) of error paths.
+- An interactive UI could also help **refining an exhaustive error coverage**. Interactive or not, this use case is important.
+- Finer-grained **typing of captures**. Right now, captures are always represented by an optional stack element.
+  - We can statically tell if the capture is total or not, if total we can get rid of the option.
+  - A stack element is very generic, we can often recover the type of the associated semantic value.
+  - The other use case for captures is to refer to locations... A dedicated syntax would be more convenient.
+- **Interaction between reduction and capture**. We could capture an approximate location if a capture occur within a reduction. A bit far fetched, but it could even be possible to compute the actual reduction to get the semantic value.
+
+## Correction
+
+- The current implementation of **captures** is incorrect. In presence of non-determinism, if there are multiple occurrences of the capture, it will always keep the most recent one, though the matching branch might refer to a previous occurrence.
+
+## Performance
+
+- More **non-determinism**, for Automaton generation and for reduction simulation
+  - Keeping an NFA longer won't increase the performance of the generator itself, but will help with coverage analysis.
+  - For reduction simulation, one of the main trick to increase performance.
+  - Maybe we don't need DFA at all, runtime matching performance might be sufficient with an NFA? We can experiment if DFA size becomes problematic.
+  - Keeping an NFA will help implementing the **correct capture semantics**.
+- The automaton we produce is not optimized at the moment. Some dead branches could be cleaned up, and a minimization algorithm will help (an extension of Valmari to "partial transition functions", or some heuristics applied either on the NFA or the DFA)

@@ -116,3 +116,7 @@ External dependencies that are worth knowing:
 - [Cmon](https://opam.ocaml.org/packages/cmon/) is a pretty-printer for recursive values
 - [Fix](https://gitlab.inria.fr/fpottier/fix) is a library for computing fixed points; it also provides a convenient representation of finite sets
 - [LRijkstra](https://gitlab.inria.fr/fpottier/menhir/-/blob/master/src/LRijkstraFast.mli) is taken from Menhir and implements the algorithm described in ["Faster Reachability Analysis for LR(1) Parsers"](https://dl.acm.org/doi/10.1145/3486608.3486903), though we apply it for a slightly different purpose than the one described in the articles
+
+## Things to do
+
+I have noted some urgent and less urgent things to improve in [FUTURE.md](FUTURE.md).
