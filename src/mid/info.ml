@@ -86,6 +86,9 @@ struct
     let kind p = Grammar.Production.kind (to_g p)
   end
 
+  (** [Transitions] module, defined below, depends on the set of Lr1 states
+      but [Lr1] module depends on [Transitions].
+      So [Lr1I] is defined first and is the raw set of Lr1 states. *)
   module Lr1I = Indexed(Grammar.Lr1)
 
   (* Transitions are represented as finite sets with auxiliary functions
@@ -236,6 +239,10 @@ struct
         (fun (p,pos) -> (Production.of_g p, pos))
         (Grammar.Lr0.items (to_lr0 lr1))
 
+    (** A more convenient presentation of reductions than the one from Cmly.
+        Each reduction is exposed as a pair of a Production.t and the lookahead
+        set.
+        Start productions are not included. *)
     let reductions =
       let import_red reds =
         reds
@@ -252,6 +259,8 @@ struct
       let import_lr1 lr1 = import_red (Grammar.Lr1.reductions (to_g lr1)) in
       Vector.get (Vector.init n import_lr1)
 
+    (** A somewhat informative string description of the Lr1 state, for debug
+        purposes. *)
     let to_string lr1 =
       match incoming lr1 with
       | Some sym -> string_of_index lr1 ^ ":" ^ Symbol.name sym
@@ -273,12 +282,14 @@ struct
     let set_to_string lr1s =
       string_concat_map ~wrap:("{","}") ", " to_string (IndexSet.elements lr1s)
 
+    (** The set of terminals that will trigger a reduction *)
     let reduce_on = tabulate_finset n (fun lr1 ->
         List.fold_left
           (fun acc (t, _) -> IndexSet.add (Terminal.of_g t) acc)
           IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
       )
 
+    (** The set of terminals that will trigger a shift transition *)
     let shift_on = tabulate_finset n (fun lr1 ->
         List.fold_left
           (fun acc (sym, _raw) ->
@@ -288,6 +299,7 @@ struct
           IndexSet.empty (Grammar.Lr1.transitions (to_g lr1))
       )
 
+    (** The set of terminals the state has no transition for *)
     let reject = tabulate_finset n (fun lr1 ->
         let result = Terminal.all in
         let result = IndexSet.diff result (reduce_on lr1) in
@@ -295,11 +307,14 @@ struct
         result
       )
 
+    (** Wrapper around [IndexSet.inter] to speed-up intersection with
+        [Terminal.all] *)
     let intersect_terms a b =
       if a == Terminal.all then b
       else if b == Terminal.all then a
       else IndexSet.inter a b
 
+    (** Compute the ϵ-closure of lr1 reductions *)
     let close_reductions lr1 =
       let rresult = ref [] in
       let rreject = ref IndexSet.empty in

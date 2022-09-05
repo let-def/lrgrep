@@ -89,7 +89,8 @@ module type INFO = sig
     val items : t -> (Production.t * int) list
     val reductions : t -> (Production.t * Terminal.set) list
 
-    (* Printing functions, for debug purposes *)
+    (* Printing functions, for debug purposes.
+       Not nice for the end-user (FIXME). *)
 
     val to_string : t -> string
     val list_to_string : t list -> string
@@ -126,17 +127,16 @@ module type INFO = sig
     val closed_reductions : t ->
       (int * Production.t * Production.t list * Terminal.set) list
 
-    (** TODO *)
+    (** All the stacks that were visited during ϵ-closure. This is used
+        to compute all the possible derivations for a given grammar.
+        (See [derive] module in [Redgraph]). *)
     val internal_stacks : t -> t list list
 
     (** Like [reject], but also including all [reject] sets from the Lr1 state
         that where reached when following the sequences of reductions during
         ε-closure.
-
-        TODO:
-        - we can also define [closed_shift_on]
-        - [closed_reduce t] is actually the union of lookaheads in
-          [closed_reductions t].
+        If useful, [closed_reduce t] could be defined as the union of
+        lookaheads in [closed_reductions t].
     *)
     val closed_reject : t -> Terminal.set
     val closed_shift_on : t -> Terminal.set
@@ -376,31 +376,127 @@ module type REGEXP = sig
     Syntax.regular_expr -> KRE.t
 end
 
+(** The reduction graph keeps track of all rewritings that apply or might
+    apply based on what is known of the [Lr1 stack] prefix. *)
 module type REDGRAPH = sig
   module Info : INFO
   open Info
 
-  val derive :
-    root:'a ->
-    step:('a -> Lr1.t -> 'a option) ->
-    join:('a list -> 'b) ->
-    'b Lr1.map
-
+  (** Each LR(1) state [st] has a node representing it in the graph, you can
+      get it with [State.of_lr1 st]. This node is the initial state of a
+      transducer that simulates all reductions that starts from state [st]. *)
   module State : sig
     include CARDINAL
     val of_lr1 : Lr1.t -> n index
   end
 
+  type state = State.n index
+
+  (** From each node, there are transitions to a parent node as long as a
+      reduction is going on.
+
+      For instance, if state [st] has an item (X ::= a b .) in its item set,
+      then the node [n0 = State.of_lr1 st] will have at least two parents:
+      - [Some n1 = state_parent n0], representing the intermediate state
+          (X ::= a . b)
+      - [Some n2 = state_parent n1], representing the state (X ::= . a b)
+
+      The graph has a mostly linear shape, except that there also are
+      edges for goto transitions.
+      For instance from node [n2], we know that the goto transitions labelled by
+      [X] can be followed.
+      These transitions target some other LR(1) states, for which we can
+      simulate reductions too. *)
+  val state_parent : state -> state option
+
+  (** We can also ask which LR(1) states can appear at
+      the stack position represented by a node:
+      - [state_lr1s n0] = {st0}, we started from state [st0], so it is the only
+        state possible for this node
+      - [ss1 = state_lr1s n1] = [Lr1.predecessors st0], the states we can find
+        immediately before [st0] on the stack are its predecessors
+      - [ss2 = state_lr1s n2] = [Lr1.set_predecessors ss1], as we go further
+        down the stacks, we iterate the [predecessors] function *)
+  val state_lr1s : state -> Lr1.set
+
+  (** When we reach node [n2], it is possible to reduce the production
+      (X ::= a b). We know by construction that all states in [ss2] have a goto
+      transition labelled by [X].
+
+      We can create a mapping {source -> target} whenever there is a goto
+      transition [source -X-> target] for [source] in [ss2].
+
+      Since in state [st0], the reduction (X ::= a b .) triggers only for
+      certain lookahead tokens, we augment the mapping to:
+        {source -> target | lookaheads}
+      It can be read as follow:
+        "when reaching state [source] and the lookahead
+         token belongs to [lookaheads], the automaton follows a goto transition
+         to [target]".
+
+      A first part of this information can be obtained using [state_goto_nt].
+      This functions returns a partial map that binds each nonterminal for
+      which a goto transition can be followed in this state to the set of
+      lookaheads that permit to follow this transition.
+
+      With our example, [state_goto_nt st2] associates [X] to [lookaheads].
+  *)
+  val state_goto_nt : state -> Terminal.set Nonterminal.map
+
+
+  (** Using one or more reductions, when the lookahead token belongs to
+      [lookahead] and the automaton state is in [sources], we can follow
+      transitions to the states in targets.
+
+      Usually, [targets] is a singleton [target], representing the family of
+      goto transitions [source -X-> target] for [source ∈ sources].
+
+      But is not always the case when there are ϵ-transitions.
+      For instance, if [Y ::= X .] is in the itemset of [target] and can be
+      reduced with [lookahead], then there is a state [target'] such that
+      [source -Y-> target'], and [targets] = {target, target'}.
+  *)
   type goto_closure = {
     sources: Lr1.set;
     targets: Lr1.set;
     lookahead: Terminal.set;
   }
 
-  val state_lr1s : State.n index -> Lr1.set
-  val state_parent : State.n index -> State.n index option
-  val state_goto_closure : State.n index -> goto_closure list
+  (** (See [state_goto_nt] and [goto_closure] first).
+      [state_goto_closure] retrieves all goto transitions that can be reached,
+      directly or indirectly, from [state].
+  *)
+  val state_goto_closure : state -> goto_closure list
+
+  (** [state_reachable st] returns the set of all target states of all goto
+      transitions that are reachable from [st].
+      These includes all the [targets] of [state_goto_closure], those of all
+      [state_parent] reachable from [st].
+      And finally, the closure of this set by adding all
+        [fun lr1state -> state_reachable (State.of_lr1 lr1state)].
+  *)
   val state_reachable : State.n index -> Lr1.set
+
+  (** Compute all the derivations necessary to implement the "modulo reduction"
+      rewriting. Starting from a regular expression [root], step will be
+      applied for each possible rewriting.
+      For rewriting sequences, [step] is applied multiple times.
+      The implementation aims to be efficient:
+      - intermediate values are reused when multiple sequences have a common
+        prefix
+      - [step] can return [None] to abort early, when a rewriting doesn't
+        apply.
+
+      All rewritings that apply to the same state are grouped together using
+      [join]. A map indexed by states is returned. The map is partial:
+      if a state has no rewriting it will not be bound.
+  *)
+  val derive :
+    root:'a ->
+    step:('a -> Lr1.t -> 'a option) ->
+    join:('a list -> 'b) ->
+    'b Lr1.map
+
 end
 
 module type REDUCTION = sig

@@ -13,6 +13,8 @@ struct
     let of_lr1 = inj_l
   end
 
+  type state = State.n index
+
   type frame = {
     states: Lr1.set;
     goto_nt: Terminal.set Nonterminal.map;
