@@ -515,8 +515,7 @@ module Redgraph = struct
 
   let close abs =
     let close_st st =
-      let visited = ref IndexSet.empty in
-      let rec visit_nt nt =
+      let rec visit_nt nt acc =
         let st' =
           try Transition.find_goto_target st nt
           with Not_found ->
@@ -525,15 +524,11 @@ module Redgraph = struct
             List.iter prerr_endline (print_items st);
             assert false
         in
-        if not (IndexSet.mem st' !visited) then (
-          visited := IndexSet.add st' !visited;
-          visit_nts (goto_nts st')
-        )
-      and visit_nts nts =
-        IndexSet.iter visit_nt nts
+        visit_nts (goto_nts st') (IndexSet.add st' acc)
+      and visit_nts nts acc =
+        IndexSet.fold visit_nt nts acc
       in
-      visit_nts abs.goto_nt;
-      !visited
+      visit_nts abs.goto_nt IndexSet.empty
     in
     let add_st st acc = Lr1Map.add st (close_st st) acc in
     if not (IndexSet.is_empty abs.goto_nt) then

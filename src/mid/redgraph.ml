@@ -75,28 +75,26 @@ struct
     let table = Vector.make State.n [] in
     let close i =
       let close_lr1 lr1_src =
-        let visited = ref IndexMap.empty in
-        let rec visit_nt la0 nt la =
+        let rec visit_nt la0 nt la acc =
           let la = IndexSet.inter la0 la in
-          if not (IndexSet.is_empty la) then
+          if IndexSet.is_empty la then
+            acc
+          else
             let lr1_tgt =
               try Transition.find_goto_target lr1_src nt
               with Not_found -> assert false
             in
-            match IndexMap.find_opt lr1_tgt !visited with
-            | None ->
-              visited := IndexMap.add lr1_tgt la !visited;
-              visit_goto la (State.of_lr1 lr1_tgt)
-            | Some la' ->
-              if not (IndexSet.subset la la') then (
-                visited := IndexMap.add lr1_tgt (IndexSet.union la la') !visited;
-                visit_goto la' (State.of_lr1 lr1_tgt)
-              )
-        and visit_goto la st =
-          IndexMap.iter (visit_nt la) (state_goto_nt st)
+            let update = function
+              | None -> Some la
+              | Some la' -> Some (IndexSet.union la la')
+            in
+            visit_goto la
+              (State.of_lr1 lr1_tgt)
+              (IndexMap.update lr1_tgt update acc)
+        and visit_goto la st acc =
+          IndexMap.fold (visit_nt la) (state_goto_nt st) acc
         in
-        visit_goto Terminal.all i;
-        !visited
+        visit_goto Terminal.all i IndexMap.empty
       in
       let add_lr1 st acc = (close_lr1 st, st) :: acc in
       if not (IndexMap.is_empty (state_goto_nt i)) then

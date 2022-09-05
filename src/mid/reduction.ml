@@ -124,13 +124,13 @@ struct
 
     let derive t =
       let direct = ref [] in
-      let reducible = ref [] in
-      begin match Redgraph.state_parent t.state with
-        | None -> ()
-        | Some state ->
-          reducible :=
-            add_abstract_state t.derivations Terminal.all Lr1.all state !reducible
-      end;
+      let reducible = ref (
+          match Redgraph.state_parent t.state with
+          | None -> []
+          | Some state ->
+            add_abstract_state t.derivations Terminal.all Lr1.all state []
+        )
+      in
       let visit_goto {Redgraph. sources; targets; lookahead} =
         (*prerr_endline (
           string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
