@@ -31,6 +31,8 @@ Some thoughts on things that can be improved.
 
 - The current implementation of **captures** is incorrect. In presence of non-determinism, if there are multiple occurrences of the capture, it will always keep the most recent one, though the matching branch might refer to a previous occurrence.
 
+- The interpreter does not keep track of lookahead, this can cause incorrect reductions to appear in hinted reductions (also, those hints should include the lookahead tokens)
+
 ## Performance
 
 - More **non-determinism**, for Automaton generation and for reduction simulation
