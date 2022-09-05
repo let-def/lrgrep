@@ -207,16 +207,16 @@ struct
     let process_root lr1 =
       List.iter (process_stack derivation_root) (Lr1.internal_stacks lr1)
     in
-    Index.iter Lr1.n process_root;
-    Printf.eprintf "derivation trie has %d nodes\n" !count
+    Index.iter Lr1.n process_root
+    (*; Printf.eprintf "derivation trie has %d nodes\n" !count*)
 
-  let () =
+  (*let () =
     Index.iter Lr1.n (fun lr1 ->
         Printf.eprintf "deriving root %s\n" (Lr1.to_string lr1);
         List.iter (fun stack ->
             Printf.eprintf "deriving stack %s\n" (Lr1.list_to_string stack);
           ) (Lr1.internal_stacks lr1);
-      )
+      )*)
 
   let derive ~root ~step ~join =
     let map = ref IndexMap.empty in
