@@ -1,9 +1,65 @@
-open Fix.Indexing
 open Utils
 open Misc
 open Mid
 
-module Make(Regexp : Sigs.REGEXP)() =
+module Make(Regexp : Sigs.REGEXP)() : sig
+  open Regexp
+  open Info
+
+  (** Our final notion of expression.
+      Internally, a set of regular expressions (implemented by [KRE]) and a set
+      of ongoing reductions (implemented by [Reduction]). *)
+  module Expr : sig
+    type t
+    val make : KRESet.t -> t
+    val cmon : t -> Cmon.t
+    val compare : t -> t -> int
+    val empty : t
+    val union : t -> t -> t
+
+    (** FIXME: Cleanup *)
+    val interpret : t -> stack:Lr1.t list -> unit
+  end
+
+  (** States of the DFA are keyed by expression, therefore they are represented
+      by an [ExprMap.t] *)
+  module ExprMap : Map.S with type key = Expr.t
+
+  module State : sig
+    type t
+    val id : t -> int
+
+    (** The indices of clauses matching in this state *)
+    val accepted : t -> IntSet.t
+
+    (** Iterate through all outgoing transitions of a state.
+        Transitions are given by three arguments:
+        - a set of lr1 states that label the transition (it should be followed
+          only when the state of an LR stack frame belongs to this set)
+        - a list of variables to update, if the transition is taken,
+          with the matching LR stack frame
+        - a target DFA state *)
+    val iter_transitions : t -> (Lr1.set -> RE.var list -> t -> unit) -> unit
+  end
+
+  (** A DFA is a map from expression to state *)
+  type t = State.t ExprMap.t
+
+  (** Number of states in the DFA / cardinal of the map *)
+  val number_of_states : t -> int
+
+  (** Produce a DFA from an initial expression.
+      Returns a pair [(dfa, state)] of the dfa and the initial state matching
+      expression *)
+  val derive_dfa : Expr.t -> t * State.t
+
+  (** Compile a DFA to a compact table, suitable for use with Lrgrep_support
+      and runtime libraries. *)
+  val gen_table : t -> Lrgrep_support.compact_dfa
+
+  (** FIXME: Cleanup *)
+  val eval : t -> State.t -> stack:Lr1.t list -> unit
+end =
 struct
   open Regexp
   open Info
@@ -23,17 +79,20 @@ struct
 
   module RedSet = Set.Make(Red)
 
-  module State = struct
+  module Expr = struct
     type t = {
       direct: KRESet.t;
       reduce: RedSet.t;
     }
 
-    let make ?(reduce=RedSet.empty) direct = { direct; reduce }
+    let make direct = {direct; reduce = RedSet.empty}
 
     let cmon t =
-      let rs = "{" ^ string_of_int (RedSet.cardinal t.reduce) ^ " reductions}" in
-      Cmon.record ["direct", KRESet.cmon t.direct; "reduce", Cmon.constant rs]
+      let rs = Printf.sprintf "{%d reductions}" (RedSet.cardinal t.reduce) in
+      Cmon.record [
+        "direct", KRESet.cmon t.direct;
+        "reduce", Cmon.constant rs;
+      ]
 
     let compare t1 t2 =
       let c = KRESet.compare t1.direct t2.direct in
@@ -94,7 +153,7 @@ struct
       in
       (IntSet.of_list !accept, tr)
 
-    let interpret st stack =
+    let interpret st ~stack =
       let reduction_cache = Red.make_compilation_cache () in
       let rec loop st stack =
         Printf.eprintf "------------------------\n";
@@ -104,8 +163,7 @@ struct
           (string_concat_map ";" string_of_int (IntSet.elements accepted));
         match stack with
         | [] -> Printf.eprintf "End of stack\n"
-        | x :: stack' ->
-          let lr1 = Index.of_int Lr1.n x in
+        | lr1 :: stack' ->
           Printf.eprintf "Parser in state %s\n" (Lr1.to_string lr1);
           let match_transition (sg, st') =
             if IndexSet.mem lr1 sg
@@ -125,11 +183,11 @@ struct
       loop st stack
   end
 
-  module StateMap = Map.Make(State)
+  module ExprMap = Map.Make(Expr)
 
-  module Repr = struct
+  module State = struct
     type t = {
-      st: State.t;
+      expr: Expr.t;
       id: int;
       accepted: IntSet.t;
       transitions: (Lr1.set * RE.var list * t lazy_t) list;
@@ -137,7 +195,11 @@ struct
       mutable scheduled: Lr1.set;
     }
 
-    let gen expr =
+    let id t = t.id
+
+    let accepted t = t.accepted
+
+    let derive_dfa expr =
       let next_id =
         let k = ref 0 in
         fun () ->
@@ -146,20 +208,20 @@ struct
           id
       in
       let reduction_cache = Red.make_compilation_cache () in
-      let dfa : t StateMap.t ref = ref StateMap.empty in
+      let dfa : t ExprMap.t ref = ref ExprMap.empty in
       let rec find_state st =
-        match StateMap.find_opt st !dfa with
+        match ExprMap.find_opt st !dfa with
         | Some state -> state
         | None ->
-          let accepted, transitions = State.derive ~reduction_cache st in
+          let accepted, transitions = Expr.derive ~reduction_cache st in
           let state = {
-            st; id = next_id ();
+            expr; id = next_id ();
             visited = IndexSet.empty;
             scheduled = IndexSet.empty;
             accepted;
             transitions = List.map make_transition transitions;
           } in
-          dfa := StateMap.add st state !dfa;
+          dfa := ExprMap.add st state !dfa;
           state
       and make_transition (sg, (vars, k)) =
         (sg, vars, lazy (find_state k))
@@ -196,45 +258,50 @@ struct
       schedule (lazy initial) Lr1.all;
       loop ();
       (!dfa, initial)
+
+    let iter_transitions r f =
+      let visit_transition (lr1s, vars, st') =
+        if Lazy.is_val st' then
+          let lazy st' = st' in
+          let cases = IndexSet.inter r.visited lr1s in
+          if not (IndexSet.is_empty cases) then
+            f cases vars st'
+      in
+      List.iter visit_transition r.transitions
+
   end
 
-  type t = Repr.t StateMap.t
+  type t = State.t ExprMap.t
 
-  let iter_transitions r f =
-    let visit_transition (lr1s, vars, st') =
-      if Lazy.is_val st' then
-        let lazy st' = st' in
-        let cases = IndexSet.inter r.Repr.visited lr1s in
-        if not (IndexSet.is_empty cases) then
-          f cases vars st'
-    in
-    List.iter visit_transition r.transitions
+  let derive_dfa = State.derive_dfa
 
-  let rec eval dfa st stack =
-    let id, actions, tr = StateMap.find st dfa in
+  let number_of_states = ExprMap.cardinal
+
+  let rec eval (dfa : t) (st : State.t) ~stack =
     Printf.eprintf "------------------------\n";
-    Printf.eprintf "Matcher in state %d:\n%a\n" id print_cmon (State.cmon st);
+    Printf.eprintf "Matcher in state %d:\n%a\n"
+      (State.id st) print_cmon (Expr.cmon st.expr);
     Printf.eprintf "Matching actions: [%s]\n"
-      (string_concat_map ";" string_of_int (IntSet.elements actions));
+      (string_concat_map ";" string_of_int (IntSet.elements st.accepted));
     match stack with
     | [] -> Printf.eprintf "End of stack\n"
-    | x :: xs ->
-      let lr1 = Index.of_int Lr1.n x in
+    | lr1 :: xs ->
       Printf.eprintf "Parser in state %s\n" (Lr1.to_string lr1);
-      begin match List.find_opt (fun (lr1s, _) -> IndexSet.mem lr1 lr1s) tr with
-        | None ->
+      let filter_tr (lr1s, _vars, _target) = IndexSet.mem lr1 lr1s in
+      begin match List.find_opt filter_tr st.transitions with
+        | Some (_, _, st') when Lazy.is_val st' ->
+          eval dfa (Lazy.force st') ~stack:xs
+        | None | Some _ ->
           Printf.eprintf "No transitions, ending analysis\n"
-        | Some (_, st') ->
-          eval dfa st' xs
       end
 
   let gen_table dfa =
-    let states = Array.make (StateMap.cardinal dfa) (None, IntSet.empty, []) in
-    StateMap.iter (fun _ (r : Repr.t) ->
+    let states = Array.make (ExprMap.cardinal dfa) (None, IntSet.empty, []) in
+    ExprMap.iter (fun _ (r : State.t) ->
         let accept = IntSet.minimum r.accepted in
         let transitions = ref [] in
         let halting = ref (r.visited :> IntSet.t) in
-        iter_transitions r
+        State.iter_transitions r
           (fun is vars target ->
              let is = (is : _ IndexSet.t :> IntSet.t) in
              halting := IntSet.diff !halting is;

@@ -144,7 +144,7 @@ struct
               (State.of_lr1 lr1_tgt)
               (IndexMap.update lr1_tgt update acc)
 
-        (** Visit all goto transitions*)
+        (* Visit all goto transitions*)
         and visit_goto la st acc =
           IndexMap.fold (visit_nt la) (state_goto_nt st) acc
         in

@@ -177,6 +177,8 @@ end
 
 type transition_action = RT.register list * int
 
+type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
+
 let compare_ints (i1, j1) (i2, j2) =
   let c = Int.compare i1 i2 in
   if c <> 0 then c else

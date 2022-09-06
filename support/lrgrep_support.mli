@@ -19,6 +19,8 @@ end
 
 type transition_action = RT.register list * int
 
+type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
+
 val compact :
   (int option * IntSet.t * (IntSet.t * transition_action) list) array ->
-  RT.program * RT.sparse_table * RT.program_counter array
+  compact_dfa

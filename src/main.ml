@@ -109,13 +109,13 @@ let gen_code entry oc vars clauses =
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
-let output_table oc entry vars (initial : Dfa.Repr.t) (program, table, remap) =
+let output_table oc entry vars (initial : Dfa.State.t) (program, table, remap) =
   let print fmt = Printf.fprintf oc fmt in
   print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
     entry.Syntax.name;
   print "  let arities = [|%s|]\n"
     (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
-  print "  let initial = %d\n" remap.(initial.id);
+  print "  let initial = %d\n" remap.(Dfa.State.id initial);
   print "  let table = %S\n" table;
   print "  let program = %S\n" program;
   print "end\n"
@@ -640,15 +640,15 @@ module Coverage() = struct
     type t
     type state
 
-    val analyse : Dfa.Repr.t -> t
+    val analyse : Dfa.State.t -> t
 
     val partial_states : t -> state list
-    val repr : state -> Dfa.Repr.t
+    val repr : state -> Dfa.State.t
     val unhandled : state -> NFA.n indexset
     val paths : t -> (state * NFA.n index * NFA.n index list) Seq.t
   end = struct
     type state = {
-      repr: Dfa.Repr.t;
+      repr: Dfa.State.t;
       transitions: state lazy_t Lr1.map;
       mutable visited: NFA.n indexset;
       mutable scheduled: NFA.n indexset;
@@ -672,17 +672,18 @@ module Coverage() = struct
     let make_state_table () =
       let table = Hashtbl.create 7 in
       let rec aux repr =
-        match Hashtbl.find_opt table repr.Dfa.Repr.id with
+        let id = Dfa.State.id repr in
+        match Hashtbl.find_opt table id with
         | Some t -> t
         | None ->
           let trs = ref IndexMap.empty in
           let add_lr1 target lr1 = trs := IndexMap.add lr1 target !trs in
-          Dfa.iter_transitions repr (fun lr1s _vars target ->
+          Dfa.State.iter_transitions repr (fun lr1s _vars target ->
               let target = lazy (aux target) in
               IndexSet.iter (add_lr1 target) lr1s
             );
           let t = make_state repr !trs in
-          Hashtbl.add table repr.Dfa.Repr.id t;
+          Hashtbl.add table id t;
           t
       in
       table, aux
@@ -694,7 +695,7 @@ module Coverage() = struct
         if not (IndexSet.is_empty states) then (
           if IndexSet.is_empty target.scheduled then push todo target;
           target.scheduled <- IndexSet.union target.scheduled states;
-          target.predecessors <- IntSet.add source.repr.id target.predecessors;
+          target.predecessors <- IntSet.add (Dfa.State.id source.repr) target.predecessors;
         )
       in
       let rec flush f = match List.rev !todo with
@@ -730,7 +731,7 @@ module Coverage() = struct
         let to_visit = state.scheduled in
         state.visited <- IndexSet.union state.visited to_visit;
         state.scheduled <- IndexSet.empty;
-        if IntSet.is_empty state.repr.accepted then
+        if IntSet.is_empty (Dfa.State.accepted state.repr) then
           IndexSet.iter (process_transition state) to_visit
       in
       let initial = lift initial in
@@ -766,11 +767,11 @@ module Coverage() = struct
     let paths t =
       let visited = Hashtbl.create 7 in
       let visited st =
-        match Hashtbl.find_opt visited st.repr.id with
+        match Hashtbl.find_opt visited (Dfa.State.id st.repr) with
         | Some set -> set
         | None ->
           let set = ref IndexSet.empty in
-          Hashtbl.add visited st.repr.id set;
+          Hashtbl.add visited (Dfa.State.id st.repr) set;
           set
       in
       let found = ref [] in
@@ -903,7 +904,7 @@ let process_entry oc entry =
     List.split (List.mapi transl_case entry.Syntax.clauses)
   in
   let cases = Regexp.KRESet.of_list cases in
-  let dfa, initial = Dfa.Repr.gen (Dfa.State.make cases) in
+  let dfa, initial = Dfa.derive_dfa (Dfa.Expr.make cases) in
   if false then (
     let module Coverage = Coverage() in
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
@@ -936,7 +937,7 @@ let process_entry oc entry =
       ) (Check.paths check)
     with Exit -> ()
   );
-  Format.eprintf "(* %d states *)\n%!" (Dfa.StateMap.cardinal dfa);
+  Format.eprintf "(* %d states *)\n%!" (Dfa.number_of_states dfa);
   output_char oc '\n';
   gen_code entry oc vars entry.Syntax.clauses;
   output_char oc '\n';
