@@ -5,6 +5,7 @@ module RT = Lrgrep_runtime
 module Sparse_packer : sig
   type 'a t
   val make : unit -> 'a t
+  type 'a vector = (RT.lr1 * 'a) list
   val add_vector : 'a t -> (RT.lr1 * 'a) list -> RT.sparse_index
   val pack : 'a t -> ('a -> RT.program_counter) -> RT.sparse_table
 end = struct
@@ -23,6 +24,8 @@ end = struct
   type 'a t = {
     mutable table: 'a cell array;
   }
+
+  type 'a vector = (RT.lr1 * 'a) list
 
   let make () = { table = Array.make 16 Unused }
 
@@ -177,6 +180,13 @@ end
 
 type transition_action = RT.register list * int
 
+type state = {
+  accept: int option;
+  halting: IntSet.t;
+  transitions: (IntSet.t * transition_action) list;
+}
+type dfa = state array
+
 type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
 
 let compare_ints (i1, j1) (i2, j2) =
@@ -191,7 +201,7 @@ let compare_transition_action (v1, t1) (v2, t2) =
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
-let compact (dfa : (int option * IntSet.t * (IntSet.t * transition_action) list) array) =
+let compact (dfa : dfa) =
   let code = Code_emitter.make () in
   let index = Sparse_packer.make () in
   let halt_pc = ref (Code_emitter.position code) in
@@ -210,7 +220,7 @@ let compact (dfa : (int option * IntSet.t * (IntSet.t * transition_action) list)
   in
   let transition_count = ref 0 in
   let cell_count = ref 0 in
-  Array.iter2 (fun (accept, halting, transitions) pc ->
+  Array.iter2 (fun {accept; halting; transitions} pc ->
       let default, other_transitions =
         let _, most_frequent_action =
           List.fold_left (fun (count, _ as default) (dom, action) ->

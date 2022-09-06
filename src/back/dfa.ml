@@ -296,7 +296,10 @@ struct
       end
 
   let gen_table dfa =
-    let states = Array.make (ExprMap.cardinal dfa) (None, IntSet.empty, []) in
+    let dummy =
+      {Lrgrep_support. accept=None; halting=IntSet.empty; transitions=[]}
+    in
+    let states = Array.make (number_of_states dfa) dummy in
     ExprMap.iter (fun _ (r : State.t) ->
         let accept = IntSet.minimum r.accepted in
         let transitions = ref [] in
@@ -307,7 +310,9 @@ struct
              halting := IntSet.diff !halting is;
              push transitions (is, (vars, target.id));
           );
-        states.(r.id) <- (accept, !halting, !transitions)
+        let halting = !halting in
+        let transitions = !transitions in
+        states.(r.id) <- {Lrgrep_support. accept; halting; transitions}
       ) dfa;
     Lrgrep_support.compact states
 end
