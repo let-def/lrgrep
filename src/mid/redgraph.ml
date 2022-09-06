@@ -7,29 +7,62 @@ struct
   module Info = Info
   open Info
 
+  (** The reduction graph states are either:
+      - an Lr1 state (a "root", where reductions starts from)
+      - an intermediate state (one or more reductions going on),
+        represented by [State.Intermediate].
+
+      Intermediate states represents the successive concrete stack frames that
+      can be visited when reducing a production.
+
+      An lr1 state [st] with an item [X := a b c .] will be represented by
+      the "root" [State.of_lr1 st].
+      Then there will be three intermediate states:
+      - [Some n1 = state_parent (State.of_lr1 st)] with item [X := a b . c]
+      - [Some n2 = state_parent n1] with item [X := a . b c]
+      - [Some n3 = state_parent n2] with item [X := . a b c]
+  *)
   module State = struct
-    module Extra = Gensym()
-    include Sum(Lr1)(Extra)
+    module Intermediate = Gensym()
+    include Sum(Lr1)(Intermediate)
     let of_lr1 = inj_l
   end
 
   type state = State.n index
 
+  (** A frame store all the information associated with intermediate state.
+      It is an abstract representation of the frame that can be found on a
+      concrete parser stack when the .
+  *)
   type frame = {
     states: Lr1.set;
+    (** A concrete parser stack will have a state in [states] when this frame
+        applies. *)
+
     goto_nt: Terminal.set Nonterminal.map;
-    parent: State.Extra.n index option;
+    (** The goto transitions that can be followed from this state, represented
+        by a partial mapping from a non-terminal (the label of the goto
+        transition) and a set of lookahead tokens that permit following this
+        transition. *)
+
+    parent: State.Intermediate.n index option;
+    (** The next intermediate state,
+        or [None] if no more reductions are going on. *)
   }
 
-  let extra : (State.Extra.n, frame) IndexBuffer.t =
+  (** The mapping between frames and intermediate states *)
+  let intermediate : (State.Intermediate.n, frame) IndexBuffer.t =
     IndexBuffer.make
       {states = IndexSet.empty; goto_nt = IndexMap.empty; parent = None}
 
-  let alloc_extra frame =
-    let index = State.Extra.fresh () in
-    IndexBuffer.set extra index frame;
+  (** Allocate a new intermediate state for a given frame *)
+  let new_intermediate frame =
+    let index = State.Intermediate.fresh () in
+    IndexBuffer.set intermediate index frame;
     index
 
+  (** Initialize a root state for LR1 state [lr1], visiting all reductions
+      starting from it, creating intermediate states when necessary. *)
   let init_root lr1 =
     let rec visit_reductions n states = function
       | [] -> {states; goto_nt = IndexMap.empty; parent = None}
@@ -46,25 +79,36 @@ struct
       | ((n', _, _, _) :: _) as reds ->
         assert (n' > n);
         let frame = visit_reductions (n + 1) (Lr1.set_predecessors states) reds in
-        {states; goto_nt = IndexMap.empty; parent = Some (alloc_extra frame)}
+        {states; goto_nt = IndexMap.empty; parent = Some (new_intermediate frame)}
     in
     visit_reductions 1 (Lr1.predecessors lr1) (Lr1.closed_reductions lr1)
 
+  (** All roots *)
   let roots = Vector.init Lr1.n init_root
 
-  let extra = IndexBuffer.contents extra State.Extra.n
+  (** Freeze intermediate frames *)
+  let intermediate = IndexBuffer.contents intermediate State.Intermediate.n
 
+  (** Get the frame for a state, looking up Lr1 states in [roots] and
+      intermediate ones in [intermediate] *)
   let frame index =
     match State.prj index with
     | L r -> Vector.get roots r
-    | R x -> Vector.get extra x
+    | R x -> Vector.get intermediate x
 
-  (* Goto closure *)
+  (* Accessors to get information stored in a frame directly from
+     a state index *)
 
   let state_lr1s i = (frame i).states
   let state_parent i = Option.map State.inj_r (frame i).parent
   let state_goto_nt i = (frame i).goto_nt
 
+  (* Goto closure *)
+
+  (** See [Sigs.REDGRAPH.goto_closure] for documentation on [goto_closure].
+
+      FIXME: is it really useful to explicitly compute goto_closure?
+      Maybe it is efficient enough to recompute the closure as needed. *)
   type goto_closure = {
     sources: Lr1.set;
     targets: Lr1.set;
@@ -74,9 +118,17 @@ struct
   let goto_closure =
     let table = Vector.make State.n [] in
     let close i =
+      (* Close each possible concrete state separately *)
       let close_lr1 lr1_src =
+        (* Visit a goto transition labelled by [nt] when looking ahead at a
+           token ∈  [la] ⋂ [la0].
+           [acc] is a map populated with {target -> lookahead}, where [target]
+           is the lr1 state reached by following the goto transition and
+           [lookahead] is the non-empty set of tokens that allowed to reach
+           this state.
+        *)
         let rec visit_nt la0 nt la acc =
-          let la = IndexSet.inter la0 la in
+          let la = Terminal.intersect la0 la in
           if IndexSet.is_empty la then
             acc
           else
@@ -91,13 +143,20 @@ struct
             visit_goto la
               (State.of_lr1 lr1_tgt)
               (IndexMap.update lr1_tgt update acc)
+
+        (** Visit all goto transitions*)
         and visit_goto la st acc =
           IndexMap.fold (visit_nt la) (state_goto_nt st) acc
         in
         visit_goto Terminal.all i IndexMap.empty
       in
-      let add_lr1 st acc = (close_lr1 st, st) :: acc in
       if not (IndexMap.is_empty (state_goto_nt i)) then
+        let add_lr1 st acc = (close_lr1 st, st) :: acc in
+        (* Populate the table with closed gotos.
+           This code could be expressed as a SQL query: it groups the closures
+           by sources, targets and lookaheads, maximizing the size of each
+           subset (to have the smallest partition).
+        *)
         Vector.set table i (
           IndexSet.fold add_lr1 (state_lr1s i) []
           |> List.concat_map (fun (map, src) ->
@@ -129,7 +188,9 @@ struct
     table
 
   let reachable_goto =
-    (* Compute reachable goto closure *)
+    (* Compute all reachable goto, as a fixed point of the goto closures
+       reachable by following [state_parent] and the [targets] of
+       [goto_closure]. *)
     let module X =
       Fix.Fix.ForType
         (struct type t = State.n index end)

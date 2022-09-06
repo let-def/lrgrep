@@ -43,6 +43,11 @@ struct
     include Indexed(Grammar.Terminal)
     let to_string i = Grammar.Terminal.name (to_g i)
     let all = all n
+
+    let intersect a b =
+      if a == all then b
+      else if b == all then a
+      else IndexSet.inter a b
   end
 
   module Nonterminal = struct
@@ -307,13 +312,6 @@ struct
         result
       )
 
-    (** Wrapper around [IndexSet.inter] to speed-up intersection with
-        [Terminal.all] *)
-    let intersect_terms a b =
-      if a == Terminal.all then b
-      else if b == Terminal.all then a
-      else IndexSet.inter a b
-
     (** Compute the ϵ-closure of lr1 reductions *)
     let close_reductions lr1 =
       let rresult = ref [] in
@@ -334,11 +332,11 @@ struct
       and close_stack prods ts = function
         | [] -> ()
         | (lr1 :: _) as stack ->
-          rreject := IndexSet.union !rreject (intersect_terms (reject lr1) ts);
-          rshift := IndexSet.union !rshift (intersect_terms (shift_on lr1) ts);
+          rreject := IndexSet.union !rreject (Terminal.intersect (reject lr1) ts);
+          rshift := IndexSet.union !rshift (Terminal.intersect (shift_on lr1) ts);
           push rinternal stack;
           let visit_reduction (prod, ts') =
-            let ts = intersect_terms ts ts' in
+            let ts = Terminal.intersect ts ts' in
             if not (IndexSet.is_empty ts) then
               let n = Array.length (Production.rhs prod) in
               close_prod prod prods ts n stack

@@ -2,9 +2,7 @@
 
 This repository provides different tools to work on the error messages of a menhir-generated parser.
 
-The main tool is `lrgrep`.
-
-It takes:
+The main tool is `lrgrep`. It takes:
 
 - a compiled Menhir grammar (a .cmly file, produced by passing `--cmly` flag to Menhir) 
 - a list of rules (usually a .mlyl file).
@@ -18,7 +16,7 @@ By carefully crafting the rules, one can provide fine-grained message to explain
 The repository is is structured as follow:
 
 - the main tool, lrgrep, can be found in [src/main.ml]()
-- [runtime]() implements the `lrgrep.runtime` library used by generated analysers
+- [support]() implements the compact table representation shared by the generator and the generated analysers via the `lrgrep.runtime` library
 - in [ocaml](), we try to apply this methodology to OCaml grammar:
   - [parser_raw.mly](ocaml/parser_raw.mly) and [lexer_raw.mll](ocaml/lexer_raw.mll) define an OCaml 4.13 compatible grammar with syntax error reporting removed
   - [parse_errors.mlyl](ocaml/parse_errors.mlyl) define the error rules for this grammar

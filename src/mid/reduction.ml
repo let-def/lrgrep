@@ -47,33 +47,47 @@ struct
 
   module Make (D : DERIVABLE) = struct
 
+    module DMap = Map.Make(D)
+
     type compilation = {
       source: D.t;
-      continuations: D.t Lr1.map;
-      domain: Lr1.set;
-    }
+      (** The derivable object that was compiled *)
 
-    module DMap = Map.Make(D)
+      continuations: D.t Lr1.map;
+      (** [continuations] is the map [lr1 -> d'] of derivations of [source]
+          (obtained by deriving one or more times), that applies when the LR
+          automaton reaches state [lr1].
+          Either because [lr1] is the current state or because we reached a
+          goto transition targeting [lr1].
+          [d'] has already been derived by [lr1]. Only non-empty [d'] are kept
+          in the map. *)
+
+      domain: Lr1.set;
+      (** The domain of [continuations], used to speed-up the case where none
+          of the continuations applies. *)
+    }
 
     type compilation_cache = compilation DMap.t ref
 
     let make_compilation_cache () = ref DMap.empty
 
+    let compile source =
+      let find_tr lr1 (lr1s, x) =
+        if IndexSet.mem lr1 lr1s then Some x else None
+      in
+      let continuations =
+        Redgraph.derive
+          ~root:source
+          ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
+          ~join:D.merge
+      in
+      {source; continuations; domain = IndexMap.domain continuations}
+
     let compile cache source =
       match DMap.find_opt source !cache with
       | Some c -> c
       | None ->
-        let find_tr lr1 (lr1s, x) =
-          if IndexSet.mem lr1 lr1s then Some x else None
-        in
-        let continuations =
-          Redgraph.derive
-            ~root:source
-            ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
-            ~join:D.merge
-        in
-        let domain = IndexMap.domain continuations in
-        let result = {source; continuations; domain} in
+        let result = compile source in
         cache := DMap.add source result !cache;
         result
 
@@ -132,10 +146,6 @@ struct
         )
       in
       let visit_goto {Redgraph. sources; targets; lookahead} =
-        (*prerr_endline (
-          string_of_indexset ~string_of_index:Lr1.to_string sources ^ " -> " ^
-          string_of_indexset ~string_of_index:Lr1.to_string targets
-          );*)
         let lookahead = IndexSet.inter lookahead t.lookahead in
         if not (IndexSet.is_empty lookahead) then
           IndexSet.iter begin fun target ->
@@ -154,7 +164,6 @@ struct
             end;
           end targets;
       in
-      (*prerr_endline "visiting goto closure";*)
       List.iter visit_goto (Redgraph.state_goto_closure t.state);
       (!direct, !reducible)
 

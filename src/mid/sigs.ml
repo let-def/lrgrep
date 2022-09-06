@@ -59,6 +59,9 @@ module type INFO = sig
     include INDEXED with type raw = Grammar.terminal
     val to_string : t -> string
     val all : set
+
+    (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
+    val intersect : set -> set -> set
   end
 
   module Nonterminal : sig
@@ -499,38 +502,124 @@ module type REDGRAPH = sig
 
 end
 
+(** Simulates the effect of reductions on derivable objects.
+
+    A derivable object can be thought of as an abstract description of an NFA.
+    Reduction simulation starts of a specific state and takes the form of an
+    extension of the NFA.
+    It has some internal transitions when a reduction is ongoing, and external
+    transitions to the original NFA when a reduction succeeds.
+*)
 module type REDUCTION = sig
   module Info : INFO
   open Info
 
+  (** Something is derivable if it accepts a [derivation] primitive.
+      For an NFA state, the derivation is essentially the list of transitions.
+      For a regular expression, this is Antimirov's notion of derivative.
+
+      We parametrize our computation with respect to an abstraction notion of
+      "DERIVABLE" objects:
+      - it helps to cleanly separate the notion of reduction simulation and
+        of regular expression
+      - we can memoize the derivation function, see [Cache] functor, or
+        interleave debugging features, easily
+      - the abstract representation allows us to construct the NFA lazily
+        without cluttering the interface (no one needs to know). This will be
+        convenient when generating the final automaton, since we know only a
+        subset of it is ever reachable (the subset that intersects _valid LR
+        stacks_).
+  *)
   module type DERIVABLE = sig
+
+    (** The type of derivable objects *)
     type t
+
+    (** The derivation primitive. The outcome is a list of (non-deterministic)
+        "transitions": pairs [(ts, d)] of a set of labels [ts] (Lr1 states) and
+        [d], the derivable object targetted by the transition. *)
     val derive : t -> t partial_derivative list
+
+    (** [merge ts] return an object that represents the union (the disjunction)
+        between many derivable objects. *)
     val merge : t list -> t
+
+    (** A total comparison function, suitable to implement [Map.OrderedType] *)
     val compare : t -> t -> int
+
+    (** Print a derivable object as a [Cmon.t] document *)
     val cmon : t -> Cmon.t
   end
 
+  (** The cache functor: it memoizes the output of [derive] function such
+      that future calls are instantaneous. *)
   module Cache (D : DERIVABLE) : sig
     include DERIVABLE
+
+    (** Memoize a derivable object *)
     val lift : D.t -> t
+
+    (** Recover the original derivable object *)
     val unlift : t -> D.t
   end
 
+  (** Simulate reduction of derivable objects represented by [D] *)
   module Make (D : DERIVABLE) :
   sig
+    (** The type of states of the "reduction simulation" NFA. *)
     type t
+
+    (** The transitions leaving a state are represented as a pair of:
+        - external transitions, targeting [D.t]
+        - internal transitions, staying inside [t]. *)
     type transitions = D.t partial_derivative list * t partial_derivative list
 
+    (** The NFA produced by reduction simulation is quite naive: it contains
+        dead ends, subset of the automaton without any external transitions.
+        Those subsets can be discarded, but it is difficult to tell ahead of
+        time.
+        We use a heuristic that is quick to compute and detects dead-ends quite
+        accurately but not perfectly (sometime we enter such dead-end and give
+        up a few states later).
+        This heuristic needs to pre-compute a bunch of derivations of the
+        original object, those are stored in a [compilation] object.
+        This object also serves as an entrypoint to the extension of the NFA.
+    *)
+    type compilation
+
+    (** The precomputations (see [compilation]) can be costly.
+        Furthermore, it happens that we simulate the same reductions many times
+        (because of a disjunction or a kleene star).
+        Therefore we can cache those in a [compilation_cache].
+    *)
     type compilation_cache
+
+    (** Create a new cache. If the same cache is passed to the [compile]
+        function, redundant compilation will be skipped.
+        (See [compilation_cache]) *)
     val make_compilation_cache : unit -> compilation_cache
 
-    type compilation
+    (** Precompute derivations for a certain object to speed-up derivation *)
     val compile : compilation_cache -> D.t -> compilation
+
+    (** Dump the informations pre-computed in a [compilation] object *)
     val cmon : compilation -> Cmon.t
 
+    (** The initial transitions *)
     val initial : compilation -> transitions
+
+    (** Get the transitions of an intermediate state of the extended NFA *)
     val derive : t -> transitions
+
+    (** Compare two intermediate states *)
     val compare : t -> t -> int
+
+    (* TODO:
+       - find a better terminology than compilation ?
+       - maybe merge the [compilation] and [t] types; this will simplify the
+         interface, hopefully this will simplify the implementation too.
+       - not urgent: some potential optimizations are noted in
+         [../../FUTURE.md], check if they really improve the situation
+    *)
   end
 end
