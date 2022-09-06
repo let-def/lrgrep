@@ -1,3 +1,5 @@
+(** A simple preprocessor to embed binary files into an ML file.
+    Look at [usage]. *)
 let usage =
   "embed [--] value1=<file1> value2=<file2> ...\n\
    prints ocaml code on stdout that looks like:\n\
