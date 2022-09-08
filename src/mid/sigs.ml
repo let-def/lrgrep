@@ -7,17 +7,14 @@ open Fix.Indexing
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
 (** The grammar defines many fixed sets (for terminals, non-terminals,
-    productions, LR states, ...).
-    For convenience, we will represent each of those sets using [Fix.Indexing].
-    The [INDEXED] module type is the common interface shared by all these
-    encodings: set definition and bijection with Menhir's representation. *)
-module type INDEXED = sig
+    productions, LR states, ...). For convenience, we represent each of those
+    sets using [Fix.Indexing].
 
+    The [INDEXED] module type extends [Fix.Indexing.CARDINAL] with convenient
+    definitions. *)
+module type INDEXED = sig
   (** This module defines a finite set *)
   include CARDINAL
-
-  (** The type of Menhir's representation for elements of this finite set *)
-  type raw
 
   (** An element of the set *)
   type t = n index
@@ -27,6 +24,15 @@ module type INDEXED = sig
 
   (** A partial map from elements to values of type ['a] *)
   type 'a map = (n, 'a) indexmap
+end
+
+(** [GRAMMAR_INDEXED] extends [INDEXED] with bijection with
+    Menhir's representation. *)
+module type GRAMMAR_INDEXED = sig
+  include INDEXED
+
+  (** The type of Menhir's representation for elements of this finite set *)
+  type raw
 
   (** Import an element from the grammar representation *)
   val of_g : raw -> t
@@ -56,7 +62,7 @@ module type INFO = sig
   module Grammar : GRAMMAR
 
   module Terminal : sig
-    include INDEXED with type raw = Grammar.terminal
+    include GRAMMAR_INDEXED with type raw = Grammar.terminal
     val to_string : t -> string
     val all : set
 
@@ -65,7 +71,7 @@ module type INFO = sig
   end
 
   module Nonterminal : sig
-    include INDEXED with type raw = Grammar.nonterminal
+    include GRAMMAR_INDEXED with type raw = Grammar.nonterminal
     val to_string : t -> string
     val all : set
     val kind : t -> [`REGULAR | `START]
@@ -79,14 +85,14 @@ module type INFO = sig
   end
 
   module Production : sig
-    include INDEXED with type raw = Grammar.production
+    include GRAMMAR_INDEXED with type raw = Grammar.production
     val lhs : t -> Nonterminal.t
     val rhs : t -> Symbol.t array
     val kind : t -> [ `REGULAR | `START ]
   end
 
   module Lr1 : sig
-    include INDEXED with type raw = Grammar.lr1
+    include GRAMMAR_INDEXED with type raw = Grammar.lr1
     val all : set
     val incoming : t -> Symbol.t option
     val items : t -> (Production.t * int) list
