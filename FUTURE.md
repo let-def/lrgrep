@@ -8,6 +8,15 @@ Some thoughts on things that can be improved.
 
 [TOC]
 
+## Cleanup
+
+[ocaml/frontend.ml]() and [ocaml/interpreter.ml]() contains some copy of analyses done by [src/mid]() and maybe [src/back]().
+
+This should be refactored such that the analysis are implemented once and reused elsewhere.
+The difficulty is that the analysis depends on a Menhir Grammar which MenhirSDK only allows to read from a file. This file is not guaranteed to be available from these binaries, so we embed it, but then there are no direct ways to read it. Should we generate a tmp file? That's ugly but maybe it is the easiest solution.
+
+Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
+
 ## Features
 
 - Allow **matching on lookahead** tokens too
