@@ -171,20 +171,23 @@ let rec union s1 s2 =
     s
   | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
     if addr1 < addr2 then
-      C (addr1, ss1, union qs1 s2)
+      let qs = union qs1 s2 in
+      if qs == qs1
+      then s1
+      else C (addr1, ss1, qs)
     else if addr1 > addr2 then
-      let s = union s1 qs2 in
-      if s == qs2 then
-        s2
-      else
-        C (addr2, ss2, s)
+      let qs = union s1 qs2 in
+      if qs == qs2
+      then s2
+      else C (addr2, ss2, qs)
     else
       let ss = ss1 lor ss2 in
-      let s = union qs1 qs2 in
-      if ss == ss2 && s == qs2 then
-        s2
-      else
-        C (addr1, ss, s)
+      let qs = union qs1 qs2 in
+      if ss = ss2 && qs == qs2
+      then s2
+      else if ss = ss1 && qs == qs1
+      then s1
+      else C (addr1, ss, qs)
 
 let rec inter s1 s2 =
   match s1, s2 with
@@ -198,14 +201,12 @@ let rec inter s1 s2 =
       inter s1 qs2
     else
       let ss = ss1 land ss2 in
-      let s = inter qs1 qs2 in
-      if ss = 0 then
-        s
-      else
-      if (ss = ss1) && (s == qs1) then
-        s1
-      else
-        C (addr1, ss, s)
+      let qs = inter qs1 qs2 in
+      if ss = 0
+      then qs
+      else if ss = ss1 && qs == qs1
+      then s1
+      else C (addr1, ss, qs)
 
 exception Found of int
 
