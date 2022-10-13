@@ -6,6 +6,7 @@ rule error_message token = parse error
 
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
+
   { match semi with
     | None -> assert false
     | Some (Parser_raw.MenhirInterpreter.Element (_, _, startp, _endp)) ->
@@ -23,16 +24,15 @@ rule error_message token = parse error
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
 | [. LIDENT]; !
-  { match Lexer_raw.as_keyword token with
-    | None ->
-    "Not expecting a lower-case identifier (TODO: support partial match)"
+  partial { match Lexer_raw.as_keyword token with
+    | None -> None
     | Some kw ->
-    "`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)"
+      Some ("`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)")
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
 | ([. UIDENT] | [. TYPE] | [. REC]); !
-  { "Expecting `type', `rec' or a module name beginning with an uppercase letter"
+  { "Expecting `type' or a module name beginning with an uppercase letter"
   }
 
 (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
@@ -47,7 +47,7 @@ rule error_message token = parse error
 
 (* https://github.com/ocaml/ocaml/issues/11445 *)
 | OF; constructor_arguments; !
-  partial { 
+  partial {
     match token with
     | MINUSGREATER ->
       Some "Issue #11445: in constructor arguments, \
