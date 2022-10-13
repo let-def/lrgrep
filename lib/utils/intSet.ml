@@ -379,7 +379,7 @@ let init_subset i j f =
       let word = !word in
       if word = 0
       then loop addr' addr'
-      else C (j, word, loop addr' addr')
+      else C (addr, word, loop addr' addr')
   in
   loop i (i - i mod word_size)
 
