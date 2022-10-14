@@ -6,6 +6,7 @@ open Misc
 let source_name = ref None
 let output_name = ref None
 let grammar_file = ref None
+let check_coverage = ref false
 
 let usage =
   Printf.sprintf
@@ -34,6 +35,8 @@ let specs = [
   " Print version and exit";
   "-vnum", Arg.Unit print_version_num,
   " Print version number and exit";
+  "-coverage", Arg.Set check_coverage,
+  " Check error coverage";
 ]
 
 let () = Arg.parse specs (fun name -> source_name := Some name) usage
@@ -139,7 +142,7 @@ let process_entry oc entry =
   in
   let cases = Regexp.KRESet.of_list cases in
   let dfa, initial = Dfa.derive_dfa (Dfa.Expr.make cases) in
-  if false then (
+  if !check_coverage then (
     let module Coverage = Back.Coverage.Make(Dfa)() in
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
     let check = Check.analyse initial in
