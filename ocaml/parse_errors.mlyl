@@ -4,6 +4,39 @@ rule error_message token = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
+| expr as e; SEMI
+  partial {
+    match token with
+    | Parser_raw.ELSE -> (
+      match e with
+      | None -> assert false
+      | Some (Parser_raw.MenhirInterpreter.Element (state, expr, startp, _endp)) ->
+        match Parser_raw.MenhirInterpreter.incoming_symbol state with
+        | N N_expr -> (
+        match expr.pexp_desc with
+        | Pexp_ifthenelse(_, _, None) ->
+          Some ("The semicolon line "
+                ^ string_of_int startp.pos_lnum
+                ^ ", character "
+                ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+                ^ " terminates the `if ... then ...` expression. \
+                   Remove it to add an else branch."
+                   )
+        | _ -> None
+        )
+      | _ -> None
+      )
+    | _ -> None
+  }
+
+| [label_declaration: mutable_flag LIDENT . COLON]
+  partial {
+    match token with
+    | Parser_raw.EQUAL ->
+      Some "Expecting ':' to declare the type of a record field, not '='"
+    | _ -> None
+  }
+
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
 
