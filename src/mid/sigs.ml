@@ -126,15 +126,15 @@ module type INFO = sig
           in reverse order (the reduction that came immediately before [prod]
           is the first element of [prods])
 
-        This list contains all the non-ε reduction and a bunch of "virtual"
+        This list contains all the non-ε reduction and a bunch of "composite"
         reductions.
-        Such a "virtual" reduction is a sequence of one or more reduction
-        starting from an ε-one and finishing by a normal reduction that will
+        A composite reduction is a sequence of reductions starting from an
+        ε-one and finishing by a normal reduction that will
         pop enough states such that the current state is popped.
         Therefore, [pop >= 1].
     *)
-    val closed_reductions : t ->
-      (int * Production.t * Production.t list * Terminal.set) list
+    type closed_reduction = (int * Production.t * Production.t list * Terminal.set)
+    val closed_reductions : t -> closed_reduction list
 
     (** All the stacks that were visited during ϵ-closure. This is used
         to compute all the possible derivations for a given grammar.

@@ -353,6 +353,9 @@ struct
 
     let t0 = Sys.time ()
 
+    type closed_reduction =
+      (int * Production.t * Production.t list * Terminal.set)
+
     let closed_reductions = tabulate_finset n (fun lr1 ->
         let reject', shift_on', internal, reductions = close_reductions lr1 in
         Vector.set closed_reject lr1 reject';
