@@ -175,10 +175,14 @@ let process_entry oc entry =
     with Exit -> ()
   );
   Format.eprintf "(* %d states *)\n%!" (Dfa.number_of_states dfa);
-  output_char oc '\n';
-  gen_code entry oc vars entry.Syntax.clauses;
-  output_char oc '\n';
-  output_table oc entry vars initial (Dfa.gen_table dfa)
+  begin match oc with
+  | None -> ()
+  | Some oc ->
+    output_char oc '\n';
+    gen_code entry oc vars entry.Syntax.clauses;
+    output_char oc '\n';
+    output_table oc entry vars initial (Dfa.gen_table dfa)
+  end
 
 
 (*
@@ -210,14 +214,17 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  begin match !output_name with
-    | None ->
-      prerr_endline "No output file provided (option -o). Giving up.";
-      exit 1
+  let oc = match !output_name with
+    | None -> None
     | Some path ->
       let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
-      List.iter (process_entry oc) lexer_definition.entrypoints;
+      Some oc
+  in
+  List.iter (process_entry oc) lexer_definition.entrypoints;
+  begin match oc with
+    | None -> ()
+    | Some oc ->
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       close_out oc
