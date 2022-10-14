@@ -197,11 +197,11 @@ let print_item (prod, pos) =
     path := symbol_name sym :: !path;
     add_dot i;
   done;
-  path := symbol_name (N (Production.lhs prod)) :: "::=" :: !path;
+  path := (symbol_name (N (Production.lhs prod)) ^ ":") :: !path;
   String.concat " " !path
 
 let print_items lr1 =
-  List.map (fun item -> "\t\t  " ^ print_item item) (Lr1.items lr1)
+  List.map (fun item -> "\t\t  [" ^ print_item item ^ "]") (Lr1.items lr1)
 
 (* ---------------------------------------------------------------------- *)
 
