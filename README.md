@@ -100,9 +100,9 @@ Now you are ready to iterate on [ocaml/parse_errors.mlyl]() to produce new rules
 
 **Note: `unset OCAMLPARAM` to switch back to the normal frontend**
 
-## Devising a new rule
+## Devising new rules
 
-**TODO**
+Once you made sure your setup is working (`make` is (re-)building the frontend and `ocamlc` is using it), you can proceed to [DEVISING-RULES.md](DEVISING-RULES.md) to get started with the error DSL and the associated workflow.
 
 # Getting started with LRGrep codebase
 
