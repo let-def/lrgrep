@@ -49,7 +49,7 @@ Clone the repository and install dependencies:
 ```bash
 $ git clone https://github.com/let-def/lrgrep.git
 $ cd lrgrep
-$ opam install menhir fix
+$ opam install menhir fix cmon
 ```
 
 At this point, `make` should succeed (contact me if not) and produce the three binaries: `lrgrep.exe`, `frontend.bc` and `interpreter.exe`.
