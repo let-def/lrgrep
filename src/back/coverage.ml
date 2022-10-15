@@ -587,26 +587,26 @@ module Make(Dfa : Sigs.DFA)() = struct
         | [] ->
           {goto = IndexMap.empty; pops = IndexMap.empty}
 
-        | (n', prod, _prods, ts) :: reds when n = n' ->
-          assert (not (IndexSet.is_empty ts));
+        | (c : Lr1.closed_reduction) :: reds when n = c.pop ->
+          assert (not (IndexSet.is_empty c.lookahead));
           let paths = process_reduction n lr1 reds in
-          begin match Production.kind prod with
+          begin match Production.kind c.prod with
             | `START -> paths
             | `REGULAR ->
-              let nt = Production.lhs prod in
+              let nt = Production.lhs c.prod in
               let target = Transition.find_goto_target lr1 nt in
               let goto =
                 IndexMap.update target (function
-                    | None -> Some ts
+                    | None -> Some c.lookahead
                     | Some ts' ->
-                      Some (IndexSet.union ts ts')
+                      Some (IndexSet.union c.lookahead ts')
                   ) paths.goto
               in
               {paths with goto}
           end
 
-        | ((n', _, _, _) :: _) as reds  ->
-          assert (n' > n);
+        | (c :: _) as reds  ->
+          assert (c.pop > n);
           process_predecessors (n + 1) (Lr1.predecessors lr1) reds
 
       and process_predecessor n reds lr1' acc =

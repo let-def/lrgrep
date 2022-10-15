@@ -66,18 +66,17 @@ struct
   let init_root lr1 =
     let rec visit_reductions n states = function
       | [] -> {states; goto_nt = IndexMap.empty; parent = None}
-      | (n', prod, _, ts) :: rest when n = n' ->
+      | (c : Lr1.closed_reduction) :: rest when c.pop = n ->
         let result = visit_reductions n states rest in
-        let nt = Production.lhs prod in
         let goto_nt =
-          IndexMap.update nt (function
-              | None -> Some ts
-              | Some ts' -> Some (IndexSet.union ts ts')
+          IndexMap.update (Production.lhs c.prod) (function
+              | None -> Some c.lookahead
+              | Some ts' -> Some (IndexSet.union c.lookahead ts')
             ) result.goto_nt
         in
         {result with goto_nt}
-      | ((n', _, _, _) :: _) as reds ->
-        assert (n' > n);
+      | (c :: _) as reds ->
+        assert (c.pop > n);
         let frame = visit_reductions (n + 1) (Lr1.set_predecessors states) reds in
         {states; goto_nt = IndexMap.empty; parent = Some (new_intermediate frame)}
     in

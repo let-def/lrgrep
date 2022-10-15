@@ -133,7 +133,12 @@ module type INFO = sig
         pop enough states such that the current state is popped.
         Therefore, [pop >= 1].
     *)
-    type closed_reduction = (int * Production.t * Production.t list * Terminal.set)
+    type closed_reduction = {
+      pop: int;
+      prod: Production.t;
+      prods: Production.t list;
+      lookahead: Terminal.set;
+    }
     val closed_reductions : t -> closed_reduction list
 
     (** All the stacks that were visited during ϵ-closure. This is used
