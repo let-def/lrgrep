@@ -82,12 +82,16 @@ struct
       let reduce = ref [] in
       let loop k = KRESet.derive_kre ~visited ~accept ~reduce ~direct k in
       KRESet.iter loop t.direct;
-      let tr =
-        let reduce = CachedKRESet.lift (KRESet.of_list !reduce) in
-        let compiled = Red.compile reduction_cache reduce in
+      let reduce_one kre =
+        let compiled =
+          Red.compile reduction_cache (CachedKRESet.lift (KRESet.singleton kre))
+        in
         (*Printf.eprintf "compiled reductions:\n%a\n"
           print_cmon (Red.cmon compiled);*)
         lift_red (Red.initial compiled)
+      in
+      let tr =
+        List.concat_map reduce_one (List.sort_uniq KRE.compare !reduce)
       in
       let tr = RedSet.fold add_redset t.reduce tr in
       let tr =
