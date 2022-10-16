@@ -134,15 +134,37 @@ struct
 
   module ExprMap = Map.Make(Expr)
 
+  module Registers = struct
+    (*module VarMap = Map.Make(struct
+        type t = RE.var
+        let compare (c1, v1) (c2, v2) =
+          let c = Int.compare c1 c2 in
+          if c <> 0 then c
+          else Int.compare v1 v2
+      end)
+
+    type t = {
+      mutable map: int VarMap.t;
+      mutable count: int;
+    }
+
+    let fresh *)
+  end
+
   module State = struct
+    type 'a transition = Lr1.set * RE.var list * 'a
+
     type t = {
       expr: Expr.t;
       id: int;
       accepted: IntSet.t;
-      transitions: (Lr1.set * RE.var list * t lazy_t) list;
+      mutable transitions: t lazy_t transition list;
+      mutable forward: t transition list;
+      mutable backward: t transition list;
       mutable visited: Lr1.set;
       mutable scheduled: Lr1.set;
     }
+
 
     let id t = t.id
 
@@ -169,6 +191,8 @@ struct
             scheduled = IndexSet.empty;
             accepted;
             transitions = List.map make_transition transitions;
+            forward = [];
+            backward = [];
           } in
           dfa := ExprMap.add st state !dfa;
           state
@@ -206,17 +230,27 @@ struct
       let initial = find_state expr in
       schedule (lazy initial) Lr1.all;
       loop ();
-      (!dfa, initial)
+      let dfa = !dfa in
+      ExprMap.iter (fun _ src ->
+          src.forward <- List.filter_map
+              (fun (set, vars, tgt) ->
+                 if Lazy.is_val tgt then (
+                   let tgt = Lazy.force_val tgt in
+                   tgt.backward <- (set, vars, src) :: tgt.backward;
+                   Some (set, vars, tgt)
+                 ) else None
+              ) src.transitions;
+          src.transitions <- []
+        ) dfa;
+      (dfa, initial)
 
     let iter_transitions r f =
       let visit_transition (lr1s, vars, st') =
-        if Lazy.is_val st' then
-          let lazy st' = st' in
-          let cases = IndexSet.inter r.visited lr1s in
-          if not (IndexSet.is_empty cases) then
-            f cases vars st'
+        let cases = IndexSet.inter r.visited lr1s in
+        if not (IndexSet.is_empty cases) then
+          f cases vars st'
       in
-      List.iter visit_transition r.transitions
+      List.iter visit_transition r.forward
 
   end
 
@@ -237,10 +271,9 @@ struct
     | lr1 :: xs ->
       Printf.eprintf "Parser in state %s\n" (Lr1.to_string lr1);
       let filter_tr (lr1s, _vars, _target) = IndexSet.mem lr1 lr1s in
-      begin match List.find_opt filter_tr st.transitions with
-        | Some (_, _, st') when Lazy.is_val st' ->
-          eval dfa (Lazy.force st') ~stack:xs
-        | None | Some _ ->
+      begin match List.find_opt filter_tr st.forward with
+        | Some (_, _, st') -> eval dfa st' ~stack:xs
+        | None ->
           Printf.eprintf "No transitions, ending analysis\n"
       end
 
