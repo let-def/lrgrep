@@ -112,12 +112,11 @@ let gen_code entry oc vars clauses =
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
-let output_table oc entry vars (program, table, remap) =
+let output_table oc entry registers (program, table, remap) =
   let print fmt = Printf.fprintf oc fmt in
   print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
     entry.Syntax.name;
-  print "  let arities = [|%s|]\n"
-    (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
+  print "  let registers = %d\n" registers;
   print "  let initial = %d\n" remap.(0);
   print "  let table = %S\n" table;
   print "  let program = %S\n" program;
@@ -128,16 +127,19 @@ let process_entry oc entry =
     let var_count = ref 0 in
     let transl_case i case =
       let vars = ref [] in
+      let varset = ref IndexSet.empty in
       let alloc name =
         let id = !var_count in
         Utils.Misc.push vars name;
         incr var_count;
-        Regexp.RE.var id
+        let v = Regexp.RE.var id in
+        varset := IndexSet.add v !varset;
+        v
       in
       let clause = Regexp.KRE.clause i in
       let kre = Regexp.transl ~alloc ~clause case.Syntax.pattern in
       let vars = List.rev !vars in
-      (kre, vars)
+      (kre, (vars, !varset))
     in
     List.split (List.mapi transl_case entry.Syntax.clauses)
   in
@@ -180,9 +182,17 @@ let process_entry oc entry =
   | None -> ()
   | Some oc ->
     output_char oc '\n';
-    gen_code entry oc vars entry.Syntax.clauses;
+    gen_code entry oc (List.map fst vars) entry.Syntax.clauses;
     output_char oc '\n';
-    output_table oc entry vars (Dfa.gen_table dfa)
+    let registers, liveness =
+      let t0 = Sys.time () in
+      let module RA = Back.Regalloc.Make(Dfa) in
+      let liveness = RA.liveness (Array.of_list (List.map snd vars)) dfa in
+      let dt = Sys.time () -. t0 in
+      Printf.eprintf "liveness: %.02fms\n" (dt *. 1000.0);
+      liveness
+    in
+    output_table oc entry registers (Dfa.gen_table dfa liveness)
   end
 
 

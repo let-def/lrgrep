@@ -66,20 +66,6 @@ struct
         if c <> 0 then c else
           array_compare IndexSet.compare r1 r2
 
-    let compare_ignore _ _ = 0
-
-    let compare_pair fst snd (x1, y1) (x2, y2) =
-      match fst x1 x2 with
-      | 0 -> snd y1 y2
-      | n -> n
-
-    let compare_fst f = compare_pair f compare_ignore
-
-    let compare_snd f = compare_pair compare_ignore f
-
-    let array_split a =
-      (Array.map fst a, Array.map snd a)
-
     let make_from_elts elts =
       let direct, reduce = List.partition_map (fun x -> x) elts in
       let direct =
@@ -121,7 +107,7 @@ struct
       let accept, direct, reduce =
         let accept = ref [] and direct = ref [] and reduce = ref [] in
         let loop i k =
-          KRESet.derive_kre k (IndexSet.singleton (thread i))
+          KRESet.derive_kre k (thread i)
             ~visited:(ref KRESet.empty) ~accept ~reduce ~direct
         in
         Array.iteri loop t.direct;
@@ -132,14 +118,18 @@ struct
           |> Red.compile reduction_cache
           |> Red.initial
           |> output_reductions ix
-        ) (Misc.sort_and_merge_indexed KRE.compare reduce);
+        ) (sort_and_merge
+             (compare_fst KRE.compare)
+             (fun (kre, i) is -> (kre, IndexSet.of_list (i :: List.map snd is)) )
+             reduce
+          );
       Array.iteri (fun i r ->
           output_reductions
             (IndexSet.singleton (thread (Array.length t.direct + i)))
             (Red.derive r)
         ) t.reduce;
-      List.iter (fun (sg, vars, k, ix) ->
-          push_direct sg (make_varmap ix vars) k
+      List.iter (fun (sg, vars, k, i) ->
+          push_direct sg (IndexMap.singleton i vars) k
         ) direct;
       let tr =
         IndexRefine.annotated_partition !output
@@ -191,7 +181,7 @@ struct
     type t = {
       expr: Kern.t;
       id: int;
-      accepted: (KRE.clause index * thread indexset) list;
+      accepted: (KRE.clause index * thread index) list;
       mutable transitions: transition list;
       mutable visited: Lr1.set;
       mutable scheduled: Lr1.set;
@@ -273,7 +263,7 @@ struct
     index: state_index;
     kern: Kern.t;
     visited: Lr1.set;
-    accepted: (KRE.clause index * thread indexset) list;
+    accepted: (KRE.clause index * thread index) list;
     forward: transition list;
     mutable backward: transition list;
   }
@@ -291,6 +281,16 @@ struct
   let forward  st = st.forward
   let backward st = st.backward
   let accepted st = st.accepted
+
+  let reverse_mapping tr ~target_thread =
+    let target_thread = Index.to_int target_thread in
+    let direct_count = Array.length tr.direct_map in
+    if target_thread < direct_count then
+      tr.direct_map.(target_thread)
+    else
+      IndexSet.fold
+        (fun thread acc -> IndexMap.add thread IndexSet.empty acc)
+        tr.reduce_map.(target_thread - direct_count) IndexMap.empty
 
   let derive_dfa expr =
     let dfa = Pre.derive_dfa (Kern.make expr) in
@@ -335,14 +335,53 @@ struct
           Printf.eprintf "No transitions, ending analysis\n"
       end
 
-  let gen_table dfa =
+  let compute_action dfa liveness tr =
+    let src_live = liveness.(source tr) in
+    let tgt_live = liveness.(target tr) in
+    let index liveness (thr, var) =
+      let before, elt, _ = IndexMap.split thr liveness in
+      let offset =
+        IndexMap.fold (fun _ set acc -> acc + IndexSet.cardinal set) before 0
+      in
+      match elt with
+      | None -> assert false
+      | Some vars ->
+        IndexSet.fold (fun var' acc -> if var <= var' then acc + 1 else acc) vars offset
+    in
+    let move = ref [] in
+    let store = ref [] in
+    for i = 0 to threads dfa.(target tr) - 1 do
+      let tgt_thr = thread i in
+      match IndexMap.find_opt tgt_thr tgt_live with
+      | None -> ()
+      | Some tgt_vars ->
+        IndexMap.iter (fun src_thr store_vars ->
+            IndexSet.iter (fun var ->
+                if IndexSet.mem var store_vars then
+                  push store (index tgt_live (tgt_thr, var))
+                else
+                  push move (index tgt_live (tgt_thr, var),
+                             index src_live (src_thr, var))
+              ) tgt_vars;
+          ) (reverse_mapping tr ~target_thread:tgt_thr)
+    done;
+    { Lrgrep_support.
+      store = !store;
+      move = !move;
+      target = target tr;
+    }
+
+  type liveness = (thread, RE.var indexset) indexmap array
+
+  let gen_table dfa liveness =
     let states = Array.map (fun (r : state) ->
-        let accept = (List.map fst r.accepted :> int list) in
+        let accept = IntSet.of_list (List.map fst r.accepted :> int list) in
         let transitions = ref [] in
         let halting = ref r.visited in
         List.iter (fun tr ->
             halting := IndexSet.diff !halting tr.label;
-            push transitions ((tr.label :> IntSet.t), ([], tr.target));
+            let action = compute_action dfa liveness tr in
+            push transitions ((tr.label :> IntSet.t), action);
           ) r.forward;
         let halting = (!halting :> IntSet.t) in
         let transitions = !transitions in

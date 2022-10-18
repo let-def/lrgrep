@@ -18,11 +18,12 @@ module type DFA = sig
   val label : transition -> Lr1.set
   val source : transition -> state_index
   val target : transition -> state_index
+  val reverse_mapping : transition -> target_thread:thread index -> (thread, RE.var indexset) indexmap
 
   val index : state -> state_index
   val forward : state -> transition list
   val backward : state -> transition list
-  val accepted : state -> (KRE.clause index * thread indexset) list
+  val accepted : state -> (KRE.clause index * thread index) list
 
   type dfa = state array
 
@@ -30,9 +31,11 @@ module type DFA = sig
       The initial state is the first element of the array. *)
   val derive_dfa : KRESet.t -> dfa
 
+  type liveness = (thread, RE.var indexset) indexmap array
+
   (** Compile a DFA to a compact table, suitable for use with Lrgrep_support
       and runtime libraries. *)
-  val gen_table : dfa -> Lrgrep_support.compact_dfa
+  val gen_table : dfa -> liveness -> Lrgrep_support.compact_dfa
 
   (** FIXME: Cleanup *)
   val eval : dfa -> state_index -> stack:Lr1.t list -> unit

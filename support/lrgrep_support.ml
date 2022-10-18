@@ -144,27 +144,33 @@ end = struct
   let position t = Buffer.length t.buffer
 
   let emit t : RT.program_instruction -> _ = function
-    | Store (i, j) ->
-      assert (i <= 0xFF && j <= 0xFF);
+    | Store i ->
+      assert (i <= 0xFF);
       Buffer.add_char t.buffer '\x01';
-      Buffer.add_uint8 t.buffer i;
-      Buffer.add_uint8 t.buffer j
+      Buffer.add_uint8 t.buffer i
+    | Move (i, j) ->
+      assert (i <= 0xFF && j <= 0xFF);
+      if i <> j then (
+        Buffer.add_char t.buffer '\x02';
+        Buffer.add_uint8 t.buffer i;
+        Buffer.add_uint8 t.buffer j
+      )
     | Yield pos ->
       assert (pos <= 0xFFFF);
-      Buffer.add_char t.buffer '\x02';
+      Buffer.add_char t.buffer '\x03';
       Buffer.add_uint16_be t.buffer pos
     | Accept clause ->
-      Buffer.add_char t.buffer '\x03';
+      Buffer.add_char t.buffer '\x04';
       Buffer.add_uint8 t.buffer clause
     | Match index ->
-      Buffer.add_char t.buffer '\x04';
+      Buffer.add_char t.buffer '\x05';
       assert (index <= 0xFFFF);
       Buffer.add_uint16_be t.buffer index
     | Halt ->
-      Buffer.add_char t.buffer '\x05'
+      Buffer.add_char t.buffer '\x06'
 
   let emit_yield_reloc t reloc =
-    Buffer.add_char t.buffer '\x02';
+    Buffer.add_char t.buffer '\x03';
     let pos = Buffer.length t.buffer in
     Buffer.add_uint16_be t.buffer 0;
     t.reloc <- (pos, reloc) :: t.reloc
@@ -178,10 +184,14 @@ end = struct
     Bytes.unsafe_to_string buf
 end
 
-type transition_action = RT.register list * int
+type transition_action = {
+  move: (RT.register * RT.register) list;
+  store: RT.register list;
+  target: int;
+}
 
 type state = {
-  accept: int list;
+  accept: IntSet.t;
   halting: IntSet.t;
   transitions: (IntSet.t * transition_action) list;
 }
@@ -194,10 +204,12 @@ let compare_ints (i1, j1) (i2, j2) =
   if c <> 0 then c else
     Int.compare j1 j2
 
-let compare_transition_action (v1, t1) (v2, t2) =
-  let c = Int.compare t1 t2 in
+let compare_transition_action t1 t2 =
+  let c = Int.compare t1.target t2.target in
   if c <> 0 then c else
-    List.compare compare_ints v1 v2
+    let c = List.compare compare_ints t1.move t2.move in
+    if c <> 0 then c else
+      List.compare Int.compare t1.store t2.store
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
@@ -207,9 +219,10 @@ let compact (dfa : dfa) =
   let halt_pc = ref (Code_emitter.position code) in
   Code_emitter.emit code Halt;
   let pcs = Array.init (Array.length dfa) (fun _ -> ref (-1)) in
-  let emit_action (vars, target) =
-    List.iter (fun (i, j) -> Code_emitter.emit code (Store (i, j))) vars;
-    Code_emitter.emit_yield_reloc code pcs.(target);
+  let emit_action act =
+    List.iter (fun (i, j) -> Code_emitter.emit code (Move (i, j))) act.move;
+    List.iter (fun i -> Code_emitter.emit code (Store i)) act.store;
+    Code_emitter.emit_yield_reloc code pcs.(act.target);
   in
   let goto_action action = (*function
     | ([], target) -> pcs.(target)
@@ -248,7 +261,7 @@ let compact (dfa : dfa) =
       in
       assert (!pc = -1);
       pc := Code_emitter.position code;
-      List.iter (fun clause -> Code_emitter.emit code (Accept clause)) accept;
+      IntSet.iter (fun clause -> Code_emitter.emit code (Accept clause)) accept;
       begin match
         List.concat_map
           (fun (dom, target) ->
