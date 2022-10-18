@@ -69,13 +69,13 @@ module Make(Dfa : Sigs.DFA)() = struct
 
     (** [analyse initial_st] compute the analysis starting from state
         [initial_st] (which should be the initial state). *)
-    val analyse : Dfa.State.t -> t
+    val analyse : Dfa.dfa -> t
 
     (** [partial_states t] returns the list of states with partial coverage *)
     val partial_states : t -> state list
 
-    (** [repr st] is the DFA state represented by [st] *)
-    val repr : state -> Dfa.State.t
+    (** [index st] is the DFA state represented by [st] *)
+    val index : state -> Dfa.state_index
 
     (** [unhandled st] returns all the NFA transitions that are not covered
         by DFA state [repr st]. *)
@@ -91,44 +91,34 @@ module Make(Dfa : Sigs.DFA)() = struct
         - [path] is a list of NFA transitions starting from the initial state
           and ending at the partially covered state.
     *)
-    val paths : t -> (state * NFA.n index * NFA.n index list) Seq.t
+    val paths : t -> (Dfa.state_index * NFA.n index * NFA.n index list) Seq.t
 
   end = struct
     type state = {
-      repr: Dfa.State.t;
-      transitions: state lazy_t Lr1.map;
+      index: Dfa.state_index;
+      transitions: Dfa.state_index Lr1.map;
       mutable visited: NFA.n indexset;
       mutable scheduled: NFA.n indexset;
       mutable unhandled: NFA.n indexset;
       mutable predecessors: IntSet.t;
     }
 
-    let make_state repr transitions = {
-      repr; transitions;
-      visited = IndexSet.empty;
-      scheduled = IndexSet.empty;
-      unhandled = IndexSet.empty;
-      predecessors = IntSet.empty;
-    }
-
-    let make_state_table () =
-      let table = Hashtbl.create 7 in
-      let rec aux repr =
-        let id = Dfa.State.id repr in
-        match Hashtbl.find_opt table id with
-        | Some t -> t
-        | None ->
-          let trs = ref IndexMap.empty in
-          let add_lr1 target lr1 = trs := IndexMap.add lr1 target !trs in
-          Dfa.State.iter_transitions repr (fun lr1s _vars target ->
-              let target = lazy (aux target) in
-              IndexSet.iter (add_lr1 target) lr1s
-            );
-          let t = make_state repr !trs in
-          Hashtbl.add table id t;
-          t
-      in
-      table, aux
+    let make_state_table dfa =
+      let make_state index transitions = {
+        index; transitions;
+        visited = IndexSet.empty;
+        scheduled = IndexSet.empty;
+        unhandled = IndexSet.empty;
+        predecessors = IntSet.empty;
+      } in
+      Array.map (fun st ->
+          make_state (Dfa.index st)
+            (List.fold_left (fun acc tr ->
+                 let target = Dfa.target tr in
+                 IndexSet.fold (fun lr1 acc -> IndexMap.add lr1 target acc)
+                   (Dfa.label tr) acc
+               ) IndexMap.empty (Dfa.forward st);)
+        ) dfa
 
     let make_scheduler () =
       let todo = ref [] in
@@ -137,7 +127,7 @@ module Make(Dfa : Sigs.DFA)() = struct
         if not (IndexSet.is_empty states) then (
           if IndexSet.is_empty target.scheduled then push todo target;
           target.scheduled <- IndexSet.union target.scheduled states;
-          target.predecessors <- IntSet.add (Dfa.State.id source.repr) target.predecessors;
+          target.predecessors <- IntSet.add source.index target.predecessors;
         )
       in
       let rec flush f = match List.rev !todo with
@@ -150,13 +140,12 @@ module Make(Dfa : Sigs.DFA)() = struct
       (schedule, flush)
 
     type t = {
-      initial: state;
       partial: state list;
-      table: (int, state) Hashtbl.t;
+      table: state array;
     }
 
-    let analyse initial =
-      let table, lift = make_state_table () in
+    let analyse dfa =
+      let table = make_state_table dfa in
       let schedule, flush = make_scheduler () in
       let partial = ref [] in
       let process_transition state tr =
@@ -166,20 +155,19 @@ module Make(Dfa : Sigs.DFA)() = struct
           if IndexSet.is_empty state.unhandled then
             push partial state;
           state.unhandled <- IndexSet.add tr state.unhandled
-        | Some (lazy target) ->
-          schedule state target (NFA.transitions tr)
+        | Some target ->
+          schedule state table.(target) (NFA.transitions tr)
       in
       let process_state state =
         let to_visit = state.scheduled in
         state.visited <- IndexSet.union state.visited to_visit;
         state.scheduled <- IndexSet.empty;
-        if IntSet.is_empty (Dfa.State.accepted state.repr) then
+        if Dfa.accepted dfa.(state.index) = [] then
           IndexSet.iter (process_transition state) to_visit
       in
-      let initial = lift initial in
-      schedule initial initial NFA.initials;
+      schedule table.(0) table.(0) NFA.initials;
       flush process_state;
-      { initial; partial = !partial; table }
+      { partial = !partial; table }
 
     let nfa_predecessors = lazy (
       let predecessors = Vector.make NFA.n IndexSet.empty in
@@ -193,32 +181,23 @@ module Make(Dfa : Sigs.DFA)() = struct
       Vector.get predecessors
     )
 
-    let repr st = st.repr
+    let index st = st.index
     let unhandled st = st.unhandled
     let partial_states t = t.partial
 
     let paths t =
-      let visited = Hashtbl.create 7 in
-      let visited st =
-        match Hashtbl.find_opt visited (Dfa.State.id st.repr) with
-        | Some set -> set
-        | None ->
-          let set = ref IndexSet.empty in
-          Hashtbl.add visited (Dfa.State.id st.repr) set;
-          set
-      in
+      let visited = Array.make (Array.length t.table) IndexSet.empty in
       let found = ref [] in
       let candidates = ref [] in
       let add_candidate (path, st0, nfa0, finished) st nfa =
         if not !finished then (
           let path = nfa :: path in
-          if st == t.initial then (
+          if st = 0 then (
             push found (st0, nfa0, path);
             finished := true;
           ) else
-            let visited = visited st in
-            if not (IndexSet.mem nfa !visited) then (
-              visited := IndexSet.add nfa !visited;
+            if not (IndexSet.mem nfa visited.(st)) then (
+              visited.(st) <- IndexSet.add nfa visited.(st);
               push candidates (st, nfa, (path, st0, nfa0, finished))
             )
         )
@@ -226,20 +205,20 @@ module Make(Dfa : Sigs.DFA)() = struct
       let predecessors (st, nfa, path) =
         let preds = Lazy.force nfa_predecessors nfa in
         IntSet.iter (fun id ->
-            let st' = Hashtbl.find t.table id in
+            let st' = t.table.(id) in
             let visited = IndexSet.inter preds st'.visited in
             IndexSet.iter (fun nfa' ->
                 match IndexMap.find_opt (NFA.label nfa') st'.transitions with
                 | None -> ()
                 | Some st'' ->
-                  if Lazy.is_val st'' && Lazy.force st'' == st then
-                    add_candidate path st' nfa'
+                  if st'' == st then
+                    add_candidate path st'.index nfa'
               ) visited
-          ) st.predecessors
+          ) t.table.(st).predecessors
       in
       List.iter (fun st ->
           IndexSet.iter
-            (fun nfa -> add_candidate ([], st, nfa, ref false) st nfa)
+            (fun nfa -> add_candidate ([], st.index, nfa, ref false) st.index nfa)
             st.unhandled
         ) t.partial;
       let rec look () =

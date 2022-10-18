@@ -249,11 +249,10 @@ module type REGEXP = sig
         parsing. *)
     type uid = private int
 
-    (** A variable is a pair of a clause number and an integer that identify
-        the variable within this clause.
-        These integers are unique within a clause and are sequentially
-        allocated. *)
-    type var = int * int
+    (** A variable is identified by an integer that is unique for a lexer,
+        and sequentially allocated. *)
+    type var
+    val var : int -> var index
 
     (** A regular expression term with its unique ID, its description and its
         position. *)
@@ -261,7 +260,7 @@ module type REGEXP = sig
 
     (** The different constructors of regular expressions*)
     and desc =
-      | Set of Lr1.set * var option
+      | Set of Lr1.set * var index option
       (** Recognise a set of states, and optionally bind the matching state to
           a variable. *)
       | Alt of t list
@@ -283,7 +282,7 @@ module type REGEXP = sig
 
     (** Print a term to a [Cmon] document. [var] arguments allow to customize
         printing of variables. *)
-    val cmon : ?var:(var -> Cmon.t) -> t -> Cmon.t
+    val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
   end
 
   (** Represent stacks of regular expression continuations (plain [RE.t]s are
@@ -294,9 +293,12 @@ module type REGEXP = sig
   *)
   module KRE : sig
 
+    type clause
+    val clause : int -> clause index
+
     (** A stack of regular expression continuations *)
     type t =
-      | Done of { clause : int }
+      | Done of { clause : clause index }
       (** [Done {clause=i}] represents the bottom of the stack matching the
           clause number [i]. When reached, it means nothing more has to be
           matched and so clause [i] succeeded. *)
@@ -351,9 +353,9 @@ module type REGEXP = sig
     *)
     val derive_kre :
       visited:t ref ->
-      accept:int list ref ->
-      direct:(Lr1.set * RE.var list * KRE.t) list ref ->
-      reduce:KRE.t list ref -> KRE.t -> unit
+      accept:(KRE.clause index * 'a) list ref ->
+      direct:(Lr1.set * RE.var indexset * KRE.t * 'a) list ref ->
+      reduce:(KRE.t * 'a) list ref -> KRE.t -> 'a -> unit
 
     (** When simulating reductions, we have a slightly simpler notion of
         derivation:
@@ -386,7 +388,7 @@ module type REGEXP = sig
   (* Translate a clause in shallow syntax (defined in [Front.Syntax]) to a
      [KRE.t]. [alloc] is called to allocate variables *)
   val transl :
-    alloc:(string -> RE.var) -> clause:int ->
+    alloc:(string -> RE.var index) -> clause:KRE.clause index ->
     Syntax.regular_expr -> KRE.t
 end
 

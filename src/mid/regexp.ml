@@ -3,6 +3,8 @@ open Utils
 open Misc
 open Fix.Indexing
 
+module Positive = Const(struct let cardinal = max_int end)
+
 module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   module Info = Info
   open Info
@@ -12,12 +14,18 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
 
     let uid = let k = ref 0 in fun () -> incr k; !k
 
-    type var = int * int
+    include (struct
+      type var = Positive.n
+      let var x = Index.of_int Positive.n x
+    end : sig
+      type var
+      val var : int -> var index
+    end)
 
     type t = { uid: uid; desc: desc; position: Syntax.position }
 
     and desc =
-      | Set of Lr1.set * var option
+      | Set of Lr1.set * var index option
       | Alt of t list
       | Seq of t list
       | Star of t
@@ -28,7 +36,7 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
     let compare t1 t2 =
       Int.compare t1.uid t2.uid
 
-    let cmon ?(var=fun (x,y) -> Cmon.tuple [Cmon.int x; Cmon.int y]) t =
+    let cmon ?(var=fun x -> Cmon.constructor "Var" (cmon_index x)) t =
       let rec aux t =
         match t.desc with
         | Set (lr1s, v) ->
@@ -48,12 +56,21 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   end
 
   module KRE = struct
+    include (struct
+      type clause = Positive.n
+      let clause x = Index.of_int Positive.n x
+    end : sig
+      type clause
+      val clause : int -> clause index
+    end)
+
+
     type t =
-      | Done of {clause: int}
+      | Done of {clause: clause index}
       | More of RE.t * t
 
     let rec cmon = function
-      | Done {clause} -> Cmon.constructor "Done" (Cmon.int clause)
+      | Done {clause} -> Cmon.constructor "Done" (cmon_index clause)
       | More (re, t) ->
         Cmon.cons (RE.cmon re) (cmon t)
 
@@ -61,7 +78,7 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       match k1, k2 with
       | Done _, More _ -> -1
       | More _, Done _ -> 1
-      | Done c1, Done c2 -> Int.compare c1.clause c2.clause
+      | Done c1, Done c2 -> compare_index c1.clause c2.clause
       | More (t1, k1'), More (t2, k2') ->
         let c = RE.compare t1 t2 in
         if c <> 0 then c else
@@ -71,16 +88,20 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   module KRESet = struct
     include Set.Make(KRE)
 
-    let derive_kre ~visited ~accept ~direct ~reduce k =
+    let derive_kre ~visited ~accept ~direct ~reduce k tag =
       let rec loop k =
         if not (mem k !visited) then (
           visited := add k !visited;
           match k with
-          | Done {clause} -> push accept clause
+          | Done {clause} -> push accept (clause, tag)
           | More (re, k') ->
             match re.desc with
             | Set (s, var) ->
-              push direct (s, Option.to_list var, k')
+              let vars =
+                Option.fold var
+                  ~none:IndexSet.empty ~some:IndexSet.singleton
+              in
+              push direct (s, vars, k', tag)
             | Alt es ->
               List.iter (fun e -> loop (KRE.More (e, k'))) es
             | Star r ->
@@ -89,7 +110,7 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
             | Seq es ->
               loop (List.fold_right (fun e k -> KRE.More (e, k)) es k')
             | Reduce ->
-              push reduce k';
+              push reduce (k', tag);
               loop k'
         )
       in
@@ -98,18 +119,23 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
     let derive_in_reduction t : t partial_derivative list =
       let visited = ref empty in
       let direct = ref [] in
-      let push_k k = push direct (Lr1.all, [], k) in
+      let push_k k = push direct (Lr1.all, IndexSet.empty, k, ()) in
       let loop k =
         match k with
         | KRE.Done _ -> push_k k
         | k ->
           let accept = ref [] in
-          derive_kre ~visited ~direct ~accept ~reduce:(ref []) k;
-          List.iter (fun clause -> push_k (KRE.Done {clause})) !accept
+          let reduce = ref [] in
+          derive_kre ~visited ~direct ~accept ~reduce k ();
+          ignore reduce; (*TODO: handle "reduction in reduction"... someday? *)
+          List.iter (fun (clause, ()) -> push_k (KRE.Done {clause})) !accept
       in
       iter loop t;
       determinize_derivatives ~compare:KRE.compare ~merge:of_list
-        (List.map (fun (s, _v, k) -> (s, k)) !direct)
+        (List.map (fun (s, v, k, ()) ->
+             ignore v; (*TODO: warn about missing variables
+                         (fallback on approximate location ?) *)
+             (s, k)) !direct)
 
     let cmon t = Cmon.list_map KRE.cmon (elements t)
   end

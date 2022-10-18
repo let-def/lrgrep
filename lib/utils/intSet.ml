@@ -1,3 +1,5 @@
+module type S = SetSig.S0
+
 (* A compressed (or should we say sparse?) bit set is a list of pairs
      of integers. The first component of every pair is an index, while
      the second component is a bit field. The list is sorted by order

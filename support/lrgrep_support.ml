@@ -181,7 +181,7 @@ end
 type transition_action = RT.register list * int
 
 type state = {
-  accept: int option;
+  accept: int list;
   halting: IntSet.t;
   transitions: (IntSet.t * transition_action) list;
 }
@@ -219,13 +219,15 @@ let compact (dfa : dfa) =
       ref position
   in
   let transition_count = ref 0 in
+  let transition_dom = ref 0 in
   let cell_count = ref 0 in
   Array.iter2 (fun {accept; halting; transitions} pc ->
       let default, other_transitions =
         let _, most_frequent_action =
           List.fold_left (fun (count, _ as default) (dom, action) ->
               let count' = IntSet.cardinal dom in
-              transition_count := !transition_count + count';
+              incr transition_count;
+              transition_dom := !transition_dom + count';
               if count' > count
               then (count', Some action)
               else default
@@ -246,10 +248,7 @@ let compact (dfa : dfa) =
       in
       assert (!pc = -1);
       pc := Code_emitter.position code;
-      begin match accept with
-        | None -> ()
-        | Some clause -> Code_emitter.emit code (Accept clause)
-      end;
+      List.iter (fun clause -> Code_emitter.emit code (Accept clause)) accept;
       begin match
         List.concat_map
           (fun (dom, target) ->
@@ -267,6 +266,6 @@ let compact (dfa : dfa) =
         | Some default -> emit_action default
       end
     ) dfa pcs;
-  Printf.eprintf "total transitions: %d, non-default: %d\n%!"
-    !transition_count !cell_count;
+  Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
+    !transition_count !transition_dom !cell_count;
   (Code_emitter.link code, Sparse_packer.pack index (!), Array.map (!) pcs)

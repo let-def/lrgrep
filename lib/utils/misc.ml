@@ -173,3 +173,36 @@ let cmon_indexset xs =
 let print_cmon oc cmon =
   PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
 
+let sort_and_merge compare merge l =
+  let rec loop x xs = function
+    | [] -> [merge x xs]
+    | y :: ys ->
+      if compare x y = 0
+      then loop x (y :: xs) ys
+      else
+        let xxs = merge x xs in
+        xxs :: loop y [] ys
+  in
+  match List.sort compare l with
+  | [] -> []
+  | x :: xs -> loop x [] xs
+
+let sort_and_merge_indexed compare l =
+  let union_ix ix (_, ix') = IndexSet.union ix ix' in
+  sort_and_merge
+    (fun (x, _) (y, _) -> compare x y)
+    (fun (x, ix) rest -> (x, List.fold_left union_ix ix rest))
+    l
+
+let array_compare cmp a1 a2 =
+  let len = Array.length a1 in
+  let c = Int.compare len (Array.length a2) in
+  if c <> 0 then c else
+    let rec loop i len =
+      if i = len then 0 else
+        let c = cmp a1.(i) a2.(i) in
+        if c <> 0 then c else
+          loop (i + 1) len
+    in
+    loop 0 len
+

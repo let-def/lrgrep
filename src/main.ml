@@ -112,40 +112,41 @@ let gen_code entry oc vars clauses =
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
-let output_table oc entry vars (initial : Dfa.State.t) (program, table, remap) =
+let output_table oc entry vars (program, table, remap) =
   let print fmt = Printf.fprintf oc fmt in
   print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
     entry.Syntax.name;
   print "  let arities = [|%s|]\n"
     (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
-  print "  let initial = %d\n" remap.(Dfa.State.id initial);
+  print "  let initial = %d\n" remap.(0);
   print "  let table = %S\n" table;
   print "  let program = %S\n" program;
   print "end\n"
 
 let process_entry oc entry =
   let cases, vars =
+    let var_count = ref 0 in
     let transl_case i case =
-      let var_count = ref 0 in
       let vars = ref [] in
       let alloc name =
         let id = !var_count in
         Utils.Misc.push vars name;
         incr var_count;
-        (i, id)
+        Regexp.RE.var id
       in
-      let kre = Regexp.transl ~alloc ~clause:i case.Syntax.pattern in
+      let clause = Regexp.KRE.clause i in
+      let kre = Regexp.transl ~alloc ~clause case.Syntax.pattern in
       let vars = List.rev !vars in
       (kre, vars)
     in
     List.split (List.mapi transl_case entry.Syntax.clauses)
   in
   let cases = Regexp.KRESet.of_list cases in
-  let dfa, initial = Dfa.derive_dfa (Dfa.Expr.make cases) in
+  let dfa = Dfa.derive_dfa cases in
   if !check_coverage then (
     let module Coverage = Back.Coverage.Make(Dfa)() in
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
-    let check = Check.analyse initial in
+    let check = Check.analyse dfa in
     let count = ref 6 in
     try Seq.iter (fun (_st, _nfa, nfa_path) ->
         let initial = ref false in
@@ -174,14 +175,14 @@ let process_entry oc entry =
       ) (Check.paths check)
     with Exit -> ()
   );
-  Format.eprintf "(* %d states *)\n%!" (Dfa.number_of_states dfa);
+  Format.eprintf "(* %d states *)\n%!" (Array.length dfa);
   begin match oc with
   | None -> ()
   | Some oc ->
     output_char oc '\n';
     gen_code entry oc vars entry.Syntax.clauses;
     output_char oc '\n';
-    output_table oc entry vars initial (Dfa.gen_table dfa)
+    output_table oc entry vars (Dfa.gen_table dfa)
   end
 
 

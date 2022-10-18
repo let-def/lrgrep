@@ -54,7 +54,7 @@ end
 type transition_action = RT.register list * int
 
 type state = {
-  accept: int option;
+  accept: int list;
   (** a clause to accept in this state.
       FIXME: this should be a set, multiple clauses can match at the same
       state. *)
