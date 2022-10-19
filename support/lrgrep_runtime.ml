@@ -14,7 +14,7 @@ type program_instruction =
   | Store of register
   | Move of register * register
   | Yield of program_counter
-  | Accept of clause
+  | Accept of clause * int * int
   | Match of sparse_index
   | Halt
 
@@ -53,8 +53,10 @@ let program_step (t : program) (r : program_counter ref)
     r := !r + 3;
     Yield (String.get_uint16_be t (pc + 1))
   | '\x04' ->
-    r := !r + 2;
-    Accept (String.get_uint8 t (pc + 1))
+    r := !r + 4;
+    Accept (String.get_uint8 t (pc + 1),
+            String.get_uint8 t (pc + 2),
+            String.get_uint8 t (pc + 3))
   | '\x05' ->
     r := !r + 3;
     Match (String.get_uint16_be t (pc + 1))
@@ -86,7 +88,6 @@ struct
     let rec loop () =
       match program_step PE.program pc with
       | Store reg ->
-        (*prerr_endline "Store";*)
         bank.(reg) <- P.top env;
         loop ()
       | Move (r1, r2) ->
@@ -96,9 +97,9 @@ struct
       | Yield pc' ->
         (*prerr_endline "Yield";*)
         Some pc'
-      | Accept clause ->
+      | Accept (clause, start, count) ->
         (*prerr_endline "Accept";*)
-        candidate := (clause, Array.copy bank) :: !candidate;
+        candidate := (clause, Array.sub bank start count) :: !candidate;
         loop ()
       | Match index ->
         (*prerr_endline "Match";*)

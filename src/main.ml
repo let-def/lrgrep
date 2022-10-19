@@ -94,21 +94,40 @@ module Dfa = Back.Dfa.Make(Regexp)()
 
 open Front
 
-let gen_code entry oc vars clauses =
+let gen_code entry oc optionals vars clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
     "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
     entry.Syntax.name
     (String.concat " " entry.Syntax.args)
     (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
-  List.iteri (fun index (vars, clause) ->
-      print "  | %d, [|%s|] -> begin\n%s\n    end\n"
+  List.iteri (fun index ((varnames, varindices), clause) ->
+      let non_optionals =
+        List.fold_left2 (fun acc name index ->
+            if IndexSet.mem index optionals
+            then acc
+            else (
+              "let " ^ name ^ " = match " ^ name ^
+              " with None -> assert false | Some x -> x in"
+            ) :: acc
+          ) [] varnames (IndexSet.elements varindices)
+        |> String.concat "\n"
+      in
+      let print_loc (loc : Syntax.location) =
+        Printf.sprintf "# %d %S\n%s"
+          loc.start_line loc.loc_file
+          (String.make loc.start_col ' ')
+      in
+      print "  | %d, [|%s|] -> %s begin\n%s\n    end\n"
         index
-        (String.concat ";" vars)
+        (String.concat ";" varnames)
+        non_optionals
         (match clause.Syntax.action with
          | Unreachable -> "failwith \"Should be unreachable\""
-         | Partial (_, str) -> str
-         | Total (_, str) -> "Some (" ^ str ^ ")")
+         | Partial (loc, str) ->
+           print_loc loc ^ str
+         | Total (loc, str) ->
+           "Some (\n" ^ print_loc loc ^ str ^ ")")
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
@@ -181,9 +200,6 @@ let process_entry oc entry =
   begin match oc with
   | None -> ()
   | Some oc ->
-    output_char oc '\n';
-    gen_code entry oc (List.map fst vars) entry.Syntax.clauses;
-    output_char oc '\n';
     let registers, liveness =
       let t0 = Sys.time () in
       let module RA = Back.Regalloc.Make(Dfa) in
@@ -192,6 +208,12 @@ let process_entry oc entry =
       Printf.eprintf "liveness: %.02fms\n" (dt *. 1000.0);
       liveness
     in
+    let optionals =
+      IndexMap.fold (fun _ -> IndexSet.union) liveness.(0) IndexSet.empty
+    in
+    output_char oc '\n';
+    gen_code entry oc optionals vars entry.Syntax.clauses;
+    output_char oc '\n';
     output_table oc entry registers (Dfa.gen_table dfa liveness)
   end
 

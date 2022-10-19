@@ -116,7 +116,7 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       in
       loop k
 
-    let derive_in_reduction t : t partial_derivative list =
+    let derive_in_reduction t : (t * RE.var indexset) partial_derivative list =
       let visited = ref empty in
       let direct = ref [] in
       let push_k k = push direct (Lr1.all, IndexSet.empty, k, ()) in
@@ -131,11 +131,12 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
           List.iter (fun (clause, ()) -> push_k (KRE.Done {clause})) !accept
       in
       iter loop t;
-      determinize_derivatives ~compare:KRE.compare ~merge:of_list
-        (List.map (fun (s, v, k, ()) ->
-             ignore v; (*TODO: warn about missing variables
-                         (fallback on approximate location ?) *)
-             (s, k)) !direct)
+      determinize_derivatives
+        ~compare:(compare_pair KRE.compare IndexSet.compare)
+        ~merge:(fun l ->
+            let ks, sets = List.split l in
+            (of_list ks, List.fold_left IndexSet.union IndexSet.empty sets))
+        (List.map (fun (s, v, k, ()) -> (s, (k, v))) !direct)
 
     let cmon t = Cmon.list_map KRE.cmon (elements t)
   end

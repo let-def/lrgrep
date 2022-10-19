@@ -159,9 +159,12 @@ end = struct
       assert (pos <= 0xFFFF);
       Buffer.add_char t.buffer '\x03';
       Buffer.add_uint16_be t.buffer pos
-    | Accept clause ->
+    | Accept (clause, start, count) ->
+      assert (start <= 0xFF && count <= 0xFF);
       Buffer.add_char t.buffer '\x04';
-      Buffer.add_uint8 t.buffer clause
+      Buffer.add_uint8 t.buffer clause;
+      Buffer.add_uint8 t.buffer start;
+      Buffer.add_uint8 t.buffer count
     | Match index ->
       Buffer.add_char t.buffer '\x05';
       assert (index <= 0xFFFF);
@@ -191,7 +194,7 @@ type transition_action = {
 }
 
 type state = {
-  accept: IntSet.t;
+  accept: (RT.clause * RT.register * int) list;
   halting: IntSet.t;
   transitions: (IntSet.t * transition_action) list;
 }
@@ -261,7 +264,10 @@ let compact (dfa : dfa) =
       in
       assert (!pc = -1);
       pc := Code_emitter.position code;
-      IntSet.iter (fun clause -> Code_emitter.emit code (Accept clause)) accept;
+      List.iter
+        (fun (clause, start, count) ->
+           Code_emitter.emit code (Accept (clause, start, count)))
+        accept;
       begin match
         List.concat_map
           (fun (dom, target) ->

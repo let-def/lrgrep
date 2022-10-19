@@ -56,7 +56,7 @@ type program_instruction =
     (** Jump and consume input:
         [Yield pc] stops the current interpretation to consume one state of the
         input stack. After consuming, execution should resume at [pc]. *)
-  | Accept of clause
+  | Accept of clause * int * int
     (** When reaching [Accept id], the matcher found that clause number [id] is
         matching. Add it to the set of matching candidates and resume
         execution. *)

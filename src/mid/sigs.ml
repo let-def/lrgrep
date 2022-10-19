@@ -379,7 +379,7 @@ module type REGEXP = sig
           consumed by one of the reduction simulated by the first [!]).
         [derive_in_reduction] implements this simpler notion.
     *)
-    val derive_in_reduction : t -> t partial_derivative list
+    val derive_in_reduction : t -> (t * RE.var indexset) partial_derivative list
 
     (** Print a set of KREs to a cmon document. *)
     val cmon : t -> Cmon.t

@@ -14,11 +14,14 @@ struct
   module Reduction = Mid.Reduction.Make(Redgraph)
 
   module CachedKRESet = Reduction.Cache(struct
-      type t = KRESet.t
-      let compare = KRESet.compare
-      let derive = KRESet.derive_in_reduction
-      let merge ts = List.fold_left KRESet.union KRESet.empty ts
-      let cmon = KRESet.cmon
+      type t = KRESet.t * RE.var indexset
+      let compare = compare_pair KRESet.compare IndexSet.compare
+      let derive (k, _) = KRESet.derive_in_reduction k
+      let merge ts =
+        let ks, vs = List.split ts in
+        (List.fold_left KRESet.union KRESet.empty ks,
+         List.fold_left IndexSet.union IndexSet.empty vs)
+      let cmon (k, _) = KRESet.cmon k
     end)
 
   module Red = Reduction.Make(CachedKRESet)
@@ -96,9 +99,9 @@ struct
         IndexSet.fold (fun i map -> IndexMap.add i vars map) ix IndexMap.empty
       in
       let output_reductions ix (ds, rs) =
-        let ix' = make_varmap ix IndexSet.empty in
         List.iter (fun (sg, k) ->
-          KRESet.iter (push_direct sg ix') (CachedKRESet.unlift k)
+            let k, v = CachedKRESet.unlift k in
+            KRESet.iter (push_direct sg (make_varmap ix v)) k
           ) ds;
         List.iter (fun (sg, r) ->
             push output (sg, Either.right (r, ix))
@@ -114,7 +117,7 @@ struct
         (!accept, !direct, !reduce)
       in
       List.iter (fun (kre, ix) ->
-          CachedKRESet.lift (KRESet.singleton kre)
+          CachedKRESet.lift (KRESet.singleton kre, IndexSet.empty)
           |> Red.compile reduction_cache
           |> Red.initial
           |> output_reductions ix
@@ -335,19 +338,19 @@ struct
           Printf.eprintf "No transitions, ending analysis\n"
       end
 
+  let variable_index liveness (thr, var : thread index * RE.var index) =
+    let before, elt, _ = IndexMap.split thr liveness in
+    let offset =
+      IndexMap.fold (fun _ set acc -> acc + IndexSet.cardinal set) before 0
+    in
+    match elt with
+    | None -> assert false
+    | Some vars ->
+      IndexSet.fold (fun var' acc -> if var < var' then acc + 1 else acc) vars offset
+
   let compute_action dfa liveness tr =
     let src_live = liveness.(source tr) in
     let tgt_live = liveness.(target tr) in
-    let index liveness (thr, var) =
-      let before, elt, _ = IndexMap.split thr liveness in
-      let offset =
-        IndexMap.fold (fun _ set acc -> acc + IndexSet.cardinal set) before 0
-      in
-      match elt with
-      | None -> assert false
-      | Some vars ->
-        IndexSet.fold (fun var' acc -> if var <= var' then acc + 1 else acc) vars offset
-    in
     let move = ref [] in
     let store = ref [] in
     for i = 0 to threads dfa.(target tr) - 1 do
@@ -358,10 +361,10 @@ struct
         IndexMap.iter (fun src_thr store_vars ->
             IndexSet.iter (fun var ->
                 if IndexSet.mem var store_vars then
-                  push store (index tgt_live (tgt_thr, var))
+                  push store (variable_index tgt_live (tgt_thr, var))
                 else
-                  push move (index tgt_live (tgt_thr, var),
-                             index src_live (src_thr, var))
+                  push move (variable_index tgt_live (tgt_thr, var),
+                             variable_index src_live (src_thr, var))
               ) tgt_vars;
           ) (reverse_mapping tr ~target_thread:tgt_thr)
     done;
@@ -375,7 +378,21 @@ struct
 
   let gen_table dfa liveness =
     let states = Array.map (fun (r : state) ->
-        let accept = IntSet.of_list (List.map fst r.accepted :> int list) in
+        let accept =
+          List.map (fun (clause, thread) ->
+              let clause = Index.to_int clause in
+              let live = liveness.(index r) in
+              match IndexMap.find_opt thread live with
+              | None -> assert false
+              | Some variables ->
+                match IndexSet.minimum variables with
+                | None -> (clause, 0, 0)
+                | Some var ->
+                  (clause,
+                   variable_index live (thread, var),
+                   IndexSet.cardinal variables)
+            ) r.accepted
+        in
         let transitions = ref [] in
         let halting = ref r.visited in
         List.iter (fun tr ->
