@@ -8,9 +8,8 @@ rule error_message token = parse error
   partial {
     match token with
     | Parser_raw.ELSE -> (
-      let Parser_raw.MenhirInterpreter.Element (state, expr, startp, _endp) = e in
-      match Parser_raw.MenhirInterpreter.incoming_symbol state, expr with
-      | N N_expr, {pexp_desc = Pexp_ifthenelse(_, _, None); _} -> (
+      match e with 
+      | {pexp_desc = Pexp_ifthenelse(_, _, None); _}, startp, _endp -> (
         Some ("The semicolon line "
               ^ string_of_int startp.pos_lnum
               ^ ", character "
@@ -33,8 +32,7 @@ rule error_message token = parse error
 
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
-
-  { let Parser_raw.MenhirInterpreter.Element (_, _, startp, _endp) = semi in
+  { let (), startp, _endp = semi in
     "Might be due to the semicolon line "
     ^ string_of_int startp.pos_lnum
     ^ ", character "
@@ -43,7 +41,7 @@ rule error_message token = parse error
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | LPAREN as lp; [. RPAREN]; !
-  { let Parser_raw.MenhirInterpreter.Element (_, _, startp, _endp) = lp in
+  { let (), startp, _endp = lp in
     "Unclosed parenthesis at line " 
     ^ string_of_int startp.pos_lnum
     ^ ", character "

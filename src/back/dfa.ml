@@ -279,6 +279,9 @@ struct
   let label  tr = tr.label
   let source tr = tr.source
   let target tr = tr.target
+  let all_vars tr =
+    Array.fold_left (fun acc map -> IndexMap.fold (fun _ -> IndexSet.union) map acc)
+      IndexSet.empty tr.direct_map
 
   let index    st = st.index
   let forward  st = st.forward

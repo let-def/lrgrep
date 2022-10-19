@@ -94,22 +94,114 @@ module Dfa = Back.Dfa.Make(Regexp)()
 
 open Front
 
-let gen_code entry oc optionals vars clauses =
+module Symbols = Fix.Indexing.Sum(Info.Terminal)(Info.Nonterminal)
+
+let recover_types dfa =
+  let symbol_of_symbol = function
+    | Info.Symbol.T t -> Symbols.inj_l t
+    | Info.Symbol.N n -> Symbols.inj_r n
+  in
+  let symbol_of_lr1 lr1 =
+    match Info.Lr1.incoming lr1 with
+    | None -> assert false
+    | Some s -> symbol_of_symbol s
+  in
+  let symbols_of_lr1s lr1s =
+   IndexSet.map symbol_of_lr1 lr1s
+  in
+  let var_symbols = ref IndexMap.empty in
+  Array.iter (fun st ->
+      List.iter (fun tr ->
+          let vars = Dfa.all_vars tr in
+          if not (IndexSet.is_empty vars) then (
+            let symbols = symbols_of_lr1s (Dfa.label tr) in
+            IndexSet.iter (fun var ->
+                var_symbols := IndexMap.update var (function
+                    | None -> Some symbols
+                    | Some symbols' -> Some (IndexSet.union symbols symbols')
+                  ) !var_symbols
+              ) vars
+          )
+        ) (Dfa.forward st)
+    ) dfa;
+  let typeable symbols =
+    try
+      IndexSet.fold (fun sym typ ->
+          let typ' =
+            match Symbols.prj sym with
+            | L t ->
+              Option.value ~default:"unit"
+                (Grammar.Terminal.typ (Info.Terminal.to_g t))
+            | R n ->
+              match Grammar.Nonterminal.typ (Info.Nonterminal.to_g n) with
+              | None -> raise Exit
+              | Some t -> t
+          in
+          match typ with
+          | None -> Some typ'
+          | Some typ_ ->
+            if typ_ <> typ' then raise Exit;
+            typ
+        ) symbols None
+    with Exit -> None
+  in
+  let var_typeable =
+    IndexMap.filter_map (fun _var symbols ->
+        match typeable symbols with
+        | None -> None
+        | Some typ -> Some (typ, symbols))
+      !var_symbols
+  in
+  (!var_symbols, var_typeable)
+
+let parser_module =
+  String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
+
+let gen_code entry oc optionals vars var_typeable clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
     "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
-    entry.Syntax.name
-    (String.concat " " entry.Syntax.args)
-    (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
+    entry.Syntax.name (String.concat " " entry.Syntax.args) parser_module;
   List.iteri (fun index ((varnames, varindices), clause) ->
-      let non_optionals =
+      let recover_types =
+        let symbol_matcher s = match Symbols.prj s with
+          | L t -> "T T_" ^ Info.Terminal.to_string t
+          | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
+        in
         List.fold_left2 (fun acc name index ->
-            if IndexSet.mem index optionals
-            then acc
-            else (
-              "let " ^ name ^ " = match " ^ name ^
-              " with None -> assert false | Some x -> x in"
-            ) :: acc
+            let is_optional = IndexSet.mem index optionals in
+            let types = match IndexMap.find_opt index var_typeable with
+              | None -> None
+              | Some (typ, cases) ->
+                let matchers =
+                  List.map symbol_matcher (IndexSet.elements cases)
+                in
+                Some (
+                  Printf.sprintf "\
+                  match %s.MenhirInterpreter.incoming_symbol st with \
+                  | %s -> ((x : %s), startp, endp)
+                  | _ -> assert false
+                  " parser_module
+                    (String.concat " | " matchers) typ
+                )
+            in
+            match is_optional, types with
+            | true, None -> acc
+            | true, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with \
+                | None -> None \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  Some (%s) in" name name parser_module types
+              :: acc
+            | false, None ->
+              Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
+                name name :: acc
+            | false, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with None -> assert false \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  %s in" name name parser_module types :: acc
           ) [] varnames (IndexSet.elements varindices)
         |> String.concat "\n"
       in
@@ -121,7 +213,7 @@ let gen_code entry oc optionals vars clauses =
       print "  | %d, [|%s|] -> %s begin\n%s\n    end\n"
         index
         (String.concat ";" varnames)
-        non_optionals
+        recover_types
         (match clause.Syntax.action with
          | Unreachable -> "failwith \"Should be unreachable\""
          | Partial (loc, str) ->
@@ -212,7 +304,8 @@ let process_entry oc entry =
       IndexMap.fold (fun _ -> IndexSet.union) liveness.(0) IndexSet.empty
     in
     output_char oc '\n';
-    gen_code entry oc optionals vars entry.Syntax.clauses;
+    let _symbols, typeable = recover_types dfa in
+    gen_code entry oc optionals vars typeable entry.Syntax.clauses;
     output_char oc '\n';
     output_table oc entry registers (Dfa.gen_table dfa liveness)
   end

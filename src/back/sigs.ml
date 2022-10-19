@@ -19,6 +19,7 @@ module type DFA = sig
   val source : transition -> state_index
   val target : transition -> state_index
   val reverse_mapping : transition -> target_thread:thread index -> (thread, RE.var indexset) indexmap
+  val all_vars : transition -> RE.var indexset
 
   val index : state -> state_index
   val forward : state -> transition list
