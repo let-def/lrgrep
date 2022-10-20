@@ -19,20 +19,21 @@ type program_instruction =
   | Halt
 
 let get_int table ~offset = function
-  | 1 -> String.get_uint8 table offset
-  | 2 -> String.get_uint16_be table offset
-  | 3 -> (String.get_uint16_be table offset) lor
-         (String.get_uint8 table (offset + 2) lsl 16)
-  | 4 -> Int32.to_int (String.get_int32_be table offset)
+  | 1 -> Bytes.get_uint8 table offset
+  | 2 -> Bytes.get_uint16_be table offset
+  | 3 -> (Bytes.get_uint16_be table offset) lor
+         (Bytes.get_uint8 table (offset + 2) lsl 16)
+  | 4 -> Int32.to_int (Bytes.get_int32_be table offset)
   | _ -> assert false
 
 let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   : program_counter option =
-  let ksize = String.get_uint8 table 0 in
-  let vsize = String.get_uint8 table 1 in
+  let table = Bytes.unsafe_of_string table in
+  let ksize = Bytes.get_uint8 table 0 in
+  let vsize = Bytes.get_uint8 table 1 in
   assert (index >= 0 && lr1 >= 0);
   let offset = 2 + (index + lr1) * (ksize + vsize) in
-  if offset + 4 > String.length table then
+  if offset + 4 > Bytes.length table then
     None
   else if get_int table ~offset ksize = lr1 then
     Some (get_int table ~offset:(offset + ksize) vsize)
@@ -42,24 +43,26 @@ let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
 let program_step (t : program) (r : program_counter ref)
   : program_instruction =
   let pc = !r in
-  match t.[pc] with
+  let c = t.[pc] in
+  let t = Bytes.unsafe_of_string t in
+  match c with
   | '\x01' ->
     r := !r + 2;
-    Store (String.get_uint8 t (pc + 1))
+    Store (Bytes.get_uint8 t (pc + 1))
   | '\x02' ->
     r := !r + 3;
-    Move (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
+    Move (Bytes.get_uint8 t (pc + 1), Bytes.get_uint8 t (pc + 2))
   | '\x03' ->
     r := !r + 4;
     Yield (get_int t ~offset:(pc + 1) 3)
   | '\x04' ->
     r := !r + 4;
-    Accept (String.get_uint8 t (pc + 1),
-            String.get_uint8 t (pc + 2),
-            String.get_uint8 t (pc + 3))
+    Accept (Bytes.get_uint8 t (pc + 1),
+            Bytes.get_uint8 t (pc + 2),
+            Bytes.get_uint8 t (pc + 3))
   | '\x05' ->
     r := !r + 3;
-    Match (String.get_uint16_be t (pc + 1))
+    Match (Bytes.get_uint16_be t (pc + 1))
   | '\x06' ->
     r := !r + 1;
     Halt

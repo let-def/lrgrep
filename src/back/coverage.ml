@@ -2,6 +2,16 @@ open Utils
 open Misc
 open Fix.Indexing
 
+let rec seq_append seq1 seq2 () =
+  match seq1() with
+  | Seq.Nil -> seq2()
+  | Seq.Cons (x, next) -> Seq.Cons (x, seq_append next seq2)
+
+let rec seq_concat seq () = match seq () with
+  | Seq.Nil -> Seq.Nil
+  | Seq.Cons (x, next) ->
+     seq_append x (seq_concat next) ()
+
 module Make(Dfa : Sigs.DFA)() = struct
   module Info = Dfa.Regexp.Info
   open Info
@@ -236,7 +246,7 @@ module Make(Dfa : Sigs.DFA)() = struct
           LCons (List.to_seq examples, Lazy.from_fun look)
       in
       let node = lazy_list_to_seq (look ()) in
-      Seq.concat (fun () -> node)
+      seq_concat (fun () -> node)
   end
 
   (** The LRijkstra classes for each state are needed to compute the possible
