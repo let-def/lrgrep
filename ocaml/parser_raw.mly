@@ -25,8 +25,8 @@ open Parsetree
 open Ast_helper
 open Docstrings
 open Docstrings.WithMenhir
-open Msupport_parsing
 
+open Parser_def
 let mkloc = Location.mkloc
 let mknoloc = Location.mknoloc
 
@@ -247,7 +247,7 @@ let dotop_fun ~loc dotop =
 
 let array_function ~loc str name =
   ghloc ~loc (Ldot(Lident str,
-                   (if !Clflags.fast then "unsafe_" ^ name else name)))
+                   (if !Clflags.unsafe then "unsafe_" ^ name else name)))
 
 let array_get_fun ~loc =
   ghexp ~loc (Pexp_ident(array_function ~loc "Array" "get"))
@@ -298,7 +298,7 @@ let bigarray_untuplify = function
 let bigarray_get ~loc arr arg =
   let mkexp, ghexp = mkexp ~loc, ghexp ~loc in
   let bigarray_function = bigarray_function ~loc in
-  let get = if !Clflags.fast then "unsafe_get" else "get" in
+  let get = if !Clflags.unsafe then "unsafe_get" else "get" in
   match bigarray_untuplify arg with
     [c1] ->
       mkexp(Pexp_apply(ghexp(Pexp_ident(bigarray_function "Array1" get)),
@@ -316,7 +316,7 @@ let bigarray_get ~loc arr arg =
 let bigarray_set ~loc arr arg newval =
   let mkexp, ghexp = mkexp ~loc, ghexp ~loc in
   let bigarray_function = bigarray_function ~loc in
-  let set = if !Clflags.fast then "unsafe_set" else "set" in
+  let set = if !Clflags.unsafe then "unsafe_set" else "set" in
   match bigarray_untuplify arg with
     [c1] ->
       mkexp(Pexp_apply(ghexp(Pexp_ident(bigarray_function "Array1" set)),
@@ -596,33 +596,6 @@ let merloc startpos ?endpos x =
   let str = mkloc "merlin.loc" loc in
   let attr = { attr_name = str; attr_loc = loc; attr_payload = PStr [] } in
   { x with pexp_attributes = attr :: x.pexp_attributes }
-
-let val_of_lwt_bindings ~loc lbs =
-  let bindings =
-    List.map
-      (fun lb ->
-         Vb.mk ~loc:lb.lb_loc ~attrs:lb.lb_attributes
-           ~docs:(Lazy.force lb.lb_docs)
-           ~text:(Lazy.force lb.lb_text)
-           lb.lb_pattern (Fake.app Fake.Lwt.un_lwt lb.lb_expression))
-      lbs.lbs_bindings
-  in
-  let str = mkstr ~loc (Pstr_value(lbs.lbs_rec, List.rev bindings)) in
-  match lbs.lbs_extension with
-  | None -> str
-  | Some id -> ghstr ~loc (Pstr_extension((id, PStr [str]), []))
-
-let expr_of_lwt_bindings ~loc lbs body =
-  let bindings =
-    List.map
-      (fun lb ->
-         Vb.mk ~loc:lb.lb_loc ~attrs:lb.lb_attributes
-           lb.lb_pattern (Fake.app Fake.Lwt.un_lwt lb.lb_expression))
-      lbs.lbs_bindings
-  in
-  Fake.app Fake.Lwt.in_lwt
-    (mkexp_attrs ~loc (Pexp_let(lbs.lbs_rec, List.rev bindings, body))
-       (lbs.lbs_extension, []))
 
 %}
 
@@ -1341,9 +1314,6 @@ module_expr [@recovery default_module_expr ()]:
     | (* An extension. *)
       ex = extension
         { Pmod_extension ex }
-    | (* A hole. *)
-      UNDERSCORE
-        { Pmod_hole }
     )
     { $1 }
 ;
@@ -2501,8 +2471,6 @@ let_pattern [@recovery default_pattern ()]:
       { mkinfix $1 $2 $3 }
   | extension
       { Pexp_extension $1 }
-  | UNDERSCORE
-      { Pexp_hole }
   | od=open_dot_declaration DOT mkrhs(LPAREN RPAREN {Lident "()"})
       { Pexp_open(od, mkexp ~loc:($loc($3)) (Pexp_construct($3, None))) }
   (*
@@ -3958,60 +3926,6 @@ payload:
   | COLON core_type { PTyp $2 }
   | QUESTION pattern { PPat ($2, None) }
   | QUESTION pattern WHEN seq_expr { PPat ($2, Some $4) }
-;
-
-%public simple_expr:
-| DOTLESS expr GREATERDOT
-    { Fake.Meta.code $startpos $endpos $2 }
-| DOTTILDE simple_expr %prec prec_escape
-    { Fake.Meta.uncode $startpos $endpos $2 }
-;
-
-(* Lwt *)
-%public structure_item:
-| lwt_bindings
-    { val_of_lwt_bindings ~loc:$loc $1 }
-
-lwt_binding:
-    LET_LWT ext_attributes rec_flag let_binding_body post_item_attributes
-      { let (ext, attr) = $2 in
-        mklbs ~loc:$loc ext $3 (mklb ~loc:$loc($4) true $4 (attr@$5)) }
-;
-lwt_bindings:
-    lwt_binding                                 { $1 }
-  | lwt_bindings and_let_binding                { addlb $1 $2 }
-;
-
-%public expr:
-| lwt_bindings IN seq_expr
-    { expr_of_lwt_bindings ~loc:$loc $1 (merloc $endpos($2) $3) }
-| MATCH_LWT ext_attributes seq_expr WITH match_cases
-    { let expr = mkexp_attrs ~loc:$loc
-          (Pexp_match(Fake.app Fake.Lwt.un_lwt $3, List.rev $5)) $2 in
-      Fake.app Fake.Lwt.in_lwt expr }
-| TRY_LWT ext_attributes seq_expr %prec below_WITH
-    { reloc_exp ~loc:$loc (Fake.app Fake.Lwt.in_lwt $3) }
-| TRY_LWT ext_attributes seq_expr WITH match_cases
-    { mkexp_attrs ~loc:$loc
-        (Pexp_try(Fake.app Fake.Lwt.in_lwt $3, List.rev $5)) $2 }
-| TRY_LWT ext_attributes seq_expr FINALLY_LWT seq_expr
-    { Fake.app (Fake.app Fake.Lwt.finally_ $3) $5 }
-| TRY_LWT ext_attributes seq_expr WITH match_cases FINALLY_LWT seq_expr
-    { let expr = mkexp_attrs ~loc:$loc
-        (Pexp_try (Fake.app Fake.Lwt.in_lwt $3, List.rev $5)) $2 in
-      Fake.app (Fake.app Fake.Lwt.finally_ expr) $7 }
-| WHILE_LWT ext_attributes seq_expr DO seq_expr DONE
-  { let expr = Pexp_while ($3, Fake.(app Lwt.un_lwt $5)) in
-    Fake.(app Lwt.to_lwt (mkexp_attrs ~loc:$loc expr $2)) }
-| FOR_LWT ext_attributes pattern EQUAL seq_expr direction_flag seq_expr DO seq_expr DONE
-    { let expr = Pexp_for ($3, $5, $7, $6, Fake.(app Lwt.un_lwt $9)) in
-      Fake.(app Lwt.to_lwt (mkexp_attrs ~loc:$loc expr $2)) }
-| FOR_LWT ext_attributes pattern IN seq_expr DO seq_expr DONE
-    { mkexp_attrs ~loc:$loc
-          (Pexp_let (Nonrecursive, [Vb.mk $3 (Fake.(app Lwt.un_stream $5))],
-             Fake.(app Lwt.unit_lwt $7)))
-          $2
-    }
 ;
 
 %%
