@@ -224,8 +224,20 @@ let compact (dfa : dfa) =
   let halt_pc = ref (Code_emitter.position code) in
   Code_emitter.emit code Halt;
   let pcs = Array.init (Array.length dfa) (fun _ -> ref (-1)) in
+  let rec emit_moves = function
+    | (i, j) :: rest ->
+      if i < j then (
+        emit_moves rest;
+        Code_emitter.emit code (Move (i, j));
+      ) else if i > j then (
+        Code_emitter.emit code (Move (i, j));
+        emit_moves rest;
+      ) else
+        emit_moves rest
+    | [] -> ()
+  in
   let emit_action act =
-    List.iter (fun (i, j) -> Code_emitter.emit code (Move (i, j))) act.move;
+    emit_moves act.move;
     List.iter (fun i -> Code_emitter.emit code (Store i)) act.store;
     Code_emitter.emit_yield_reloc code pcs.(act.target);
   in
