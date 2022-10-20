@@ -156,9 +156,10 @@ end = struct
         Buffer.add_uint8 t.buffer j
       )
     | Yield pos ->
-      assert (pos <= 0xFFFF);
+      assert (pos <= 0xFFFFFF);
       Buffer.add_char t.buffer '\x03';
-      Buffer.add_uint16_be t.buffer pos
+      Buffer.add_uint16_be t.buffer (pos land 0xFFFF);
+      Buffer.add_uint8 t.buffer (pos lsr 16)
     | Accept (clause, start, count) ->
       assert (start <= 0xFF && count <= 0xFF);
       Buffer.add_char t.buffer '\x04';
@@ -175,14 +176,15 @@ end = struct
   let emit_yield_reloc t reloc =
     Buffer.add_char t.buffer '\x03';
     let pos = Buffer.length t.buffer in
-    Buffer.add_uint16_be t.buffer 0;
+    Buffer.add_string t.buffer "   ";
     t.reloc <- (pos, reloc) :: t.reloc
 
   let link t =
     let buf = Buffer.to_bytes t.buffer in
     List.iter (fun (pos, reloc) ->
-        assert (0 <= !reloc && !reloc < 0xFFFF);
-        Bytes.set_int16_be buf pos !reloc
+        assert (0 <= !reloc && !reloc < 0xFFFFFF);
+        Bytes.set_uint16_be buf pos (!reloc land 0xFFFF);
+        Bytes.set_uint8 buf (pos + 2) (!reloc lsr 16);
       ) t.reloc;
     Bytes.unsafe_to_string buf
 end

@@ -50,8 +50,8 @@ let program_step (t : program) (r : program_counter ref)
     r := !r + 3;
     Move (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
   | '\x03' ->
-    r := !r + 3;
-    Yield (String.get_uint16_be t (pc + 1))
+    r := !r + 4;
+    Yield (get_int t ~offset:(pc + 1) 3)
   | '\x04' ->
     r := !r + 4;
     Accept (String.get_uint8 t (pc + 1),
