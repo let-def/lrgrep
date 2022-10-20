@@ -105,7 +105,7 @@ We can now capture the problematic situation with a pattern recognizing precisel
 After matching this situation, we want to express that we are looking ahead at an equal sign in the token stream.
 The lookahead `token` is passed as a parameter to the semantic action so we can simply pattern match on it.
 
-It also means that our rule is not total: it should only apply when the token is `Parser_raw.EQUAL`. This is expressed by adding the `partial` keyword before the semantic action. When an action is `partial`, it should evaluate to an option. Returning `Some _` means that the rule applied, returning `None` forces lrgrep to resume matching with the next rules. With this in mind, we now formulate the following pattern and add it to `ocaml/parse_errors.mlyl`:
+It also means that our rule is not total: it should only apply when the lookahead token is `Parser_raw.EQUAL`. This is expressed by adding the `partial` keyword before the semantic action. When an action is `partial`, it should evaluate to an option. Returning `Some _` means that the rule applied, returning `None` forces lrgrep to resume matching with the next rules. With this in mind, we now formulate the following pattern and add it to `ocaml/parse_errors.mlyl`:
 
 ```
 | [label_declaration: mutable_flag LIDENT . COLON]
@@ -133,63 +133,103 @@ Error: Expecting ':' to declare the type of a record field, not '='
 
 ## A more complex example
 
-Starting from: https://stackoverflow.com/questions/52323697/why-is-there-a-ocaml-syntax-error-on-if-statement
+Another example is the following also from StackOverflow: https://stackoverflow.com/questions/52323697/why-is-there-a-ocaml-syntax-error-on-if-statement
+This example has an unfortunate semicolon `;` in the `then` branch
+making the parser believe that the developer wanted to express a one-armed if:
 
-- Run the interpreter to dump the state of the parser when it fails:
+```ocaml
+let rec list_above thresh lst =
+  if lst = [] then 
+    printf("Herewego");
+  else 
+    begin 
+  if (List.hd lst) >= thresh then 
+    (((List.hd lst)::(list_above thresh List.tl lst)))
+  else if (List.hd lst) < thresh then 
+    ((list_above thresh List.tl lst));
+end
+;;
+```
 
+We again run the interpreter to dump the state of the parser when it fails:
+```
+$ dune exec ../ocaml/interpreter.exe stackoverflow2.ml
+Entering directory '/home/jmi/software/lrgrep'
+File "stackoverflow2.ml", line 4, characters 2-6, parser stack (most recent first):
+- line 3:22-23	SEMI
+  	  seq_expr ::= expr SEMI . PERCENT attr_id seq_expr
+  	  seq_expr ::= expr SEMI . seq_expr
+  	  seq_expr ::= expr SEMI .
+- from 2:2 to 3:22	expr
+  	↱ seq_expr
+  	  strict_binding ::= EQUAL seq_expr .
+- line 1:30-31	EQUAL
+  	↱ strict_binding
+  	  fun_binding ::= strict_binding .
+  	↱ fun_binding
+  	  strict_binding ::= labeled_simple_pattern fun_binding .
+- line 1:26-29	labeled_simple_pattern
   ```
-  $ dune exec ../ocaml/interpreter.exe stackoverflow2.ml
-  Entering directory '/home/jmi/software/lrgrep'
-  File "stackoverflow2.ml", line 4, characters 2-6, parser stack (most recent first):
-  - line 3:22-23	SEMI
-    	  seq_expr ::= expr SEMI . PERCENT attr_id seq_expr
-    	  seq_expr ::= expr SEMI . seq_expr
-    	  seq_expr ::= expr SEMI .
-  - from 2:2 to 3:22	expr
-    	↱ seq_expr
-    	  strict_binding ::= EQUAL seq_expr .
-  - line 1:30-31	EQUAL
-    	↱ strict_binding
-    	  fun_binding ::= strict_binding .
-    	↱ fun_binding
-    	  strict_binding ::= labeled_simple_pattern fun_binding .
-  - line 1:26-29	labeled_simple_pattern
-  ```
 
-- The output tells us that the rule has already been reduced by the one-armed `if` rule in the OCaml grammar:
+The output tells us that we are half-way through parsing a sequential
+expression `seq_expr` and that `if`-`then` tokens have already been reduced by
+the one-armed `if` rule in the OCaml grammar:
+```
+  | IF ext_attributes seq_expr THEN expr
+    { Pexp_ifthenelse($3, $5, None), $2 }
+```
 
-  ```
-    | IF ext_attributes seq_expr THEN expr
-      { Pexp_ifthenelse($3, $5, None), $2 }
-  ```
-
-- Add (complex) rule:
-
-  ```
+Like in the above example, we can express a rule of the same shape to capture the situation:
+```
   | expr as e; SEMI
   partial {
     match token with
-    | Parser_raw.ELSE -> (
-      match e with
-      | None -> assert false
-      | Some (Parser_raw.MenhirInterpreter.Element (state, expr, startp, _endp)) ->
-        match Parser_raw.MenhirInterpreter.incoming_symbol state with
-        | N N_expr -> (
-        match expr.pexp_desc with
-        | Pexp_ifthenelse(_, _, None) ->
-          Some ("The semicolon line "
-                ^ string_of_int startp.pos_lnum
-                ^ ", character "
-                ^ string_of_int (startp.pos_cnum - startp.pos_bol)
-                ^ " terminates the if _ then _ expression. \
-                   Remove it to add an else branch."
-                   )
-        | _ -> None
-        )
+    | Parser_raw.ELSE -> ...
+    | _ -> None
+  }
+```
+
+In this case it gets a bit more tricky as the expression has already
+been reduced by the parser. To express the desired rule we therefore
+need to inspect the result of the semantic action of the OCaml parser,
+i.e., an OCaml AST. We therefore pattern-match on a one-armed `if` in
+the shape of a `Pexp_ifthenelse` with an omitted (`None`)
+`else`-branch and report a suitable error message:
+```
+| expr as e; SEMI
+partial {
+  match token with
+  | Parser_raw.ELSE -> (
+    match e with
+    | None -> assert false
+    | Some (Parser_raw.MenhirInterpreter.Element (state, expr, startp, _endp)) ->
+      match Parser_raw.MenhirInterpreter.incoming_symbol state with
+      | N N_expr -> (
+      match expr.pexp_desc with
+      | Pexp_ifthenelse(_, _, None) ->
+        Some ("The semicolon line "
+              ^ string_of_int startp.pos_lnum
+              ^ ", character "
+              ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+              ^ " terminates the if _ then _ expression. \
+                 Remove it to add an else branch."
+                 )
       | _ -> None
       )
     | _ -> None
-  }
-  ```
+    )
+  | _ -> None
+}
+```
 
-TODO: explain
+After adding the above to `ocaml/parse_errors.mlyl` we again recompile
+the frontend by running `make`. We can now observe the improved error
+message:
+
+```
+$ ocamlc demo/stackoverflow2.ml 
+File "demo/stackoverflow2.ml", line 6, characters 2-6:
+6 |   else
+      ^^^^
+Error: The semicolon line 4, character 2 terminates the if _ then _ expression. Remove it to add an else branch.
+```
