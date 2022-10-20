@@ -51,13 +51,15 @@ end
 (** The action of a transition is pair of:
     - a possibly empty list of registers to save the current state to
     - a target state (index of the state in the dfa array) *)
-type transition_action = RT.register list * int
+type transition_action = {
+  move: (RT.register * RT.register) list;
+  store: RT.register list;
+  target: int;
+}
 
 type state = {
-  accept: int option;
-  (** a clause to accept in this state.
-      FIXME: this should be a set, multiple clauses can match at the same
-      state. *)
+  accept: (RT.clause * RT.register * int) list;
+  (** a clause to accept in this state. *)
 
   halting: IntSet.t;
   (** The set of labels that should cause matching to halt (this can be seen as

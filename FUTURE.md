@@ -38,9 +38,11 @@ Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
 
 ## Correction
 
-- The current implementation of **captures** is incorrect. In presence of non-determinism, if there are multiple occurrences of the capture, it will always keep the most recent one, though the matching branch might refer to a previous occurrence.
-
 - The interpreter does not keep track of lookahead, this can cause incorrect reductions to appear in hinted reductions (also, those hints should include the lookahead tokens)
+- Coverage check stops after the first error for a given branch - but a subset of the lookahead might permit reaching other errors
+
+Fixed in PR#2:
+- The current implementation of **captures** is incorrect. In presence of non-determinism, if there are multiple occurrences of the capture, it will always keep the most recent one, though the matching branch might refer to a previous occurrence.
 
 ## Performance
 
@@ -48,7 +50,7 @@ Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
   - Keeping an NFA longer won't increase the performance of the generator itself, but will help with coverage analysis.
   - For reduction simulation, one of the main trick to increase performance.
   - Maybe we don't need DFA at all, runtime matching performance might be sufficient with an NFA? We can experiment if DFA size becomes problematic.
-  - Keeping an NFA will help implementing the **correct capture semantics**.
+  - Keeping an NFA will help implementing the **correct capture semantics**. (Fixed in PR#2, however I maintain that NFA will be more helpful!)
 - The automaton we produce is not optimized at the moment. Some dead branches could be cleaned up, and a minimization algorithm will help (an extension of Valmari to "partial transition functions", or some heuristics applied either on the NFA or the DFA)
 
 ### Datastructures
@@ -70,3 +72,5 @@ I think that an LR parser for Elm syntax with comparable error messages quality 
 
 - [Elm's parser](https://github.com/elm/compiler/tree/master/compiler/src/Parse)
 - [Elm's syntax errors](https://github.com/elm/compiler/blob/master/compiler/src/Reporting/Error/Syntax.hs)
+
+Also for "brace-based" languages, it might be possible to have a finer-grained characterization of errors than existing tools permit (with possibly the exception of heavily instrumented manually written parsers). For instance, it should be possible to switch between expression/statement/block-level analysis for each pattern.

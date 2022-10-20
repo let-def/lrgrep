@@ -1,5 +1,16 @@
 open Fix.Indexing
 
+let compare_ignore _ _ = 0
+
+let compare_pair fst snd (x1, y1) (x2, y2) =
+  match fst x1 x2 with
+  | 0 -> snd y1 y2
+  | n -> n
+
+let compare_fst f = compare_pair f compare_ignore
+
+let compare_snd f = compare_pair compare_ignore f
+
 (** [array_last arr] returns the [Some x] where [x] is the last element
     of the array, or [None] if the array is empty *)
 let array_last arr = match Array.length arr with
@@ -15,6 +26,21 @@ let rec array_findi f i arr =
     i
   else
     array_findi f (i + 1) arr
+
+let array_split a =
+  (Array.map fst a, Array.map snd a)
+
+let array_compare cmp a1 a2 =
+  let len = Array.length a1 in
+  let c = Int.compare len (Array.length a2) in
+  if c <> 0 then c else
+    let rec loop i len =
+      if i = len then 0 else
+        let c = cmp a1.(i) a2.(i) in
+        if c <> 0 then c else
+          loop (i + 1) len
+    in
+    loop 0 len
 
 (** [group ~compare ~group list]
     Group togethers the elements of [list] that are equivalent according to
@@ -173,3 +199,23 @@ let cmon_indexset xs =
 let print_cmon oc cmon =
   PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)
 
+let sort_and_merge compare merge l =
+  let rec loop x xs = function
+    | [] -> [merge x xs]
+    | y :: ys ->
+      if compare x y = 0
+      then loop x (y :: xs) ys
+      else
+        let xxs = merge x xs in
+        xxs :: loop y [] ys
+  in
+  match List.sort compare l with
+  | [] -> []
+  | x :: xs -> loop x [] xs
+
+let sort_and_merge_indexed compare l =
+  let union_ix ix (_, ix') = IndexSet.union ix ix' in
+  sort_and_merge
+    (compare_fst compare)
+    (fun (x, ix) rest -> (x, List.fold_left union_ix ix rest))
+    l

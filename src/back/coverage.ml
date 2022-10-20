@@ -69,13 +69,13 @@ module Make(Dfa : Sigs.DFA)() = struct
 
     (** [analyse initial_st] compute the analysis starting from state
         [initial_st] (which should be the initial state). *)
-    val analyse : Dfa.State.t -> t
+    val analyse : Dfa.dfa -> t
 
     (** [partial_states t] returns the list of states with partial coverage *)
     val partial_states : t -> state list
 
-    (** [repr st] is the DFA state represented by [st] *)
-    val repr : state -> Dfa.State.t
+    (** [index st] is the DFA state represented by [st] *)
+    val index : state -> Dfa.state_index
 
     (** [unhandled st] returns all the NFA transitions that are not covered
         by DFA state [repr st]. *)
@@ -91,44 +91,34 @@ module Make(Dfa : Sigs.DFA)() = struct
         - [path] is a list of NFA transitions starting from the initial state
           and ending at the partially covered state.
     *)
-    val paths : t -> (state * NFA.n index * NFA.n index list) Seq.t
+    val paths : t -> (Dfa.state_index * NFA.n index * NFA.n index list) Seq.t
 
   end = struct
     type state = {
-      repr: Dfa.State.t;
-      transitions: state lazy_t Lr1.map;
+      index: Dfa.state_index;
+      transitions: Dfa.state_index Lr1.map;
       mutable visited: NFA.n indexset;
       mutable scheduled: NFA.n indexset;
       mutable unhandled: NFA.n indexset;
       mutable predecessors: IntSet.t;
     }
 
-    let make_state repr transitions = {
-      repr; transitions;
-      visited = IndexSet.empty;
-      scheduled = IndexSet.empty;
-      unhandled = IndexSet.empty;
-      predecessors = IntSet.empty;
-    }
-
-    let make_state_table () =
-      let table = Hashtbl.create 7 in
-      let rec aux repr =
-        let id = Dfa.State.id repr in
-        match Hashtbl.find_opt table id with
-        | Some t -> t
-        | None ->
-          let trs = ref IndexMap.empty in
-          let add_lr1 target lr1 = trs := IndexMap.add lr1 target !trs in
-          Dfa.State.iter_transitions repr (fun lr1s _vars target ->
-              let target = lazy (aux target) in
-              IndexSet.iter (add_lr1 target) lr1s
-            );
-          let t = make_state repr !trs in
-          Hashtbl.add table id t;
-          t
-      in
-      table, aux
+    let make_state_table dfa =
+      let make_state index transitions = {
+        index; transitions;
+        visited = IndexSet.empty;
+        scheduled = IndexSet.empty;
+        unhandled = IndexSet.empty;
+        predecessors = IntSet.empty;
+      } in
+      Array.map (fun st ->
+          make_state (Dfa.index st)
+            (List.fold_left (fun acc tr ->
+                 let target = Dfa.target tr in
+                 IndexSet.fold (fun lr1 acc -> IndexMap.add lr1 target acc)
+                   (Dfa.label tr) acc
+               ) IndexMap.empty (Dfa.forward st);)
+        ) dfa
 
     let make_scheduler () =
       let todo = ref [] in
@@ -137,7 +127,7 @@ module Make(Dfa : Sigs.DFA)() = struct
         if not (IndexSet.is_empty states) then (
           if IndexSet.is_empty target.scheduled then push todo target;
           target.scheduled <- IndexSet.union target.scheduled states;
-          target.predecessors <- IntSet.add (Dfa.State.id source.repr) target.predecessors;
+          target.predecessors <- IntSet.add source.index target.predecessors;
         )
       in
       let rec flush f = match List.rev !todo with
@@ -150,13 +140,12 @@ module Make(Dfa : Sigs.DFA)() = struct
       (schedule, flush)
 
     type t = {
-      initial: state;
       partial: state list;
-      table: (int, state) Hashtbl.t;
+      table: state array;
     }
 
-    let analyse initial =
-      let table, lift = make_state_table () in
+    let analyse dfa =
+      let table = make_state_table dfa in
       let schedule, flush = make_scheduler () in
       let partial = ref [] in
       let process_transition state tr =
@@ -166,20 +155,19 @@ module Make(Dfa : Sigs.DFA)() = struct
           if IndexSet.is_empty state.unhandled then
             push partial state;
           state.unhandled <- IndexSet.add tr state.unhandled
-        | Some (lazy target) ->
-          schedule state target (NFA.transitions tr)
+        | Some target ->
+          schedule state table.(target) (NFA.transitions tr)
       in
       let process_state state =
         let to_visit = state.scheduled in
         state.visited <- IndexSet.union state.visited to_visit;
         state.scheduled <- IndexSet.empty;
-        if IntSet.is_empty (Dfa.State.accepted state.repr) then
+        if Dfa.accepted dfa.(state.index) = [] then
           IndexSet.iter (process_transition state) to_visit
       in
-      let initial = lift initial in
-      schedule initial initial NFA.initials;
+      schedule table.(0) table.(0) NFA.initials;
       flush process_state;
-      { initial; partial = !partial; table }
+      { partial = !partial; table }
 
     let nfa_predecessors = lazy (
       let predecessors = Vector.make NFA.n IndexSet.empty in
@@ -193,32 +181,23 @@ module Make(Dfa : Sigs.DFA)() = struct
       Vector.get predecessors
     )
 
-    let repr st = st.repr
+    let index st = st.index
     let unhandled st = st.unhandled
     let partial_states t = t.partial
 
     let paths t =
-      let visited = Hashtbl.create 7 in
-      let visited st =
-        match Hashtbl.find_opt visited (Dfa.State.id st.repr) with
-        | Some set -> set
-        | None ->
-          let set = ref IndexSet.empty in
-          Hashtbl.add visited (Dfa.State.id st.repr) set;
-          set
-      in
+      let visited = Array.make (Array.length t.table) IndexSet.empty in
       let found = ref [] in
       let candidates = ref [] in
       let add_candidate (path, st0, nfa0, finished) st nfa =
         if not !finished then (
           let path = nfa :: path in
-          if st == t.initial then (
+          if st = 0 then (
             push found (st0, nfa0, path);
             finished := true;
           ) else
-            let visited = visited st in
-            if not (IndexSet.mem nfa !visited) then (
-              visited := IndexSet.add nfa !visited;
+            if not (IndexSet.mem nfa visited.(st)) then (
+              visited.(st) <- IndexSet.add nfa visited.(st);
               push candidates (st, nfa, (path, st0, nfa0, finished))
             )
         )
@@ -226,20 +205,20 @@ module Make(Dfa : Sigs.DFA)() = struct
       let predecessors (st, nfa, path) =
         let preds = Lazy.force nfa_predecessors nfa in
         IntSet.iter (fun id ->
-            let st' = Hashtbl.find t.table id in
+            let st' = t.table.(id) in
             let visited = IndexSet.inter preds st'.visited in
             IndexSet.iter (fun nfa' ->
                 match IndexMap.find_opt (NFA.label nfa') st'.transitions with
                 | None -> ()
                 | Some st'' ->
-                  if Lazy.is_val st'' && Lazy.force st'' == st then
-                    add_candidate path st' nfa'
+                  if st'' == st then
+                    add_candidate path st'.index nfa'
               ) visited
-          ) st.predecessors
+          ) t.table.(st).predecessors
       in
       List.iter (fun st ->
           IndexSet.iter
-            (fun nfa -> add_candidate ([], st, nfa, ref false) st nfa)
+            (fun nfa -> add_candidate ([], st.index, nfa, ref false) st.index nfa)
             st.unhandled
         ) t.partial;
       let rec look () =
@@ -578,43 +557,42 @@ module Make(Dfa : Sigs.DFA)() = struct
         ((Sys.time () -. t0) *. 1000.)
 
     type lr1_paths = {
-      goto: Terminal.set Lr1.map;
-      pops: lr1_paths Lr1.map;
+      lr1_goto: Lr1.closed_reduction list Lr1.map;
+      lr1_pops: lr1_paths Lr1.map;
     }
 
     let intermediate_lr1_steps lr1 =
       let rec process_reduction n lr1 = function
         | [] ->
-          {goto = IndexMap.empty; pops = IndexMap.empty}
+          {lr1_goto = IndexMap.empty; lr1_pops = IndexMap.empty}
 
-        | (n', prod, _prods, ts) :: reds when n = n' ->
-          assert (not (IndexSet.is_empty ts));
+        | (c : Lr1.closed_reduction) :: reds when n = c.pop ->
+          assert (not (IndexSet.is_empty c.lookahead));
           let paths = process_reduction n lr1 reds in
-          begin match Production.kind prod with
+          begin match Production.kind c.prod with
             | `START -> paths
             | `REGULAR ->
-              let nt = Production.lhs prod in
+              let nt = Production.lhs c.prod in
               let target = Transition.find_goto_target lr1 nt in
-              let goto =
+              let lr1_goto =
                 IndexMap.update target (function
-                    | None -> Some ts
-                    | Some ts' ->
-                      Some (IndexSet.union ts ts')
-                  ) paths.goto
+                    | None -> Some [c]
+                    | Some cs -> Some (c :: cs)
+                  ) paths.lr1_goto
               in
-              {paths with goto}
+              {paths with lr1_goto}
           end
 
-        | ((n', _, _, _) :: _) as reds  ->
-          assert (n' > n);
+        | (c :: _) as reds  ->
+          assert (c.pop > n);
           process_predecessors (n + 1) (Lr1.predecessors lr1) reds
 
       and process_predecessor n reds lr1' acc =
         IndexMap.add lr1' (process_reduction n lr1' reds) acc
 
       and process_predecessors n lr1s reds = {
-        goto = IndexMap.empty;
-        pops = IndexSet.fold (process_predecessor n reds) lr1s IndexMap.empty
+        lr1_goto = IndexMap.empty;
+        lr1_pops = IndexSet.fold (process_predecessor n reds) lr1s IndexMap.empty
       }
 
       in
@@ -624,33 +602,60 @@ module Make(Dfa : Sigs.DFA)() = struct
 
     module Paths = Sum(Lrc)(Intermediate)
 
-    type lrc_paths =
-      | Fail of Lrc.set
-      | Empty
-      | Step of {
-          states: Lrc.set;
-          index: Paths.n index;
-          goto: Lrc.set;
-          pops: lrc_paths Lr1.map;
-        }
+    type lrc_paths = {
+      states: Lrc.set;
+      index: Paths.n index;
+      fail: (Lr1.closed_reduction * Terminal.set) list;
+      goto: (Lr1.closed_reduction * Lrc.set) list;
+      pops: lrc_paths Lr1.map;
+    }
 
-    let paths = IndexBuffer.make Empty
+    let empty = {
+        states = IndexSet.empty;
+        index = Paths.inj_r (Intermediate.fresh ());
+        fail = [];
+        goto = [];
+        pops = IndexMap.empty;
+      }
 
-    let mk_step ?initial states goto pops =
-      if IndexSet.is_empty goto && IndexMap.is_empty pops then
-        Empty
-      else
+    let paths = IndexBuffer.make empty
+
+    let mk_step ?initial states ~fail ~goto pops =
+      match fail, goto with
+      | [], [] when IndexMap.is_empty pops -> empty
+      | _ ->
         let index = match initial with
-          | None -> Paths.inj_r (Intermediate.fresh ())
           | Some lrc -> Paths.inj_l lrc
+          | None -> Paths.inj_r (Intermediate.fresh ())
         in
-        let result = Step {states; index; goto; pops} in
+        let result = {states; index; fail; goto; pops} in
         IndexBuffer.set paths index result;
         result
+
+    let is_empty = function
+      | {fail=[]; goto=[]; pops; _} -> IndexMap.is_empty pops
+      | _ -> false
 
     let t0 = Sys.time ()
 
     let () =
+      (* FIXME: this code stops after the first failure found (there is at
+         least one lookahead token that will reach the erroneous state).
+         It is therefore partially incomplete:
+         - if it reports no failure, there is no failure
+         - if there are failures, it will report some of them (the first it can
+           reach), but will not distinguish paths that fail differently for
+           some lookahead tokens.
+
+         Possible fix:
+         - refine the exploration, remembering which lookahead tokens have been
+         explored or not
+         - an intuition that I am not sure will work, but is likely
+           preferable if it does: refine LRijkstra to also propagate failing
+           subsets when computing partitions. That way, "LRC" states will be
+           fine enough to distinguish all failure paths. (The risks are either
+           that it will blow up or that this last hypothesis is wrong.)
+      *)
       let process_lr1 lr1 =
         let lr1_steps = intermediate_lr1_steps lr1 in
         let compute_paths lrc =
@@ -660,48 +665,52 @@ module Make(Dfa : Sigs.DFA)() = struct
               | `Initial lrc -> (Some lrc, IndexSet.singleton lrc)
               | `Continue lrcs -> (None, lrcs)
             in
-            let exception Can_fail in
-            let process_goto target la' acc =
-              if IndexSet.disjoint la la' then acc else (
-                if not (IndexSet.disjoint la (Lr1.closed_reject target)) then
-                  raise Can_fail;
-                IndexSet.union acc (
+            let failures = ref [] in
+            let goto = ref [] in
+            let process_goto target (c : Lr1.closed_reduction) =
+              if not (IndexSet.disjoint la c.lookahead) then (
+                let fail_la = Terminal.intersect la (Lr1.closed_reject target) in
+                let reach_lrc =
                   IndexSet.filter (fun lrc ->
                       IndexSet.mem lrc can_fail_states &&
                       let la' = Lrc.lookahead lrc in
                       not (IndexSet.disjoint la la')
                     ) (Lrc.lrcs_of_lr1 target)
-                )
+                in
+                if not (IndexSet.is_empty fail_la) then
+                  push failures (c, fail_la);
+                if not (IndexSet.is_empty reach_lrc) then
+                  push goto (c, reach_lrc);
               )
             in
-            match IndexMap.fold process_goto ipaths.goto IndexSet.empty with
-            | exception Can_fail -> Fail lrcs
-            | goto ->
-              let pops =
-                IndexMap.fold (fun lr1 lrcs' opops ->
-                    match IndexMap.find_opt lr1 ipaths.pops with
-                    | None -> opops
-                    | Some ipaths' ->
-                      match visit ipaths' (`Continue lrcs') with
-                      | Empty -> opops
-                      | Fail _ | Step _ as opaths ->
-                        IndexMap.add lr1 opaths opops
-                  ) (Lrc.set_predecessors_by_lr1 lrcs) IndexMap.empty
-              in
-              mk_step ?initial lrcs goto pops
+            IndexMap.iter
+              (fun target cs -> List.iter (process_goto target) cs)
+              ipaths.lr1_goto;
+            let pops =
+              IndexMap.fold (fun lr1 lrcs' opops ->
+                  match IndexMap.find_opt lr1 ipaths.lr1_pops with
+                  | None -> opops
+                  | Some ipaths' ->
+                    match visit ipaths' (`Continue lrcs') with
+                    | opaths when is_empty opaths -> opops
+                    | opaths -> IndexMap.add lr1 opaths opops
+                ) (Lrc.set_predecessors_by_lr1 lrcs) IndexMap.empty
+            in
+            mk_step ?initial lrcs ~fail:!failures ~goto:!goto pops
           in
           visit lr1_steps (`Initial lrc)
         in
         let process_lrc lrc =
           assert (lr1 = Lrc.lr1_of_lrc lrc);
-          if IndexSet.mem lrc fail_states then
-            IndexBuffer.set paths (Paths.inj_l lrc)
-              (Fail (IndexSet.singleton lrc))
-          else if IndexSet.mem lrc can_fail_states then
-            match compute_paths lrc with
-            | Empty -> ()
-            | Fail _ as x -> IndexBuffer.set paths (Paths.inj_l lrc) x
-            | Step x -> assert (IndexSet.is_empty x.goto)
+          (*if IndexSet.mem lrc fail_states then
+            IndexBuffer.set paths (Paths.inj_l lrc) (
+              mk_step (IndexSet.singleton lrc)
+                ~fail:Terminal.all ~goto:[] ~pops:IndexMap.empty
+            )*)
+          if IndexSet.mem lrc can_fail_states then (
+            let paths = compute_paths lrc in
+            assert (paths.goto = [])
+          )
         in
         IndexSet.iter process_lrc (Lrc.lrcs_of_lr1 lr1)
       in
@@ -728,47 +737,45 @@ module Make(Dfa : Sigs.DFA)() = struct
       let initials : n indexset =
         IndexSet.fold (fun lrc acc ->
             let p = Paths.inj_l lrc in
-            match paths p with
-            | Empty -> acc
-            | Fail lrcs -> IndexSet.union (encode_normal_set lrcs) acc
-            | Step _ -> IndexSet.add (inj_r p) acc
+            let paths = paths p in
+            if is_empty paths
+            then acc
+            else match paths.fail with
+              | (_ :: _) -> encode_normal_set (IndexSet.singleton lrc)
+              | [] -> IndexSet.add (inj_r p) acc
           )
           (IndexSet.inter can_fail_states Lrc.offering_states) IndexSet.empty
 
-      let fold_path_transitions ~lookahead ~follow_goto ~reach ~fail = function
-        | Empty | Fail _ -> assert false
-        | Step {states; goto; pops; _} ->
-          let lr1 = Lrc.lr1_of_lrc (IndexSet.choose states) in
-          IndexMap.iter (fun _lr1 step ->
-              match step with
-              | Empty -> assert false
-              | Fail lrcs -> fail lrcs lookahead
-              | Step s' -> reach s'.index lookahead
-            ) pops;
+      let fold_path_transitions ~lookahead ~follow_goto ~reach ~fail path =
+        match path.fail with
+        | _ when is_empty path -> ()
+        | (_ :: _) -> fail path.states lookahead
+        | [] ->
+          let lr1 = Lrc.lr1_of_lrc (IndexSet.choose path.states) in
+          IndexMap.iter (fun _lr1 next -> reach next.index lookahead) path.pops;
           let rec visit lookahead lrc =
             let lookahead = follow_goto lrc lookahead in
             match paths (Paths.inj_l lrc) with
-            | Empty -> ()
-            | Fail lrcs ->
+            | p when is_empty p -> ()
+            | {states; fail = (_ :: _); _ } ->
               IndexSet.iter begin fun lrc ->
                 match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
                 | None -> assert false
                 | Some lrcs -> fail lrcs lookahead
-              end lrcs
-            | Step t0 ->
-              assert (IndexSet.is_empty t0.goto);
-              begin match IndexMap.find_opt lr1 t0.pops with
+              end states
+            | p ->
+              assert (p.goto = []);
+              begin match IndexMap.find_opt lr1 p.pops with
                 | None -> ()
-                | Some Empty -> assert false
-                | Some (Fail lrcs) -> fail lrcs lookahead
-                | Some (Step t) ->
-                  reach t.index lookahead;
-                  visit_set lookahead t.goto
+                | Some {fail = (_::_); states; _} -> fail states lookahead
+                | Some p' ->
+                  reach p'.index lookahead;
+                  visit_set lookahead p'.goto
               end
-          and visit_set lookahead set =
-            IndexSet.iter (visit lookahead) set
+          and visit_set lookahead sets =
+            List.iter (fun (_, set) -> IndexSet.iter (visit lookahead) set) sets
           in
-          visit_set lookahead goto
+          visit_set lookahead path.goto
 
       let step_transitions path =
         let set = ref IndexSet.empty in
@@ -784,30 +791,33 @@ module Make(Dfa : Sigs.DFA)() = struct
         | L n -> encode_normal_set (Lrc.predecessors n)
         | R n ->
           begin match paths n with
-            | Empty -> IndexSet.empty
-            | Fail _ ->
+            | p when is_empty p -> IndexSet.empty
+            | {fail = (_ :: _); states; _} ->
               begin match Paths.prj n with
-                | L (n : Lrc.t) -> encode_normal_set (Lrc.predecessors n)
-                | R (_ : Intermediate.n index) -> assert false
+                | L (n : Lrc.t) ->
+                  assert (states = IndexSet.singleton n);
+                  encode_normal_set (Lrc.predecessors n)
+                | R (_ : Intermediate.n index) ->
+                  encode_normal_set (indexset_bind states Lrc.predecessors)
               end
-            | Step _ as paths -> step_transitions paths
+            | paths -> step_transitions paths
           end
 
       let lrcs n =
         match prj n with
         | L l -> IndexSet.singleton l
         | R p ->
-          match paths p with
-          | Empty | Fail _ -> assert false
-          | Step s -> s.states
+          let paths = paths p in
+          assert (not (is_empty paths));
+          paths.states
 
       let label n =
         match prj n with
         | L l -> Lrc.lr1_of_lrc l
         | R p ->
-          match paths p with
-          | Empty | Fail _ -> assert false
-          | Step s -> Lrc.lr1_of_lrc (IndexSet.choose s.states)
+          let paths = paths p in
+          assert (not (is_empty paths));
+          Lrc.lr1_of_lrc (IndexSet.choose paths.states)
 
       (* let () =
          Index.iter Paths.n (fun p ->
@@ -855,11 +865,10 @@ module Make(Dfa : Sigs.DFA)() = struct
           assert (not (IndexSet.is_empty la));
           la
         | R path ->
-          match paths path with
-          | Empty | Fail _ -> assert false
-          | Step s ->
-            assert (IndexSet.is_singleton s.states);
-            let lrc = IndexSet.choose s.states in
-            follow_lookahead_path (Lrc.lookahead lrc) entry rest
+          let paths = paths path in
+          assert (not (is_empty paths));
+          assert (IndexSet.is_singleton paths.states);
+          let lrc = IndexSet.choose paths.states in
+          follow_lookahead_path (Lrc.lookahead lrc) entry rest
   end
 end

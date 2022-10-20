@@ -313,6 +313,20 @@ struct
       )
 
     (** Compute the ϵ-closure of lr1 reductions *)
+    let closed_reject = Vector.make n IndexSet.empty
+    let closed_shift_on = Vector.make n IndexSet.empty
+
+    let internal_stacks = Vector.make n []
+
+    let t0 = Sys.time ()
+
+    type closed_reduction = {
+      pop: int;
+      prod: Production.t;
+      prods: Production.t list;
+      lookahead: Terminal.set;
+    }
+
     let close_reductions lr1 =
       let rresult = ref [] in
       let rreject = ref IndexSet.empty in
@@ -321,7 +335,7 @@ struct
       let rec close_prod prod prods ts n stack =
         match stack with
         | [] ->
-          push rresult (n + 1, prod, prods, ts)
+          push rresult {pop = n + 1; prod; prods; lookahead = ts}
         | top :: _ when n = 0 ->
           let target = Transition.find_goto_target top (Production.lhs prod) in
           let stack = target :: stack in
@@ -346,15 +360,6 @@ struct
       close_stack [] Terminal.all [lr1];
       (!rreject, !rshift, !rinternal, !rresult)
 
-    let closed_reject = Vector.make n IndexSet.empty
-    let closed_shift_on = Vector.make n IndexSet.empty
-
-    let internal_stacks = Vector.make n []
-
-    let t0 = Sys.time ()
-
-    type closed_reduction =
-      (int * Production.t * Production.t list * Terminal.set)
 
     let closed_reductions = tabulate_finset n (fun lr1 ->
         let reject', shift_on', internal, reductions = close_reductions lr1 in
@@ -375,7 +380,7 @@ struct
             (string_of_indexset ~index:Terminal.to_string reject');
           exit 1
         );
-        let order_by_length (n1, _, _, _) (n2, _, _ ,_) = Int.compare n1 n2 in
+        let order_by_length c1 c2 = Int.compare c1.pop c2.pop in
         List.sort order_by_length reductions
       )
 

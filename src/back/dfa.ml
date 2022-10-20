@@ -1,5 +1,6 @@
 open Utils
 open Misc
+open Fix.Indexing
 
 module Make(Regexp : Mid.Sigs.REGEXP)()
   : Sigs.DFA with module Regexp = Regexp
@@ -13,99 +14,145 @@ struct
   module Reduction = Mid.Reduction.Make(Redgraph)
 
   module CachedKRESet = Reduction.Cache(struct
-      type t = KRESet.t
-      let compare = KRESet.compare
-      let derive = KRESet.derive_in_reduction
-      let merge ts = List.fold_left KRESet.union KRESet.empty ts
-      let cmon = KRESet.cmon
+      type t = KRESet.t * RE.var indexset
+      let compare = compare_pair KRESet.compare IndexSet.compare
+      let derive (k, _) = KRESet.derive_in_reduction k
+      let merge ts =
+        let ks, vs = List.split ts in
+        (List.fold_left KRESet.union KRESet.empty ks,
+         List.fold_left IndexSet.union IndexSet.empty vs)
+      let cmon (k, _) = KRESet.cmon k
     end)
 
   module Red = Reduction.Make(CachedKRESet)
 
-  module RedSet = Set.Make(Red)
+  include (struct
+    type thread = RE.var
+    let thread = RE.var
+  end : sig
+    type thread
+    val thread : int -> thread index
+  end)
 
-  module Expr = struct
+  module Kern = struct
     type t = {
-      direct: KRESet.t;
-      reduce: RedSet.t;
+      direct: KRE.t array;
+      reduce: Red.t array;
     }
 
-    let make direct = {direct; reduce = RedSet.empty}
+    type direct_map = (thread, RE.var indexset) indexmap array
+    type reduce_map = thread indexset array
+
+    type transition = (direct_map * reduce_map * t)
+
+    let make direct =
+      {direct = Array.of_list (KRESet.elements direct); reduce = [||]}
+
+    let empty = {direct = [||]; reduce = [||]}
 
     let cmon t =
-      let rs = Printf.sprintf "{%d reductions}" (RedSet.cardinal t.reduce) in
+      let rs = Printf.sprintf "{%d reductions}" (Array.length t.reduce) in
       Cmon.record [
-        "direct", KRESet.cmon t.direct;
+        "direct", Cmon.array_map KRE.cmon t.direct;
         "reduce", Cmon.constant rs;
       ]
 
     let compare t1 t2 =
-      let c = KRESet.compare t1.direct t2.direct in
+      let c = array_compare KRE.compare t1.direct t2.direct in
       if c <> 0 then c else
-        RedSet.compare t1.reduce t2.reduce
+        array_compare Red.compare t1.reduce t2.reduce
 
-    let lift_direct (sg, vars, k) =
-      (sg, (vars, {direct = KRESet.singleton k; reduce = RedSet.empty}))
+    let compare_transition (d1, r1, t1 : transition) (d2, r2, t2 : transition) =
+      let c = compare t1 t2 in
+      if c <> 0 then c else
+        let c = array_compare (IndexMap.compare IndexSet.compare) d1 d2 in
+        if c <> 0 then c else
+          array_compare IndexSet.compare r1 r2
 
-    let lift_cached (sg, k) =
-      (sg, ([], {direct = CachedKRESet.unlift k; reduce = RedSet.empty}))
-
-    let lift_reduce (sg, k) =
-      (sg, ([], {direct = KRESet.empty; reduce = RedSet.singleton k}))
-
-    let lift_red (d, r) =
-      List.map lift_cached d @ List.map lift_reduce r
-
-    let add_redset red tr = lift_red (Red.derive red) @ tr
-
-    let empty = {
-      direct = KRESet.empty;
-      reduce = RedSet.empty;
-    }
-
-    let union t1 t2 = {
-      direct = KRESet.union t1.direct t2.direct;
-      reduce = RedSet.union t1.reduce t2.reduce;
-    }
-
-    let compare_transition (_v1, k1) (_v2, k2) =
-      compare k1 k2
-
-    let merge_transition xs =
-      let merge_one (vars, ks) (var, k) = (var @ vars, union ks k) in
-      List.fold_left merge_one ([], empty) xs
+    let make_from_elts elts =
+      let direct, reduce = List.partition_map (fun x -> x) elts in
+      let direct =
+        let combine_vars vars (_, vars') =
+          let vars_union _ vs1 vs2 = Some (IndexSet.union vs1 vs2) in
+          IndexMap.union vars_union vars vars'
+        in
+        sort_and_merge
+          (compare_fst KRE.compare)
+          (fun (k, vars) rest -> (k, List.fold_left combine_vars vars rest))
+          direct
+      in
+      let reduce =
+        let combine_ix ix (_, ix') = IndexSet.union ix ix' in
+        sort_and_merge
+          (compare_fst Red.compare)
+          (fun (r, ix) rest -> (r, List.fold_left combine_ix ix rest))
+          reduce
+      in
+      let direct, direct_tr = array_split (Array.of_list direct) in
+      let reduce, reduce_tr = array_split (Array.of_list reduce) in
+      (direct_tr, reduce_tr, {direct; reduce})
 
     let derive ~reduction_cache t =
-      let visited = ref KRESet.empty in
-      let accept = ref [] in
-      let direct = ref [] in
-      let reduce = ref [] in
-      let loop k = KRESet.derive_kre ~visited ~accept ~reduce ~direct k in
-      KRESet.iter loop t.direct;
-      let tr =
-        let reduce = CachedKRESet.lift (KRESet.of_list !reduce) in
-        let compiled = Red.compile reduction_cache reduce in
-        (*Printf.eprintf "compiled reductions:\n%a\n"
-          print_cmon (Red.cmon compiled);*)
-        lift_red (Red.initial compiled)
+      let output = ref [] in
+      let push_direct sg ix k = push output (sg, Either.left (k, ix)) in
+      let make_varmap (ix : thread indexset) vars =
+        IndexSet.fold (fun i map -> IndexMap.add i vars map) ix IndexMap.empty
       in
-      let tr = RedSet.fold add_redset t.reduce tr in
-      let tr =
-        determinize_derivatives
-          ~compare:compare_transition
-          ~merge:merge_transition
-          (List.map lift_direct !direct @ tr)
+      let output_reductions ix (ds, rs) =
+        List.iter (fun (sg, k) ->
+            let k, v = CachedKRESet.unlift k in
+            KRESet.iter (push_direct sg (make_varmap ix v)) k
+          ) ds;
+        List.iter (fun (sg, r) ->
+            push output (sg, Either.right (r, ix))
+          ) rs;
       in
-      (IntSet.of_list !accept, tr)
+      let accept, direct, reduce =
+        let accept = ref [] and direct = ref [] and reduce = ref [] in
+        let loop i k =
+          KRESet.derive_kre k (thread i)
+            ~visited:(ref KRESet.empty) ~accept ~reduce ~direct
+        in
+        Array.iteri loop t.direct;
+        (!accept, !direct, !reduce)
+      in
+      List.iter (fun (kre, ix) ->
+          CachedKRESet.lift (KRESet.singleton kre, IndexSet.empty)
+          |> Red.compile reduction_cache
+          |> Red.initial
+          |> output_reductions ix
+        ) (sort_and_merge
+             (compare_fst KRE.compare)
+             (fun (kre, i) is -> (kre, IndexSet.of_list (i :: List.map snd is)) )
+             reduce
+          );
+      Array.iteri (fun i r ->
+          output_reductions
+            (IndexSet.singleton (thread (Array.length t.direct + i)))
+            (Red.derive r)
+        ) t.reduce;
+      List.iter (fun (sg, vars, k, i) ->
+          push_direct sg (IndexMap.singleton i vars) k
+        ) direct;
+      let tr =
+        IndexRefine.annotated_partition !output
+        |> List.map (fun (sg, elts) -> (sg, make_from_elts elts))
+        |> Misc.sort_and_merge
+          (compare_snd compare_transition)
+          (fun (sg, e) rest ->
+             let union_sg sg (sg', _) = IndexSet.union sg sg' in
+             (List.fold_left union_sg sg rest, e))
+      in
+      (accept, tr)
 
-    let interpret st ~stack =
+    let _interpret st ~stack =
       let reduction_cache = Red.make_compilation_cache () in
       let rec loop st stack =
         Printf.eprintf "------------------------\n";
         Printf.eprintf "Matcher state:\n%a\n" print_cmon (cmon st);
         let accepted, transitions = derive ~reduction_cache st in
         Printf.eprintf "Matching actions: [%s]\n"
-          (string_concat_map ";" string_of_int (IntSet.elements accepted));
+          (string_concat_map ";" (fun (x, _) -> string_of_index x) accepted);
         match stack with
         | [] -> Printf.eprintf "End of stack\n"
         | lr1 :: stack' ->
@@ -121,28 +168,29 @@ struct
             (match count with
              | 0 -> " (ending analysis)"
              | 1 -> " (deterministic)"
-             | _ -> "s (non-deterministic)");
-          if count > 0 then
-            loop (List.fold_left union empty (List.map snd targets)) stack'
+             | _ -> "s (non-deterministic), error!");
+          match targets with
+          | [] -> loop empty stack'
+          | [_, _, st'] -> loop st' stack'
+          | _ -> assert false
       in
       loop st stack
   end
 
-  module ExprMap = Map.Make(Expr)
+  module KernMap = Map.Make(Kern)
 
-  module State = struct
+  module Pre = struct
+
     type t = {
-      expr: Expr.t;
+      expr: Kern.t;
       id: int;
-      accepted: IntSet.t;
-      transitions: (Lr1.set * RE.var list * t lazy_t) list;
+      accepted: (KRE.clause index * thread index) list;
+      mutable transitions: transition list;
       mutable visited: Lr1.set;
       mutable scheduled: Lr1.set;
     }
 
-    let id t = t.id
-
-    let accepted t = t.accepted
+    and transition = Lr1.set * Kern.direct_map * Kern.reduce_map * t lazy_t
 
     let derive_dfa expr =
       let next_id =
@@ -153,12 +201,12 @@ struct
           id
       in
       let reduction_cache = Red.make_compilation_cache () in
-      let dfa : t ExprMap.t ref = ref ExprMap.empty in
+      let dfa : t KernMap.t ref = ref KernMap.empty in
       let rec find_state st =
-        match ExprMap.find_opt st !dfa with
+        match KernMap.find_opt st !dfa with
         | Some state -> state
         | None ->
-          let accepted, transitions = Expr.derive ~reduction_cache st in
+          let accepted, transitions = Kern.derive ~reduction_cache st in
           let state = {
             expr; id = next_id ();
             visited = IndexSet.empty;
@@ -166,10 +214,10 @@ struct
             accepted;
             transitions = List.map make_transition transitions;
           } in
-          dfa := ExprMap.add st state !dfa;
+          dfa := KernMap.add st state !dfa;
           state
-      and make_transition (sg, (vars, k)) =
-        (sg, vars, lazy (find_state k))
+      and make_transition (sg, (direct_tr, reduce_tr, k)) =
+        (sg, direct_tr, reduce_tr, lazy (find_state k))
       in
       let todo = ref [] in
       let schedule st sg =
@@ -186,10 +234,9 @@ struct
         let sg = st.scheduled in
         st.visited <- IndexSet.union sg st.visited;
         st.scheduled <- IndexSet.empty;
-        List.iter
-          (fun (sg', _vars, st') ->
-             schedule st' (Lr1.set_predecessors (IndexSet.inter sg' sg)))
-          st.transitions
+        List.iter (fun (sg', _, _, st') ->
+            schedule st' (Lr1.set_predecessors (IndexSet.inter sg' sg))
+          ) st.transitions
       in
       let rec loop () =
         match List.rev !todo with
@@ -202,62 +249,164 @@ struct
       let initial = find_state expr in
       schedule (lazy initial) Lr1.all;
       loop ();
-      (!dfa, initial)
-
-    let iter_transitions r f =
-      let visit_transition (lr1s, vars, st') =
-        if Lazy.is_val st' then
-          let lazy st' = st' in
-          let cases = IndexSet.inter r.visited lr1s in
-          if not (IndexSet.is_empty cases) then
-            f cases vars st'
-      in
-      List.iter visit_transition r.transitions
-
+      !dfa
   end
 
-  type t = State.t ExprMap.t
+  type state_index = int
 
-  let derive_dfa = State.derive_dfa
+  type transition = {
+    label: Lr1.set;
+    source: state_index;
+    target: state_index;
+    direct_map: Kern.direct_map;
+    reduce_map: Kern.reduce_map;
+  }
 
-  let number_of_states = ExprMap.cardinal
+  type state = {
+    index: state_index;
+    kern: Kern.t;
+    visited: Lr1.set;
+    accepted: (KRE.clause index * thread index) list;
+    forward: transition list;
+    mutable backward: transition list;
+  }
 
-  let rec eval (dfa : t) (st : State.t) ~stack =
+  type dfa = state array
+
+  let threads st =
+    Array.length st.kern.direct + Array.length st.kern.reduce
+
+  let label  tr = tr.label
+  let source tr = tr.source
+  let target tr = tr.target
+  let all_vars tr =
+    Array.fold_left (fun acc map -> IndexMap.fold (fun _ -> IndexSet.union) map acc)
+      IndexSet.empty tr.direct_map
+
+  let index    st = st.index
+  let forward  st = st.forward
+  let backward st = st.backward
+  let accepted st = st.accepted
+
+  let reverse_mapping tr ~target_thread =
+    let target_thread = Index.to_int target_thread in
+    let direct_count = Array.length tr.direct_map in
+    if target_thread < direct_count then
+      tr.direct_map.(target_thread)
+    else
+      IndexSet.fold
+        (fun thread acc -> IndexMap.add thread IndexSet.empty acc)
+        tr.reduce_map.(target_thread - direct_count) IndexMap.empty
+
+  let derive_dfa expr =
+    let dfa = Pre.derive_dfa (Kern.make expr) in
+    let states =
+      Array.make (KernMap.cardinal dfa)
+        {index=0; visited=IndexSet.empty; kern=Kern.empty;
+         accepted=[]; forward=[]; backward=[]}
+    in
+    KernMap.iter (fun kern {Pre. id=index; accepted; transitions; visited; _} ->
+        let forward = List.filter_map
+            (fun (label, direct_map, reduce_map, tgt) ->
+               if Lazy.is_val tgt then (
+                 let target = (Lazy.force_val tgt).Pre.id in
+                 Some {label; source=index; target; direct_map; reduce_map}
+               ) else None
+            ) transitions
+        in
+        states.(index) <- {index; kern; forward; visited; accepted; backward=[]}
+      ) dfa;
+    Array.iter (fun src ->
+        List.iter (fun tr ->
+            let tgt = states.(tr.target) in
+            tgt.backward <- tr :: tgt.backward
+          ) src.forward
+      ) states;
+    states
+
+  let rec eval (dfa : dfa) (st : state_index) ~stack =
     Printf.eprintf "------------------------\n";
     Printf.eprintf "Matcher in state %d:\n%a\n"
-      (State.id st) print_cmon (Expr.cmon st.expr);
+      st print_cmon (Kern.cmon dfa.(st).kern);
     Printf.eprintf "Matching actions: [%s]\n"
-      (string_concat_map ";" string_of_int (IntSet.elements st.accepted));
+      (string_concat_map ";" (fun (x, _) -> string_of_index x) dfa.(st).accepted);
     match stack with
     | [] -> Printf.eprintf "End of stack\n"
     | lr1 :: xs ->
       Printf.eprintf "Parser in state %s\n" (Lr1.to_string lr1);
-      let filter_tr (lr1s, _vars, _target) = IndexSet.mem lr1 lr1s in
-      begin match List.find_opt filter_tr st.transitions with
-        | Some (_, _, st') when Lazy.is_val st' ->
-          eval dfa (Lazy.force st') ~stack:xs
-        | None | Some _ ->
+      let filter_tr tr = IndexSet.mem lr1 tr.label in
+      begin match List.find_opt filter_tr dfa.(st).forward with
+        | Some tr -> eval dfa tr.target ~stack:xs
+        | None ->
           Printf.eprintf "No transitions, ending analysis\n"
       end
 
-  let gen_table dfa =
-    let dummy =
-      {Lrgrep_support. accept=None; halting=IntSet.empty; transitions=[]}
+  let variable_index liveness (thr, var : thread index * RE.var index) =
+    let before, elt, _ = IndexMap.split thr liveness in
+    let offset =
+      IndexMap.fold (fun _ set acc -> acc + IndexSet.cardinal set) before 0
     in
-    let states = Array.make (number_of_states dfa) dummy in
-    ExprMap.iter (fun _ (r : State.t) ->
-        let accept = IntSet.minimum r.accepted in
+    match elt with
+    | None -> assert false
+    | Some vars ->
+      IndexSet.fold (fun var' acc -> if var < var' then acc + 1 else acc) vars offset
+
+  let compute_action dfa liveness tr =
+    let src_live = liveness.(source tr) in
+    let tgt_live = liveness.(target tr) in
+    let move = ref [] in
+    let store = ref [] in
+    for i = 0 to threads dfa.(target tr) - 1 do
+      let tgt_thr = thread i in
+      match IndexMap.find_opt tgt_thr tgt_live with
+      | None -> ()
+      | Some tgt_vars ->
+        IndexMap.iter (fun src_thr store_vars ->
+            IndexSet.iter (fun var ->
+                if IndexSet.mem var store_vars then
+                  push store (variable_index tgt_live (tgt_thr, var))
+                else
+                  push move (variable_index tgt_live (tgt_thr, var),
+                             variable_index src_live (src_thr, var))
+              ) tgt_vars;
+          ) (reverse_mapping tr ~target_thread:tgt_thr)
+    done;
+    { Lrgrep_support.
+      store = !store;
+      move = !move;
+      target = target tr;
+    }
+
+  type liveness = (thread, RE.var indexset) indexmap array
+
+  let gen_table dfa liveness =
+    let states = Array.map (fun (r : state) ->
+        let accept =
+          List.map (fun (clause, thread) ->
+              let clause = Index.to_int clause in
+              let live = liveness.(index r) in
+              match IndexMap.find_opt thread live with
+              | None -> assert false
+              | Some variables ->
+                match IndexSet.minimum variables with
+                | None -> (clause, 0, 0)
+                | Some var ->
+                  (clause,
+                   variable_index live (thread, var),
+                   IndexSet.cardinal variables)
+            ) r.accepted
+        in
         let transitions = ref [] in
-        let halting = ref (r.visited :> IntSet.t) in
-        State.iter_transitions r
-          (fun is vars target ->
-             let is = (is : _ IndexSet.t :> IntSet.t) in
-             halting := IntSet.diff !halting is;
-             push transitions (is, (vars, target.id));
-          );
-        let halting = !halting in
+        let halting = ref r.visited in
+        List.iter (fun tr ->
+            halting := IndexSet.diff !halting tr.label;
+            let action = compute_action dfa liveness tr in
+            push transitions ((tr.label :> IntSet.t), action);
+          ) r.forward;
+        let halting = (!halting :> IntSet.t) in
         let transitions = !transitions in
-        states.(r.id) <- {Lrgrep_support. accept; halting; transitions}
-      ) dfa;
+        {Lrgrep_support. accept; halting; transitions}
+      ) dfa
+    in
     Lrgrep_support.compact states
 end

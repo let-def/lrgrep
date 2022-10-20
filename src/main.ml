@@ -94,58 +94,172 @@ module Dfa = Back.Dfa.Make(Regexp)()
 
 open Front
 
-let gen_code entry oc vars clauses =
+module Symbols = Fix.Indexing.Sum(Info.Terminal)(Info.Nonterminal)
+
+let recover_types dfa =
+  let symbol_of_symbol = function
+    | Info.Symbol.T t -> Symbols.inj_l t
+    | Info.Symbol.N n -> Symbols.inj_r n
+  in
+  let symbol_of_lr1 lr1 =
+    match Info.Lr1.incoming lr1 with
+    | None -> assert false
+    | Some s -> symbol_of_symbol s
+  in
+  let symbols_of_lr1s lr1s =
+   IndexSet.map symbol_of_lr1 lr1s
+  in
+  let var_symbols = ref IndexMap.empty in
+  Array.iter (fun st ->
+      List.iter (fun tr ->
+          let vars = Dfa.all_vars tr in
+          if not (IndexSet.is_empty vars) then (
+            let symbols = symbols_of_lr1s (Dfa.label tr) in
+            IndexSet.iter (fun var ->
+                var_symbols := IndexMap.update var (function
+                    | None -> Some symbols
+                    | Some symbols' -> Some (IndexSet.union symbols symbols')
+                  ) !var_symbols
+              ) vars
+          )
+        ) (Dfa.forward st)
+    ) dfa;
+  let typeable symbols =
+    try
+      IndexSet.fold (fun sym typ ->
+          let typ' =
+            match Symbols.prj sym with
+            | L t ->
+              Option.value ~default:"unit"
+                (Grammar.Terminal.typ (Info.Terminal.to_g t))
+            | R n ->
+              match Grammar.Nonterminal.typ (Info.Nonterminal.to_g n) with
+              | None -> raise Exit
+              | Some t -> t
+          in
+          match typ with
+          | None -> Some typ'
+          | Some typ_ ->
+            if typ_ <> typ' then raise Exit;
+            typ
+        ) symbols None
+    with Exit -> None
+  in
+  let var_typeable =
+    IndexMap.filter_map (fun _var symbols ->
+        match typeable symbols with
+        | None -> None
+        | Some typ -> Some (typ, symbols))
+      !var_symbols
+  in
+  (!var_symbols, var_typeable)
+
+let parser_module =
+  String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
+
+let gen_code entry oc optionals vars var_typeable clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
     "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
-    entry.Syntax.name
-    (String.concat " " entry.Syntax.args)
-    (String.capitalize_ascii (Filename.basename Grammar.Grammar.basename));
-  List.iteri (fun index (vars, clause) ->
-      print "  | %d, [|%s|] -> begin\n%s\n    end\n"
+    entry.Syntax.name (String.concat " " entry.Syntax.args) parser_module;
+  List.iteri (fun index ((varnames, varindices), clause) ->
+      let recover_types =
+        let symbol_matcher s = match Symbols.prj s with
+          | L t -> "T T_" ^ Info.Terminal.to_string t
+          | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
+        in
+        List.fold_left2 (fun acc name index ->
+            let is_optional = IndexSet.mem index optionals in
+            let types = match IndexMap.find_opt index var_typeable with
+              | None -> None
+              | Some (typ, cases) ->
+                let matchers =
+                  List.map symbol_matcher (IndexSet.elements cases)
+                in
+                Some (
+                  Printf.sprintf "\
+                  match %s.MenhirInterpreter.incoming_symbol st with \
+                  | %s -> ((x : %s), startp, endp)
+                  | _ -> assert false
+                  " parser_module
+                    (String.concat " | " matchers) typ
+                )
+            in
+            match is_optional, types with
+            | true, None -> acc
+            | true, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with \
+                | None -> None \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  Some (%s) in" name name parser_module types
+              :: acc
+            | false, None ->
+              Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
+                name name :: acc
+            | false, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with None -> assert false \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  %s in" name name parser_module types :: acc
+          ) [] varnames (IndexSet.elements varindices)
+        |> String.concat "\n"
+      in
+      let print_loc (loc : Syntax.location) =
+        Printf.sprintf "# %d %S\n%s"
+          loc.start_line loc.loc_file
+          (String.make loc.start_col ' ')
+      in
+      print "  | %d, [|%s|] -> %s begin\n%s\n    end\n"
         index
-        (String.concat ";" vars)
+        (String.concat ";" varnames)
+        recover_types
         (match clause.Syntax.action with
          | Unreachable -> "failwith \"Should be unreachable\""
-         | Partial (_, str) -> str
-         | Total (_, str) -> "Some (" ^ str ^ ")")
+         | Partial (loc, str) ->
+           print_loc loc ^ str
+         | Total (loc, str) ->
+           "Some (\n" ^ print_loc loc ^ str ^ ")")
     ) (List.combine vars clauses);
   print "  | _ -> failwith \"Invalid action\"\n\n"
 
-let output_table oc entry vars (initial : Dfa.State.t) (program, table, remap) =
+let output_table oc entry registers (program, table, remap) =
   let print fmt = Printf.fprintf oc fmt in
   print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
     entry.Syntax.name;
-  print "  let arities = [|%s|]\n"
-    (string_concat_map ";" (fun a -> string_of_int (List.length a)) vars);
-  print "  let initial = %d\n" remap.(Dfa.State.id initial);
+  print "  let registers = %d\n" registers;
+  print "  let initial = %d\n" remap.(0);
   print "  let table = %S\n" table;
   print "  let program = %S\n" program;
   print "end\n"
 
 let process_entry oc entry =
   let cases, vars =
+    let var_count = ref 0 in
     let transl_case i case =
-      let var_count = ref 0 in
       let vars = ref [] in
+      let varset = ref IndexSet.empty in
       let alloc name =
         let id = !var_count in
         Utils.Misc.push vars name;
         incr var_count;
-        (i, id)
+        let v = Regexp.RE.var id in
+        varset := IndexSet.add v !varset;
+        v
       in
-      let kre = Regexp.transl ~alloc ~clause:i case.Syntax.pattern in
+      let clause = Regexp.KRE.clause i in
+      let kre = Regexp.transl ~alloc ~clause case.Syntax.pattern in
       let vars = List.rev !vars in
-      (kre, vars)
+      (kre, (vars, !varset))
     in
     List.split (List.mapi transl_case entry.Syntax.clauses)
   in
   let cases = Regexp.KRESet.of_list cases in
-  let dfa, initial = Dfa.derive_dfa (Dfa.Expr.make cases) in
+  let dfa = Dfa.derive_dfa cases in
   if !check_coverage then (
     let module Coverage = Back.Coverage.Make(Dfa)() in
     let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
-    let check = Check.analyse initial in
+    let check = Check.analyse dfa in
     let count = ref 6 in
     try Seq.iter (fun (_st, _nfa, nfa_path) ->
         let initial = ref false in
@@ -174,14 +288,26 @@ let process_entry oc entry =
       ) (Check.paths check)
     with Exit -> ()
   );
-  Format.eprintf "(* %d states *)\n%!" (Dfa.number_of_states dfa);
+  Format.eprintf "(* %d states *)\n%!" (Array.length dfa);
   begin match oc with
   | None -> ()
   | Some oc ->
+    let registers, liveness =
+      let t0 = Sys.time () in
+      let module RA = Back.Regalloc.Make(Dfa) in
+      let liveness = RA.liveness (Array.of_list (List.map snd vars)) dfa in
+      let dt = Sys.time () -. t0 in
+      Printf.eprintf "liveness: %.02fms\n" (dt *. 1000.0);
+      liveness
+    in
+    let optionals =
+      IndexMap.fold (fun _ -> IndexSet.union) liveness.(0) IndexSet.empty
+    in
     output_char oc '\n';
-    gen_code entry oc vars entry.Syntax.clauses;
+    let _symbols, typeable = recover_types dfa in
+    gen_code entry oc optionals vars typeable entry.Syntax.clauses;
     output_char oc '\n';
-    output_table oc entry vars initial (Dfa.gen_table dfa)
+    output_table oc entry registers (Dfa.gen_table dfa liveness)
   end
 
 

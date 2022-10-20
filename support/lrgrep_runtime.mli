@@ -10,19 +10,8 @@ type lr1 = int
     (generated) client program to map it to a semantic action. *)
 type clause = int
 
-(** Variables are also named by small integers, attributed monotonically
-    starting from 0 by traversing the clause pattern from right to left. *)
-type var = int
-
-(** A register is the pair of a clause and a variable.
-    A variable name is unique only within a clause. *)
-type register = clause * var
-
-(** The arities array describe the number of variables of each clause.
-    For instance, an array [|1; 2|] means the matching program has two clauses
-    the first one with a single variable and the second one with two variables.
-    The corresponding registers are therefor (0, 0), (1, 0) and (1, 1). *)
-type arities = int array
+(** Registers are also named by small integers. *)
+type register = int
 
 (* Representation of the automaton as sparse tables and bytecoded programs *)
 
@@ -62,11 +51,12 @@ type program_instruction =
   | Store of register
     (** [Store r] stores the state at the top of the parser stack in
         register [r]. *)
+  | Move of register * register
   | Yield of program_counter
     (** Jump and consume input:
         [Yield pc] stops the current interpretation to consume one state of the
         input stack. After consuming, execution should resume at [pc]. *)
-  | Accept of clause
+  | Accept of clause * int * int
     (** When reaching [Accept id], the matcher found that clause number [id] is
         matching. Add it to the set of matching candidates and resume
         execution. *)
@@ -89,7 +79,7 @@ val program_step : program -> program_counter ref -> program_instruction
 
 (** All the elements composing a parse error matching program. *)
 module type Parse_errors = sig
-  val arities : int array
+  val registers : int
   val initial : program_counter
   val table : sparse_table
   val program : program

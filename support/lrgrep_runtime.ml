@@ -1,8 +1,6 @@
 type lr1 = int
 type clause = int
-type var = int
-type register = clause * var
-type arities = int array
+type register = int
 
 (* Representation of automaton as sparse tables and bytecoded programs *)
 
@@ -14,8 +12,9 @@ type program_counter = int
 
 type program_instruction =
   | Store of register
+  | Move of register * register
   | Yield of program_counter
-  | Accept of clause
+  | Accept of clause * int * int
   | Match of sparse_index
   | Halt
 
@@ -45,24 +44,29 @@ let program_step (t : program) (r : program_counter ref)
   let pc = !r in
   match t.[pc] with
   | '\x01' ->
-    r := !r + 3;
-    Store (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
+    r := !r + 2;
+    Store (String.get_uint8 t (pc + 1))
   | '\x02' ->
     r := !r + 3;
-    Yield (String.get_uint16_be t (pc + 1))
+    Move (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
   | '\x03' ->
-    r := !r + 2;
-    Accept (String.get_uint8 t (pc + 1))
+    r := !r + 4;
+    Yield (get_int t ~offset:(pc + 1) 3)
   | '\x04' ->
+    r := !r + 4;
+    Accept (String.get_uint8 t (pc + 1),
+            String.get_uint8 t (pc + 2),
+            String.get_uint8 t (pc + 3))
+  | '\x05' ->
     r := !r + 3;
     Match (String.get_uint16_be t (pc + 1))
-  | '\x05' ->
+  | '\x06' ->
     r := !r + 1;
     Halt
   | _ -> assert false
 
 module type Parse_errors = sig
-  val arities : int array
+  val registers : int
   val initial : program_counter
   val table : sparse_table
   val program : program
@@ -83,16 +87,19 @@ struct
     let pc = ref pc in
     let rec loop () =
       match program_step PE.program pc with
-      | Store (clause, var) ->
+      | Store reg ->
+        bank.(reg) <- P.top env;
+        loop ()
+      | Move (r1, r2) ->
         (*prerr_endline "Store";*)
-        bank.(clause).(var) <- P.top env;
+        bank.(r1) <- bank.(r2);
         loop ()
       | Yield pc' ->
         (*prerr_endline "Yield";*)
         Some pc'
-      | Accept clause ->
+      | Accept (clause, start, count) ->
         (*prerr_endline "Accept";*)
-        candidate := clause :: !candidate;
+        candidate := (clause, Array.sub bank start count) :: !candidate;
         loop ()
       | Match index ->
         (*prerr_endline "Match";*)
@@ -113,7 +120,7 @@ struct
     loop ()
 
   let run env =
-    let bank = Array.map (fun a -> Array.make a None) PE.arities in
+    let bank = Array.make PE.registers None in
     let candidate = ref [] in
     let rec loop env pc =
       match interpret bank env candidate pc with
@@ -127,6 +134,5 @@ struct
     in
     loop env PE.initial;
     !candidate
-    |> List.sort_uniq Int.compare
-    |> List.map (fun clause -> clause, bank.(clause))
+    |> List.sort_uniq (fun (a,_) (b,_) -> Int.compare a b)
 end

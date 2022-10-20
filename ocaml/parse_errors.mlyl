@@ -8,21 +8,14 @@ rule error_message token = parse error
   partial {
     match token with
     | Parser_raw.ELSE -> (
-      match e with
-      | None -> assert false
-      | Some (Parser_raw.MenhirInterpreter.Element (state, expr, startp, _endp)) ->
-        match Parser_raw.MenhirInterpreter.incoming_symbol state with
-        | N N_expr -> (
-        match expr.pexp_desc with
-        | Pexp_ifthenelse(_, _, None) ->
-          Some ("The semicolon line "
-                ^ string_of_int startp.pos_lnum
-                ^ ", character "
-                ^ string_of_int (startp.pos_cnum - startp.pos_bol)
-                ^ " terminates the `if ... then ...` expression. \
-                   Remove it to add an else branch."
-                   )
-        | _ -> None
+      match e with 
+      | {pexp_desc = Pexp_ifthenelse(_, _, None); _}, startp, _endp -> (
+        Some ("The semicolon line "
+              ^ string_of_int startp.pos_lnum
+              ^ ", character "
+              ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+              ^ " terminates the `if ... then ...` expression. \
+              Remove it to add an else branch.")
         )
       | _ -> None
       )
@@ -39,19 +32,21 @@ rule error_message token = parse error
 
 | structure_item; !; SEMI as semi;
   LET; ext; list(attribute); rec_flag; let_binding_body; !
-
-  { match semi with
-    | None -> assert false
-    | Some (Parser_raw.MenhirInterpreter.Element (_, _, startp, _endp)) ->
-      "Might be due to the semicolon line "
-      ^ string_of_int startp.pos_lnum
-      ^ ", character "
-      ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+  { let (), startp, _endp = semi in
+    "Might be due to the semicolon line "
+    ^ string_of_int startp.pos_lnum
+    ^ ", character "
+    ^ string_of_int (startp.pos_cnum - startp.pos_bol)
   }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
-| LPAREN; [. RPAREN]; !
-  { "Unclosed parenthesis" }
+| LPAREN as lp; [. RPAREN]; !
+  { let (), startp, _endp = lp in
+    "Unclosed parenthesis at line " 
+    ^ string_of_int startp.pos_lnum
+    ^ ", character "
+    ^ string_of_int (startp.pos_cnum - startp.pos_bol)
+  }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase

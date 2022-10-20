@@ -46,12 +46,11 @@ module type S = sig
   val of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t
 end
 
-module RawIntMap = Map.Make(Int)
 module IntMap = struct
   type 'n index = int
-  type (+'n, !'a) t = 'a RawIntMap.t
+  type (+'n, !'a) t = 'a IntMap.t
 
-  include (RawIntMap : Map.S with type key := int and type 'a t := 'a RawIntMap.t)
+  include (IntMap : Map.S with type key := int and type 'a t := 'a IntMap.t)
 end
 
 module F(X : Index.Unsafe.T) = struct
