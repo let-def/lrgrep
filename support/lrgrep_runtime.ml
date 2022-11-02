@@ -61,8 +61,8 @@ let program_step (t : program) (r : program_counter ref)
             Bytes.get_uint8 t (pc + 2),
             Bytes.get_uint8 t (pc + 3))
   | '\x05' ->
-    r := !r + 3;
-    Match (Bytes.get_uint16_be t (pc + 1))
+    r := !r + 4;
+    Match (get_int t ~offset:(pc + 1) 3)
   | '\x06' ->
     r := !r + 1;
     Halt
