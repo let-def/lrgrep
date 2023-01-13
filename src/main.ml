@@ -88,6 +88,56 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 
 module Info = Mid.Info.Make(Grammar)
 
+let () =
+  let open Grammar in
+  let (+:=) x y = x := !x + y in
+  let shift = ref 0 in
+  let reduce_without_default_reductions = ref 0 in
+  let reduce_with_default_reductions = ref 0 in
+  let default_reductions = ref 0 in
+  let red_aggressive = ref 0 in
+  let count_aggressive = ref 0 in
+  Lr1.iter (fun lr1 ->
+      let shifts =
+        Lr1.transitions lr1
+        |> List.filter (fun (sym, _) -> match sym with T _ -> true | _ -> false)
+        |> List.length
+      in
+      shift +:= shifts;
+      let total = ref 0 in
+      let largest = ref 0 in
+      let reds =
+        Lr1.reductions lr1
+        |> List.map (fun (_, ps) -> List.hd ps)
+        |> Misc.group_by
+          ~compare:(fun p1 p2 -> Int.compare (Production.to_int p1) (Production.to_int p2))
+          ~group:(fun _p ps -> (1 + List.length ps))
+      in
+      List.iter (fun count ->
+          largest := max !largest count;
+          total +:= count)
+        reds;
+      reduce_without_default_reductions +:= !total;
+      begin match reds, shifts with
+        | [_], 0 ->
+          default_reductions +:= 1
+        | _, _ -> reduce_with_default_reductions +:= !total
+      end;
+      red_aggressive +:= (!total - !largest);
+      if !largest > 0 then
+        incr count_aggressive
+    );
+  Printf.eprintf
+    "Transition statistics\n\
+     shift (incompressible)         : %d\n\
+     total (w/o default reductions) : %d\n\
+     total (w/ default reductions)  : %d + %d default reductions\n\
+     aggressive default reductions  : %d + %d default reductions\n"
+    !shift
+    !reduce_without_default_reductions
+    !reduce_with_default_reductions !default_reductions
+    !red_aggressive !count_aggressive
+
 module Regexp = Mid.Regexp.Make(Info)
 
 module Dfa = Back.Dfa.Make(Regexp)()
