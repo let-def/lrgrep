@@ -469,8 +469,8 @@ module Make(Dfa : Sigs.DFA)() = struct
     end
 
     val follow_lookahead_path :
-      Terminal.set -> NFA.n index -> NFA.n index list -> Terminal.set
-    val compute_lookahead : NFA.n index list -> Terminal.set
+      Terminal.set -> NFA.n index -> NFA.n index list -> Lr1.t list list list * Terminal.set
+    val compute_lookahead : NFA.n index list -> Lr1.t list list list * Terminal.set
   end =
   struct
     let rec predecessor_stream lrcs = Scons (
@@ -746,42 +746,41 @@ module Make(Dfa : Sigs.DFA)() = struct
           )
           (IndexSet.inter can_fail_states Lrc.offering_states) IndexSet.empty
 
-      let fold_path_transitions ~lookahead ~follow_goto ~reach ~fail path =
+      let fold_path_transitions ~goto ~reach ~fail path acc =
         match path.fail with
         | _ when is_empty path -> ()
-        | (_ :: _) -> fail path.states lookahead
+        | (_ :: _) -> fail path.states acc
         | [] ->
           let lr1 = Lrc.lr1_of_lrc (IndexSet.choose path.states) in
-          IndexMap.iter (fun _lr1 next -> reach next.index lookahead) path.pops;
-          let rec visit lookahead lrc =
-            let lookahead = follow_goto lrc lookahead in
+          IndexMap.iter (fun _lr1 next -> reach next.index acc) path.pops;
+          let rec visit acc lrc =
+            let acc = goto lrc acc in
             match paths (Paths.inj_l lrc) with
             | p when is_empty p -> ()
             | {states; fail = (_ :: _); _ } ->
               IndexSet.iter begin fun lrc ->
                 match IndexMap.find_opt lr1 (Lrc.predecessors_by_lr1 lrc) with
                 | None -> assert false
-                | Some lrcs -> fail lrcs lookahead
+                | Some lrcs -> fail lrcs acc
               end states
             | p ->
               assert (p.goto = []);
               begin match IndexMap.find_opt lr1 p.pops with
                 | None -> ()
-                | Some {fail = (_::_); states; _} -> fail states lookahead
+                | Some {fail = (_::_); states; _} -> fail states acc
                 | Some p' ->
-                  reach p'.index lookahead;
-                  visit_set lookahead p'.goto
+                  reach p'.index acc;
+                  visit_set acc p'.goto
               end
-          and visit_set lookahead sets =
-            List.iter (fun (_, set) -> IndexSet.iter (visit lookahead) set) sets
+          and visit_set acc sets =
+            List.iter (fun (_, set) -> IndexSet.iter (visit acc) set) sets
           in
-          visit_set lookahead path.goto
+          visit_set acc path.goto
 
       let step_transitions path =
         let set = ref IndexSet.empty in
-        fold_path_transitions path
-          ~lookahead:()
-          ~follow_goto:(fun _ () -> ())
+        fold_path_transitions path ()
+          ~goto:(fun _ () -> ())
           ~reach:(fun step () -> set := IndexSet.add (inj_r step) !set)
           ~fail:(fun lrcs () -> set := IndexSet.union (encode_normal_set lrcs) !set);
         !set
@@ -826,32 +825,40 @@ module Make(Dfa : Sigs.DFA)() = struct
             | _ -> ()) *)
     end
 
-    let rec follow_lookahead_path lookahead state = function
-      | [] -> lookahead
+    let rec follow_lookahead_path gotos lookahead state = function
+      | [] -> (gotos, lookahead)
       | x :: xs ->
         match NFA.prj state with
-        | L _ -> lookahead
+        | L _ -> (gotos, lookahead)
         | R path ->
+          let gotos' = ref [] in
           let lookahead' = ref IndexSet.empty in
-          NFA.fold_path_transitions (paths path)
-            ~lookahead
-            ~follow_goto:(fun lrc la ->
+          NFA.fold_path_transitions (paths path) ([], lookahead)
+            ~goto:(fun lrc (gotos, la) ->
                 let lr1 = Lrc.lr1_of_lrc lrc in
                 let la = Terminal.intersect (Lrc.lookahead lrc) la in
                 let la = IndexSet.diff la (Info.Lr1.closed_reject lr1) in
-                la
+                if true then assert false;
+                (lr1 :: gotos, la)
               )
-            ~reach:(fun path lookahead ->
-                if equal_index path x then
+            ~reach:(fun path (gotos, lookahead) ->
+                if equal_index path x then (
+                  push gotos' gotos;
                   lookahead' := IndexSet.union !lookahead' lookahead
+                )
               )
-            ~fail:(fun lrcs lookahead ->
+            ~fail:(fun lrcs (gotos, lookahead) ->
                 match NFA.prj x with
                 | L lrc' when IndexSet.mem lrc' lrcs ->
+                  push gotos' gotos;
                   lookahead' := IndexSet.union !lookahead' lookahead
                 | _ -> ()
               );
-          follow_lookahead_path !lookahead' x xs
+          let gotos = List.sort_uniq compare !gotos' :: gotos in
+          follow_lookahead_path gotos !lookahead' x xs
+
+    let follow_lookahead_path lookahead state states =
+      follow_lookahead_path [] lookahead state states
 
     let compute_lookahead = function
       | [] -> assert false
@@ -863,7 +870,7 @@ module Make(Dfa : Sigs.DFA)() = struct
             IndexSet.inter la (Info.Lr1.closed_reject (Lrc.lr1_of_lrc lrc))
           in
           assert (not (IndexSet.is_empty la));
-          la
+          ([], la)
         | R path ->
           let paths = paths path in
           assert (not (is_empty paths));
