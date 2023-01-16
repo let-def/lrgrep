@@ -115,8 +115,8 @@ let () =
       in
       List.iter (fun count ->
           largest := max !largest count;
-          total +:= count)
-        reds;
+          total +:= count
+        ) reds;
       reduce_without_default_reductions +:= !total;
       begin match reds, shifts with
         | [_], 0 ->
@@ -137,6 +137,92 @@ let () =
     !reduce_without_default_reductions
     !reduce_with_default_reductions !default_reductions
     !red_aggressive !count_aggressive
+
+let () =
+  let open Grammar in
+  let by_default = ref IntMap.empty in
+  Lr1.iter (fun lr1 ->
+      let reds =
+        Lr1.reductions lr1
+        |> List.map (fun (t, ps) -> (t, List.hd ps))
+        |> Misc.group_by
+          ~compare:(fun (_,p1) (_,p2) -> Int.compare (Production.to_int p1) (Production.to_int p2))
+          ~group:(fun (t,p) tps -> (p, 1 + List.length tps, (t,p) :: tps))
+      in
+      let prod = ref (-1) in
+      let largest = ref 0 in
+      let shifts =
+        List.filter_map
+          (fun (sym, lr1) -> match sym with T t -> Some (t, `Shift lr1) | _ -> None)
+          (Lr1.transitions lr1)
+      in
+      let num_transitions = ref (List.length shifts) in
+      List.iter (fun (p, count, _) ->
+          if count > !largest then (
+            largest := count;
+            prod := (Production.to_int p);
+          );
+          num_transitions := !num_transitions + count
+        ) reds;
+      let transitions =
+        shifts @ List.concat_map (fun (prod', _, tps) ->
+          if Production.to_int prod' = !prod then
+            []
+          else
+            List.map (fun (t, p) -> (t, `Reduce p)) tps
+        ) reds
+      in
+      by_default := IntMap.update !prod (fun states ->
+          let states = Option.value states ~default:[] in
+          Some ((!num_transitions - !largest, List.sort compare transitions, lr1) :: states)
+        ) !by_default
+    );
+  let count = ref 0 in
+  let group = ref 0 in
+  let sum_of_diff = ref 0 in
+  let largest_class = ref 0 in
+  IntMap.iter (fun _ states ->
+      let states =
+        List.sort
+          (fun (n1, _, _) (n2, _, _) -> Int.compare n1 n2)
+          states
+      in
+      let rec distance = function
+        | [], x | x, [] -> List.length x
+        | (k1, v1) :: l1, (k2, v2) :: l2 ->
+          if k1 = k2 then (
+            if v1 = v2
+            then distance (l1, l2)
+            else 1 + distance (l1, l2)
+          ) else if k1 < k2 then
+            1 + distance (l1, (k2, v2) :: l2)
+          else
+            1 + distance ((k1, v1) :: l1, l2)
+      in
+      let class_size =
+        List.fold_left (fun best (_, t1, _) ->
+            min best
+              (List.fold_left (fun sum (_, t2, _) -> sum + min (distance(t1,t2)) (List.length t2)) 0 states)
+          ) max_int states
+      in
+      sum_of_diff := !sum_of_diff + class_size;
+      largest_class := max !largest_class class_size;
+      let _ =
+        List.fold_left (fun candidates (n, transitions, _) ->
+            let count' = List.fold_left (fun count' candidate ->
+                min count' (distance (candidate, transitions))
+              ) n candidates
+            in
+            count := !count + count';
+            transitions :: candidates
+          ) [] states
+      in
+      group := max !group (List.length states);
+    ) !by_default;
+  Printf.eprintf
+    "compress everything   : %d edges, largest class: %d\n\
+     sum of diff (1-parent): %d, largest class: %d\n"
+    !count !group !sum_of_diff !largest_class
 
 module Regexp = Mid.Regexp.Make(Info)
 
@@ -323,10 +409,23 @@ let process_entry oc entry =
         let path = if !initial then path else "..." :: path in
         let path = String.concat " " path in
         prerr_endline ("Found uncovered case:\n  " ^ path);
-        let la = Coverage.Lrce.compute_lookahead nfa_path in
+        let gotos, la = Coverage.Lrce.compute_lookahead nfa_path in
         prerr_endline ("Looking ahead at:\n  {" ^
                        string_concat_map ", " Info.Terminal.to_string
                          (IndexSet.elements la) ^ "}\n");
+        prerr_endline "Goto targets on the path:\n";
+        List.iter (fun step ->
+            prerr_endline "Step:\n";
+            List.iter (List.iter (fun lr1 ->
+                let items = Info.Lr1.items lr1 in
+                prerr_endline
+                  (string_concat_map " | "
+                     (fun (p,i) -> Printf.sprintf "(#%d,%d)" (p : _ Fix.Indexing.index :> int) i)
+                     items);
+                let items = List.map (fun (p,i) -> Info.Production.to_g p, i) items in
+                Format.eprintf "%a\n%!" Grammar.Print.itemset items
+              )) step;
+          ) gotos;
         decr count;
         (*if !count = 0 then (
           prerr_endline "Press enter to get more cases, \
