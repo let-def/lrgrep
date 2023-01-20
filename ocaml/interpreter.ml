@@ -149,8 +149,8 @@ module Lr1 = struct
 
   let reductions =
     Vector.init n (fun lr1 ->
-        List.map (fun (t, prods) ->
-            Terminal.of_int t, List.map (Index.of_int Production.n) prods)
+        List.map (fun (t, p) ->
+            Terminal.of_int t, Index.of_int Production.n p)
           grammar.g_lr1_states.((lr1 :> int)).lr1_reductions
       )
     |> Vector.get
@@ -414,8 +414,7 @@ module Redgraph = struct
       in
       let productions =
         Lr1.reductions lr1
-        |> List.filter_map (fun (_, ps) ->
-            let prod = List.hd ps in
+        |> List.filter_map (fun (_, prod) ->
             match Production.kind prod with
             | `REGULAR -> Some (prepare_goto prod)
             | `START -> None
