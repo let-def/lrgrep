@@ -95,7 +95,7 @@ struct
       | [] ->
         match Grammar.Lr1.reductions lr1 with
         | [] -> None
-        | (_, [p]) :: ps when List.for_all (fun (_, p') -> p' = [p]) ps ->
+        | (_, p) :: ps when List.for_all (fun (_, p') -> p' = p) ps ->
           Some p
         | _ -> None
 
@@ -109,10 +109,10 @@ struct
         [prod, Terminal.all]
       | None ->
         let raw =
-          let add acc (t, ps) =
+          let add acc (t, p) =
             match Grammar.Terminal.kind t with
             | `ERROR -> acc
-            | _ -> ((t, List.hd ps) :: acc)
+            | _ -> ((t, p) :: acc)
           in
           List.fold_left add [] (Grammar.Lr1.reductions lr1)
         in
