@@ -251,8 +251,8 @@ struct
     let reductions =
       let import_red reds =
         reds
-        |> List.filter_map (fun (t, ps) ->
-             let p = Production.of_g (List.hd ps) in
+        |> List.filter_map (fun (t, p) ->
+             let p = Production.of_g p in
              match Production.kind p with
              | `START -> None
              | `REGULAR -> Some (p, Terminal.of_g t)

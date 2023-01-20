@@ -108,7 +108,7 @@ let () =
       let largest = ref 0 in
       let reds =
         Lr1.reductions lr1
-        |> List.map (fun (_, ps) -> List.hd ps)
+        |> List.map (fun (_, p) -> p)
         |> Misc.group_by
           ~compare:(fun p1 p2 -> Int.compare (Production.to_int p1) (Production.to_int p2))
           ~group:(fun _p ps -> (1 + List.length ps))
@@ -144,7 +144,6 @@ let () =
   Lr1.iter (fun lr1 ->
       let reds =
         Lr1.reductions lr1
-        |> List.map (fun (t, ps) -> (t, List.hd ps))
         |> Misc.group_by
           ~compare:(fun (_,p1) (_,p2) -> Int.compare (Production.to_int p1) (Production.to_int p2))
           ~group:(fun (t,p) tps -> (p, 1 + List.length tps, (t,p) :: tps))
