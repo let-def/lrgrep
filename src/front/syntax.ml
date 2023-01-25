@@ -40,6 +40,9 @@ type atom_desc =
       {
         lhs: symbol option;
         (** if specified, the item must have this non-terminal as lhs *)
+        anchored : bool;
+          (** Whether the prefix must exactly match the item, rather
+              than allowing longer productions. *)
         prefix: symbol option list;
         (** the list of producers before the dot *)
         suffix: symbol option list;
@@ -175,11 +178,12 @@ let print_atom_desc = function
     Cmon.construct "Symbol" [print_symbol sym]
   | Wildcard ->
     Cmon.constant "Wildcard"
-  | Item {lhs; prefix; suffix} ->
+  | Item {lhs; anchored; prefix; suffix} ->
     Cmon.crecord "Item" [
-      "lhs"    , print_option print_symbol lhs;
-      "prefix" , Cmon.list (List.map (print_option print_symbol) prefix);
-      "suffix" , Cmon.list (List.map (print_option print_symbol) suffix);
+      "lhs"     , print_option print_symbol lhs;
+      "anchored", Cmon.bool anchored;
+      "prefix"  , Cmon.list (List.map (print_option print_symbol) prefix);
+      "suffix"  , Cmon.list (List.map (print_option print_symbol) suffix);
     ]
 
 let rec print_regular_term = function

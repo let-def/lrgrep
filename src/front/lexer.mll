@@ -198,6 +198,7 @@ rule main = parse
 | ',' { COMMA }
 | ';' { SEMI }
 | '.' { DOT }
+| '^' { CARET }
 | eof { EOF }
 | _
   { raise_lexical_error lexbuf
