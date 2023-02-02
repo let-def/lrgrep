@@ -218,7 +218,150 @@ let compare_transition_action t1 t2 =
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
+(** Minimize a DFA, following Hopcroft (1971) *)
+module Minimize : sig
+  val minimize : dfa -> dfa
+end = struct
+  module IntSetSet = Set.Make(IntSet)
+
+  (** An accepted error message. *)
+  module Accept = struct
+    type t = RT.clause * RT.register * int
+    let compare (clause1, start1, count1) (clause2, start2, count2) =
+      let cmp = Int.compare clause1 clause2 in
+      if cmp <> 0 then cmp else
+        let cmp = Int.compare start1 start2 in
+        if cmp <> 0 then cmp else Int.compare count1 count2
+  end
+
+  module Accept_set = Set.Make(Accept)
+  module Accept_set_map = Map.Make(Accept_set)
+
+  (** Partition our states based on their accepting states. *)
+  let states_by_accepted_clauses dfa = 
+    let _, p = Array.fold_left (fun (i, map) state ->
+      let map = Accept_set_map.update (Accept_set.of_list state.accept)
+        (fun bucket -> Option.value ~default:IntSet.empty bucket |> IntSet.add i |> Option.some)
+        map
+      in
+      (i + 1, map)
+    ) (0, Accept_set_map.empty) dfa
+    in
+    Accept_set_map.fold (fun _ s m -> IntSetSet.add s m) p IntSetSet.empty
+
+  (** A transition from one state to another. Unlike {!compare_transition_action},
+    this ignores the target state: only the moves and stores are considered. *)
+  module Transition = struct
+    type t = transition_action
+
+    let compare action1 action2 : int =
+      if action1 == action2 then 0 else
+      let cmp = List.compare compare_ints action1.move action2.move in
+      if cmp <> 0 then cmp else
+        List.compare Int.compare action1.store action2.store
+  end
+
+  module Transition_map = Map.Make(Transition)
+
+  module Int_refine = Refine.Make(struct
+    include IntSet
+
+    type 'a t = IntSet.t
+  end)
+
+  let rec find_equivalent_states dfa partition work =
+    match IntSetSet.min_elt_opt work with
+    | None -> partition
+    | Some states ->
+      let work = IntSetSet.remove states work in
+
+      (* Gather all incoming transitions for the current set of states. *)
+      let _, transitions = Array.fold_left (fun (source, transitions) state ->
+          let transitions = List.fold_left (fun transitions (inputs, action) ->
+              if IntSet.mem action.target states then (inputs, (source, action)) :: transitions
+              else transitions
+            ) transitions state.transitions 
+          in
+          (source + 1, transitions)
+        ) (0, []) dfa 
+      in
+      (* Partition them based on the input symbol(s). *)
+      let transitions = Int_refine.annotated_partition transitions in
+      (* Then build a map of (input symbol(s), transition) -> source states. *)
+      let source_states = List.fold_left (fun source_states (_, our_transitions) -> 
+        let transitions = 
+          List.fold_left (fun transitions (source, transition) ->
+            Transition_map.update transition
+              (fun bucket -> Option.value ~default:IntSet.empty bucket |> IntSet.add source |> Option.some)
+              transitions)
+            Transition_map.empty our_transitions
+        in
+        Transition_map.fold (fun _ s m -> IntSetSet.add s m) transitions source_states
+      ) IntSetSet.empty transitions in 
+
+      (* Refine our equivalence sets, and add any new sets to the work list. *)
+      let partition, work = IntSetSet.fold (fun x (partition, work) ->
+          IntSetSet.fold (fun y ((partition, work) as nochange) ->
+            let intersect = IntSet.inter x y in
+            if IntSet.is_empty intersect then nochange else
+            let diff = IntSet.diff y x in
+            if IntSet.is_empty diff then nochange else
+              let partition = IntSetSet.remove y partition |> IntSetSet.add diff |> IntSetSet.add intersect in
+              let work =
+                if IntSetSet.mem y work  then
+                  IntSetSet.remove y work |> IntSetSet.add diff |> IntSetSet.add intersect
+                else if IntSet.cardinal intersect <= IntSet.cardinal diff then
+                  IntSetSet.add intersect work
+                else
+                  IntSetSet.add diff work
+              in
+              (partition, work)
+          )
+          partition (partition, work)
+        ) source_states (partition, work) 
+      in
+      find_equivalent_states dfa partition work
+
+  let minimize dfa =
+    let partition = states_by_accepted_clauses dfa in 
+    let partition = find_equivalent_states dfa partition partition in
+
+    (* Build a new reduced array of states. *)
+    let new_states =
+      IntSetSet.to_seq partition
+      |> Seq.map (fun x -> (IntSet.minimum x |> Option.get, x))
+      |> Array.of_seq
+    in
+    (* Ensure we have a consistent ordering with the original state list. This
+       ensures state 0 is still the initial state. *)
+    Array.fast_sort (fun (x, _) (y, _) -> Int.compare x y) new_states;
+
+    (* Build a map of the old state index to the new one. *)
+    let _, state_map = Array.fold_left
+      (fun (i, m) (_, state_idxs) -> (i + 1, IntSet.fold (fun s m -> IntMap.add s i m) state_idxs m))
+      (0, IntMap.empty) new_states
+    in
+
+    (* And then rewrite the transitions to point to the correct state. *)
+    Array.map (fun (idx, _) ->
+      let state = dfa.(idx) in
+      let transitions = List.map 
+        (fun (lr1, action) -> (lr1, { action with target = IntMap.find action.target state_map})) 
+        state.transitions
+      in
+      { state with transitions }
+    ) new_states
+
+  let minimize dfa = 
+    let t0 = Sys.time () in
+    let dfa = minimize dfa in
+    let dt = Sys.time () -. t0 in 
+    Printf.eprintf "minimized to %d states in %.2fms\n" (Array.length dfa) (dt *. 1000.0);
+    dfa
+end
+
 let compact (dfa : dfa) =
+  let dfa = Minimize.minimize dfa in
   let code = Code_emitter.make () in
   let index = Sparse_packer.make () in
   let halt_pc = ref (Code_emitter.position code) in
