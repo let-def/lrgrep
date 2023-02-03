@@ -208,20 +208,20 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       | () -> true
       | exception Exit -> false
 
-    let item_match lhs (lp, prefix) (ls, suffix) (prod, pos) =
+    let item_match lhs anchored (lp, prefix) (ls, suffix) (prod, pos) =
       maybe_has_lhs prod lhs &&
-      pos >= lp &&
+      (if anchored then pos = lp else pos >= lp) &&
       let rhs = Production.rhs prod in
       Array.length rhs >= pos + ls &&
       forall_i (fun i sym -> maybe_match_sym rhs.(pos - i - 1) sym) prefix &&
       forall_i (fun i sym -> maybe_match_sym rhs.(pos + i) sym) suffix
 
-    let states_by_items ~lhs ~prefix ~suffix =
+    let states_by_items ~lhs ~anchored ~prefix ~suffix =
       let prefix' = List.length prefix, List.rev prefix in
       let suffix' = List.length suffix, suffix in
       index_fold Lr1.n IndexSet.empty (fun lr1 acc ->
           if List.exists
-              (item_match lhs prefix' suffix')
+              (item_match lhs anchored prefix' suffix')
               (Lr1.items lr1)
           then IndexSet.add lr1 acc
           else acc
@@ -250,11 +250,11 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
   let transl_atom = function
     | Syntax.Symbol name ->
       State_indices.states_of_symbol (transl_symbol name)
-    | Syntax.Item {lhs; prefix; suffix} ->
+    | Syntax.Item {lhs; anchored; prefix; suffix} ->
       let lhs = Option.map transl_nonterminal lhs in
       let prefix = transl_producers prefix in
       let suffix = transl_producers suffix in
-      Match_item.states_by_items ~lhs ~prefix ~suffix
+      Match_item.states_by_items ~lhs ~anchored ~prefix ~suffix
     | Syntax.Wildcard ->
       Lr1.all
 

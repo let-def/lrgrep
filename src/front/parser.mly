@@ -43,6 +43,7 @@ let mk_re desc pos = {desc; position = make_position pos}
        COMMA       ","
        SEMI        ";"
        COLON       ":"
+       CARET       "^"
        AS          "as"
        PARTIAL     "partial"
        (*HASH       "#"*)
@@ -93,8 +94,8 @@ wild_symbol:
 atom:
 | "_"    { Wildcard }
 | symbol { Symbol $1 }
-| "[" lhs=item_lhs prefix=wild_symbol* "." suffix=wild_symbol* "]"
-  { Item {lhs; prefix; suffix} }
+| "[" anchored=boption("^") lhs=item_lhs prefix=wild_symbol* "." suffix=wild_symbol* "]"
+  { Item {lhs; anchored; prefix; suffix} }
 ;
 
 %inline item_lhs:
