@@ -63,7 +63,8 @@ type program_instruction =
   | Match of sparse_index
     (** [Match sidx] lookup the sparse table for a cell matching the state
         at the top of the parser stack at index [sidx].
-        If the lookup is successful, execution should jump to
+        If the lookup is successful, it returns the [pc] should jump to.
+        If unsuccesful, execution continue on next instruction.
     *)
   | Halt
     (** Program is finished, there will be no more matches. *)
