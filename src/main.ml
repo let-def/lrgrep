@@ -345,35 +345,38 @@ let gen_code entry oc optionals vars var_typeable clauses =
           loc.start_line loc.loc_file
           (String.make loc.start_col ' ')
       in
+      let lookahead_constraint = match clause.Syntax.lookaheads with
+         | [] -> None
+         | terminals ->
+           let sym_pattern sym =
+             match Regexp.transl_symbol (Syntax.Name sym) with
+             | Info.Symbol.N n ->
+               failwith ("Lookahead should be a terminal, " ^
+                         Info.Nonterminal.to_string n ^ " is a nonterminal")
+             | Info.Symbol.T t ->
+               let name = Info.Terminal.to_string t in
+               match Info.Terminal.semantic_value t with
+               | None -> name
+               | Some _ -> name ^ " _"
+           in
+           Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
+      in
       print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
         index
         (String.concat ";" varnames)
-        (match clause.Syntax.lookaheads with
-         | [] -> "_"
-         | terminals ->
-           string_concat_map ~wrap:("(",")") "|"
-             (fun sym ->
-                match Regexp.transl_symbol (Syntax.Name sym) with
-                | Info.Symbol.N n ->
-                  failwith ("Lookahead should be a terminal, " ^
-                            Info.Nonterminal.to_string n ^ " is a nonterminal")
-                | Info.Symbol.T t ->
-                  let name = Info.Terminal.to_string t in
-                  match Info.Terminal.semantic_value t with
-                  | None -> name
-                  | Some _ -> name ^ " _"
-             )
-             terminals
-        )
+        (Option.value lookahead_constraint ~default:"_")
         recover_types
         (match clause.Syntax.action with
          | Unreachable -> "failwith \"Should be unreachable\""
          | Partial (loc, str) ->
            print_loc loc ^ str
          | Total (loc, str) ->
-           "Some (\n" ^ print_loc loc ^ str ^ ")")
+           "Some (\n" ^ print_loc loc ^ str ^ ")");
+      if Option.is_some lookahead_constraint then
+        print "  | (%d, [|%s|]), _ -> None\n"
+          index (string_concat_map ";" (fun _ -> "_") varnames)
     ) (List.combine vars clauses);
-  print "  | _ -> failwith \"Invalid action\"\n\n"
+  print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
 let output_table oc entry registers (program, table, remap) =
   let print fmt = Printf.fprintf oc fmt in
