@@ -555,10 +555,15 @@ module type REDUCTION = sig
     (** The type of derivable objects *)
     type t
 
+    (** Label that annotates a transition *)
+    type label
+
+    val merge_label : label list -> label
+
     (** The derivation primitive. The outcome is a list of (non-deterministic)
         "transitions": pairs [(ts, d)] of a set of labels [ts] (Lr1 states) and
         [d], the derivable object targetted by the transition. *)
-    val derive : t -> t partial_derivative list
+    val derive : t -> (t * label) partial_derivative list
 
     (** [merge ts] return an object that represents the union (the disjunction)
         between many derivable objects. *)
@@ -569,12 +574,14 @@ module type REDUCTION = sig
 
     (** Print a derivable object as a [Cmon.t] document *)
     val cmon : t -> Cmon.t
+
+    val cmon_label : label -> Cmon.t
   end
 
   (** The cache functor: it memoizes the output of [derive] function such
       that future calls are instantaneous. *)
   module Cache (D : DERIVABLE) : sig
-    include DERIVABLE
+    include DERIVABLE with type label = D.label
 
     (** Memoize a derivable object *)
     val lift : D.t -> t
@@ -592,7 +599,9 @@ module type REDUCTION = sig
     (** The transitions leaving a state are represented as a pair of:
         - external transitions, targeting [D.t]
         - internal transitions, staying inside [t]. *)
-    type transitions = D.t partial_derivative list * t partial_derivative list
+    type transitions =
+      (D.t * D.label) partial_derivative list *
+      (t   * D.label) partial_derivative list
 
     (** The NFA produced by reduction simulation is quite naive: it contains
         dead ends, subset of the automaton without any external transitions.

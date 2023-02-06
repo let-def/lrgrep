@@ -10,17 +10,24 @@ struct
 
   module type DERIVABLE = sig
     type t
-    val derive : t -> t partial_derivative list
+
+    type label
+    val merge_label : label list -> label
+
+    val derive : t -> (t * label) partial_derivative list
     val merge : t list -> t
     val compare : t -> t -> int
     val cmon : t -> Cmon.t
+    val cmon_label : label -> Cmon.t
   end
 
   module Cache (D : DERIVABLE) = struct
     type t = {
       d: D.t;
-      mutable tr: t partial_derivative list option;
+      mutable tr: (t * D.label) partial_derivative list option;
     }
+
+    type label = D.label
 
     let lift d = {d; tr=None}
     let unlift t = t.d
@@ -30,7 +37,7 @@ struct
       | Some tr -> tr
       | None ->
         let dir = D.derive t.d in
-        let tr = List.map (fun (sg, d) -> (sg, lift d)) dir in
+        let tr = List.map (fun (sg, (d, label)) -> (sg, (lift d, label))) dir in
         t.tr <- Some tr;
         tr
 
@@ -43,6 +50,10 @@ struct
 
     let cmon t =
       Cmon.constructor "Cache" (D.cmon t.d)
+
+    let merge_label = D.merge_label
+
+    let cmon_label = D.cmon_label
   end
 
   module Make (D : DERIVABLE) = struct
@@ -53,7 +64,7 @@ struct
       source: D.t;
       (** The derivable object that was compiled *)
 
-      continuations: D.t Lr1.map;
+      continuations: (D.t * D.label) Lr1.map;
       (** [continuations] is the map [lr1 -> d'] of derivations of [source]
           (obtained by deriving one or more times), that applies when the LR
           automaton reaches state [lr1].
@@ -77,9 +88,13 @@ struct
       in
       let continuations =
         Redgraph.derive
-          ~root:source
-          ~step:(fun d lr1 -> List.find_map (find_tr lr1) (D.derive d))
-          ~join:D.merge
+          ~root:(source, D.merge_label [])
+          ~step:(fun (d,l) lr1 ->
+              match List.find_map (find_tr lr1) (D.derive d) with
+              | None -> None
+              | Some (x,l') -> Some (x, D.merge_label [l;l'])
+            )
+          ~join:(fun xs -> let ds, ls = List.split xs in (D.merge ds, D.merge_label ls))
       in
       {source; continuations; domain = IndexMap.domain continuations}
 
@@ -93,8 +108,8 @@ struct
 
     let cmon compiled =
       IndexMap.fold
-        (fun lr1 d acc ->
-           Cmon.tuple [Cmon.constant (Lr1.to_string lr1); D.cmon d] :: acc)
+        (fun lr1 (d,l) acc ->
+           Cmon.tuple [Cmon.constant (Lr1.to_string lr1); D.cmon d; D.cmon_label l] :: acc)
         compiled.continuations []
       |> List.rev
       |> Cmon.list
@@ -105,7 +120,7 @@ struct
       lookahead: Terminal.set;
     }
 
-    type transitions = D.t partial_derivative list * t partial_derivative list
+    type transitions = (D.t * D.label) partial_derivative list * (t * D.label) partial_derivative list
 
     let compare t1 t2 =
       let c = compare_index t1.state t2.state in
@@ -117,7 +132,7 @@ struct
     let add_abstract_state derivations lookahead sg state xs =
       if IndexSet.disjoint (Redgraph.state_reachable state) derivations.domain
       then xs
-      else (sg, {derivations; state; lookahead}) :: xs
+      else (sg, ({derivations; state; lookahead}, D.merge_label [])) :: xs
 
     let initial derivations =
       let add_direct lr1 d xs = (IndexSet.singleton lr1, d) :: xs in
@@ -129,12 +144,12 @@ struct
       let reducible = index_fold Lr1.n [] add_reducible in
       (direct, reducible)
 
-    let filter_tr sg1 (sg2, v) =
+    let filter_tr l sg1 (sg2, (d,l')) =
       let sg' = IndexSet.inter sg1 sg2 in
       if IndexSet.is_empty sg' then
         None
       else
-        Some (sg', v)
+        Some (sg', (d, D.merge_label [l;l']))
 
     let derive t =
       let direct = ref [] in
@@ -151,9 +166,9 @@ struct
           IndexSet.iter begin fun target ->
             begin match IndexMap.find_opt target t.derivations.continuations with
               | None -> ()
-              | Some d ->
+              | Some (d,l) ->
                 List.iter
-                  (fun tr -> Option.iter (push direct) (filter_tr sources tr))
+                  (fun tr -> Option.iter (push direct) (filter_tr l sources tr))
                   (D.derive d)
             end;
             begin match Redgraph.state_parent (Redgraph.State.of_lr1 target) with
