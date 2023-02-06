@@ -14,14 +14,16 @@ struct
   module Reduction = Mid.Reduction.Make(Redgraph)
 
   module CachedKRESet = Reduction.Cache(struct
-      type t = KRESet.t * RE.var indexset
-      let compare = compare_pair KRESet.compare IndexSet.compare
-      let derive (k, _) = KRESet.derive_in_reduction k
-      let merge ts =
-        let ks, vs = List.split ts in
-        (List.fold_left KRESet.union KRESet.empty ks,
-         List.fold_left IndexSet.union IndexSet.empty vs)
-      let cmon (k, _) = KRESet.cmon k
+      type t = KRESet.t
+      type label = RE.var indexset
+      let compare = KRESet.compare
+      let derive k = KRESet.derive_in_reduction k
+      let merge ks =
+        List.fold_left KRESet.union KRESet.empty ks
+      let cmon k = KRESet.cmon k
+      let merge_label vs =
+        List.fold_left IndexSet.union IndexSet.empty vs
+      let cmon_label = cmon_indexset
     end)
 
   module Red = Reduction.Make(CachedKRESet)
@@ -41,7 +43,7 @@ struct
     }
 
     type direct_map = (thread, RE.var indexset) indexmap array
-    type reduce_map = thread indexset array
+    type reduce_map = (thread, RE.var indexset) indexmap array
 
     type transition = (direct_map * reduce_map * t)
 
@@ -67,25 +69,24 @@ struct
       if c <> 0 then c else
         let c = array_compare (IndexMap.compare IndexSet.compare) d1 d2 in
         if c <> 0 then c else
-          array_compare IndexSet.compare r1 r2
+          array_compare (IndexMap.compare IndexSet.compare) r1 r2
 
-    let make_from_elts elts =
+    let make_from_elts (elts : (KRE.t * (_, _ indexset) indexmap, Red.t * (_, _ indexset) indexmap) Either.t list) =
       let direct, reduce = List.partition_map (fun x -> x) elts in
+      let combine_vars vars (_, vars') =
+        let vars_union _ vs1 vs2 = Some (IndexSet.union vs1 vs2) in
+        IndexMap.union vars_union vars vars'
+      in
       let direct =
-        let combine_vars vars (_, vars') =
-          let vars_union _ vs1 vs2 = Some (IndexSet.union vs1 vs2) in
-          IndexMap.union vars_union vars vars'
-        in
         sort_and_merge
           (compare_fst KRE.compare)
           (fun (k, vars) rest -> (k, List.fold_left combine_vars vars rest))
           direct
       in
       let reduce =
-        let combine_ix ix (_, ix') = IndexSet.union ix ix' in
         sort_and_merge
           (compare_fst Red.compare)
-          (fun (r, ix) rest -> (r, List.fold_left combine_ix ix rest))
+          (fun (r, vars) rest -> (r, List.fold_left combine_vars vars rest))
           reduce
       in
       let direct, direct_tr = array_split (Array.of_list direct) in
@@ -95,16 +96,17 @@ struct
     let derive ~reduction_cache t =
       let output = ref [] in
       let push_direct sg ix k = push output (sg, Either.left (k, ix)) in
+      let push_reduce sg ix k = push output (sg, Either.right (k, ix)) in
       let make_varmap (ix : thread indexset) vars =
         IndexSet.fold (fun i map -> IndexMap.add i vars map) ix IndexMap.empty
       in
       let output_reductions ix (ds, rs) =
-        List.iter (fun (sg, k) ->
-            let k, v = CachedKRESet.unlift k in
+        List.iter (fun (sg, (k, v)) ->
+            let k = CachedKRESet.unlift k in
             KRESet.iter (push_direct sg (make_varmap ix v)) k
           ) ds;
-        List.iter (fun (sg, r) ->
-            push output (sg, Either.right (r, ix))
+        List.iter (fun (sg, (r, v)) ->
+            push_reduce sg (make_varmap ix v) r
           ) rs;
       in
       let accept, direct, reduce =
@@ -117,7 +119,7 @@ struct
         (!accept, !direct, !reduce)
       in
       List.iter (fun (kre, ix) ->
-          CachedKRESet.lift (KRESet.singleton kre, IndexSet.empty)
+          CachedKRESet.lift (KRESet.singleton kre)
           |> Red.compile reduction_cache
           |> Red.initial
           |> output_reductions ix
@@ -134,14 +136,15 @@ struct
       List.iter (fun (sg, vars, k, i) ->
           push_direct sg (IndexMap.singleton i vars) k
         ) direct;
+      let tr = IndexRefine.annotated_partition !output in
+      let tr = List.map (fun (sg, elts) -> (sg, make_from_elts elts)) tr in
       let tr =
-        IndexRefine.annotated_partition !output
-        |> List.map (fun (sg, elts) -> (sg, make_from_elts elts))
-        |> Misc.sort_and_merge
+        Misc.sort_and_merge
           (compare_snd compare_transition)
           (fun (sg, e) rest ->
              let union_sg sg (sg', _) = IndexSet.union sg sg' in
              (List.fold_left union_sg sg rest, e))
+          tr
       in
       (accept, tr)
 
@@ -294,9 +297,7 @@ struct
     if target_thread < direct_count then
       tr.direct_map.(target_thread)
     else
-      IndexSet.fold
-        (fun thread acc -> IndexMap.add thread IndexSet.empty acc)
-        tr.reduce_map.(target_thread - direct_count) IndexMap.empty
+      tr.reduce_map.(target_thread - direct_count)
 
   let derive_dfa expr =
     let dfa = Pre.derive_dfa (Kern.make expr) in
