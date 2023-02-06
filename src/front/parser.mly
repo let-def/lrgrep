@@ -75,10 +75,15 @@ cases:
 | case "|" cases { $1 :: $3}
 ;
 
+lookaheads:
+| ":" IDENT { [$2] }
+| lookaheads "|" IDENT { $3 :: $1 }
+;
+
 case:
-| regexp ACTION           { {pattern = $1; action = Total $2} }
-| regexp "partial" ACTION { {pattern = $1; action = Partial $3} }
-| regexp UNREACHABLE      { {pattern = $1; action = Unreachable} }
+| regexp loption(lookaheads) ACTION           { {pattern = $1; lookaheads=$2; action = Total $3} }
+| regexp loption(lookaheads) "partial" ACTION { {pattern = $1; lookaheads=$2; action = Partial $4} }
+| regexp loption(lookaheads) UNREACHABLE      { {pattern = $1; lookaheads=$2; action = Unreachable} }
 ;
 
 symbol:

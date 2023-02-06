@@ -66,6 +66,10 @@ module type INFO = sig
     val to_string : t -> string
     val all : set
 
+    (** [semantic_value term] is [Some typ] if terminal [term] has a semantic
+        value of type [typ], or [None] for unparameterized terminals. *)
+    val semantic_value : t -> string option
+
     (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
     val intersect : set -> set -> set
   end
@@ -384,6 +388,9 @@ module type REGEXP = sig
     (** Print a set of KREs to a cmon document. *)
     val cmon : t -> Cmon.t
   end
+
+  (* Translate a syntactic symbol, raise an exception if symbol is invalid *)
+  val transl_symbol : Syntax.symbol -> Symbol.t
 
   (* Translate a clause in shallow syntax (defined in [Front.Syntax]) to a
      [KRE.t]. [alloc] is called to allocate variables *)

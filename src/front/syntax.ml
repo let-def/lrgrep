@@ -90,6 +90,7 @@ type clause_action =
 (** A clause is a pair of a pattern and an action, representing one rule *)
 type clause = {
   pattern: regular_expr; (** the pattern *)
+  lookaheads: string list; (** restrict matching to these lookahead terminals, or [] for all terminals *)
   action: clause_action; (** the semantic action *)
 }
 
@@ -208,9 +209,10 @@ let print_clause_action = function
   | Total code -> Cmon.constructor "Total" (print_ocamlcode code)
   | Partial code -> Cmon.constructor "Partial" (print_ocamlcode code)
 
-let print_clause {pattern; action} =
+let print_clause {pattern; lookaheads; action} =
   Cmon.record [
     "pattern", print_regular_expression pattern;
+    "lookaheads", Cmon.list_map Cmon.string lookaheads;
     "action", print_clause_action action;
   ]
 
