@@ -201,11 +201,14 @@ struct
         | R edge ->
           List.iter (fun {Unreduce. lookahead; state; _} ->
               let base = Vector.get classes (Node.inj_l state) in
+              (* Comment the code below to have a partial order on partitions
+                 (remove the ↑Z in equation (6) *)
               let base =
                 if lookahead != Terminal.all
                 then List.map (IndexSet.inter lookahead) base
                 else base
               in
+              (* Stop commenting here *)
               acc := (lookahead :: base) @ !acc
             ) (Unreduce.goto_transition edge)
       end;
