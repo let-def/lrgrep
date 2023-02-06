@@ -48,6 +48,9 @@ struct
       if a == all then b
       else if b == all then a
       else IndexSet.inter a b
+
+    let semantic_value i =
+      Grammar.Terminal.typ (to_g i)
   end
 
   module Nonterminal = struct

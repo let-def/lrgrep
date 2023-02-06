@@ -295,8 +295,8 @@ let parser_module =
 let gen_code entry oc optionals vars var_typeable clauses =
   let print fmt = Printf.fprintf oc fmt in
   print
-    "let execute_%s %s : int * %s.MenhirInterpreter.element option array -> _ option = function\n"
-    entry.Syntax.name (String.concat " " entry.Syntax.args) parser_module;
+    "let execute_%s %s : (int * %s.MenhirInterpreter.element option array) * %s.token -> _ option = function\n"
+    entry.Syntax.name (String.concat " " entry.Syntax.args) parser_module parser_module;
   List.iteri (fun index ((varnames, varindices), clause) ->
       let recover_types =
         let symbol_matcher s = match Symbols.prj s with
@@ -345,9 +345,26 @@ let gen_code entry oc optionals vars var_typeable clauses =
           loc.start_line loc.loc_file
           (String.make loc.start_col ' ')
       in
-      print "  | %d, [|%s|] -> %s begin\n%s\n    end\n"
+      print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
         index
         (String.concat ";" varnames)
+        (match clause.Syntax.lookaheads with
+         | [] -> "_"
+         | terminals ->
+           string_concat_map ~wrap:("(",")") "|"
+             (fun sym ->
+                match Regexp.transl_symbol (Syntax.Name sym) with
+                | Info.Symbol.N n ->
+                  failwith ("Lookahead should be a terminal, " ^
+                            Info.Nonterminal.to_string n ^ " is a nonterminal")
+                | Info.Symbol.T t ->
+                  let name = Info.Terminal.to_string t in
+                  match Info.Terminal.semantic_value t with
+                  | None -> name
+                  | Some _ -> name ^ " _"
+             )
+             terminals
+        )
         recover_types
         (match clause.Syntax.action with
          | Unreachable -> "failwith \"Should be unreachable\""
