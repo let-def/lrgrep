@@ -69,7 +69,7 @@ let do_parse
         let rec loop = function
           | [] -> error_and_exit "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
-            match Parse_errors.execute_error_message tok m with
+            match Parse_errors.execute_error_message tok (m, tok) with
             | None -> loop ms
             | Some err -> error_and_exit err
         in
