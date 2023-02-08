@@ -1,4 +1,25 @@
-{}
+{
+  let rec longident_to_string = function
+    | Longident.Lident n -> n
+    | Longident.Lapply (a, b) ->
+      longident_to_string a ^ "(" ^ longident_to_string b ^ ")"
+    | Longident.Ldot (a, n) ->
+      longident_to_string a ^ "." ^ n
+
+  let report_currified_constructor ?outer inner (token : Parser_raw.token) =
+    let inner, _, _ = inner in
+    let token = match token with
+      | UNDERSCORE -> "_"
+      | LIDENT u | UIDENT u -> u
+      | LPAREN -> "..."
+      | _ -> assert false
+    in
+    let inner_msg = longident_to_string inner ^ " (..., " ^ token ^ ")" in
+    "Issue #10990: arguments of n-ary constructors should be put between parentheses, e.g. " ^
+    match outer with
+    | Some (outer, _, _) -> longident_to_string outer ^ " (" ^ inner_msg ^ ")"
+    | None -> inner_msg
+}
 
 rule error_message token = parse error
 
@@ -34,7 +55,7 @@ rule error_message token = parse error
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | LPAREN as lp; [. RPAREN]; !
   { let (), startp, _endp = lp in
-    "Unclosed parenthesis at line " 
+    "Unclosed parenthesis at line "
     ^ string_of_int startp.pos_lnum
     ^ ", character "
     ^ string_of_int (startp.pos_cnum - startp.pos_bol)
@@ -71,3 +92,12 @@ rule error_message token = parse error
 | [. IN]; !
   { "Expecting `in'" }
 
+| constr_longident as outer; constr_longident as inner;
+  [pattern_gen: constr_longident pattern .]; !
+  : UNDERSCORE | LIDENT | UIDENT | LPAREN
+  { report_currified_constructor ~outer inner token }
+
+| constr_longident as inner;
+  [pattern_gen: constr_longident pattern .]; !
+  : UNDERSCORE | LIDENT | UIDENT | LPAREN
+  { report_currified_constructor inner token }
