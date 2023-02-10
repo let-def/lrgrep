@@ -1,45 +1,11 @@
 open Front
 open Utils
 open Misc
+open Front
 open Fix.Indexing
 
 (** The representation of (compiled) grammars exported by Menhir *)
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
-
-(** The grammar defines many fixed sets (for terminals, non-terminals,
-    productions, LR states, ...). For convenience, we represent each of those
-    sets using [Fix.Indexing].
-
-    The [INDEXED] module type extends [Fix.Indexing.CARDINAL] with convenient
-    definitions. *)
-module type INDEXED = sig
-  (** This module defines a finite set *)
-  include CARDINAL
-
-  (** An element of the set *)
-  type t = n index
-
-  (** A subset of elements *)
-  type set = n indexset
-
-  (** A partial map from elements to values of type ['a] *)
-  type 'a map = (n, 'a) indexmap
-end
-
-(** [GRAMMAR_INDEXED] extends [INDEXED] with bijection with
-    Menhir's representation. *)
-module type GRAMMAR_INDEXED = sig
-  include INDEXED
-
-  (** The type of Menhir's representation for elements of this finite set *)
-  type raw
-
-  (** Import an element from the grammar representation *)
-  val of_g : raw -> t
-
-  (** Export an element to the grammar representation *)
-  val to_g : t -> raw
-end
 
 (** The [INFO] module type first exposes a convenient interface for accessing
     all components of the [GRAMMAR] (using [INDEXED] interface).
