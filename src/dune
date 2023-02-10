@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (public_name lrgrep)
+ (libraries front mid fix cmon utils menhirSdk))
