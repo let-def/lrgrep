@@ -42,6 +42,7 @@ let mk_re desc pos = {desc; position = make_position pos}
        COLON       ":"
        PARTIAL     "partial"
        SLASH       "/"
+       AT          "@"
        EOF
 
 %start <Syntax.lexer_definition> lexer_definition
@@ -77,7 +78,7 @@ case_action:
 
 
 lookaheads:
-| loption(preceded("/", separated_nonempty_list("|", IDENT))) { $1 }
+| loption(preceded("@", separated_nonempty_list("|", IDENT))) { $1 }
 ;
 
 symbol:
@@ -85,7 +86,7 @@ symbol:
 | IDENT "(" separated_list(",", symbol) ")" { Apply ($1, $3) }
 ;
 
-atom:
+wild_symbol:
 | "_"    { None }
 | symbol { Some $1 }
 ;
@@ -96,7 +97,7 @@ atom:
 
 regleaf:
 | "(" regexp ")" { $2 }
-| capture atom { mk_re (Atom ($1, $2)) $endpos }
+| capture wild_symbol { mk_re (Atom ($1, $2)) $endpos }
 | capture "[" regexp "]"
   { let kind, expr = match $3.desc with
         | Reduce {capture=None; kind=`Shortest; expr} -> `Longest, expr
@@ -112,23 +113,17 @@ regterm:
 | regleaf "?" { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
 ;
 
-dot_filter:
-| "." symbol+ { mk_re (Filter_dot $2) $endpos }
-;
-
-regterms:
-| regterm { [$1] }
-| lhs_filter regterms { $1 :: $2 }
-
-
-lhs_filter:
-| symbol ":" { mk_re (Filter_lhs $1) $endpos }
+filter:
+| "." wild_symbol+
+  { Filter_dot $2 }
+| "/" wild_symbol ":" wild_symbol+ "." wild_symbol+
+  { Filter_item ($2, $4, $6) }
 ;
 
 regseq_loop:
-| regseq_loop dot_filter   { $2 :: $1 }
-| regterms                 { List.rev $1 }
-| regseq_loop ";" regterms { List.rev_append $3 $1 }
+| regseq_loop filter      { mk_re (Filter $2) $endpos :: $1 }
+| regterm                 { [$1] }
+| regseq_loop ";" regterm { $3 :: $1 }
 ;
 
 regseq:

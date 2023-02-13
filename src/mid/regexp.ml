@@ -19,34 +19,107 @@ module type REDGRAPH = sig
     (Production.t * 'a indexset) list ->
     [> `Goto of Nonterminal.t * 'a indexset | `Pop ] Seq.t
 
-  module State : CARDINAL
-
-  type state = State.n index
-  type stateset = State.n indexset
-  type lookahead = Terminal.set
+  type state
+  val state : state cardinal
 
   type transition = {
     pop : (int * Lr1.set) option;
-    lookahead : lookahead;
-    target : State.n index;
+    lookahead : Terminal.set;
+    target : state index;
   }
-
   type stack = private Lr1.t list
   type state_def = { stack : stack; transitions : transition list; }
   val initial : (Lr1.t * transition list) list
-  val states : (State.n, state_def) vector
-  val reachable : (State.n, State.n indexset) vector
-  val by_symbols : Symbol.t list -> State.n indexset
+  val states : state index -> state_def
+  val reachable : state index -> state indexset
+end
+
+module type RE = sig
+  module Info : Info.S
+  open Info
+  type redstate
+
+  (** Integers that serves has unique id to identify sub-terms.
+      Thanks to properties of Antimirov's derivatives, no new term is
+      introduced during derivation. All terms are produced during initial
+      parsing. *)
+  type uid = private int
+
+  type reduction = {
+    target: redstate index;
+    capture: var index option;
+    pattern: redstate indexset;
+    candidates: Lr1.set;
+    lookahead: Terminal.set;
+  }
+
+  (** A regular expression term with its unique ID, its description and its
+      position. *)
+  type t =
+    | Normal of { uid : uid; desc : desc; position : Syntax.position }
+    | Reduction of { pop: int; reduction: reduction }
+
+  (** The different constructors of regular expressions*)
+  and desc =
+    | Set of Lr1.set * var index option
+    (** Recognise a set of states, and optionally bind the matching state to
+        a variable. *)
+    | Alt of t list
+    (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
+        [Alt []] represents the empty language. *)
+    | Seq of t list
+    (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
+        [Seq []] represents the {ε}. *)
+    | Star of t
+    (** [Star t] is represents the Kleene star of [t] *)
+    | Filter of Lr1.set
+    | Reduce of {
+        capture: (var index * var index) option;
+        pattern: redstate indexset;
+      }
+    (** The reduction operator *)
+
+  (** Introduce a new term, allocating a unique ID *)
+  val make : Syntax.position -> desc -> t
+
+  (** Compare two terms *)
+  val compare : t -> t -> int
+
+  (** Print a term to a [Cmon] document. [var] arguments allow to customize
+      printing of variables. *)
+  val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
+end
+
+module type K = sig
+  module Info : Info.S
+  type re
+
+  type clause
+  val clause : int -> clause index
+
+  type t =
+    | Done of {clause: clause index}
+    | More of re * t
+
+  val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
+
+  val derive :
+    accept:(clause index -> unit) ->
+    direct:(Info.Lr1.set -> clause index option -> t -> unit) ->
+    t -> unit
 end
 
 module type S = sig
   module Info : Info.S
 
   module Redgraph : REDGRAPH with module Info := Info
+  module RE : RE with module Info := Info and type redstate := Redgraph.state
+  module K : K with module Info := Info and type re := RE.t
 end
 
-module Make (Info : Info.S)() =
+module Make (Info : Info.S)() : S with module Info = Info =
 struct
+  module Info = Info
   open Info
 
   module Redgraph : REDGRAPH with module Info := Info =
@@ -75,11 +148,12 @@ struct
       in
       fun () -> step 0 reductions
 
-    module State = Gensym()
+    include Gensym()
+    type state = n
+    let state = n
 
     module Stack : sig
       type t = private Lr1.t list
-
       val init : Lr1.t -> t
       val push : Lr1.t -> t -> t
       val top : t -> Lr1.t
@@ -100,11 +174,11 @@ struct
     type transition = {
       pop: (int * Lr1.set) option;
       lookahead: lookahead;
-      target: State.n index;
+      target: state index;
     }
 
     type state_def = {
-      stack: Stack.t;
+      stack: stack;
       transitions: transition list;
     }
 
@@ -117,7 +191,7 @@ struct
       match Hashtbl.find_opt nodes stack with
       | Some state -> state
       | None ->
-        let state = State.fresh () in
+        let state = fresh () in
         Hashtbl.add nodes stack state;
         let transitions = visit_transitions stack in
         IndexBuffer.set states state {stack; transitions};
@@ -169,13 +243,13 @@ struct
       let acc = ref [] in
       Index.iter Lr1.n (fun lr1 ->
           match Lr1.incoming lr1 with
-          | None | Some (Symbol.T _) ->
+          | Some sym when Symbol.is_nonterminal sym -> ()
+          | None | Some _ ->
             push acc (lr1, visit_transitions (Stack.init lr1))
-          | Some (Symbol.N _) -> ()
         );
       !acc
 
-    let states = IndexBuffer.contents states State.n
+    let states = IndexBuffer.contents states state
 
     let reachable =
       let reachable =
@@ -185,7 +259,7 @@ struct
             |> IndexSet.of_list
           )  states
       in
-      let preds = Vector.make State.n IndexSet.empty in
+      let preds = Vector.make state IndexSet.empty in
       Vector.iteri (fun source reachable ->
           IndexSet.iter (fun target -> vector_set_add preds target source)
             reachable
@@ -202,7 +276,7 @@ struct
         let reach = Vector.get reachable state in
         IndexSet.iter (update reach) (Vector.get preds state)
       in
-      Index.iter State.n process;
+      Index.iter state process;
       let rec loop () =
         match !todo with
         | [] -> ()
@@ -214,91 +288,14 @@ struct
       loop ();
       reachable
 
-    let by_symbols =
-      let table = Hashtbl.create 7 in
-      Vector.iteri (fun index state ->
-          let syms =
-            List.rev_map (fun lr1 -> Option.get (Lr1.incoming lr1))
-              (state.stack : Stack.t :> _ list)
-          in
-          match Hashtbl.find_opt table syms with
-          | None -> Hashtbl.add table syms (ref (IndexSet.singleton index))
-          | Some indices -> indices := IndexSet.add index !indices
-        ) states;
-      fun syms ->
-        match Hashtbl.find_opt table syms with
-        | None -> IndexSet.empty
-        | Some indices -> !indices
-
-    let initial_by_reachability states =
-      List.filter_map (fun (lr1, tr) ->
-          match
-            List.filter (fun tr ->
-                let reachable = Vector.get reachable tr.target in
-                not (IndexSet.disjoint reachable states)
-              ) tr
-          with
-          | [] -> None
-          | tr -> Some (lr1, tr)
-        ) initial
-
-    type state = State.n index
-    type stateset = State.n indexset
+    let states = Vector.get states
+    let reachable = Vector.get reachable
   end
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
-  module RE : sig
-    (** Integers that serves has unique id to identify sub-terms.
-        Thanks to properties of Antimirov's derivatives, no new term is
-        introduced during derivation. All terms are produced during initial
-        parsing. *)
-    type uid = private int
-
-    type reduction = {
-      target: Redgraph.state;
-      capture: var index option;
-      pattern: Redgraph.stateset;
-      candidates: Lr1.set;
-      lookahead: Redgraph.lookahead;
-    }
-
-    (** A regular expression term with its unique ID, its description and its
-        position. *)
-    type t =
-      | Normal of { uid : uid; desc : desc; position : Syntax.position }
-      | Reduction of { pop: int; reduction: reduction }
-
-    (** The different constructors of regular expressions*)
-    and desc =
-      | Set of Lr1.set * var index option
-      (** Recognise a set of states, and optionally bind the matching state to
-          a variable. *)
-      | Alt of t list
-      (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
-          [Alt []] represents the empty language. *)
-      | Seq of t list
-      (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
-          [Seq []] represents the {ε}. *)
-      | Star of t
-      (** [Star t] is represents the Kleene star of [t] *)
-      | Filter of Lr1.set
-      | Reduce of {
-          capture: (var index * var index) option;
-          pattern: Redgraph.stateset;
-        }
-      (** The reduction operator *)
-
-    (** Introduce a new term, allocating a unique ID *)
-    val make : Syntax.position -> desc -> t
-
-    (** Compare two terms *)
-    val compare : t -> t -> int
-
-    (** Print a term to a [Cmon] document. [var] arguments allow to customize
-        printing of variables. *)
-    val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
-
-  end = struct
+  module RE : RE with module Info := Info
+                  and type redstate := Redgraph.state =
+  struct
     type uid = int
 
     let uid =
@@ -306,11 +303,11 @@ struct
       fun () -> incr k; !k
 
     type reduction = {
-      target: Redgraph.state;
+      target: Redgraph.state index;
       capture: var index option;
-      pattern: Redgraph.stateset;
+      pattern: Redgraph.state indexset;
       candidates: Lr1.set;
-      lookahead: Redgraph.lookahead;
+      lookahead: Terminal.set;
     }
 
     type t =
@@ -324,7 +321,7 @@ struct
       | Filter of Lr1.set
       | Reduce of {
           capture: (var index * var index) option;
-          pattern: Redgraph.stateset;
+          pattern: Redgraph.state indexset;
         }
 
     let make position desc = Normal {uid = uid (); desc; position}
@@ -389,23 +386,8 @@ struct
       aux t
   end
 
-
-  module K : sig
-    type clause = Positive.n
-
-    val clause : int -> clause index
-
-    type t =
-      | Done of {clause: clause index}
-      | More of RE.t * t
-
-    val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
-
-    val derive :
-      accept:(clause index -> unit) ->
-      direct:(Lr1.set -> clause index option -> t -> unit) ->
-      t -> unit
-  end = struct
+  module K : K with module Info := Info and type re := RE.t =
+  struct
     type clause = Positive.n
 
     let clause n =
@@ -470,7 +452,7 @@ struct
           ~capture0 ~capture ~label ~k ~pattern
           ~pop ~target ~lookahead =
         if (IndexSet.mem target pattern ||
-            not (IndexSet.disjoint pattern (Vector.get Redgraph.reachable target))) &&
+            not (IndexSet.disjoint pattern (Redgraph.reachable target))) &&
            not (IndexSet.is_empty lookahead)
         then match pop with
           | Some (pop, candidates) ->
@@ -479,7 +461,7 @@ struct
           | None ->
             if IndexSet.mem target pattern then
               loop label k;
-            let state = Vector.get Redgraph.states target in
+            let state = Redgraph.states target in
             List.iter (fun (tr : Redgraph.transition) ->
                 let label, pop = match tr.pop with
                   | None -> (label, None)
