@@ -22,6 +22,14 @@ let print_version_string () =
   print_string "The Menhir parser lexer generator :-], version ";
   print_version_num ()
 
+let error {Front.Syntax. line; col} fmt =
+  Printf.eprintf "Error line %d, column %d: " line col;
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
+
+let warn {Front.Syntax. line; col} fmt =
+  Printf.eprintf "Warning line %d, column %d: " line col;
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt
+
 let eprintf = Printf.eprintf
 
 let specs = [
@@ -85,248 +93,169 @@ let lexer_definition =
   result
 
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
-
 module Info = Mid.Info.Make(Grammar)
-
-let () =
-  let open Grammar in
-  let (+:=) x y = x := !x + y in
-  let shift = ref 0 in
-  let reduce_without_default_reductions = ref 0 in
-  let reduce_with_default_reductions = ref 0 in
-  let default_reductions = ref 0 in
-  let red_aggressive = ref 0 in
-  let count_aggressive = ref 0 in
-  Lr1.iter (fun lr1 ->
-      let shifts =
-        Lr1.transitions lr1
-        |> List.filter (fun (sym, _) -> match sym with T _ -> true | _ -> false)
-        |> List.length
-      in
-      shift +:= shifts;
-      let total = ref 0 in
-      let largest = ref 0 in
-      let reds =
-        Lr1.reductions lr1
-        |> List.map (fun (_, p) -> p)
-        |> Misc.group_by
-          ~compare:(fun p1 p2 -> Int.compare (Production.to_int p1) (Production.to_int p2))
-          ~group:(fun _p ps -> (1 + List.length ps))
-      in
-      List.iter (fun count ->
-          largest := max !largest count;
-          total +:= count
-        ) reds;
-      reduce_without_default_reductions +:= !total;
-      begin match reds, shifts with
-        | [_], 0 ->
-          default_reductions +:= 1
-        | _, _ -> reduce_with_default_reductions +:= !total
-      end;
-      red_aggressive +:= (!total - !largest);
-      if !largest > 0 then
-        incr count_aggressive
-    );
-  Printf.eprintf
-    "Transition statistics\n\
-     shift (incompressible)         : %d\n\
-     total (w/o default reductions) : %d\n\
-     total (w/ default reductions)  : %d + %d default reductions\n\
-     aggressive default reductions  : %d + %d default reductions\n"
-    !shift
-    !reduce_without_default_reductions
-    !reduce_with_default_reductions !default_reductions
-    !red_aggressive !count_aggressive
-
-let () =
-  let open Grammar in
-  let by_default = ref IntMap.empty in
-  Lr1.iter (fun lr1 ->
-      let reds =
-        Lr1.reductions lr1
-        |> Misc.group_by
-          ~compare:(fun (_,p1) (_,p2) -> Int.compare (Production.to_int p1) (Production.to_int p2))
-          ~group:(fun (t,p) tps -> (p, 1 + List.length tps, (t,p) :: tps))
-      in
-      let prod = ref (-1) in
-      let largest = ref 0 in
-      let shifts =
-        List.filter_map
-          (fun (sym, lr1) -> match sym with T t -> Some (t, `Shift lr1) | _ -> None)
-          (Lr1.transitions lr1)
-      in
-      let num_transitions = ref (List.length shifts) in
-      List.iter (fun (p, count, _) ->
-          if count > !largest then (
-            largest := count;
-            prod := (Production.to_int p);
-          );
-          num_transitions := !num_transitions + count
-        ) reds;
-      let transitions =
-        shifts @ List.concat_map (fun (prod', _, tps) ->
-          if Production.to_int prod' = !prod then
-            []
-          else
-            List.map (fun (t, p) -> (t, `Reduce p)) tps
-        ) reds
-      in
-      by_default := IntMap.update !prod (fun states ->
-          let states = Option.value states ~default:[] in
-          Some ((!num_transitions - !largest, List.sort compare transitions, lr1) :: states)
-        ) !by_default
-    );
-  let count = ref 0 in
-  let group = ref 0 in
-  let sum_of_diff = ref 0 in
-  let largest_class = ref 0 in
-  IntMap.iter (fun _ states ->
-      let states =
-        List.sort
-          (fun (n1, _, _) (n2, _, _) -> Int.compare n1 n2)
-          states
-      in
-      let rec distance = function
-        | [], x | x, [] -> List.length x
-        | (k1, v1) :: l1, (k2, v2) :: l2 ->
-          if k1 = k2 then (
-            if v1 = v2
-            then distance (l1, l2)
-            else 1 + distance (l1, l2)
-          ) else if k1 < k2 then
-            1 + distance (l1, (k2, v2) :: l2)
-          else
-            1 + distance ((k1, v1) :: l1, l2)
-      in
-      let class_size =
-        List.fold_left (fun best (_, t1, _) ->
-            min best
-              (List.fold_left (fun sum (_, t2, _) -> sum + min (distance(t1,t2)) (List.length t2)) 0 states)
-          ) max_int states
-      in
-      sum_of_diff := !sum_of_diff + class_size;
-      largest_class := max !largest_class class_size;
-      let _ =
-        List.fold_left (fun candidates (n, transitions, _) ->
-            let count' = List.fold_left (fun count' candidate ->
-                min count' (distance (candidate, transitions))
-              ) n candidates
-            in
-            count := !count + count';
-            transitions :: candidates
-          ) [] states
-      in
-      group := max !group (List.length states);
-    ) !by_default;
-  Printf.eprintf
-    "compress everything   : %d edges, largest class: %d\n\
-     sum of diff (1-parent): %d, largest class: %d\n"
-    !count !group !sum_of_diff !largest_class
-
 module Regexp = Mid.Regexp.Make(Info)()
+
+(* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
+
+module Lr1_index = struct
+  open Front
+  open Info
+  open Fix.Indexing
+
+  (* Group by incoming symbol *)
+
+  let states_of_symbol = Vector.make Symbol.n IndexSet.empty
+
+  let () =
+    Index.iter Lr1.n (fun lr1 ->
+        match Lr1.incoming lr1 with
+        | None -> ()
+        | Some sym -> vector_set_add states_of_symbol sym lr1
+      )
+
+  let states_of_symbol = Vector.get states_of_symbol
+
+  (* Group by goto transition *)
+
+  let states_by_goto_transition = Vector.make Nonterminal.n IndexSet.empty
+
+  let () =
+    Index.iter Transition.goto (fun tr ->
+        let state = Transition.(source (of_goto tr)) in
+        let symbol = Transition.goto_symbol tr in
+        vector_set_add states_by_goto_transition symbol state
+      )
+
+  let states_by_goto_transition = Vector.get states_by_goto_transition
+
+  let states_by_item_rhs = Vector.make Symbol.n IndexSet.empty
+
+  let () =
+    Index.iter Lr1.n (fun state ->
+        List.iter (fun (prod, dot) ->
+            if dot < Production.length prod then (
+              vector_set_add states_by_item_rhs
+                (Production.rhs prod).(dot) state
+            )
+          ) (Lr1.items state)
+      )
+
+  let states_by_item_rhs pattern =
+    let pattern = Array.of_list pattern in
+    let match_sym sym = function
+      | None -> true
+      | Some sym' -> equal_index sym sym'
+    in
+    let match_item (prod, pos) =
+      let rhs = Production.rhs prod in
+      match
+        if Array.length rhs <> pos + Array.length pattern then
+          raise Not_found;
+        Array.iteri (fun i sym' ->
+           if not (match_sym rhs.(pos + i) sym') then
+             raise Not_found
+          ) pattern
+      with
+      | () -> true
+      | exception Not_found -> false
+    in
+    let match_state state = List.exists match_item (Lr1.items state) in
+    let candidates =
+      match pattern.(0) with
+      | None -> Lr1.all
+      | Some sym -> Vector.get states_by_item_rhs sym
+    in
+    IndexSet.filter match_state candidates
+
+  (* Map symbol names to actual symbols *)
+
+  let linearize_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Syntax.Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Syntax.Name s -> Buffer.add_string buffer s
+        | Syntax.Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
+
+  let find_symbol =
+    let table = Hashtbl.create 7 in
+    let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
+    Index.iter Symbol.n add_symbol;
+    fun name -> Hashtbl.find_opt table (linearize_symbol name)
+
+  let get_symbol pos sym =
+    match find_symbol sym with
+    | None -> error pos "Unknown symbol %s" (linearize_symbol sym)
+    | Some sym -> sym
+end
+
+module Reduce = struct
+  open Info
+  open Front.Syntax
+  open Regexp
+
+  let transl_filter position = function
+    | Filter_item (sym, prefix, suffix) ->
+      RE.Filter (
+        match Symbol.desc (Lr1_index.get_symbol position symbol) with
+        | T _ -> error position "Expecting a non-terminal before ':'"
+        | N n -> Lr1_index.states_by_goto_transition n
+      )
+    | Filter_dot symbols ->
+      RE.Filter (
+        symbols
+        |> List.map (Option.map (Lr1_index.get_symbol position))
+        |> Lr1_index.states_by_item_rhs
+      )
+
+  let rec transl re =
+    let desc = match re.desc with
+      | Atom (capture, symbol) ->
+        if Option.is_some capture then
+          error re.position "Captures are not allowed inside reductions";
+        let set = match symbol with
+          | None -> Lr1.all
+          | Some sym ->
+            match Lr1_index.find_symbol sym with
+            | None ->
+              error re.position "Unknown symbol"
+            | Some sym ->
+              if Symbol.is_terminal sym then
+                warn re.position "A reduction can only match non-terminals";
+              Lr1_index.states_of_symbol sym
+        in
+        RE.Set (set, None)
+      | Alternative res ->
+        RE.Alt (List.map transl res)
+      | Repetition re ->
+        RE.Star (transl re)
+      | Reduce _ ->
+        error re.position "Reductions cannot be nested"
+      | Concat res ->
+        RE.Seq (List.rev_map transl res)
+      | Filter filter ->
+        transl_filter re.position filter
+    in
+    RE.make re.position desc
+end
 
 open Front
 
-module Symbols = Fix.Indexing.Sum(Info.Terminal)(Info.Nonterminal)
-
 let parser_module =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
-
-let gen_code entry oc optionals vars var_typeable clauses =
-  let print fmt = Printf.fprintf oc fmt in
-  print
-    "let execute_%s %s : (int * %s.MenhirInterpreter.element option array) * %s.token -> _ option = function\n"
-    entry.Syntax.name (String.concat " " entry.Syntax.args) parser_module parser_module;
-  List.iteri (fun index ((varnames, varindices), clause) ->
-      let recover_types =
-        let symbol_matcher s = match Symbols.prj s with
-          | L t -> "T T_" ^ Info.Terminal.to_string t
-          | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
-        in
-        List.fold_left2 (fun acc name index ->
-            let is_optional = IndexSet.mem index optionals in
-            let types = match IndexMap.find_opt index var_typeable with
-              | None -> None
-              | Some (typ, cases) ->
-                let matchers =
-                  List.map symbol_matcher (IndexSet.elements cases)
-                in
-                Some (
-                  Printf.sprintf "\
-                  match %s.MenhirInterpreter.incoming_symbol st with \
-                  | %s -> ((x : %s), startp, endp)
-                  | _ -> assert false
-                  " parser_module
-                    (String.concat " | " matchers) typ
-                )
-            in
-            match is_optional, types with
-            | true, None -> acc
-            | true, Some types ->
-              Printf.sprintf "\
-              let %s = match %s with \
-                | None -> None \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  Some (%s) in" name name parser_module types
-              :: acc
-            | false, None ->
-              Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
-                name name :: acc
-            | false, Some types ->
-              Printf.sprintf "\
-              let %s = match %s with None -> assert false \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  %s in" name name parser_module types :: acc
-          ) [] varnames (IndexSet.elements varindices)
-        |> String.concat "\n"
-      in
-      let print_loc (loc : Syntax.location) =
-        Printf.sprintf "# %d %S\n%s"
-          loc.start_line loc.loc_file
-          (String.make loc.start_col ' ')
-      in
-      let lookahead_constraint = match clause.Syntax.lookaheads with
-         | [] -> None
-         | terminals ->
-           let sym_pattern sym =
-             match Regexp.transl_symbol (Syntax.Name sym) with
-             | Info.Symbol.N n ->
-               failwith ("Lookahead should be a terminal, " ^
-                         Info.Nonterminal.to_string n ^ " is a nonterminal")
-             | Info.Symbol.T t ->
-               let name = Info.Terminal.to_string t in
-               match Info.Terminal.semantic_value t with
-               | None -> name
-               | Some _ -> name ^ " _"
-           in
-           Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
-      in
-      print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
-        index
-        (String.concat ";" varnames)
-        (Option.value lookahead_constraint ~default:"_")
-        recover_types
-        (match clause.Syntax.action with
-         | Unreachable -> "failwith \"Should be unreachable\""
-         | Partial (loc, str) ->
-           print_loc loc ^ str
-         | Total (loc, str) ->
-           "Some (\n" ^ print_loc loc ^ str ^ ")");
-      if Option.is_some lookahead_constraint then
-        print "  | (%d, [|%s|]), _ -> None\n"
-          index (string_concat_map ";" (fun _ -> "_") varnames)
-    ) (List.combine vars clauses);
-  print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
-
-let output_table oc entry registers (program, table, remap) =
-  let print fmt = Printf.fprintf oc fmt in
-  print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
-    entry.Syntax.name;
-  print "  let registers = %d\n" registers;
-  print "  let initial = %d\n" remap.(0);
-  print "  let table = %S\n" table;
-  print "  let program = %S\n" program;
-  print "end\n"
 
 let process_entry oc entry =
   let cases, vars =

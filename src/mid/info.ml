@@ -63,9 +63,23 @@ module type S = sig
   end
 
   module Symbol : sig
-    type t = T of Terminal.t | N of Nonterminal.t
+    include SUM with type l := Terminal.n
+                 and type r := Nonterminal.n
+
+    type t = n index
+
+    type desc =
+      | T of Terminal.t
+      | N of Nonterminal.t
+
+    val desc : t -> desc
+
+    val is_terminal : n index -> bool
+    val is_nonterminal : n index -> bool
+
     val of_g : Grammar.symbol -> t
     val to_g : t -> Grammar.symbol
+
     val name : ?mangled:bool -> t -> string
   end
 
@@ -224,21 +238,37 @@ struct
   end
 
   module Symbol = struct
-    type t =
+    include Sum(Terminal)(Nonterminal)
+    type t = n index
+
+    type desc =
       | T of Terminal.t
       | N of Nonterminal.t
 
+    let desc t =
+      match prj t with
+      | L t -> T t
+      | R n -> N n
+
     let of_g = function
-      | Grammar.T t -> T (Terminal.of_g t)
-      | Grammar.N n -> N (Nonterminal.of_g n)
+      | Grammar.T t -> inj_l (Terminal.of_g t)
+      | Grammar.N n -> inj_r (Nonterminal.of_g n)
 
-    let to_g = function
-      | T t -> Grammar.T (Terminal.to_g t)
-      | N n -> Grammar.N (Nonterminal.to_g n)
+    let to_g t = match prj t with
+      | L t -> Grammar.T (Terminal.to_g t)
+      | R n -> Grammar.N (Nonterminal.to_g n)
 
-    let name ?mangled = function
-      | T t -> Grammar.symbol_name ?mangled (T (Terminal.to_g t))
-      | N n -> Grammar.symbol_name ?mangled (N (Nonterminal.to_g n))
+    let name ?mangled t = match prj t with
+      | L t -> Grammar.symbol_name ?mangled (T (Terminal.to_g t))
+      | R n -> Grammar.symbol_name ?mangled (N (Nonterminal.to_g n))
+
+    let is_terminal t = match prj t with
+      | L _ -> true
+      | R _ -> false
+
+    let is_nonterminal t = match prj t with
+      | L _ -> false
+      | R _ -> true
   end
 
   module Production = struct
@@ -386,8 +416,8 @@ struct
 
     let symbol i =
       match split i with
-      | L i -> Symbol.N (Vector.get nt_symbols i)
-      | R i -> Symbol.T (Vector.get t_symbols i)
+      | L i -> Symbol.inj_r (Vector.get nt_symbols i)
+      | R i -> Symbol.inj_l (Vector.get t_symbols i)
 
     let goto_symbol i = Vector.get nt_symbols i
     let shift_symbol i = Vector.get t_symbols i

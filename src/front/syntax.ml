@@ -28,10 +28,17 @@ type symbol =
       E.g separated_list(sep, X) is represented as:
         [Apply ("separated_list", [Name "sep"; Name "X"])] *)
 
+type wild_symbol = symbol option
+
 (** [regular_desc] describes the different cases of the regular expression
     syntax. *)
+
+type filter =
+  | Filter_dot of wild_symbol list
+  | Filter_item of wild_symbol * wild_symbol list * wild_symbol list
+
 type regular_desc =
-  | Atom of string option * symbol option
+  | Atom of string option * wild_symbol
   | Alternative of regular_expr list
   (** A disjunction of multiple expressions.
       [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
@@ -45,8 +52,7 @@ type regular_desc =
   (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
   (** [Concat [e1; e2; ..]] is [e1; e2; ...] *)
-  | Filter_dot of symbol list
-  | Filter_lhs of symbol
+  | Filter of filter
 
 (** [regular_expr] adds position information to [regular_desc] for error
     reporting purposes. *)
@@ -102,7 +108,7 @@ type prompt_sentence =
   | Prompt_interpret of symbol list
   (** Interpret this list of symbol *)
 
-(** {1 Helper and printing functions} *)
+(** {1 Helper and cmoning functions} *)
 
 let make_position {Lexing. pos_lnum; pos_cnum; pos_bol; _} =
   {line = pos_lnum; col = pos_cnum - pos_bol + 1}
@@ -115,7 +121,7 @@ let make_location startpos endpos = {
   end_pos = endpos.Lexing.pos_cnum;
 }
 
-let print_location {
+let cmon_location {
     loc_file;
     start_pos;
     end_pos;
@@ -129,87 +135,95 @@ let print_location {
     "start_col" , int start_col;
   ])
 
-let print_ocamlcode (location, code) =
+let cmon_ocamlcode (location, code) =
   Cmon.tuple [
-    print_location location;
+    cmon_location location;
     Cmon.string code;
   ]
 
-let print_position {line; col} =
+let cmon_position {line; col} =
   Cmon.(record ["line", int line; "col", int col])
 
-let print_option f = function
+let cmon_option f = function
   | None -> Cmon.constant "None"
   | Some x -> Cmon.constructor "Some" (f x)
 
-let rec print_symbol = function
+let rec cmon_symbol = function
   | Name sym -> Cmon.constructor "Name" (Cmon.string sym)
   | Apply (sym, args) -> Cmon.construct "Apply" [
       Cmon.string sym;
-      Cmon.list (List.map print_symbol args);
+      Cmon.list (List.map cmon_symbol args);
     ]
 
-let print_capture cap =
-  print_option Cmon.string cap
+let cmon_capture cap =
+  cmon_option Cmon.string cap
 
-let print_wild_symbol sym =
-  print_option print_symbol sym
+let cmon_wild_symbol sym =
+  cmon_option cmon_symbol sym
 
-let print_longest_or_shortest = function
+let cmon_longest_or_shortest = function
   | `Longest -> Cmon.string "`Longest"
   | `Shortest -> Cmon.string "`Shortest"
 
-let rec print_regular_term = function
+let cmon_filter = function
+  | Filter_dot syms ->
+    Cmon.constructor "Filter_dot" (Cmon.list_map cmon_wild_symbol syms)
+  | Filter_item (sym, prefix, suffix)  ->
+    Cmon.construct "Filter_lhs" [
+      cmon_wild_symbol sym;
+      Cmon.list_map cmon_wild_symbol prefix;
+      Cmon.list_map cmon_wild_symbol suffix;
+    ]
+
+let rec cmon_regular_term = function
   | Atom (cap, sym) ->
-    Cmon.construct "Atom" [print_capture cap; print_wild_symbol sym]
+    Cmon.construct "Atom" [cmon_capture cap; cmon_wild_symbol sym]
   | Alternative res ->
-    Cmon.constructor "Alternative" (Cmon.list_map print_regular_expression res)
+    Cmon.constructor "Alternative" (Cmon.list_map cmon_regular_expression res)
   | Concat res ->
-    Cmon.constructor "Concat" (Cmon.list_map print_regular_expression res)
+    Cmon.constructor "Concat" (Cmon.list_map cmon_regular_expression res)
   | Repetition re ->
-    Cmon.constructor "Repetition" (print_regular_expression re)
+    Cmon.constructor "Repetition" (cmon_regular_expression re)
   | Reduce {capture; kind; expr} ->
     Cmon.crecord "Reduce" [
-      "capture", print_capture capture;
-      "kind", print_longest_or_shortest kind;
-      "expr", print_regular_expression expr;
+      "capture", cmon_capture capture;
+      "kind", cmon_longest_or_shortest kind;
+      "expr", cmon_regular_expression expr;
     ]
-  | Filter_dot syms ->
-    Cmon.constructor "Filter_dot" (Cmon.list_map print_symbol syms)
-  | Filter_lhs sym ->
-    Cmon.constructor "Filter_lhs" (print_symbol sym)
+  | Filter filter ->
+    Cmon.constructor "Filter" (cmon_filter filter)
 
-and print_regular_expression re =
+and cmon_regular_expression re =
   Cmon.record [
-    "desc", print_regular_term re.desc;
-    "position", print_position re.position;
+    "desc", cmon_regular_term re.desc;
+    "position", cmon_position re.position;
   ]
 
-let print_clause_action = function
+let cmon_clause_action = function
   | Unreachable -> Cmon.constant "Unreachable"
-  | Total code -> Cmon.constructor "Total" (print_ocamlcode code)
-  | Partial code -> Cmon.constructor "Partial" (print_ocamlcode code)
+  | Total code -> Cmon.constructor "Total" (cmon_ocamlcode code)
+  | Partial code -> Cmon.constructor "Partial" (cmon_ocamlcode code)
 
-let print_clause {pattern; lookaheads; action} =
+let cmon_clause {pattern; lookaheads; action} =
   Cmon.record [
-    "pattern", print_regular_expression pattern;
+    "pattern", cmon_regular_expression pattern;
     "lookaheads", Cmon.list_map Cmon.string lookaheads;
-    "action", print_clause_action action;
+    "action", cmon_clause_action action;
   ]
 
-let print_entrypoints {error; startsymbols; name; args; clauses} =
+let cmon_entrypoints {error; startsymbols; name; args; clauses} =
   Cmon.record [
     "startsymbols", Cmon.list_map Cmon.string startsymbols;
     "error", Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list_map Cmon.string args;
-    "clauses", Cmon.list_map print_clause clauses;
+    "clauses", Cmon.list_map cmon_clause clauses;
   ]
 
-let print_definition {header; entrypoints; trailer} : Cmon.t =
+let cmon_definition {header; entrypoints; trailer} : Cmon.t =
   Cmon.record [
-    "header", print_ocamlcode header;
-    "entrypoints", Cmon.list (List.map print_entrypoints entrypoints);
-    "trailer", print_ocamlcode trailer;
+    "header", cmon_ocamlcode header;
+    "entrypoints", Cmon.list (List.map cmon_entrypoints entrypoints);
+    "trailer", cmon_ocamlcode trailer;
   ]
 

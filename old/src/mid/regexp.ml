@@ -64,7 +64,6 @@ module Make(Info : Sigs.INFO) : Sigs.REGEXP with module Info = Info = struct
       val clause : int -> clause index
     end)
 
-
     type t =
       | Done of {clause: clause index}
       | More of RE.t * t
