@@ -39,7 +39,7 @@ rule error_message token = parse error
     | _ -> None
   }
 
-| label_declaration: mutable_flag; LIDENT . COLON @ EQUAL {
+| LIDENT / label_declaration: mutable_flag LIDENT . COLON possibly_poly(core_type_no_attr) list(attribute) @ EQUAL {
     "Expecting ':' to declare the type of a record field, not '='"
   }
 

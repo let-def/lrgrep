@@ -5,11 +5,21 @@ open Misc
 
 module Positive = Const(struct let cardinal = max_int end)
 
-type var = Positive.n
+include (struct
+  type var = Positive.n
+  let var i = Index.of_int Positive.n i
+end : sig
+  type var
+  val var : int -> var index
+end)
 
-let fresh_var =
-  let k = ref (-1) in
-  fun () -> incr k; Index.of_int Positive.n !k
+let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
+
+let cmon_option f = function
+  | None -> Cmon.constant "None"
+  | Some x -> Cmon.constructor "Some" (f x)
+
+let cmon_var x = Cmon.constructor "Var" (cmon_index x)
 
 module type REDGRAPH = sig
   module Info : Info.S
@@ -32,6 +42,8 @@ module type REDGRAPH = sig
   val initial : (Lr1.t * transition list) list
   val states : state index -> state_def
   val reachable : state index -> state indexset
+
+  val to_string : state index -> string
 end
 
 module type RE = sig
@@ -45,19 +57,13 @@ module type RE = sig
       parsing. *)
   type uid = private int
 
-  type reduction = {
-    target: redstate index;
-    capture: var index option;
-    pattern: redstate indexset;
-    candidates: Lr1.set;
-    lookahead: Terminal.set;
-  }
-
   (** A regular expression term with its unique ID, its description and its
       position. *)
-  type t =
-    | Normal of { uid : uid; desc : desc; position : Syntax.position }
-    | Reduction of { pop: int; reduction: reduction }
+  type t = {
+    uid : uid;
+    desc : desc;
+    position : Syntax.position;
+  }
 
   (** The different constructors of regular expressions*)
   and desc =
@@ -92,29 +98,43 @@ end
 
 module type K = sig
   module Info : Info.S
+  open Info
+
   type re
+  type redstate
 
-  type clause
-  val clause : int -> clause index
+  type reduction = {
+    target: redstate index;
+    capture: var index option;
+    pattern: redstate indexset;
+    candidates: Lr1.set;
+    lookahead: Terminal.set;
+  }
 
-  type t =
-    | Done of {clause: clause index}
-    | More of re * t
+  type 'a t =
+    | Done of 'a
+    | More of re * 'a t
+    | Reducing of {pop: int; reduction: reduction; next: 'a t}
 
-  val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
+  val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
 
   val derive :
-    accept:(clause index -> unit) ->
-    direct:(Info.Lr1.set -> clause index option -> t -> unit) ->
-    t -> unit
+    accept:('a -> unit) ->
+    direct:(Info.Lr1.set -> var index option -> 'a t -> unit) ->
+    'a t -> unit
 end
 
 module type S = sig
   module Info : Info.S
-
-  module Redgraph : REDGRAPH with module Info := Info
-  module RE : RE with module Info := Info and type redstate := Redgraph.state
-  module K : K with module Info := Info and type re := RE.t
+  module Redgraph : REDGRAPH
+    with module Info := Info
+  module RE : RE
+    with module Info := Info
+     and type redstate := Redgraph.state
+  module K : K
+    with module Info := Info
+     and type re := RE.t
+     and type redstate := Redgraph.state
 end
 
 module Make (Info : Info.S)() : S with module Info = Info =
@@ -140,10 +160,10 @@ struct
         | (prod, lookahead) :: rest when Production.length prod = n ->
           consume_lhs n (Production.lhs prod) lookahead rest
 
-        | rest -> return `Pop n rest
+        | rest -> return `Pop (n + 1) rest
 
       and return r n next =
-        Seq.Cons (r, fun () -> step (n + 1) next)
+        Seq.Cons (r, fun () -> step n next)
 
       in
       fun () -> step 0 reductions
@@ -290,6 +310,14 @@ struct
 
     let states = Vector.get states
     let reachable = Vector.get reachable
+
+    let to_string state =
+      let states = List.rev ((states state).stack : stack :> Lr1.t list) in
+      string_concat_map " " (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | Some sym -> Symbol.name sym
+          | None -> "<initial>"
+        ) states
   end
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
@@ -302,17 +330,11 @@ struct
       let k = ref 0 in
       fun () -> incr k; !k
 
-    type reduction = {
-      target: Redgraph.state index;
-      capture: var index option;
-      pattern: Redgraph.state indexset;
-      candidates: Lr1.set;
-      lookahead: Terminal.set;
+    type t = {
+      uid : uid;
+      desc : desc;
+      position : Syntax.position;
     }
-
-    type t =
-      | Normal of { uid : uid; desc : desc; position : Syntax.position }
-      | Reduction of { pop: int; reduction: reduction }
     and desc =
       | Set of Lr1.set * var index option
       | Alt of t list
@@ -324,28 +346,54 @@ struct
           pattern: Redgraph.state indexset;
         }
 
-    let make position desc = Normal {uid = uid (); desc; position}
+    let make position desc = {uid = uid (); desc; position}
 
     let compare t1 t2 =
-      match t1, t2 with
-      | Normal t1, Normal t2 -> Int.compare t1.uid t2.uid
-      | Reduction r1, Reduction r2 ->
-        let c = Int.compare r1.pop r2.pop in
-        if c <> 0 then c else
-          compare r1.reduction r2.reduction
-      | Normal _, Reduction _ -> -1
-      | Reduction _, Normal _ -> +1
+      Int.compare t1.uid t2.uid
 
     let cmon_set_cardinal set =
       Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
 
-    let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
+    let cmon ?(var=cmon_var) t =
+      let rec aux t =
+        match t.desc with
+        | Set (lr1s, v) ->
+          Cmon.construct "Set" [
+            cmon_set_cardinal lr1s;
+            match v with
+            | None -> Cmon.constant "None"
+            | Some x -> Cmon.constructor "Some" (var x)
+          ]
+        | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
+        | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
+        | Star t -> Cmon.constructor "Star" (aux t)
+        | Filter lr1s ->
+          Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
+        | Reduce {capture; pattern} ->
+          Cmon.crecord "Reduce" [
+            "capture", cmon_option (cmon_pair var var) capture;
+            "pattern", cmon_indexset pattern;
+          ]
+      in
+      aux t
+  end
 
-    let cmon_option f = function
-      | None -> Cmon.constant "None"
-      | Some x -> Cmon.constructor "Some" (f x)
+  module K : K with module Info := Info
+                and type re := RE.t
+                and type redstate := Redgraph.state =
+  struct
+    type reduction = {
+      target: Redgraph.state index;
+      capture: var index option;
+      pattern: Redgraph.state indexset;
+      candidates: Lr1.set;
+      lookahead: Terminal.set;
+    }
 
-    let cmon_var x = Cmon.constructor "Var" (cmon_index x)
+    type 'a t =
+      | Done of 'a
+      | More of RE.t * 'a t
+      | Reducing of {pop: int; reduction: reduction; next: 'a t}
 
     let cmon_reduction ?(var=cmon_var) {target; capture; pattern; candidates; lookahead} =
       Cmon.record [
@@ -356,61 +404,24 @@ struct
         "lookahead"  , cmon_indexset lookahead;
       ]
 
-    let cmon ?(var=cmon_var) t =
-      let rec aux = function
-        | Reduction {pop; reduction} ->
-          Cmon.crecord "Reduction" [
-            "pop", Cmon.int pop;
-            "reduction", cmon_reduction ~var reduction;
-          ]
-        | Normal t ->
-          match t.desc with
-          | Set (lr1s, v) ->
-            Cmon.construct "Set" [
-              cmon_set_cardinal lr1s;
-              match v with
-              | None -> Cmon.constant "None"
-              | Some x -> Cmon.constructor "Some" (var x)
-            ]
-          | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
-          | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
-          | Star t -> Cmon.constructor "Star" (aux t)
-          | Filter lr1s ->
-            Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-          | Reduce {capture; pattern} ->
-            Cmon.crecord "Reduce" [
-              "capture", cmon_option (cmon_pair var var) capture;
-              "pattern", cmon_indexset pattern;
-            ]
-      in
-      aux t
-  end
-
-  module K : K with module Info := Info and type re := RE.t =
-  struct
-    type clause = Positive.n
-
-    let clause n =
-      Index.of_int Positive.n n
-
-    type t =
-      | Done of {clause: clause index}
-      | More of RE.t * t
-
-    let more re k = More (re, k)
-
-    let rec cmon ?var = function
-      | Done {clause} ->
-        Cmon.crecord "Done" ["clause", cmon_index clause]
-      | More (re, k) ->
-        Cmon.construct "More" [RE.cmon ?var re; cmon ?var k]
+    let rec cmon ?var ?(accept=fun _ -> Cmon.constant "_") = function
+      | Done a ->
+        Cmon.constructor "Done" (accept a)
+      | More (re, next) ->
+        Cmon.construct "More" [RE.cmon ?var re; cmon ?var next]
+      | Reducing {pop; reduction; next} ->
+        Cmon.crecord "Reducing" [
+          "pop"       , Cmon.int pop;
+          "reduction" , cmon_reduction ?var reduction;
+          "next"      , cmon ?var next;
+        ]
 
     let derive ~accept ~direct k =
       let rec loop filter = function
-        | Done {clause} -> accept clause
-        | More (Reduction {pop; reduction}, k) ->
+        | Done a -> accept a
+        | Reducing {pop; reduction; next} ->
           if pop > 0 then
-            direct filter None (more (Reduction {pop = pop - 1; reduction}) k)
+            direct filter None (Reducing {pop = pop - 1; reduction; next})
           else
             process_transition
               ~capture0:None
@@ -421,17 +432,17 @@ struct
               ~pop:None
               ~target:reduction.target
               ~lookahead:reduction.lookahead
-        | More (Normal re, k') as k ->
+        | More (re, k') as k ->
           match re.desc with
           | Set (s, var) ->
             direct (Lr1.intersect filter s) var k'
           | Alt es ->
-            List.iter (fun e -> loop filter (more e k')) es
+            List.iter (fun e -> loop filter (More (e, k'))) es
           | Star r ->
             loop filter k';
-            loop filter (more r k)
+            loop filter (More (r, k))
           | Seq es ->
-            loop filter (List.fold_right more es k')
+            loop filter (List.fold_right (fun e k -> More (e,k)) es k')
           | Reduce {capture; pattern} ->
             List.iter (fun (lr1, trs) ->
                 if (IndexSet.mem lr1 filter) then
@@ -456,8 +467,8 @@ struct
            not (IndexSet.is_empty lookahead)
         then match pop with
           | Some (pop, candidates) ->
-            let reduction = {RE. capture; pattern; candidates; lookahead; target} in
-            direct label capture0 (more (Reduction {pop; reduction}) k)
+            let reduction = {capture; pattern; candidates; lookahead; target} in
+            direct label capture0 (Reducing {pop; reduction; next=k})
           | None ->
             if IndexSet.mem target pattern then
               loop label k;
