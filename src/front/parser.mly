@@ -114,9 +114,9 @@ regterm:
 ;
 
 filter:
-| "." wild_symbol+
+| "." wild_symbol*
   { Filter_dot $2 }
-| "/" wild_symbol ":" wild_symbol+ "." wild_symbol+
+| "/" wild_symbol ":" wild_symbol* "." wild_symbol*
   { Filter_item ($2, $4, $6) }
 ;
 

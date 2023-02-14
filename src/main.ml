@@ -1,6 +1,8 @@
 open Utils
 open Misc
 
+module StringSet = Set.Make(String)
+
 (* Command-line parsing. *)
 
 let source_name = ref None
@@ -202,26 +204,50 @@ module Lr1_index = struct
     | Some sym -> sym
 end
 
-module Reduce = struct
+module Transl = struct
   open Info
   open Front.Syntax
+  open Fix.Indexing
   open Regexp
 
   let transl_filter position = function
     | Filter_item (sym, prefix, suffix) ->
-      RE.Filter (
-        match Symbol.desc (Lr1_index.get_symbol position symbol) with
-        | T _ -> error position "Expecting a non-terminal before ':'"
-        | N n -> Lr1_index.states_by_goto_transition n
-      )
+      let dot = List.length prefix in
+      let symbols =
+        Array.of_list (prefix @ suffix)
+        |> Array.map (Option.map (Lr1_index.get_symbol position))
+      in
+      let wild_match sym = function
+        | None -> true
+        | Some sym' -> sym = sym'
+      in
+      let approx_candidates =
+        if dot = 0 then Lr1.all
+        else match symbols.(dot - 1) with
+          | None -> Lr1.all
+          | Some sym -> Lr1_index.states_of_symbol sym
+      in
+      let filter_state state =
+        Lr1.items state
+        |> List.exists (fun (prod, dot') ->
+            dot = dot' &&
+            Production.length prod = Array.length symbols &&
+            (match sym with
+             | None -> true
+             | Some sym ->
+               Lr1_index.get_symbol position sym =
+               Symbol.inj_r (Production.lhs prod)
+            ) &&
+            Array.for_all2 wild_match (Production.rhs prod) symbols
+          )
+      in
+      IndexSet.filter filter_state approx_candidates
     | Filter_dot symbols ->
-      RE.Filter (
-        symbols
-        |> List.map (Option.map (Lr1_index.get_symbol position))
-        |> Lr1_index.states_by_item_rhs
-      )
+      symbols
+      |> List.map (Option.map (Lr1_index.get_symbol position))
+      |> Lr1_index.states_by_item_rhs
 
-  let rec transl re =
+  let rec transl_reduce re =
     let desc = match re.desc with
       | Atom (capture, symbol) ->
         if Option.is_some capture then
@@ -229,123 +255,135 @@ module Reduce = struct
         let set = match symbol with
           | None -> Lr1.all
           | Some sym ->
-            match Lr1_index.find_symbol sym with
-            | None ->
-              error re.position "Unknown symbol"
-            | Some sym ->
-              if Symbol.is_terminal sym then
-                warn re.position "A reduction can only match non-terminals";
-              Lr1_index.states_of_symbol sym
+            let sym = Lr1_index.get_symbol re.position sym in
+            if Symbol.is_terminal sym then
+              warn re.position "A reduction can only match non-terminals";
+            Lr1_index.states_of_symbol sym
+        in
+        RE.Set (set, None)
+      | Alternative res ->
+        RE.Alt (List.map transl_reduce res)
+      | Repetition re ->
+        RE.Star (transl_reduce re)
+      | Reduce _ ->
+        error re.position "Reductions cannot be nested"
+      | Concat res ->
+        RE.Seq (List.map transl_reduce res)
+      | Filter filter ->
+        let states = transl_filter re.position filter in
+        if IndexSet.is_empty states then
+          warn re.position "No items match this filter";
+        RE.Filter states
+    in
+    RE.make re.position desc
+
+  type lr1_trie = {
+    mutable sub: lr1_trie Lr1.map;
+    mutable reached: Redgraph.state indexset;
+  }
+
+  let lr1_trie_root =
+    let root = {sub = IndexMap.empty; reached = IndexSet.empty} in
+    let rec visit_trie node = function
+      | [] -> node
+      | x :: xs ->
+        let node' = match IndexMap.find_opt x node.sub with
+          | Some node' -> node'
+          | None ->
+            let node' = {sub = IndexMap.empty; reached = IndexSet.empty} in
+            node.sub <- IndexMap.add x node' node.sub;
+            node'
+        in
+        visit_trie node' xs
+    in
+    Index.iter Redgraph.state (fun state ->
+        let def = Redgraph.states state in
+        let node = visit_trie root (def.stack : Redgraph.stack :> _ list) in
+        node.reached <- IndexSet.add state node.reached
+      );
+    root
+
+  let compile_reduce_expr re =
+    let reached = ref IndexSet.empty in
+    let rec step node k =
+      K.derive
+        ~accept:(fun () -> reached := IndexSet.union !reached node.reached)
+        ~direct:(fun labels _ k' ->
+            IndexMap.iter (fun label node' ->
+                if IndexSet.mem label labels then
+                  step node' k'
+              ) node.sub
+          )
+        k
+    in
+    step lr1_trie_root (K.More (re, K.Done ()));
+    !reached
+
+  let compile_reduce expr =
+    (*print_cmon stderr (Front.Syntax.cmon_regular_expression expr);
+      prerr_newline ();*)
+    let re = transl_reduce expr in
+    (*print_cmon stderr (RE.cmon re);
+      prerr_newline ();*)
+    compile_reduce_expr re
+
+  let rec transl re =
+    let desc = match re.desc with
+      | Atom (capture, symbol) ->
+        ignore capture;
+        let set = match symbol with
+          | None -> Lr1.all
+          | Some sym ->
+            Lr1_index.states_of_symbol (Lr1_index.get_symbol re.position sym)
         in
         RE.Set (set, None)
       | Alternative res ->
         RE.Alt (List.map transl res)
       | Repetition re ->
         RE.Star (transl re)
-      | Reduce _ ->
-        error re.position "Reductions cannot be nested"
+      | Reduce {capture; kind; expr} ->
+        ignore capture;
+        ignore kind;
+        (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
+        let pattern = compile_reduce expr in
+        warn re.position
+          "Reduce pattern is matching %d/%d cases\n"
+          (IndexSet.cardinal pattern) (cardinal Redgraph.state);
+        let strings = ref StringSet.empty in
+        IndexSet.iter
+          (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
+          pattern;
+        (*StringSet.iter prerr_endline !strings;*)
+        RE.Reduce {capture = None; pattern}
       | Concat res ->
-        RE.Seq (List.rev_map transl res)
+        RE.Seq (List.map transl res)
       | Filter filter ->
-        transl_filter re.position filter
+        let states = transl_filter re.position filter in
+        if IndexSet.is_empty states then
+          warn re.position "No item matches this filter";
+        RE.Filter states
     in
     RE.make re.position desc
+
 end
+
+(*module Clause = struct
+  open Info
+  open Front.Syntax
+  open Regexp
+  end*)
 
 open Front
 
 let parser_module =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
-let process_entry oc entry =
-  let cases, vars =
-    let var_count = ref 0 in
-    let transl_case i case =
-      let vars = ref [] in
-      let varset = ref IndexSet.empty in
-      let alloc name =
-        let id = !var_count in
-        Utils.Misc.push vars name;
-        incr var_count;
-        let v = Regexp.RE.var id in
-        varset := IndexSet.add v !varset;
-        v
-      in
-      let clause = Regexp.KRE.clause i in
-      let kre = Regexp.transl ~alloc ~clause case.Syntax.pattern in
-      let vars = List.rev !vars in
-      (kre, (vars, !varset))
-    in
-    List.split (List.mapi transl_case entry.Syntax.clauses)
-  in
-  let cases = Regexp.KRESet.of_list cases in
-  let dfa = Dfa.derive_dfa cases in
-  if !check_coverage then (
-    let module Coverage = Back.Coverage.Make(Dfa)() in
-    let module Check = Coverage.Check_dfa(Coverage.Lrce.NFA) in
-    let check = Check.analyse dfa in
-    let count = ref 6 in
-    try Seq.iter (fun (_st, _nfa, nfa_path) ->
-        let initial = ref false in
-        let print nfa =
-          let lr1 = Coverage.Lrce.NFA.label nfa in
-          match Info.Lr1.incoming lr1 with
-          | None -> initial := true; Info.Lr1.to_string lr1
-          | Some sym -> Info.Symbol.name sym
-        in
-        let path = List.rev_map print nfa_path in
-        let path = if !initial then path else "..." :: path in
-        let path = String.concat " " path in
-        prerr_endline ("Found uncovered case:\n  " ^ path);
-        let gotos, la = Coverage.Lrce.compute_lookahead nfa_path in
-        prerr_endline ("Looking ahead at:\n  {" ^
-                       string_concat_map ", " Info.Terminal.to_string
-                         (IndexSet.elements la) ^ "}\n");
-        prerr_endline "Goto targets on the path:\n";
-        List.iter (fun step ->
-            prerr_endline "Step:\n";
-            List.iter (List.iter (fun lr1 ->
-                let items = Info.Lr1.items lr1 in
-                prerr_endline
-                  (string_concat_map " | "
-                     (fun (p,i) -> Printf.sprintf "(#%d,%d)" (p : _ Fix.Indexing.index :> int) i)
-                     items);
-                let items = List.map (fun (p,i) -> Info.Production.to_g p, i) items in
-                Format.eprintf "%a\n%!" Grammar.Print.itemset items
-              )) step;
-          ) gotos;
-        decr count;
-        (*if !count = 0 then (
-          prerr_endline "Press enter to get more cases, \
-                         type anything else to stop";
-          match read_line () with
-          | "" -> count := 6
-          | _ -> raise Exit
-        )*)
-      ) (Check.paths check)
-    with Exit -> ()
-  );
-  Format.eprintf "(* %d states *)\n%!" (Array.length dfa);
-  begin match oc with
-  | None -> ()
-  | Some oc ->
-    let registers, liveness =
-      let t0 = Sys.time () in
-      let module RA = Back.Regalloc.Make(Dfa) in
-      let liveness = RA.liveness (Array.of_list (List.map snd vars)) dfa in
-      let dt = Sys.time () -. t0 in
-      Printf.eprintf "liveness: %.02fms\n" (dt *. 1000.0);
-      liveness
-    in
-    let optionals =
-      IndexMap.fold (fun _ -> IndexSet.union) liveness.(0) IndexSet.empty
-    in
-    output_char oc '\n';
-    let _symbols, typeable = recover_types dfa in
-    gen_code entry oc optionals vars typeable entry.Syntax.clauses;
-    output_char oc '\n';
-    output_table oc entry registers (Dfa.gen_table dfa liveness)
-  end
+let process_entry _oc (entry : Syntax.entry) =
+  List.iter (fun (clause : Syntax.clause) ->
+      (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
+      let _ = Transl.transl clause.pattern in
+      ()
+    ) entry.clauses
 
 let () = (
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
@@ -353,20 +391,21 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
   );*)
-  let oc = match !output_name with
+  (*let oc = match !output_name with
     | None -> None
     | Some path ->
       let oc = open_out_bin path in
       output_string oc (snd lexer_definition.header);
       Some oc
-  in
+    in*)
+  let oc = None in
   List.iter (process_entry oc) lexer_definition.entrypoints;
-  begin match oc with
+  (*begin match oc with
     | None -> ()
     | Some oc ->
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
       close_out oc
-  end;
+    end;*)
   (* Print matching functions *)
 )
