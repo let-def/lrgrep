@@ -127,11 +127,11 @@ let tabulate_finset n f =
 
 (** Equality on indices *)
 let equal_index =
-  (Int.equal : int -> int -> bool :> _ index -> _ index -> bool)
+  (Int.equal : int -> int -> bool :> 'a index -> 'a index -> bool)
 
 (** Comparison of indices *)
 let compare_index =
-  (Int.compare : int -> int -> int :> _ index -> _ index -> int)
+  (Int.compare : int -> int -> int :> 'a index -> 'a index -> int)
 
 (** [string_concat_map ~wrap:(pre, post) sep f xs] returns a string made of the
     concatenation of the elements of [xs] printed by function [f] and separated
@@ -219,3 +219,10 @@ let sort_and_merge_indexed compare l =
     (compare_fst compare)
     (fun (x, ix) rest -> (x, List.fold_left union_ix ix rest))
     l
+
+let list_foralli f l =
+  let rec loop i = function
+    | [] -> true
+    | x :: xs -> (f i x) && (loop (i + 1) xs)
+  in
+  loop 0 l

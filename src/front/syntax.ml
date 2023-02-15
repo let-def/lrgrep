@@ -33,10 +33,6 @@ type wild_symbol = symbol option
 (** [regular_desc] describes the different cases of the regular expression
     syntax. *)
 
-type filter =
-  | Filter_dot of wild_symbol list
-  | Filter_item of wild_symbol * wild_symbol list * wild_symbol list
-
 type regular_desc =
   | Atom of string option * wild_symbol
   | Alternative of regular_expr list
@@ -52,7 +48,13 @@ type regular_desc =
   (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
   (** [Concat [e1; e2; ..]] is [e1; e2; ...] *)
-  | Filter of filter
+  | Filter of {
+      lhs: wild_symbol;
+      pre_anchored: bool;
+      prefix: wild_symbol list;
+      suffix: wild_symbol list;
+      post_anchored: bool;
+    }
 
 (** [regular_expr] adds position information to [regular_desc] for error
     reporting purposes. *)
@@ -165,16 +167,6 @@ let cmon_longest_or_shortest = function
   | `Longest -> Cmon.string "`Longest"
   | `Shortest -> Cmon.string "`Shortest"
 
-let cmon_filter = function
-  | Filter_dot syms ->
-    Cmon.constructor "Filter_dot" (Cmon.list_map cmon_wild_symbol syms)
-  | Filter_item (sym, prefix, suffix)  ->
-    Cmon.construct "Filter_lhs" [
-      cmon_wild_symbol sym;
-      Cmon.list_map cmon_wild_symbol prefix;
-      Cmon.list_map cmon_wild_symbol suffix;
-    ]
-
 let rec cmon_regular_term = function
   | Atom (cap, sym) ->
     Cmon.construct "Atom" [cmon_capture cap; cmon_wild_symbol sym]
@@ -190,8 +182,14 @@ let rec cmon_regular_term = function
       "kind", cmon_longest_or_shortest kind;
       "expr", cmon_regular_expression expr;
     ]
-  | Filter filter ->
-    Cmon.constructor "Filter" (cmon_filter filter)
+  | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
+    Cmon.crecord "Filter" [
+      "lhs"           , cmon_wild_symbol lhs;
+      "pre_anchored"  , Cmon.bool pre_anchored;
+      "prefix"        , Cmon.list_map cmon_wild_symbol prefix;
+      "suffix"        , Cmon.list_map cmon_wild_symbol suffix;
+      "post_anchored" , Cmon.bool post_anchored;
+    ]
 
 and cmon_regular_expression re =
   Cmon.record [

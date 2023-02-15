@@ -192,6 +192,8 @@ rule main = parse
 | '?' { QUESTION }
 | '/' { SLASH }
 | '@' { AT }
+| '^' { HAT }
+| '$' { DOLLAR }
 | '(' { LPAREN }
 | ')' { RPAREN }
 | ':' { COLON }
