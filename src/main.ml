@@ -118,57 +118,88 @@ module Lr1_index = struct
 
   let states_of_symbol = Vector.get states_of_symbol
 
-  (* Group by goto transition *)
-
-  let states_by_goto_transition = Vector.make Nonterminal.n IndexSet.empty
-
-  let () =
-    Index.iter Transition.goto (fun tr ->
-        let state = Transition.(source (of_goto tr)) in
-        let symbol = Transition.goto_symbol tr in
-        vector_set_add states_by_goto_transition symbol state
-      )
-
-  let states_by_goto_transition = Vector.get states_by_goto_transition
-
-  let states_by_item_rhs = Vector.make Symbol.n IndexSet.empty
+  let states_by_item_suffix = Vector.make Symbol.n IndexSet.empty
 
   let () =
     Index.iter Lr1.n (fun state ->
         List.iter (fun (prod, dot) ->
             if dot < Production.length prod then (
-              vector_set_add states_by_item_rhs
+              vector_set_add states_by_item_suffix
                 (Production.rhs prod).(dot) state
             )
           ) (Lr1.items state)
       )
 
-  let states_by_item_rhs pattern =
-    let pattern = Array.of_list pattern in
-    let match_sym sym = function
-      | None -> true
-      | Some sym' -> equal_index sym sym'
-    in
-    let match_item (prod, pos) =
-      let rhs = Production.rhs prod in
-      match
-        if Array.length rhs <> pos + Array.length pattern then
-          raise Not_found;
-        Array.iteri (fun i sym' ->
-           if not (match_sym rhs.(pos + i) sym') then
-             raise Not_found
-          ) pattern
-      with
-      | () -> true
-      | exception Not_found -> false
-    in
-    let match_state state = List.exists match_item (Lr1.items state) in
-    let candidates =
-      match pattern.(0) with
-      | None -> Lr1.all
-      | Some sym -> Vector.get states_by_item_rhs sym
-    in
-    IndexSet.filter match_state candidates
+  let states_by_item_suffix = Vector.get states_by_item_suffix
+
+  (*let states_by_item_suffix ?(candidates=Lr1.all) ~anchored = function
+    | [] ->
+      if anchored then
+        IndexSet.filter (fun lr1 ->
+            List.exists
+              (fun (prod, pos) -> pos = Production.length prod)
+              (Lr1.items lr1)
+          ) candidates
+      else
+        candidates
+    | (p0 :: _) as pattern ->
+      let len_pat = List.length pattern in
+      let match_item (prod, pos) =
+        let len_suf = Production.length prod - pos in
+        let len_pat = len_pat in
+        (if anchored then len_pat = len_suf else len_pat <= len_suf) &&
+        match
+          let rhs = Production.rhs prod in
+          List.iteri (fun i sym' ->
+              if not (match_sym rhs.(pos + i) sym') then
+                raise Not_found
+            ) pattern
+        with
+        | () -> true
+        | exception Not_found -> false
+      in
+      let match_state state = List.exists match_item (Lr1.items state) in
+      let candidates =
+        match p0 with
+        | None -> candidates
+        | Some sym ->
+          Lr1.intersect candidates
+            (Vector.get states_by_item_suffix sym)
+      in
+      IndexSet.filter match_state candidates
+
+  let states_by_item_prefix ?(candidates=Lr1.all) ~anchored = function
+    | [] ->
+      if anchored then
+        IndexSet.filter (fun lr1 ->
+            List.exists
+              (fun (_, pos) -> pos = 0)
+              (Lr1.items lr1)
+          ) candidates
+      else
+        candidates
+    | (p0 :: _) as pattern ->
+      let len_pat = List.length pattern in
+      let match_item (prod, len_pre) =
+        (if anchored then len_pat = len_pre else len_pat <= len_pre) &&
+        match
+          let rhs = Production.rhs prod in
+          List.iteri (fun i sym' ->
+              if not (match_sym rhs.(len_pre - i - 1) sym') then
+                raise Not_found
+            ) pattern
+        with
+        | () -> true
+        | exception Not_found -> false
+      in
+      let match_state state = List.exists match_item (Lr1.items state) in
+      let candidates =
+        match p0 with
+        | None -> candidates
+        | Some sym ->
+          Lr1.intersect candidates (states_of_symbol sym)
+      in
+      IndexSet.filter match_state candidates*)
 
   (* Map symbol names to actual symbols *)
 
@@ -210,72 +241,45 @@ module Transl = struct
   open Fix.Indexing
   open Regexp
 
-  let transl_filter position = function
-    | Filter_item (sym, prefix, suffix) ->
-      let dot = List.length prefix in
-      let symbols =
-        Array.of_list (prefix @ suffix)
-        |> Array.map (Option.map (Lr1_index.get_symbol position))
-      in
-      let wild_match sym = function
-        | None -> true
-        | Some sym' -> sym = sym'
-      in
-      let approx_candidates =
-        if dot = 0 then Lr1.all
-        else match symbols.(dot - 1) with
-          | None -> Lr1.all
-          | Some sym -> Lr1_index.states_of_symbol sym
-      in
-      let filter_state state =
-        Lr1.items state
-        |> List.exists (fun (prod, dot') ->
-            dot = dot' &&
-            Production.length prod = Array.length symbols &&
-            (match sym with
-             | None -> true
-             | Some sym ->
-               Lr1_index.get_symbol position sym =
-               Symbol.inj_r (Production.lhs prod)
-            ) &&
-            Array.for_all2 wild_match (Production.rhs prod) symbols
-          )
-      in
-      IndexSet.filter filter_state approx_candidates
-    | Filter_dot symbols ->
-      symbols
-      |> List.map (Option.map (Lr1_index.get_symbol position))
-      |> Lr1_index.states_by_item_rhs
+  let match_sym sym = function
+    | None -> true
+    | Some sym' -> equal_index sym sym'
 
-  let rec transl_reduce re =
-    let desc = match re.desc with
-      | Atom (capture, symbol) ->
-        if Option.is_some capture then
-          error re.position "Captures are not allowed inside reductions";
-        let set = match symbol with
-          | None -> Lr1.all
-          | Some sym ->
-            let sym = Lr1_index.get_symbol re.position sym in
-            if Symbol.is_terminal sym then
-              warn re.position "A reduction can only match non-terminals";
-            Lr1_index.states_of_symbol sym
-        in
-        RE.Set (set, None)
-      | Alternative res ->
-        RE.Alt (List.map transl_reduce res)
-      | Repetition re ->
-        RE.Star (transl_reduce re)
-      | Reduce _ ->
-        error re.position "Reductions cannot be nested"
-      | Concat res ->
-        RE.Seq (List.map transl_reduce res)
-      | Filter filter ->
-        let states = transl_filter re.position filter in
-        if IndexSet.is_empty states then
-          warn re.position "No items match this filter";
-        RE.Filter states
+  let transl_filter position ~lhs ~pre_anchored ~prefix ~suffix ~post_anchored =
+    let transl_sym = Option.map (Lr1_index.get_symbol position) in
+    let lhs = transl_sym lhs in
+    let prefix = List.rev_map transl_sym prefix in
+    let suffix = List.map transl_sym suffix in
+    let check_len anchored pat len =
+      if anchored
+      then pat = len
+      else pat <= len
     in
-    RE.make re.position desc
+    let len_pre = List.length prefix in
+    let len_suf = List.length suffix in
+    let check_item (prod, pos) =
+      let rhs = Production.rhs prod in
+      check_len pre_anchored len_pre pos &&
+      check_len post_anchored len_suf (Production.length prod - pos) &&
+      match_sym (Symbol.inj_r (Production.lhs prod)) lhs &&
+      list_foralli (fun i pat -> match_sym rhs.(pos + i) pat) suffix &&
+      list_foralli (fun i pat -> match_sym rhs.(pos - i - 1) pat) prefix
+    in
+    let check_state state =
+      List.exists check_item (Lr1.items state)
+    in
+    let candidates = Lr1.all in
+    let candidates = match suffix with
+      | Some x :: _ ->
+        Lr1.intersect candidates (Lr1_index.states_by_item_suffix x)
+      | _ -> candidates
+    in
+    let candidates = match prefix with
+      | Some x :: _ ->
+        Lr1.intersect candidates (Lr1_index.states_of_symbol x)
+      | _ -> candidates
+    in
+    IndexSet.filter check_state candidates
 
   type lr1_trie = {
     mutable sub: lr1_trie Lr1.map;
@@ -319,48 +323,49 @@ module Transl = struct
     step lr1_trie_root (K.More (re, K.Done ()));
     !reached
 
-  let compile_reduce expr =
-    (*print_cmon stderr (Front.Syntax.cmon_regular_expression expr);
-      prerr_newline ();*)
-    let re = transl_reduce expr in
-    (*print_cmon stderr (RE.cmon re);
-      prerr_newline ();*)
-    compile_reduce_expr re
-
-  let rec transl re =
+  let rec transl ~for_reduction re =
     let desc = match re.desc with
       | Atom (capture, symbol) ->
-        ignore capture;
+        if for_reduction && Option.is_some capture then
+          error re.position "Captures are not allowed inside reductions";
         let set = match symbol with
           | None -> Lr1.all
           | Some sym ->
-            Lr1_index.states_of_symbol (Lr1_index.get_symbol re.position sym)
+            let sym = Lr1_index.get_symbol re.position sym in
+            if for_reduction && Symbol.is_terminal sym then
+              warn re.position "A reduction can only match non-terminals";
+            Lr1_index.states_of_symbol sym
         in
         RE.Set (set, None)
       | Alternative res ->
-        RE.Alt (List.map transl res)
+        RE.Alt (List.map (transl ~for_reduction) res)
       | Repetition re ->
-        RE.Star (transl re)
+        RE.Star (transl ~for_reduction re)
       | Reduce {capture; kind; expr} ->
+        if for_reduction then
+          error re.position "Reductions cannot be nested";
         ignore capture;
         ignore kind;
         (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
-        let pattern = compile_reduce expr in
+        let re = transl ~for_reduction:true expr in
+        let pattern = compile_reduce_expr re in
         warn re.position
           "Reduce pattern is matching %d/%d cases\n"
           (IndexSet.cardinal pattern) (cardinal Redgraph.state);
-        let strings = ref StringSet.empty in
+        (*let strings = ref StringSet.empty in
         IndexSet.iter
           (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
-          pattern;
+          pattern;*)
         (*StringSet.iter prerr_endline !strings;*)
         RE.Reduce {capture = None; pattern}
       | Concat res ->
-        RE.Seq (List.map transl res)
-      | Filter filter ->
-        let states = transl_filter re.position filter in
+        RE.Seq (List.map (transl ~for_reduction) res)
+      | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
+        let states =
+          transl_filter re.position ~lhs ~pre_anchored ~prefix ~suffix ~post_anchored
+        in
         if IndexSet.is_empty states then
-          warn re.position "No item matches this filter";
+          warn re.position "No items match this filter";
         RE.Filter states
     in
     RE.make re.position desc
@@ -381,7 +386,7 @@ let parser_module =
 let process_entry _oc (entry : Syntax.entry) =
   List.iter (fun (clause : Syntax.clause) ->
       (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
-      let _ = Transl.transl clause.pattern in
+      let _ = Transl.transl ~for_reduction:false clause.pattern in
       ()
     ) entry.clauses
 
