@@ -416,16 +416,29 @@ struct
           "next"      , cmon ?var next;
         ]
 
+    let pop_next label = function
+      | None -> (label, None)
+      | Some (0, label') -> (Lr1.intersect label label', None)
+      | Some (n, label') -> (label, Some (n - 1, label'))
+
+    let reachable state pattern =
+      IndexSet.mem state pattern ||
+      not (IndexSet.disjoint pattern (Redgraph.reachable state))
+
     let derive ~accept ~direct k =
       let rec loop filter = function
-        | Done a -> accept a
+        | Done a as k ->
+          if IndexSet.equal filter Lr1.all then
+            accept a
+          else
+            direct filter None k
         | Reducing {pop; reduction; next} ->
           if pop > 0 then
             direct filter None (Reducing {pop = pop - 1; reduction; next})
           else
             process_transition
-              ~capture0:None
-              ~capture:reduction.capture
+              ~capture_start:None
+              ~capture_end:reduction.capture
               ~label:(Lr1.intersect filter reduction.candidates)
               ~k
               ~pattern:reduction.pattern
