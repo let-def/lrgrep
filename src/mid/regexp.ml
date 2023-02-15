@@ -104,11 +104,11 @@ module type K = sig
   type redstate
 
   type reduction = {
-    target: redstate index;
-    capture: var index option;
-    pattern: redstate indexset;
-    candidates: Lr1.set;
-    lookahead: Terminal.set;
+    target      : redstate index;
+    capture_end : var index option;
+    pattern     : redstate indexset;
+    candidates  : Lr1.set;
+    lookahead   : Terminal.set;
   }
 
   type 'a t =
@@ -172,23 +172,7 @@ struct
     type state = n
     let state = n
 
-    module Stack : sig
-      type t = private Lr1.t list
-      val init : Lr1.t -> t
-      val push : Lr1.t -> t -> t
-      val top : t -> Lr1.t
-      val pop : t -> t option
-    end = struct
-      type t = Lr1.t list
-      let init lr1 = [lr1]
-      let push = List.cons
-      let top = List.hd
-      let pop = function
-        | [] -> assert false
-        | [_] -> None
-        | _ :: xs -> Some xs
-    end
-    type stack = Stack.t
+    type stack = Lr1.t list
     type lookahead = Terminal.set
 
     type transition = {
@@ -203,7 +187,7 @@ struct
     }
 
     let states = IndexBuffer.make
-        {stack=Stack.init (IndexSet.choose Lr1.all); transitions=[]}
+        {stack=[IndexSet.choose Lr1.all]; transitions=[]}
 
     let nodes = Hashtbl.create 7
 
@@ -218,21 +202,22 @@ struct
         state
 
     and visit_transitions stack =
-      let reductions = Lr1.reductions (Stack.top stack) in
+      let reductions = Lr1.reductions (List.hd stack) in
       visit_inner stack (simulate_reductions reductions)
 
     and visit_inner stack actions =
       match actions () with
       | Seq.Nil -> []
       | Seq.Cons (`Pop, next) ->
-        begin match Stack.pop stack with
-          | Some stack -> visit_inner stack next
-          | None -> visit_outer (Lr1.predecessors (Stack.top stack)) 0 next
+        begin match stack with
+          | [] -> assert false
+          | [top] -> visit_outer (Lr1.predecessors top) 0 next
+          | _ :: stack -> visit_inner stack next
         end
       | Seq.Cons (`Goto (lhs, lookahead), next) ->
         let transition =
-          let goto = Transition.find_goto_target (Stack.top stack) lhs in
-          let target = visit_stack (Stack.push goto stack) in
+          let goto = Transition.find_goto_target (List.hd stack) lhs in
+          let target = visit_stack (goto :: stack) in
           {pop = None; lookahead; target}
         in
         transition :: visit_inner stack next
@@ -250,7 +235,7 @@ struct
                 | Some (sources, stack) ->
                   Some (IndexSet.add state sources, stack)
                 | None ->
-                  Some (IndexSet.singleton state, visit_stack (Stack.init goto))
+                  Some (IndexSet.singleton state, visit_stack [goto])
               ) acc
           ) states IndexMap.empty
         in
@@ -265,7 +250,7 @@ struct
           match Lr1.incoming lr1 with
           | Some sym when Symbol.is_nonterminal sym -> ()
           | None | Some _ ->
-            push acc (lr1, visit_transitions (Stack.init lr1))
+            push acc (lr1, visit_transitions [lr1])
         );
       !acc
 
@@ -384,7 +369,7 @@ struct
   struct
     type reduction = {
       target: Redgraph.state index;
-      capture: var index option;
+      capture_end: var index option;
       pattern: Redgraph.state indexset;
       candidates: Lr1.set;
       lookahead: Terminal.set;
@@ -395,10 +380,11 @@ struct
       | More of RE.t * 'a t
       | Reducing of {pop: int; reduction: reduction; next: 'a t}
 
-    let cmon_reduction ?(var=cmon_var) {target; capture; pattern; candidates; lookahead} =
+    let cmon_reduction ?(var=cmon_var)
+        {target; capture_end; pattern; candidates; lookahead} =
       Cmon.record [
         "target"     , cmon_index target;
-        "capture"    , cmon_option var capture;
+        "capture_end", cmon_option var capture_end;
         "pattern"    , cmon_indexset pattern;
         "candidates" , cmon_indexset candidates;
         "lookahead"  , cmon_indexset lookahead;
@@ -438,7 +424,7 @@ struct
           else
             process_transition
               ~capture_start:None
-              ~capture_end:reduction.capture
+              ~capture_end:reduction.capture_end
               ~label:(Lr1.intersect filter reduction.candidates)
               ~k
               ~pattern:reduction.pattern
@@ -479,8 +465,7 @@ struct
         if not (IndexSet.is_empty lookahead) && (reachable target pattern) then
           match pop with
           | Some (pop, candidates) ->
-            let capture = capture_end in
-            let reduction = {capture; pattern; candidates; lookahead; target} in
+            let reduction = {capture_end; pattern; candidates; lookahead; target} in
             direct label capture_start (Reducing {pop; reduction; next=k})
           | None ->
             if IndexSet.mem target pattern then
