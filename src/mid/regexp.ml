@@ -116,6 +116,8 @@ module type K = sig
     | More of re * 'a t
     | Reducing of {pop: int; reduction: reduction; next: 'a t}
 
+  val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
+
   val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
 
   val derive :
@@ -245,14 +247,9 @@ struct
           by_target result
 
     let initial =
-      let acc = ref [] in
-      Index.iter Lr1.n (fun lr1 ->
-          match Lr1.incoming lr1 with
-          | Some sym when Symbol.is_nonterminal sym -> ()
-          | None | Some _ ->
-            push acc (lr1, visit_transitions [lr1])
-        );
-      !acc
+      IndexSet.fold
+        (fun lr1 acc -> (lr1, visit_transitions [lr1]) :: acc)
+        Lr1.idle []
 
     let states = IndexBuffer.contents states state
 
@@ -375,10 +372,43 @@ struct
       lookahead: Terminal.set;
     }
 
+    let compare_reduction r1 r2 =
+      if r1 == r2 then 0 else
+        let c = compare_index r1.target r2.target in
+        if c <> 0 then c else
+          let c =
+            Option.compare compare_index r1.capture_end r2.capture_end
+          in
+          if c <> 0 then c else
+            let c = IndexSet.compare r1.pattern r2.pattern in
+            if c <> 0 then c else
+              let c = IndexSet.compare r1.candidates r2.candidates in
+              if c <> 0 then c else
+                IndexSet.compare r1.lookahead r2.lookahead
+
     type 'a t =
       | Done of 'a
       | More of RE.t * 'a t
       | Reducing of {pop: int; reduction: reduction; next: 'a t}
+
+    let rec compare cmp_a t1 t2 =
+      if t1 == t2 then 0 else
+        match t1, t2 with
+        | Done a1, Done a2 -> cmp_a a1 a2
+        | More (e1, t1'), More (e2, t2') ->
+          let c = RE.compare e1 e2 in
+          if c <> 0 then c else
+            compare cmp_a t1' t2'
+        | Reducing r1, Reducing r2 ->
+          let c = Int.compare r1.pop r2.pop in
+          if c <> 0 then c else
+            let c = compare_reduction r1.reduction r2.reduction in
+            if c <> 0 then c else
+              compare cmp_a r1.next r2.next
+        | Done _, (More _ | Reducing _) -> -1
+        | (More _ | Reducing _), Done _ -> +1
+        | More _, Reducing _ -> -1
+        | Reducing _, More _ -> +1
 
     let cmon_reduction ?(var=cmon_var)
         {target; capture_end; pattern; candidates; lookahead} =
@@ -462,7 +492,10 @@ struct
       and process_transition
           ~capture_start ~capture_end ~label ~k ~pattern
           ~pop ~target ~lookahead =
-        if not (IndexSet.is_empty lookahead) && (reachable target pattern) then
+        if not (IndexSet.is_empty lookahead) &&
+           not (IndexSet.is_empty label) &&
+           (reachable target pattern)
+        then
           match pop with
           | Some (pop, candidates) ->
             let reduction = {capture_end; pattern; candidates; lookahead; target} in
@@ -472,10 +505,11 @@ struct
               loop label k;
             (Redgraph.states target).transitions |>
             List.iter begin fun (tr : Redgraph.transition) ->
-              let label, pop = pop_next label tr.pop in
-              process_transition ~capture_start ~capture_end ~label ~k ~pattern
-                ~pop ~target:tr.target
-                ~lookahead:(Terminal.intersect lookahead tr.lookahead)
+              if Option.is_some tr.pop then
+                let label, pop = pop_next label tr.pop in
+                process_transition ~capture_start ~capture_end ~label ~k ~pattern
+                  ~pop ~target:tr.target
+                  ~lookahead:(Terminal.intersect lookahead tr.lookahead)
             end
       in
       loop Lr1.all k

@@ -383,12 +383,91 @@ open Front
 let parser_module =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
-let process_entry _oc (entry : Syntax.entry) =
-  List.iter (fun (clause : Syntax.clause) ->
-      (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
-      let _ = Transl.transl ~for_reduction:false clause.pattern in
-      ()
-    ) entry.clauses
+module Nfa = struct
+  open Info
+  type k = int Regexp.K.t
+
+  module KMap = Map.Make(struct
+      type t = k
+      let compare t1 t2 = Regexp.K.compare Int.compare t1 t2
+    end)
+
+  type state = {
+    index: int;
+    k: k;
+    accept: IntSet.t;
+    transitions: (Lr1.set * state lazy_t) list;
+    mutable visited: Lr1.set;
+    mutable scheduled: Lr1.set;
+  }
+
+  let process_entry _oc (entry : Syntax.entry) =
+    let count = ref 0 in
+    let nfa = ref KMap.empty in
+    let rec get_state k =
+      match KMap.find_opt k !nfa with
+      | Some t -> t
+      | None ->
+        let index = !count in
+        incr count;
+        let accept = ref IntSet.empty in
+        let transitions = ref [] in
+        Regexp.K.derive
+          ~accept:(fun x -> accept := IntSet.add x !accept)
+          ~direct:(fun label _capture k' ->
+              transitions := (label, lazy (get_state k')) :: !transitions)
+          k;
+        let t = {
+          index; k;
+          accept = !accept;
+          transitions = !transitions;
+          visited = IndexSet.empty;
+          scheduled = IndexSet.empty;
+        } in
+        nfa := KMap.add k t !nfa;
+        t
+    in
+    let scheduled = ref [] in
+    let schedule st lr1s =
+      let lr1s = IndexSet.diff lr1s st.visited in
+      if not (IndexSet.is_empty lr1s) then (
+        if IndexSet.is_empty st.scheduled then
+          push scheduled st;
+        st.scheduled <- IndexSet.union st.scheduled lr1s
+      )
+    in
+    let process st =
+      let states = Lr1.set_predecessors st.scheduled in
+      st.visited <- IndexSet.union st.scheduled st.visited;
+      st.scheduled <- IndexSet.empty;
+      List.iter (fun (states', st) ->
+          let states' = IndexSet.inter states states' in
+          if not (IndexSet.is_empty states') then
+            schedule (Lazy.force st) states'
+        ) st.transitions
+    in
+    let rec flush () =
+      match !scheduled with
+      | [] -> ()
+      | todo ->
+        scheduled := [];
+        List.iter process todo;
+        flush ()
+    in
+    let initial_states =
+      List.mapi (fun i (clause : Syntax.clause) ->
+          (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
+          let re = Transl.transl ~for_reduction:false clause.pattern in
+          let state = get_state Regexp.K.(More (re, Done i)) in
+          schedule state Lr1.idle;
+          state
+        ) entry.clauses
+    in
+    flush ();
+    ignore initial_states;
+    Printf.eprintf "NFA states: %d\n" (KMap.cardinal !nfa)
+end
+
 
 let () = (
   (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
@@ -404,7 +483,7 @@ let () = (
       Some oc
     in*)
   let oc = None in
-  List.iter (process_entry oc) lexer_definition.entrypoints;
+  List.iter (Nfa.process_entry oc) lexer_definition.entrypoints;
   (*begin match oc with
     | None -> ()
     | Some oc ->
