@@ -411,19 +411,24 @@ module Nfa = struct
         let index = !count in
         incr count;
         let accept = ref IntSet.empty in
-        let transitions = ref [] in
+        let transitions = ref KMap.empty in
         Regexp.K.derive
           ~accept:(fun x -> accept := IntSet.add x !accept)
           ~direct:(fun label _capture k' ->
-              transitions := (label, lazy (get_state k')) :: !transitions)
+              match KMap.find_opt k' !transitions with
+              | Some labels -> labels := IndexSet.union label !labels
+              | None -> transitions := KMap.add k' (ref label) !transitions
+            )
           k;
-        let t = {
-          index; k;
-          accept = !accept;
-          transitions = !transitions;
-          visited = IndexSet.empty;
-          scheduled = IndexSet.empty;
-        } in
+        let accept = !accept in
+        let transitions =
+          KMap.fold
+            (fun k label acc -> (!label, lazy (get_state k)) :: acc)
+            !transitions []
+        in
+        let t = {index; k; accept; transitions;
+                 visited = IndexSet.empty; scheduled = IndexSet.empty}
+        in
         nfa := KMap.add k t !nfa;
         t
     in
@@ -455,13 +460,14 @@ module Nfa = struct
         flush ()
     in
     let initial_states =
-      List.mapi (fun i (clause : Syntax.clause) ->
-          (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
-          let re = Transl.transl ~for_reduction:false clause.pattern in
-          let state = get_state Regexp.K.(More (re, Done i)) in
-          schedule state Lr1.idle;
-          state
-        ) entry.clauses
+      entry.clauses |>
+      List.mapi begin fun i (clause : Syntax.clause) ->
+        (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
+        let re = Transl.transl ~for_reduction:false clause.pattern in
+        let state = get_state Regexp.K.(More (re, Done i)) in
+        schedule state Lr1.idle;
+        state
+      end
     in
     flush ();
     ignore initial_states;
