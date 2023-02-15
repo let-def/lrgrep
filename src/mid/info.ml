@@ -94,6 +94,7 @@ module type S = sig
   module Lr1 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr1
     val all : set
+    val idle : set
     val incoming : t -> Symbol.t option
     val items : t -> (Production.t * int) list
 
@@ -436,6 +437,12 @@ struct
 
     let incoming lr1 =
       Option.map Symbol.of_g (Grammar.Lr0.incoming (to_lr0 lr1))
+
+    let idle = IndexSet.init_from_set n (fun lr1 ->
+        match incoming lr1 with
+        | Some sym -> Symbol.is_terminal sym
+        | None -> true
+      )
 
     let items lr1 =
       List.map
