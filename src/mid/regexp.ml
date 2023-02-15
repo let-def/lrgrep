@@ -457,45 +457,41 @@ struct
           | Seq es ->
             loop filter (List.fold_right (fun e k -> More (e,k)) es k')
           | Reduce {capture; pattern} ->
-            List.iter (fun (lr1, trs) ->
-                if (IndexSet.mem lr1 filter) then
-                  List.iter (fun {Redgraph. pop; target; lookahead} ->
-                      process_transition
-                        ~capture0:(Option.map fst capture)
-                        ~capture:(Option.map snd capture)
-                        ~label:(IndexSet.singleton lr1)
-                        ~k ~pattern ~pop ~target ~lookahead
-                    ) trs
-              ) Redgraph.initial
+            Redgraph.initial |>
+            List.iter begin fun (lr1, trs) ->
+              if (IndexSet.mem lr1 filter) then
+                List.iter (fun {Redgraph. pop; target; lookahead} ->
+                    process_transition
+                      ~capture_start:(Option.map fst capture)
+                      ~capture_end:(Option.map snd capture)
+                      ~label:(IndexSet.singleton lr1)
+                      ~k ~pattern ~pop ~target ~lookahead
+                  ) trs
+            end
           | Filter filter' ->
             let filter = Lr1.intersect filter' filter in
             if not (IndexSet.is_empty filter) then
               loop filter k'
 
       and process_transition
-          ~capture0 ~capture ~label ~k ~pattern
+          ~capture_start ~capture_end ~label ~k ~pattern
           ~pop ~target ~lookahead =
-        if (IndexSet.mem target pattern ||
-            not (IndexSet.disjoint pattern (Redgraph.reachable target))) &&
-           not (IndexSet.is_empty lookahead)
-        then match pop with
+        if not (IndexSet.is_empty lookahead) && (reachable target pattern) then
+          match pop with
           | Some (pop, candidates) ->
+            let capture = capture_end in
             let reduction = {capture; pattern; candidates; lookahead; target} in
-            direct label capture0 (Reducing {pop; reduction; next=k})
+            direct label capture_start (Reducing {pop; reduction; next=k})
           | None ->
             if IndexSet.mem target pattern then
               loop label k;
-            let state = Redgraph.states target in
-            List.iter (fun (tr : Redgraph.transition) ->
-                let label, pop = match tr.pop with
-                  | None -> (label, None)
-                  | Some (0, label') -> (Lr1.intersect label label', None)
-                  | Some (n, label') -> (label, Some (n - 1, label'))
-                in
-                process_transition ~capture0 ~capture ~label ~k ~pattern
-                  ~pop ~target:tr.target
-                  ~lookahead:(Terminal.intersect lookahead tr.lookahead)
-              ) state.transitions
+            (Redgraph.states target).transitions |>
+            List.iter begin fun (tr : Redgraph.transition) ->
+              let label, pop = pop_next label tr.pop in
+              process_transition ~capture_start ~capture_end ~label ~k ~pattern
+                ~pop ~target:tr.target
+                ~lookahead:(Terminal.intersect lookahead tr.lookahead)
+            end
       in
       loop Lr1.all k
 
