@@ -25,22 +25,24 @@ module type REDGRAPH = sig
   module Info : Info.S
   open Info
 
-  val simulate_reductions :
-    (Production.t * 'a indexset) list ->
-    [> `Goto of Nonterminal.t * 'a indexset | `Pop ] Seq.t
-
   type state
   val state : state cardinal
 
-  type transition = {
-    pop : (int * Lr1.set) option;
-    lookahead : Terminal.set;
-    target : state index;
+  type 'a goto_sequence = ('a * Terminal.set) list list
+  type inner_transitions = (state index) goto_sequence
+  type outer_transitions = (Lr1.set * state index) goto_sequence
+  type transitions = {
+    inner : inner_transitions;
+    outer : outer_transitions;
   }
-  type stack = private Lr1.t list
-  type state_def = { stack : stack; transitions : transition list; }
-  val initial : (Lr1.t * transition list) list
-  val states : state index -> state_def
+
+  type stack = Lr1.t * Lr1.t list
+
+  val initial : (Lr1.t * transitions) list
+
+  val get_stack : state index -> stack
+  val get_transitions : state index -> transitions
+
   val reachable : state index -> state indexset
 
   val to_string : state index -> string
@@ -56,6 +58,15 @@ module type RE = sig
       introduced during derivation. All terms are produced during initial
       parsing. *)
   type uid = private int
+
+  type reduction = {
+    pattern: redstate indexset;
+    capture: (var index * var index) option;
+  }
+
+  val compare_reduction : reduction -> reduction -> int
+
+  val cmon_reduction : ?var:(var index -> Cmon.t) -> reduction -> Cmon.t
 
   (** A regular expression term with its unique ID, its description and its
       position. *)
@@ -79,10 +90,7 @@ module type RE = sig
     | Star of t
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
-    | Reduce of {
-        capture: (var index * var index) option;
-        pattern: redstate indexset;
-      }
+    | Reduce of reduction
     (** The reduction operator *)
 
   (** Introduce a new term, allocating a unique ID *)
@@ -96,47 +104,35 @@ module type RE = sig
   val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
 end
 
-module type K = sig
+module type S = sig
   module Info : Info.S
   open Info
 
-  type re
-  type redstate
-
-  type reduction = {
-    target      : redstate index;
-    capture_end : var index option;
-    pattern     : redstate indexset;
-    candidates  : Lr1.set;
-    lookahead   : Terminal.set;
-  }
-
-  type 'a t =
-    | Done of 'a
-    | More of re * 'a t
-    | Reducing of {pop: int; reduction: reduction; next: 'a t}
-
-  val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
-
-  val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
-
-  val derive :
-    accept:('a -> unit) ->
-    direct:(Info.Lr1.set -> var index option -> 'a t -> unit) ->
-    'a t -> unit
-end
-
-module type S = sig
-  module Info : Info.S
   module Redgraph : REDGRAPH
     with module Info := Info
   module RE : RE
     with module Info := Info
      and type redstate := Redgraph.state
-  module K : K
-    with module Info := Info
-     and type re := RE.t
-     and type redstate := Redgraph.state
+  module K : sig
+    type 'a t =
+      | Done of 'a
+      | More of RE.t * 'a t
+      | Reducing of {
+          reduction: RE.reduction;
+          lookahead: Terminal.set;
+          transitions: Redgraph.outer_transitions;
+          next: 'a t;
+        }
+
+    val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
+
+    val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
+
+    val derive :
+      accept:('a -> unit) ->
+      direct:(Info.Lr1.set -> var index option -> 'a t -> unit) ->
+      'a t -> unit
+  end
 end
 
 module Make (Info : Info.S)() : S with module Info = Info =
@@ -146,50 +142,36 @@ struct
 
   module Redgraph : REDGRAPH with module Info := Info =
   struct
-    let simulate_reductions reductions : _ Seq.t =
-      let rec consume_lhs n lhs lookahead = function
-        | (prod, lookahead') :: rest
-          when Production.length prod = n && Production.lhs prod = lhs ->
-          let lookahead = IndexSet.union lookahead lookahead' in
-          consume_lhs n lhs lookahead rest
-
-        | rest ->
-          return (`Goto (lhs, lookahead)) n rest
-
-      and step n = function
-        | [] -> Seq.Nil
-
-        | (prod, lookahead) :: rest when Production.length prod = n ->
-          consume_lhs n (Production.lhs prod) lookahead rest
-
-        | rest -> return `Pop (n + 1) rest
-
-      and return r n next =
-        Seq.Cons (r, fun () -> step n next)
-
-      in
-      fun () -> step 0 reductions
-
     include Gensym()
     type state = n
     let state = n
 
-    type stack = Lr1.t list
-    type lookahead = Terminal.set
-
-    type transition = {
-      pop: (int * Lr1.set) option;
-      lookahead: lookahead;
-      target: state index;
+    type stack = Lr1.t * Lr1.t list
+    type 'a goto_sequence = ('a * Terminal.set) list list
+    type inner_transitions = (state index) goto_sequence
+    type outer_transitions = (Lr1.set * state index) goto_sequence
+    type transitions = {
+      inner: inner_transitions;
+      outer: outer_transitions;
     }
 
-    type state_def = {
-      stack: stack;
-      transitions: transition list;
-    }
+    let rec group_reductions depth
+      : (Production.t * Terminal.set) list -> Nonterminal.t goto_sequence =
+      function
+      | [] -> []
+      | (prod, la) :: rest when depth = Production.length prod ->
+        let lhs = Production.lhs prod in
+        begin match group_reductions depth rest with
+          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
+            ((lhs, IndexSet.union la la') :: other) :: tl
+          | [] -> [[lhs, la]]
+          | other :: tl -> ((lhs, la) :: other) :: tl
+        end
+      | otherwise ->
+        [] :: group_reductions (depth + 1) otherwise
 
-    let states = IndexBuffer.make
-        {stack=[IndexSet.choose Lr1.all]; transitions=[]}
+    let states =
+      IndexBuffer.make ((Index.of_int Lr1.n 0, []), {inner=[]; outer=[]})
 
     let nodes = Hashtbl.create 7
 
@@ -199,67 +181,69 @@ struct
       | None ->
         let state = fresh () in
         Hashtbl.add nodes stack state;
-        let transitions = visit_transitions stack in
-        IndexBuffer.set states state {stack; transitions};
+        IndexBuffer.set states state
+          (stack, visit_transitions stack);
         state
 
-    and visit_transitions stack =
-      let reductions = Lr1.reductions (List.hd stack) in
-      visit_inner stack (simulate_reductions reductions)
+    and visit_transitions (top, _ as stack) =
+      Lr1.reductions top
+      |> group_reductions 0
+      |> visit_inner stack
 
-    and visit_inner stack actions =
-      match actions () with
-      | Seq.Nil -> []
-      | Seq.Cons (`Pop, next) ->
-        begin match stack with
-          | [] -> assert false
-          | [top] -> visit_outer (Lr1.predecessors top) 0 next
-          | _ :: stack -> visit_inner stack next
-        end
-      | Seq.Cons (`Goto (lhs, lookahead), next) ->
-        let transition =
-          let goto = Transition.find_goto_target (List.hd stack) lhs in
-          let target = visit_stack (goto :: stack) in
-          {pop = None; lookahead; target}
+    and visit_inner (top, rest) = function
+      | [] ->
+        {inner = []; outer = []}
+      | goto :: next ->
+        let {inner; outer} = match rest with
+          | top' :: rest' ->
+            visit_inner (top', rest') next
+          | [] ->
+            {inner = []; outer = visit_outer (IndexSet.singleton top) next}
         in
-        transition :: visit_inner stack next
+        let process_goto (lhs, la) =
+          let target = Transition.find_goto_target top lhs in
+          (visit_stack (target, top :: rest), la)
+        in
+        {inner = List.map process_goto goto :: inner; outer}
 
-    and visit_outer states depth actions =
-      match actions () with
-      | Seq.Nil -> []
-      | Seq.Cons (`Pop, next) ->
-        visit_outer (Lr1.set_predecessors states) (depth + 1) next
-      | Seq.Cons (`Goto (lhs, lookahead), next) ->
-        let result = visit_outer states depth next in
-        let by_target = IndexSet.fold (fun state acc ->
-            let goto = Transition.find_goto_target state lhs in
-            IndexMap.update goto (function
+    and visit_outer states = function
+      | [] -> []
+      | goto :: next ->
+        let states = Lr1.set_predecessors states in
+        let next = visit_outer states next in
+        let process_goto acc (lhs, la) =
+          let process_target source acc =
+            let target = Transition.find_goto_target source lhs in
+            IndexMap.update target (function
                 | Some (sources, stack) ->
-                  Some (IndexSet.add state sources, stack)
+                  Some (IndexSet.add source sources, stack)
                 | None ->
-                  Some (IndexSet.singleton state, visit_stack [goto])
+                  Some (IndexSet.singleton source, visit_stack (target, []))
               ) acc
-          ) states IndexMap.empty
+          in
+          let by_target = IndexSet.fold process_target states IndexMap.empty in
+          let add_target _ transition acc = (transition, la) :: acc in
+          IndexMap.fold add_target by_target acc
         in
-        IndexMap.fold
-          (fun _target_state (sources, target) acc ->
-             {pop = Some (depth, sources); lookahead; target} :: acc)
-          by_target result
+        let goto = List.fold_left process_goto [] goto in
+        goto :: next
 
     let initial =
       IndexSet.fold
-        (fun lr1 acc -> (lr1, visit_transitions [lr1]) :: acc)
+        (fun lr1 acc -> (lr1, visit_transitions (lr1, [])) :: acc)
         Lr1.idle []
 
-    let states = IndexBuffer.contents states state
+    let states_def = IndexBuffer.contents states state
 
     let reachable =
       let reachable =
-        Vector.map (fun state ->
-            state.transitions
-            |> List.map (fun tr -> tr.target)
-            |> IndexSet.of_list
-          )  states
+        states_def |> Vector.map begin fun (_stack, {inner; outer}) ->
+          let ix = ref IndexSet.empty in
+          let add st = ix := IndexSet.add st !ix in
+          List.iter (List.iter (fun (st, _) -> add st)) inner;
+          List.iter (List.iter (fun ((_, st), _) -> add st)) outer;
+          !ix
+        end
       in
       let preds = Vector.make state IndexSet.empty in
       Vector.iteri (fun source reachable ->
@@ -290,11 +274,15 @@ struct
       loop ();
       reachable
 
-    let states = Vector.get states
+    let get_def = Vector.get states_def
+    let get_stack st = fst (get_def st)
+    let get_transitions st = snd (get_def st)
+
     let reachable = Vector.get reachable
 
     let to_string state =
-      let states = List.rev ((states state).stack : stack :> Lr1.t list) in
+      let top, rest = get_stack state in
+      let states = List.rev (top :: rest) in
       string_concat_map " " (fun lr1 ->
           match Lr1.incoming lr1 with
           | Some sym -> Symbol.name sym
@@ -312,6 +300,17 @@ struct
       let k = ref 0 in
       fun () -> incr k; !k
 
+    type reduction = {
+      pattern: Redgraph.state indexset;
+      capture: (var index * var index) option;
+    }
+
+    let compare_reduction r1 r2 =
+      if r1 == r2 then 0 else
+        let c = IndexSet.compare r1.pattern r2.pattern in
+        if c <> 0 then c else
+          Option.compare (compare_pair compare_index compare_index) r1.capture r2.capture
+
     type t = {
       uid : uid;
       desc : desc;
@@ -323,10 +322,7 @@ struct
       | Seq of t list
       | Star of t
       | Filter of Lr1.set
-      | Reduce of {
-          capture: (var index * var index) option;
-          pattern: Redgraph.state indexset;
-        }
+      | Reduce of reduction
 
     let make position desc = {uid = uid (); desc; position}
 
@@ -335,6 +331,12 @@ struct
 
     let cmon_set_cardinal set =
       Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
+
+    let cmon_reduction ?(var=cmon_var) {capture; pattern} =
+      Cmon.record [
+        "capture", cmon_option (cmon_pair var var) capture;
+        "pattern", cmon_indexset pattern;
+      ]
 
     let cmon ?(var=cmon_var) t =
       let rec aux t =
@@ -351,45 +353,42 @@ struct
         | Star t -> Cmon.constructor "Star" (aux t)
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-        | Reduce {capture; pattern} ->
-          Cmon.crecord "Reduce" [
-            "capture", cmon_option (cmon_pair var var) capture;
-            "pattern", cmon_indexset pattern;
-          ]
+        | Reduce r ->
+          Cmon.constructor "Reduce" (cmon_reduction ~var r)
       in
       aux t
   end
 
-  module K : K with module Info := Info
-                and type re := RE.t
-                and type redstate := Redgraph.state =
-  struct
-    type reduction = {
-      target: Redgraph.state index;
-      capture_end: var index option;
-      pattern: Redgraph.state indexset;
-      candidates: Lr1.set;
-      lookahead: Terminal.set;
-    }
-
-    let compare_reduction r1 r2 =
-      if r1 == r2 then 0 else
-        let c = compare_index r1.target r2.target in
-        if c <> 0 then c else
-          let c =
-            Option.compare compare_index r1.capture_end r2.capture_end
-          in
-          if c <> 0 then c else
-            let c = IndexSet.compare r1.pattern r2.pattern in
-            if c <> 0 then c else
-              let c = IndexSet.compare r1.candidates r2.candidates in
-              if c <> 0 then c else
-                IndexSet.compare r1.lookahead r2.lookahead
-
+  module K = struct
     type 'a t =
       | Done of 'a
       | More of RE.t * 'a t
-      | Reducing of {pop: int; reduction: reduction; next: 'a t}
+      | Reducing of {
+          reduction: RE.reduction;
+          lookahead: Terminal.set;
+          transitions: Redgraph.outer_transitions;
+          next: 'a t;
+        }
+
+    let rec list_compare f xxs yys =
+      if xxs == yys then 0 else
+        match xxs, yys with
+        | [], _  -> -1
+        | _ , [] -> +1
+        | (x :: xs), (y :: ys) ->
+          let c = f x y in
+          if c <> 0 then c else
+            list_compare f xs ys
+
+    let compare_outer_transition ((s1, t1), la1) ((s2, t2), la2) =
+      let c = compare_index t1 t2 in
+      if c <> 0 then c else
+        let c = IndexSet.compare s1 s2 in
+        if c <> 0 then c else
+          IndexSet.compare la1 la2
+
+    let compare_outer_transitions l1 l2 =
+      list_compare compare_outer_transition l1 l2
 
     let rec compare cmp_a t1 t2 =
       if t1 == t2 then 0 else
@@ -400,24 +399,23 @@ struct
           if c <> 0 then c else
             compare cmp_a t1' t2'
         | Reducing r1, Reducing r2 ->
-          let c = Int.compare r1.pop r2.pop in
+          let c = RE.compare_reduction r1.reduction r2.reduction in
           if c <> 0 then c else
-            let c = compare_reduction r1.reduction r2.reduction in
+            let c = list_compare compare_outer_transitions r1.transitions r2.transitions in
             if c <> 0 then c else
-              compare cmp_a r1.next r2.next
+              let c = IndexSet.compare r1.lookahead r2.lookahead in
+              if c <> 0 then c else
+                compare cmp_a r1.next r2.next
         | Done _, (More _ | Reducing _) -> -1
         | (More _ | Reducing _), Done _ -> +1
         | More _, Reducing _ -> -1
         | Reducing _, More _ -> +1
 
-    let cmon_reduction ?(var=cmon_var)
-        {target; capture_end; pattern; candidates; lookahead} =
-      Cmon.record [
-        "target"     , cmon_index target;
-        "capture_end", cmon_option var capture_end;
-        "pattern"    , cmon_indexset pattern;
-        "candidates" , cmon_indexset candidates;
-        "lookahead"  , cmon_indexset lookahead;
+    let cmon_outer_transitions ((s, t), la) =
+      Cmon.tuple [
+        cmon_indexset s;
+        cmon_index t;
+        cmon_indexset la;
       ]
 
     let rec cmon ?var ?(accept=fun _ -> Cmon.constant "_") = function
@@ -425,23 +423,35 @@ struct
         Cmon.constructor "Done" (accept a)
       | More (re, next) ->
         Cmon.construct "More" [RE.cmon ?var re; cmon ?var next]
-      | Reducing {pop; reduction; next} ->
+      | Reducing {reduction; lookahead; transitions; next} ->
         Cmon.crecord "Reducing" [
-          "pop"       , Cmon.int pop;
-          "reduction" , cmon_reduction ?var reduction;
-          "next"      , cmon ?var next;
+          "reduction"   , RE.cmon_reduction ?var reduction;
+          "lookahead"   , cmon_indexset lookahead;
+          "transitions" , Cmon.list_map (Cmon.list_map cmon_outer_transitions) transitions;
+          "next"        , cmon ?var next;
         ]
 
-    let pop_next label = function
-      | None -> (label, None)
-      | Some (0, label') -> (Lr1.intersect label label', None)
-      | Some (n, label') -> (label, Some (n - 1, label'))
-
-    let reachable state pattern =
-      IndexSet.mem state pattern ||
+    let pattern_reachable ~from:state pattern =
       not (IndexSet.disjoint pattern (Redgraph.reachable state))
 
     let derive ~accept ~direct =
+      let rec reduce_target (r : RE.reduction) la target matched process_outer =
+        if not (IndexSet.is_empty la) then (
+          if IndexSet.mem target r.pattern then
+            matched := true;
+          if pattern_reachable r.pattern ~from:target then
+            reduce_transitions r matched process_outer la
+              (Redgraph.get_transitions target)
+        )
+      and reduce_transitions r matched process_outer la {Redgraph. inner; outer} =
+        assert (not (IndexSet.is_empty la));
+        List.iter (List.iter (fun (target', la') ->
+            reduce_target r (Terminal.intersect la la') target'
+              matched process_outer))
+          inner;
+        if outer <> [] then
+          process_outer r la outer
+      in
       let rec process_k filter = function
         | Done a as self ->
           if IndexSet.equal filter Lr1.all then
@@ -452,23 +462,15 @@ struct
         | More (re, k) as self ->
           process_re filter self k re.desc
 
-        | Reducing {pop; reduction; next} ->
-          if pop > 0 then
-            direct filter None (Reducing {pop = pop - 1; reduction; next})
-          else
-            process_transition
-              ~capture_start:None
-              ~capture_end:reduction.capture_end
-              ~label:(Lr1.intersect filter reduction.candidates)
-              ~next
-              ~pattern:reduction.pattern
-              ~pop:None
-              ~target:reduction.target
-              ~lookahead:reduction.lookahead
+        | Reducing {reduction; transitions; lookahead; next} ->
+          let matching = ref IndexSet.empty in
+          process_outer matching filter next reduction lookahead transitions;
+          if not (IndexSet.is_empty !matching) then
+            direct !matching None next
 
       and process_re filter self next = function
         | Set (s, var) ->
-          direct (Lr1.intersect filter s) var next
+          (direct (Lr1.intersect filter s) var next : unit)
         | Alt es ->
           List.iter (fun e -> process_k filter (More (e, next))) es
         | Star r ->
@@ -480,41 +482,40 @@ struct
           let filter = Lr1.intersect filter' filter in
           if not (IndexSet.is_empty filter) then
             process_k filter next
-        | Reduce {capture; pattern} ->
-          Redgraph.initial |>
-          List.iter begin fun (lr1, trs) ->
-            if IndexSet.mem lr1 filter then
-              trs |>
-              List.iter begin fun {Redgraph. pop; target; lookahead} ->
-                process_transition
-                  ~capture_start:(Option.map fst capture)
-                  ~capture_end:(Option.map snd capture)
-                  ~label:(IndexSet.singleton lr1)
-                  ~next ~pattern ~pop ~target ~lookahead
-              end
-          end
+        | Reduce r ->
+          let matching = ref IndexSet.empty in
+          List.iter (fun (lr1, trs) ->
+              if IndexSet.mem lr1 filter then (
+                let matched = ref false in
+                reduce_transitions r matched
+                  (fun reduction lookahead transitions ->
+                     direct (IndexSet.singleton lr1) None
+                       (Reducing {reduction; transitions; lookahead; next}))
+                  Terminal.all trs;
+                if !matched then
+                  matching := IndexSet.add lr1 !matching
+              )
+            ) Redgraph.initial;
+          if not (IndexSet.is_empty !matching) then
+            direct !matching None next
 
-      and process_transition
-          ~capture_start ~capture_end ~label ~next ~pattern
-          ~pop ~target ~lookahead =
-        if not (IndexSet.is_empty lookahead) &&
-           not (IndexSet.is_empty label) &&
-           (reachable target pattern)
-        then
-          match pop with
-          | Some (pop, candidates) ->
-            let reduction = {capture_end; pattern; candidates; lookahead; target} in
-            direct label capture_start (Reducing {pop; reduction; next})
-          | None ->
-            if IndexSet.mem target pattern then
-              process_k label next;
-            (Redgraph.states target).transitions |>
-            List.iter begin fun (tr : Redgraph.transition) ->
-              let label, pop = pop_next label tr.pop in
-              process_transition ~capture_start ~capture_end ~label ~next ~pattern
-                ~pop ~target:tr.target
-                ~lookahead:(Terminal.intersect lookahead tr.lookahead)
-            end
+      and process_outer matching filter next reduction lookahead = function
+        | [] -> ()
+        | goto :: transitions ->
+          if transitions <> [] then
+            direct filter None
+              (Reducing {reduction; transitions; lookahead; next});
+          List.iter (fun ((filter', target), lookahead') ->
+              let filter = Lr1.intersect filter filter' in
+              let lookahead = Terminal.intersect lookahead lookahead' in
+              if not (IndexSet.is_empty filter) then (
+                let matched = ref false in
+                reduce_target reduction lookahead target matched
+                  (process_outer matching filter next);
+                if !matched then
+                  matching := IndexSet.union filter !matching;
+              )
+            ) goto
       in
       fun k -> process_k Lr1.all k
 
