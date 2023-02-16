@@ -301,8 +301,8 @@ module Transl = struct
         visit_trie node' xs
     in
     Index.iter Redgraph.state (fun state ->
-        let def = Redgraph.states state in
-        let node = visit_trie root (def.stack : Redgraph.stack :> _ list) in
+        let top, rest = Redgraph.get_stack state in
+        let node = visit_trie root (top :: rest) in
         node.reached <- IndexSet.add state node.reached
       );
     root
