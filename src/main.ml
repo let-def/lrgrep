@@ -387,18 +387,35 @@ module Nfa = struct
   open Info
   type k = int Regexp.K.t
 
-  module KMap = Map.Make(struct
-      type t = k
-      let compare t1 t2 = Regexp.K.compare Int.compare t1 t2
-    end)
+  module K = struct
+    type t = k
+    let compare t1 t2 = Regexp.K.compare Int.compare t1 t2
+  end
+
+  module KMap = Map.Make(K)
+  module KSet = Set.Make(K)
+  module KSetMap = Map.Make(KSet)
 
   type state = {
+    (* State construction *)
     index: int;
     k: k;
     accept: IntSet.t;
     transitions: (Lr1.set * state lazy_t) list;
+
+    (* NFA construction *)
     mutable visited: Lr1.set;
     mutable scheduled: Lr1.set;
+
+    (* Liveness analysis *)
+    mutable predecessors: state list;
+    mutable reach_accept: bool;
+  }
+
+  type dfa_state = {
+    dfa_ks: KSet.t;
+    dfa_accept: IntSet.t;
+    mutable dfa_transitions: (Lr1.set * dfa_state) list;
   }
 
   let process_entry _oc (entry : Syntax.entry) =
@@ -426,9 +443,13 @@ module Nfa = struct
             (fun k label acc -> (!label, lazy (get_state k)) :: acc)
             !transitions []
         in
-        let t = {index; k; accept; transitions;
-                 visited = IndexSet.empty; scheduled = IndexSet.empty}
-        in
+        let t = {
+          index; k; accept; transitions;
+          visited = IndexSet.empty;
+          scheduled = IndexSet.empty;
+          predecessors = [];
+          reach_accept = false;
+        } in
         nfa := KMap.add k t !nfa;
         t
     in
@@ -470,8 +491,73 @@ module Nfa = struct
       end
     in
     flush ();
-    ignore initial_states;
-    Printf.eprintf "NFA states: %d\n" (KMap.cardinal !nfa)
+    Printf.eprintf "NFA states: %d\n" (KMap.cardinal !nfa);
+    KMap.iter (fun _ source ->
+        List.iter (fun (_, target) ->
+            if Lazy.is_val target then (
+              let lazy target = target in
+              target.predecessors <- source :: target.predecessors
+            )
+          ) source.transitions
+      ) !nfa;
+    let live = ref 0 in
+    let rec set_accept st =
+      if not st.reach_accept then (
+        incr live;
+        st.reach_accept <- true;
+        List.iter set_accept st.predecessors
+      )
+    in
+    KMap.iter
+      (fun _ st -> if not (IntSet.is_empty st.accept) then set_accept st)
+      !nfa;
+    let reduce_count = ref 0 in
+    KMap.iter (fun k st ->
+        match k with
+        | Regexp.K.Reducing _ when st.reach_accept -> incr reduce_count
+        | _ -> ()
+      ) !nfa;
+    Printf.eprintf "NFA live states: %d (%d reductions)\n" !live !reduce_count;
+    let dfa = ref KSetMap.empty in
+    let rec determinize states =
+      let dfa_ks =
+        List.fold_left (fun ks st -> KSet.add st.k ks) KSet.empty states
+      in
+      match KSetMap.find_opt dfa_ks !dfa with
+      | Some dfa_st -> dfa_st
+      | None ->
+        let dfa_accept =
+          List.fold_left (fun ks st -> IntSet.union st.accept ks) IntSet.empty states
+        in
+        let dfa_st = {dfa_ks; dfa_accept; dfa_transitions = []} in
+        dfa := KSetMap.add dfa_ks dfa_st !dfa;
+        let transitions =
+          List.concat_map (fun st ->
+            let set' = Lr1.set_predecessors st.visited in
+            List.filter_map (fun (set, st') ->
+                if Lazy.is_val st' then
+                  let st' = Lazy.force st' in
+                  if st'.reach_accept then
+                    Some (Lr1.intersect set set', st')
+                  else
+                    None
+                else
+                  None
+              ) st.transitions
+          ) states
+          |> IndexRefine.annotated_partition
+        in
+        dfa_st.dfa_transitions <-
+          List.map (fun (set, states) -> (set, determinize states)) transitions;
+        dfa_st
+    in
+    let _initial_state = determinize initial_states in
+    Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !dfa);
+    List.iteri (fun i init ->
+        if not init.reach_accept then
+          Printf.eprintf "Clause %d is unreachable\n" i;
+      ) initial_states
+
 end
 
 
