@@ -110,9 +110,11 @@ module type S = sig
 
   module Redgraph : REDGRAPH
     with module Info := Info
+
   module RE : RE
     with module Info := Info
      and type redstate := Redgraph.state
+
   module K : sig
     type 'a t =
       | Done of 'a
@@ -123,11 +125,8 @@ module type S = sig
           transitions: Redgraph.outer_transitions;
           next: 'a t;
         }
-
     val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
-
     val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
-
     val derive :
       accept:('a -> unit) ->
       direct:(Info.Lr1.set -> var index option -> 'a t -> unit) ->
@@ -434,7 +433,7 @@ struct
     let pattern_reachable ~from:state pattern =
       not (IndexSet.disjoint pattern (Redgraph.reachable state))
 
-    let derive ~accept ~direct =
+    let derive ~accept ~direct k =
       let rec reduce_target (r : RE.reduction) la target matched process_outer =
         if not (IndexSet.is_empty la) then (
           if IndexSet.mem target r.pattern then
@@ -452,6 +451,24 @@ struct
         if outer <> [] then
           process_outer r la outer
       in
+      let rec reduce_outer matching filter next reduction lookahead = function
+        | [] -> ()
+        | goto :: transitions ->
+          if transitions <> [] then
+            direct filter None
+              (Reducing {reduction; transitions; lookahead; next});
+          List.iter (fun ((filter', target), lookahead') ->
+              let filter = Lr1.intersect filter filter' in
+              let lookahead = Terminal.intersect lookahead lookahead' in
+              if not (IndexSet.is_empty filter) then (
+                let matched = ref false in
+                reduce_target reduction lookahead target matched
+                  (reduce_outer matching filter next);
+                if !matched then
+                  matching := IndexSet.union filter !matching;
+              )
+            ) goto
+      in
       let rec process_k filter = function
         | Done a as self ->
           if IndexSet.equal filter Lr1.all then
@@ -464,24 +481,29 @@ struct
 
         | Reducing {reduction; transitions; lookahead; next} ->
           let matching = ref IndexSet.empty in
-          process_outer matching filter next reduction lookahead transitions;
+          reduce_outer matching filter next reduction lookahead transitions;
           if not (IndexSet.is_empty !matching) then
             direct !matching None next
 
       and process_re filter self next = function
         | Set (s, var) ->
           (direct (Lr1.intersect filter s) var next : unit)
+
         | Alt es ->
           List.iter (fun e -> process_k filter (More (e, next))) es
+
         | Star r ->
           process_k filter next;
           process_k filter (More (r, self))
+
         | Seq es ->
           process_k filter (List.fold_right (fun e k -> More (e,k)) es next)
+
         | Filter filter' ->
           let filter = Lr1.intersect filter' filter in
           if not (IndexSet.is_empty filter) then
             process_k filter next
+
         | Reduce r ->
           let matching = ref IndexSet.empty in
           List.iter (fun (lr1, trs) ->
@@ -498,26 +520,8 @@ struct
             ) Redgraph.initial;
           if not (IndexSet.is_empty !matching) then
             direct !matching None next
-
-      and process_outer matching filter next reduction lookahead = function
-        | [] -> ()
-        | goto :: transitions ->
-          if transitions <> [] then
-            direct filter None
-              (Reducing {reduction; transitions; lookahead; next});
-          List.iter (fun ((filter', target), lookahead') ->
-              let filter = Lr1.intersect filter filter' in
-              let lookahead = Terminal.intersect lookahead lookahead' in
-              if not (IndexSet.is_empty filter) then (
-                let matched = ref false in
-                reduce_target reduction lookahead target matched
-                  (process_outer matching filter next);
-                if !matched then
-                  matching := IndexSet.union filter !matching;
-              )
-            ) goto
       in
-      fun k -> process_k Lr1.all k
+      process_k Lr1.all k
 
   end
 end
