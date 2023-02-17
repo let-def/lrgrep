@@ -10,6 +10,15 @@ let output_name = ref None
 let grammar_file = ref None
 let check_coverage = ref false
 
+let escape_and_align_left str =
+  let str = Bytes.unsafe_of_string (String.escaped str) in
+  for i = 0 to Bytes.length str - 2 do
+    if Bytes.get str (i+0) = '\\' &&
+       Bytes.get str (i+1) = 'n' then
+      Bytes.set str (i+1) 'l'
+  done;
+  ("\"" ^ Bytes.unsafe_to_string str ^ "\\l\"")
+
 let usage =
   Printf.sprintf
     "lrgrep, a menhir lexer\n\
@@ -309,9 +318,26 @@ module Transl = struct
 
   let compile_reduce_expr re =
     let reached = ref IndexSet.empty in
+    let immediate = ref IndexSet.empty in
     let rec step node k =
       K.derive
-        ~accept:(fun () -> reached := IndexSet.union !reached node.reached)
+        ~accept:(fun ?set () ->
+            if node == lr1_trie_root then
+              immediate :=
+                IndexSet.union !immediate
+                  (Option.value set ~default:Lr1.all)
+            else
+              reached := (
+                match set with
+                | None -> IndexSet.union node.reached !reached
+                | Some set ->
+                  IndexMap.fold (fun label node' acc ->
+                      if IndexSet.mem label set
+                      then IndexSet.union acc node'.reached
+                      else acc
+                    ) node.sub !reached
+              )
+          )
         ~direct:(fun labels _ k' ->
             IndexMap.iter (fun label node' ->
                 if IndexSet.mem label labels then
@@ -321,7 +347,7 @@ module Transl = struct
         k
     in
     step lr1_trie_root (K.More (re, K.Done ()));
-    !reached
+    (!reached, !immediate)
 
   let rec transl ~for_reduction re =
     let desc = match re.desc with
@@ -348,16 +374,23 @@ module Transl = struct
         ignore kind;
         (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
         let re = transl ~for_reduction:true expr in
-        let pattern = compile_reduce_expr re in
+        let pattern, immediate = compile_reduce_expr re in
         warn re.position
-          "Reduce pattern is matching %d/%d cases\n"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state);
-        (*let strings = ref StringSet.empty in
+          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
+          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
+          (IndexSet.cardinal immediate);
+        let strings = ref StringSet.empty in
         IndexSet.iter
           (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
-          pattern;*)
-        (*StringSet.iter prerr_endline !strings;*)
-        RE.Reduce {capture = None; pattern}
+          pattern;
+        StringSet.iter prerr_endline !strings;
+        let r = RE.Reduce {capture = None; pattern} in
+        if IndexSet.is_empty immediate then
+          r
+        else if immediate == Lr1.all then
+          RE.Alt [RE.make re.position r; RE.make re.position (RE.Seq [])]
+        else
+          RE.Alt [RE.make re.position r; RE.make re.position (RE.Filter immediate)]
       | Concat res ->
         RE.Seq (List.map (transl ~for_reduction) res)
       | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
@@ -427,17 +460,20 @@ module Nfa = struct
       | None ->
         let index = !count in
         incr count;
-        let accept = ref IntSet.empty in
+        let accepted = ref IntSet.empty in
         let transitions = ref KMap.empty in
-        Regexp.K.derive
-          ~accept:(fun x -> accept := IntSet.add x !accept)
-          ~direct:(fun label _capture k' ->
-              match KMap.find_opt k' !transitions with
-              | Some labels -> labels := IndexSet.union label !labels
-              | None -> transitions := KMap.add k' (ref label) !transitions
-            )
-          k;
-        let accept = !accept in
+        let direct label _capture k' =
+          match KMap.find_opt k' !transitions with
+          | Some labels -> labels := IndexSet.union label !labels
+          | None -> transitions := KMap.add k' (ref label) !transitions
+        in
+        let accept ?set x =
+          match set with
+          | None -> accepted := IntSet.add x !accepted
+          | Some set -> direct set None (Done x)
+        in
+        Regexp.K.derive ~accept ~direct k;
+        let accept = !accepted in
         let transitions =
           KMap.fold
             (fun k label acc -> (!label, lazy (get_state k)) :: acc)
@@ -500,6 +536,60 @@ module Nfa = struct
             )
           ) source.transitions
       ) !nfa;
+    let oc = open_out "nfa.dot" in
+    let fp fmt = Printf.fprintf oc fmt in
+    fp "digraph G {\n";
+    fp "  rankdir=\"LR\";\n";
+    fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
+    fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
+    KMap.iter (fun _ source ->
+        let states = IndexSet.elements source.visited in
+        let rec take n = function
+          | x :: xs when n > 0 -> x :: take (n - 1) xs
+          | _ -> []
+        in
+        let states = take 100 states in
+        let expr = Format.asprintf "%a" Cmon.format (Regexp.K.cmon source.k) in
+        let items =
+          if source.predecessors = [] then
+            "<initial>"
+          else
+            Format.asprintf "%a"
+              Grammar.Print.itemset
+              (List.concat_map (fun state ->
+                   (List.map
+                      (fun (p, n) -> Production.to_g p, n)
+                      (Lr1.items state))
+                 ) states)
+        in
+        fp " st%d[label=%s];\n" source.index (escape_and_align_left (expr ^ "\n" ^ items));
+        List.iter (fun (label, target) ->
+            if Lazy.is_val target then (
+              let target = Lazy.force target in
+              let label =
+                if label == Lr1.all then "_"
+                else
+                  List.map (fun lr1 ->
+                      match Lr1.incoming lr1 with
+                      | None -> "<initial>"
+                      | Some sym -> Symbol.name sym
+                    ) (IndexSet.elements label)
+                  |> List.sort_uniq String.compare
+                  |> String.concat "\n"
+              in
+              let label =
+                if String.length label > 1024 then
+                  String.sub label 0 1020 ^ "..."
+                else
+                  label
+              in
+              fp "st%d -> st%d [label=%S];\n"
+                source.index target.index label
+            )
+          ) source.transitions;
+      ) !nfa;
+    fp "}\n";
+    close_out oc;
     let live = ref 0 in
     let rec set_accept st =
       if not st.reach_accept then (
@@ -553,10 +643,11 @@ module Nfa = struct
     in
     let _initial_state = determinize initial_states in
     Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !dfa);
-    List.iteri (fun i init ->
+    List.iter2 (fun init (clause : Syntax.clause) ->
         if not init.reach_accept then
-          Printf.eprintf "Clause %d is unreachable\n" i;
-      ) initial_states
+          Printf.eprintf "Clause line %d is unreachable\n"
+            clause.pattern.position.line;
+      ) initial_states entry.clauses
 
 end
 
@@ -575,6 +666,7 @@ let () = (
       Some oc
     in*)
   let oc = None in
+  prerr_newline ();
   List.iter (Nfa.process_entry oc) lexer_definition.entrypoints;
   (*begin match oc with
     | None -> ()
