@@ -189,11 +189,8 @@ let cmon_index =
   (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
 
 (** Turns a set of indices into a cmon document *)
-let cmon_indexset xs =
-  Cmon.constant (
-    string_concat_map ~wrap:("[","]") ";"
-      string_of_index (IndexSet.elements xs)
-  )
+let cmon_indexset ?(index=cmon_index) xs =
+  Cmon.list_map index (IndexSet.elements xs)
 
 (** Print a cmon document to a channel with sensible defaults *)
 let print_cmon oc cmon =
