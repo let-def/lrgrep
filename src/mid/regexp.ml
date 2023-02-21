@@ -272,7 +272,7 @@ struct
                 vector_set_add preds target source
             ) reachable
         ) reachable;
-      begin
+      (*begin
         let oc = open_out "reach.dot" in
         let fp fmt = Printf.fprintf oc fmt in
         fp "digraph G {\n";
@@ -299,7 +299,7 @@ struct
         visit (Index.of_int state 704);
         fp "}\n";
         close_out oc;
-      end;
+        end;*)
       let todo = ref [] in
       let update reach' state =
         let reach = Vector.get reachable state in
@@ -324,12 +324,12 @@ struct
       loop ();
       reachable
 
-    let () =
+    (*let () =
       if false then
         Vector.iteri (fun st reachable ->
             Printf.eprintf "#%d: %d reachable\n"
               (Index.to_int st) (IndexSet.cardinal reachable)
-          ) reachable
+          ) reachable*)
 
     let reachable = Vector.get reachable
 
@@ -488,17 +488,49 @@ struct
         | More _, Reducing _ -> -1
         | Reducing _, More _ -> +1
 
-    let cmon_outer_transitions {Redgraph. target; lookahead; filter} =
+    let cmon_candidate ?lookahead:lookahead' ~filter:cmon_filter {Redgraph. target; lookahead; filter} =
       Cmon.record [
         "target"  , cmon_index target;
-        "lookahead" , cmon_set_cardinal lookahead;
-        "filter"     , (
-          if IndexSet.cardinal filter < 10
-          then cmon_indexset filter
-              ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1))
-          else cmon_set_cardinal filter
+        "lookahead" , (
+          match lookahead' with
+          | None -> cmon_set_cardinal lookahead
+          | Some lookahead' ->
+            Cmon.constant (
+              Printf.sprintf "{%d elements} (%d matching current reduction)"
+                (IndexSet.cardinal lookahead)
+                (IndexSet.cardinal (IndexSet.inter lookahead lookahead'))
+            )
         );
+        "filter"     , cmon_filter filter;
       ]
+
+    let cmon_outer_candidate ?lookahead c =
+      cmon_candidate ?lookahead c
+        ~filter:(fun filter ->
+            if IndexSet.cardinal filter >= 10 then cmon_set_cardinal filter else (
+              (*Cmon.record [
+                "filter",*)
+              cmon_indexset filter
+                ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
+              (*"predecessors",
+                cmon_indexset (Lr1.set_predecessors filter)
+                ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
+                ]*)
+            )
+          )
+
+    let cmon_transitions ~candidate trs =
+      trs |> Cmon.list_map @@ fun {Redgraph. reachable; candidates} ->
+      Cmon.record [
+        "reachable", cmon_set_cardinal reachable;
+        "candidates", Cmon.list_map candidate candidates;
+      ]
+
+    (*let cmon_all_transitions {Redgraph. inner; outer} =
+      Cmon.record [
+        "inner", cmon_transitions ~candidate:(cmon_candidate ~filter:(fun () -> Cmon.unit)) inner;
+        "outer", cmon_transitions ~candidate:cmon_outer_candidate outer;
+      ]*)
 
     let rec cmon ?var ?(accept=fun _ -> Cmon.constant "_") = function
       | Done a ->
@@ -509,13 +541,7 @@ struct
         Cmon.crecord "Reducing" [
           "reduction"   , RE.cmon_reduction ?var reduction;
           "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
-          "transitions" , Cmon.list_map (fun {Redgraph. reachable; candidates} ->
-              Cmon.record [
-                "reachable", cmon_set_cardinal reachable;
-                "candidates", Cmon.list_map cmon_outer_transitions candidates;
-              ]
-            )
-            transitions;
+          "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
           "next"        , cmon ?var next;
         ]
 
@@ -531,21 +557,23 @@ struct
     let live_redstate (red : RE.reduction) (state : Redgraph.state index) =
       intersecting red.pattern (Redgraph.reachable state)
 
-    let rec reduce_target (r : RE.reduction) la target process_outer =
-      not_empty la && (
+    let visited_target = ref IndexSet.empty
+
+    let rec reduce_target ~on_outer r ~lookahead target =
+      not_empty lookahead && (
         (live_redstate r target &&
-         reduce_steps r process_outer la
-           (Redgraph.get_transitions target)
-        ) || IndexSet.mem target r.pattern
+         reduce_transitions ~on_outer r ~lookahead
+           (Redgraph.get_transitions target))
+        || IndexSet.mem target r.pattern
       )
 
-    and reduce_steps (r : RE.reduction) process_outer la {Redgraph. inner; outer} =
-      assert (not_empty la);
+    and reduce_transitions ~on_outer r ~lookahead {Redgraph. inner; outer} =
+      assert (not_empty lookahead);
       let matched = ref false in
       let visit_candidate (c : unit Redgraph.goto_candidate) =
-        let la = Terminal.intersect la c.lookahead in
-        if reduce_target r la c.target process_outer then
-          matched := true
+        if reduce_target ~on_outer r c.target
+            ~lookahead:(Terminal.intersect lookahead c.lookahead)
+        then matched := true
       in
       let rec loop = function
         | step :: xs when live_redstep r step ->
@@ -555,21 +583,21 @@ struct
       in
       loop inner;
       if outer <> [] then
-        process_outer r la outer;
+        on_outer r lookahead outer;
       !matched
 
     let derive ~accept ~direct k =
-      let rec reduce_outer matching filter next reduction lookahead = function
+      let rec reduce_outer matching next filter reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
-          List.iter begin fun (candidate : _ Redgraph.goto_candidate) ->
+          let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
             let filter = Lr1.intersect filter candidate.filter in
-            let lookahead = Terminal.intersect lookahead candidate.lookahead in
-            if not_empty filter then (
-              if reduce_target reduction lookahead candidate.target
-                  (reduce_outer matching filter next) then
-                matching := IndexSet.union filter !matching;
-            )
-          end step.candidates;
+            if not_empty filter &&
+               reduce_target reduction candidate.target
+                 ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
+                 ~on_outer:(reduce_outer matching next filter)
+            then matching := IndexSet.union filter !matching
+          in
+          List.iter visit_candidate step.candidates;
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
               direct filter None
@@ -578,20 +606,31 @@ struct
           end
         | _ -> ()
       in
+      let reduce_outer next filter reduction lookahead transitions =
+        let matching = ref IndexSet.empty in
+        reduce_outer matching next filter reduction lookahead transitions;
+        !matching
+      in
       let rec process_k filter k =
         if not_empty filter then
           match k with
           | Done a ->
-            let set = if IndexSet.equal filter Lr1.all then None else Some filter in
+            let set =
+              if IndexSet.equal filter Lr1.all
+              then None
+              else Some filter
+            in
             accept ?set a
 
-          | More (re, k) as self ->
-            process_re filter self k re.desc
+          | More (re, next) as self ->
+            process_re filter self next re.desc
 
           | Reducing {reduction; transitions; lookahead; next} ->
-            let matching = ref IndexSet.empty in
-            reduce_outer matching filter next reduction lookahead transitions;
-            process_k !matching next
+            visited_target := IndexSet.empty;
+            let matching =
+              reduce_outer next filter reduction lookahead transitions
+            in
+            process_k matching next
 
       and process_re filter self next = function
         | Set (s, var) ->
@@ -607,26 +646,24 @@ struct
           process_k filter (More (r, self))
 
         | Seq es ->
-          process_k filter (List.fold_right (fun e k -> More (e,k)) es next)
+          process_k filter (List.fold_right (fun e k -> More (e, k)) es next)
 
         | Filter filter' ->
           process_k (Lr1.intersect filter' filter) next
 
         | Reduce r ->
-          let matching = ref IndexSet.empty in
-          Vector.iteri begin fun lr1 steps ->
-            if IndexSet.mem lr1 filter then (
-              let process_outer reduction lookahead = function
-                | step :: _ as transitions when live_redstep reduction step ->
+          let matching = IndexSet.filter (fun lr1 ->
+              let steps = Vector.get Redgraph.initial lr1 in
+              let on_outer reduction lookahead = function
+                | (step :: _) as transitions when live_redstep reduction step ->
                   direct (IndexSet.singleton lr1) None
                     (Reducing {reduction; lookahead; transitions; next})
                 | _ -> ()
               in
-              if reduce_steps r process_outer Terminal.all steps then
-                matching := IndexSet.add lr1 !matching
-            )
-          end Redgraph.initial;
-          process_k !matching next
+              reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
+            ) filter
+          in
+          process_k matching next
       in
       process_k Lr1.all k
 

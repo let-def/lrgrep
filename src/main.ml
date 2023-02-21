@@ -381,89 +381,106 @@ module Transl = struct
           "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
           (IndexSet.cardinal pattern) (cardinal Redgraph.state)
           (IndexSet.cardinal immediate);
-        prerr_endline (string_concat_map ", " string_of_index (IndexSet.elements pattern));
-        let oc = open_out "reduce.dot" in
-        let fp fmt = Printf.fprintf oc fmt in
-        fp "digraph G {\n";
-        fp "  rankdir=\"LR\";\n";
-        fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
-        fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
-        let output_states = Hashtbl.create 7 in
-        let reachable set = not (IndexSet.disjoint set pattern) in
-        let reachable_step step = reachable step.Redgraph.reachable in
-        let reachable_state state = reachable (Redgraph.reachable state) in
-        let rec output_steps output_st src st popped get_filter = function
-          | step :: rest when reachable_step step ->
-            List.iter (fun (candidate : _ Redgraph.goto_candidate) ->
-                let label = get_filter candidate.filter in
-                if reachable_state candidate.target then (
-                  fp "  st_%d -> st_%d [label=%s]\n" src
-                    (Index.to_int candidate.target)
-                    (escape_and_align_left
-                       "%s :: \n%s"
-                       (string_concat_map " :: \n"
-                          (fun lr1 -> Symbol.name (Option.get (Lr1.incoming lr1)))
-                          popped)
-                       (match label with
+        (*begin
+          prerr_endline (string_concat_map ", " string_of_index (IndexSet.elements pattern));
+          let oc = open_out "reduce.dot" in
+          let fp fmt = Printf.fprintf oc fmt in
+          fp "digraph G {\n";
+          fp "  rankdir=\"LR\";\n";
+          fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
+          fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
+          let output_states = Hashtbl.create 7 in
+          let reachable set = not (IndexSet.disjoint set pattern) in
+          let reachable_step step = reachable step.Redgraph.reachable in
+          let reachable_state state = reachable (Redgraph.reachable state) in
+          let rec output_steps output_st src st popped get_filter = function
+            | step :: rest when reachable_step step ->
+              List.iter (fun (candidate : _ Redgraph.goto_candidate) ->
+                  let label = get_filter candidate.filter in
+                  if reachable_state candidate.target then (
+                    let label = (match label with
                         | None -> ""
                         | Some sets ->
-                          string_concat_map ",\n" Symbol.name
-                            (List.sort_uniq compare_index
-                               (List.filter_map Lr1.incoming (IndexSet.elements sets))))
-                    );
-                  output_st candidate.target
-                )
-              ) step.candidates;
-            let st = IndexSet.choose (Lr1.predecessors st) in
-            let popped = st :: popped in
-            ignore (output_steps output_st src st popped get_filter rest : bool);
-            true
-          | _ -> false
-        in
-        let output_steps output_st src st f tr =
-          output_steps output_st src st [] f tr
-        in
-        let rec output_st st =
-          if not (Hashtbl.mem output_states st) then (
-            Hashtbl.add output_states st ();
-            let (top, rest) = Redgraph.get_stack st in
-            let items =
-              Format.asprintf "%a"
-                Grammar.Print.itemset
-                (List.map
-                   (fun (p, n) -> Production.to_g p, n)
-                   (Lr1.items top))
-            in
-            fp "  st_%d[label=%s];\n"
-              (Index.to_int st)
-              (escape_and_align_left "%s: %s\n%s"
-                 (string_of_index st)
-                 (Lr1.list_to_string (List.rev (top :: rest)))
-                 items
-              );
-            let lr1 = match List.rev rest with
-              | [] -> top
-              | x :: _ -> x
-            in
-            ignore (output_transitions (Index.to_int st) lr1 (Redgraph.get_transitions st) : bool)
-          )
-        and output_transitions src lr1 {Redgraph. inner; outer} =
-          let i = output_steps output_st src lr1 (fun () -> None) inner in
-          let o = output_steps output_st src lr1 Option.some outer in
-          i || o
-        in
-        Vector.iteri (fun lr1 trs ->
-            let index = (100000 + Index.to_int lr1) in
-            if output_transitions index lr1 trs then
-              fp " st_%d[label=%S];\n" index (Lr1.to_string lr1);
-          ) Redgraph.initial;
-        fp "}\n";
-        close_out oc;
-        let strings = ref StringSet.empty in
-        IndexSet.iter
-          (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
-          pattern;
-        StringSet.iter prerr_endline !strings;
+                          IndexSet.elements sets
+                          |> List.filter_map Lr1.incoming
+                          |> List.sort_uniq compare_index
+                          |> List.map Symbol.name
+                          |> List.filter (function
+                              | "MINUSGREATER" -> true
+                              | "COLON" -> true
+                              | _ -> false
+                            )
+                          |> String.concat ",\n"
+                      )
+                    in
+                    if label <> "" then
+                      fp "  st_%d -> st_%d [label=%s]\n" src
+                        (Index.to_int candidate.target)
+                        (escape_and_align_left
+                           "%s :: \n%s"
+                           (string_concat_map " :: \n"
+                              (fun lr1 -> Symbol.name (Option.get (Lr1.incoming lr1)))
+                              popped)
+                           label
+                        );
+                    output_st candidate.target
+                  )
+                ) step.candidates;
+              let st = IndexSet.choose (Lr1.predecessors st) in
+              let popped = st :: popped in
+              ignore (output_steps output_st src st popped get_filter rest : bool);
+              true
+            | _ -> false
+          in
+          let output_steps output_st src st f tr =
+            output_steps output_st src st [] f tr
+          in
+          let rec output_st st =
+            if not (Hashtbl.mem output_states st) then (
+              Hashtbl.add output_states st ();
+              let (top, rest) = Redgraph.get_stack st in
+              let items =
+                Format.asprintf "%a"
+                  Grammar.Print.itemset
+                  (List.map
+                     (fun (p, n) -> Production.to_g p, n)
+                     (Lr1.items top))
+              in
+              fp "  st_%d[label=%s];\n"
+                (Index.to_int st)
+                (escape_and_align_left "%s: %s\n%s"
+                   (string_of_index st)
+                   (Lr1.list_to_string (List.rev (top :: rest)))
+                   items
+                );
+              let lr1 = match List.rev rest with
+                | [] -> top
+                | x :: _ -> x
+              in
+              ignore (output_transitions (Index.to_int st) lr1 (Redgraph.get_transitions st) : bool)
+            )
+          and output_transitions src lr1 {Redgraph. inner; outer} =
+            let i = output_steps output_st src lr1 (fun () -> None) inner in
+            let o = output_steps output_st src lr1 Option.some outer in
+            i || o
+          in
+          Vector.iteri (fun lr1 trs ->
+              let index = (100000 + Index.to_int lr1) in
+              if output_transitions index lr1 trs then
+                fp " st_%d[label=%S];\n" index (Lr1.to_string lr1);
+            ) Redgraph.initial;
+          output_st (Index.of_int Redgraph.state 911);
+          output_st (Index.of_int Redgraph.state 453);
+          fp "}\n";
+          close_out oc;
+        end;*)
+        (*begin
+          let strings = ref StringSet.empty in
+          IndexSet.iter
+            (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
+            pattern;
+          StringSet.iter prerr_endline !strings;
+        end;*)
         let r = RE.Reduce {capture = None; pattern} in
         if IndexSet.is_empty immediate then
           r
@@ -556,7 +573,7 @@ module Nfa = struct
         let accept = !accepted in
         let transitions =
           KMap.fold
-            (fun k label acc -> (!label, lazy (get_state k)) :: acc)
+            (fun k' label acc -> (!label, lazy (get_state k')) :: acc)
             !transitions []
         in
         let t = {
@@ -616,65 +633,78 @@ module Nfa = struct
             )
           ) source.transitions
       ) !nfa;
-    let oc = open_out "nfa.dot" in
-    let fp fmt = Printf.fprintf oc fmt in
-    fp "digraph G {\n";
-    fp "  rankdir=\"LR\";\n";
-    fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
-    fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
-    KMap.iter (fun _ source ->
-        let states = IndexSet.elements source.visited in
-        let rec take n = function
-          | x :: xs when n > 0 -> x :: take (n - 1) xs
-          | _ -> []
-        in
-        let states = take 100 states in
-        let expr = Format.asprintf "%a" Cmon.format (Regexp.K.cmon source.k) in
-        let items =
-          if source.predecessors = [] then
-            "<initial>"
-          else
-            Format.asprintf "%a"
-              Grammar.Print.itemset
-              (List.concat_map (fun state ->
-                   (List.map
-                      (fun (p, n) -> Production.to_g p, n)
-                      (Lr1.items state))
-                 ) states)
-        in
-        fp " st%d[label=%s];\n" source.index
-          (escape_and_align_left "%s\n%d transitions\n%s" expr
-             (List.length source.transitions)
-             items);
-        List.iter (fun (label, target) ->
-            if Lazy.is_val target then (
-              let target = Lazy.force target in
-              let label =
-                if label == Lr1.all then "_"
-                else if IndexSet.cardinal label <= 10 then
-                  Lr1.set_to_string label
-                else
-                  List.map (fun lr1 ->
-                      match Lr1.incoming lr1 with
-                      | None -> "<initial>"
-                      | Some sym -> Symbol.name sym
-                    ) (IndexSet.elements label)
-                  |> List.sort_uniq String.compare
-                  |> String.concat "\n"
-              in
-              let label =
-                if String.length label > 1024 then
-                  String.sub label 0 1020 ^ "..."
-                else
-                  label
-              in
-              fp "st%d -> st%d [label=%S];\n"
-                source.index target.index label
+    (*begin
+      let oc = open_out "nfa.dot" in
+      let fp fmt = Printf.fprintf oc fmt in
+      fp "digraph G {\n";
+      fp "  rankdir=\"LR\";\n";
+      fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
+      fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
+      KMap.iter (fun _ source ->
+          let states = IndexSet.elements source.visited in
+          let rec take n = function
+            | x :: xs when n > 0 -> x :: take (n - 1) xs
+            | _ -> []
+          in
+          let states = take 100 states in
+          let expr = Format.asprintf "%a" Cmon.format (Regexp.K.cmon source.k) in
+          let items =
+            if source.predecessors = [] then
+              "<initial>"
+            else
+              Format.asprintf "%a"
+                Grammar.Print.itemset
+                (List.concat_map (fun state ->
+                     (List.map
+                        (fun (p, n) -> Production.to_g p, n)
+                        (Lr1.items state))
+                   ) states)
+          in
+          fp " st%d[label=%s];\n" source.index
+            (escape_and_align_left
+               "%s\n%d transitions\n%s\nincoming: %s\noutgoing: %s"
+               expr
+               (List.length source.transitions)
+               items
+               (if IndexSet.cardinal source.visited < 100
+                then string_of_indexset ~index:Lr1.to_string source.visited
+                else "...")
+               (if IndexSet.cardinal source.visited < 20
+                then string_of_indexset ~index:Lr1.to_string (Lr1.set_predecessors source.visited)
+                else "...")
             )
-          ) source.transitions;
-      ) !nfa;
-    fp "}\n";
-    close_out oc;
+          ;
+          List.iter (fun (label, target) ->
+              if Lazy.is_val target then (
+                let target = Lazy.force target in
+                let label =
+                  if label == Lr1.all then "_"
+                  else if IndexSet.cardinal label <= 10 then (
+                    Lr1.set_to_string label ^ "\n predecessors: " ^
+                    Lr1.set_to_string (Lr1.set_predecessors label)
+                  ) else
+                    List.map (fun lr1 ->
+                        match Lr1.incoming lr1 with
+                        | None -> "<initial>"
+                        | Some sym -> Symbol.name sym
+                      ) (IndexSet.elements label)
+                    |> List.sort_uniq String.compare
+                    |> String.concat "\n"
+                in
+                let label =
+                  if String.length label > 1024 then
+                    String.sub label 0 1020 ^ "..."
+                  else
+                    label
+                in
+                fp "st%d -> st%d [label=%S];\n"
+                  source.index target.index label
+              )
+            ) source.transitions;
+        ) !nfa;
+      fp "}\n";
+      close_out oc;
+    end;*)
     let live = ref 0 in
     let rec set_accept st =
       if not st.reach_accept then (
@@ -732,8 +762,7 @@ module Nfa = struct
         if not init.reach_accept then
           Printf.eprintf "Clause line %d is unreachable\n"
             clause.pattern.position.line;
-      ) initial_states entry.clauses
-
+      ) initial_states entry.clauses;
 end
 
 
