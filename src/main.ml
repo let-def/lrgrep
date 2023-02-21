@@ -10,14 +10,16 @@ let output_name = ref None
 let grammar_file = ref None
 let check_coverage = ref false
 
-let escape_and_align_left str =
-  let str = Bytes.unsafe_of_string (String.escaped str) in
-  for i = 0 to Bytes.length str - 2 do
-    if Bytes.get str (i+0) = '\\' &&
-       Bytes.get str (i+1) = 'n' then
-      Bytes.set str (i+1) 'l'
-  done;
-  ("\"" ^ Bytes.unsafe_to_string str ^ "\\l\"")
+let escape_and_align_left fmt =
+  Printf.ksprintf (fun str ->
+      let str = Bytes.unsafe_of_string (String.escaped str) in
+      for i = 0 to Bytes.length str - 2 do
+        if Bytes.get str (i+0) = '\\' &&
+           Bytes.get str (i+1) = 'n' then
+          Bytes.set str (i+1) 'l'
+      done;
+      ("\"" ^ Bytes.unsafe_to_string str ^ "\\l\"")
+    ) fmt
 
 let usage =
   Printf.sprintf
@@ -388,36 +390,38 @@ module Transl = struct
         fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
         let output_states = Hashtbl.create 7 in
         let reachable set = not (IndexSet.disjoint set pattern) in
-        let rec output_tr output_st src st popped f = function
-          | (reach, trs) :: rest when reachable reach ->
-            List.iter (fun (x, _) ->
-                let st, label = f x in
-                if reachable (Redgraph.reachable st) then (
+        let reachable_step step = reachable step.Redgraph.reachable in
+        let reachable_state state = reachable (Redgraph.reachable state) in
+        let rec output_steps output_st src st popped get_filter = function
+          | step :: rest when reachable_step step ->
+            List.iter (fun (candidate : _ Redgraph.goto_candidate) ->
+                let label = get_filter candidate.filter in
+                if reachable_state candidate.target then (
                   fp "  st_%d -> st_%d [label=%s]\n" src
-                    (Index.to_int st)
-                    (escape_and_align_left (
-                        (string_concat_map " :: \n"
-                           (fun lr1 -> Symbol.name (Option.get (Lr1.incoming lr1)))
-                           popped
-                         ^ " :: \n" ^
-                         match label with
-                         | None -> ""
-                         | Some sets ->
-                           string_concat_map ",\n" Symbol.name
-                             (List.sort_uniq compare_index
-                                (List.filter_map Lr1.incoming (IndexSet.elements sets))))))
-                    ;
-                  output_st st
+                    (Index.to_int candidate.target)
+                    (escape_and_align_left
+                       "%s :: \n%s"
+                       (string_concat_map " :: \n"
+                          (fun lr1 -> Symbol.name (Option.get (Lr1.incoming lr1)))
+                          popped)
+                       (match label with
+                        | None -> ""
+                        | Some sets ->
+                          string_concat_map ",\n" Symbol.name
+                            (List.sort_uniq compare_index
+                               (List.filter_map Lr1.incoming (IndexSet.elements sets))))
+                    );
+                  output_st candidate.target
                 )
-              ) trs;
+              ) step.candidates;
             let st = IndexSet.choose (Lr1.predecessors st) in
             let popped = st :: popped in
-            ignore (output_tr output_st src st popped f rest : bool);
+            ignore (output_steps output_st src st popped get_filter rest : bool);
             true
           | _ -> false
         in
-        let output_tr output_st src st f tr =
-          output_tr output_st src st [] f tr
+        let output_steps output_st src st f tr =
+          output_steps output_st src st [] f tr
         in
         let rec output_st st =
           if not (Hashtbl.mem output_states st) then (
@@ -432,25 +436,25 @@ module Transl = struct
             in
             fp "  st_%d[label=%s];\n"
               (Index.to_int st)
-              (escape_and_align_left (
-                  string_of_index st ^ ": " ^ Lr1.list_to_string (List.rev (top :: rest))
-                  ^ "\n" ^
-                  items
-                ));
+              (escape_and_align_left "%s: %s\n%s"
+                 (string_of_index st)
+                 (Lr1.list_to_string (List.rev (top :: rest)))
+                 items
+              );
             let lr1 = match List.rev rest with
               | [] -> top
               | x :: _ -> x
             in
-            ignore (output_trs (Index.to_int st) lr1 (Redgraph.get_transitions st) : bool)
+            ignore (output_transitions (Index.to_int st) lr1 (Redgraph.get_transitions st) : bool)
           )
-        and output_trs src lr1 {Redgraph. inner; outer} =
-          let i = output_tr output_st src lr1 (fun x -> (x, None)) inner in
-          let o = output_tr output_st src lr1 (fun (lab, x) -> (x, Some lab)) outer in
+        and output_transitions src lr1 {Redgraph. inner; outer} =
+          let i = output_steps output_st src lr1 (fun () -> None) inner in
+          let o = output_steps output_st src lr1 Option.some outer in
           i || o
         in
-        List.iter (fun (lr1, trs) ->
+        Vector.iteri (fun lr1 trs ->
             let index = (100000 + Index.to_int lr1) in
-            if output_trs index lr1 trs then
+            if output_transitions index lr1 trs then
               fp " st_%d[label=%S];\n" index (Lr1.to_string lr1);
           ) Redgraph.initial;
         fp "}\n";
@@ -638,12 +642,17 @@ module Nfa = struct
                       (Lr1.items state))
                  ) states)
         in
-        fp " st%d[label=%s];\n" source.index (escape_and_align_left (expr ^ "\n" ^ items));
+        fp " st%d[label=%s];\n" source.index
+          (escape_and_align_left "%s\n%d transitions\n%s" expr
+             (List.length source.transitions)
+             items);
         List.iter (fun (label, target) ->
             if Lazy.is_val target then (
               let target = Lazy.force target in
               let label =
                 if label == Lr1.all then "_"
+                else if IndexSet.cardinal label <= 10 then
+                  Lr1.set_to_string label
                 else
                   List.map (fun lr1 ->
                       match Lr1.incoming lr1 with
