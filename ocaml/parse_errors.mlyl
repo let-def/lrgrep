@@ -25,7 +25,7 @@ rule error_message token = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
-(*| e=expr; SEMI @ ELSE
+| e=expr; SEMI @ ELSE
   partial {
     match e with
     | {pexp_desc = Pexp_ifthenelse(_, _, None); _}, startp, _endp -> (
@@ -80,15 +80,16 @@ rule error_message token = parse error
   {  "`module' keyword cannot appear in an expression, \
        use `(module M)' to pack a first class-module \
        or `let module M = ... in ...' to define a local module"
-  }*)
+  }
 
 (* https://github.com/ocaml/ocaml/issues/11445 *)
-| OF; [constructor_arguments] @ MINUSGREATER
+
+| [constructor_arguments] @ MINUSGREATER
   { "Issue #11445: in constructor arguments, \
      arrow types should be wrapped between parentheses"
   }
 
-(*| [_* / . IN]
+| [_* / . IN]
   { "Expecting `in'" }
 
 | outer=constr_longident; inner=constr_longident;
@@ -99,4 +100,4 @@ rule error_message token = parse error
 | inner=constr_longident;
   [_* / pattern_gen: constr_longident pattern .]
   @ UNDERSCORE | LIDENT | UIDENT | LPAREN
-  { report_currified_constructor inner token }*)
+  { report_currified_constructor inner token }
