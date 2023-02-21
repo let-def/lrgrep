@@ -542,12 +542,6 @@ module Nfa = struct
     mutable reach_accept: bool;
   }
 
-  type dfa_state = {
-    dfa_ks: KSet.t;
-    dfa_accept: IntSet.t;
-    mutable dfa_transitions: (Lr1.set * dfa_state) list;
-  }
-
   let process_entry _oc (entry : Syntax.entry) =
     let count = ref 0 in
     let nfa = ref KMap.empty in
@@ -723,21 +717,34 @@ module Nfa = struct
         | _ -> ()
       ) !nfa;
     Printf.eprintf "NFA live states: %d (%d reductions)\n" !live !reduce_count;
+    let open Fix.Indexing in
+    let module State = struct
+      type t = {
+        k: KSet.t;
+        accept: IntSet.t;
+      }
+      include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+    end in
+    let module Transition = struct
+      type t = {
+        source: State.n index;
+        target: State.n index;
+        label: Lr1.set;
+      }
+      include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+    end in
     let dfa = ref KSetMap.empty in
     let rec determinize states =
-      let dfa_ks =
-        List.fold_left (fun ks st -> KSet.add st.k ks) KSet.empty states
-      in
-      match KSetMap.find_opt dfa_ks !dfa with
+      let k = List.fold_left (fun k st -> KSet.add st.k k) KSet.empty states in
+      match KSetMap.find_opt k !dfa with
       | Some dfa_st -> dfa_st
       | None ->
-        let dfa_accept =
-          List.fold_left (fun ks st -> IntSet.union st.accept ks) IntSet.empty states
+        let accept =
+          List.fold_left (fun acc st -> IntSet.union st.accept acc) IntSet.empty states
         in
-        let dfa_st = {dfa_ks; dfa_accept; dfa_transitions = []} in
-        dfa := KSetMap.add dfa_ks dfa_st !dfa;
-        let transitions =
-          List.concat_map (fun st ->
+        let index = State.add {k; accept} in
+        dfa := KSetMap.add k index !dfa;
+        List.concat_map (fun st ->
             let set' = Lr1.set_predecessors st.visited in
             List.filter_map (fun (set, st') ->
                 if Lazy.is_val st' then
@@ -750,14 +757,49 @@ module Nfa = struct
                   None
               ) st.transitions
           ) states
-          |> IndexRefine.annotated_partition
-        in
-        dfa_st.dfa_transitions <-
-          List.map (fun (set, states) -> (set, determinize states)) transitions;
-        dfa_st
+        |> IndexRefine.annotated_partition
+        |> List.iter (fun (label, states) ->
+            ignore (Transition.add
+                      {source=index; label; target=determinize states})
+          );
+        index
     in
-    let _initial_state = determinize initial_states in
+    let initial_state = determinize initial_states in
     Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !dfa);
+    let module DFA = struct
+      type states = State.n
+      let states = State.n
+
+      type transitions = Transition.n
+      let transitions = Transition.n
+
+      let label i = (Transition.get i).label
+      let source i = (Transition.get i).source
+      let target i = (Transition.get i).target
+
+      let initials f = f initial_state
+      let finals f =
+        Index.iter states
+          (fun st -> if not (IntSet.is_empty (State.get st).accept) then f st)
+
+      let refinements refine =
+        let acc = ref [] in
+        Index.iter states (fun st ->
+            if not (IntSet.is_empty (State.get st).accept) then
+              push acc st
+          );
+        Misc.group_by !acc
+          ~compare:(fun st1 st2 ->
+              IntSet.compare (State.get st1).accept (State.get st2).accept)
+          ~group:(fun st sts -> st :: sts)
+        |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
+
+    end in
+    let module MIN = Valmari.Minimize
+        (struct type t = Lr1.set let compare = IndexSet.compare end)
+        (DFA)
+    in
+    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MIN.states);
     List.iter2 (fun init (clause : Syntax.clause) ->
         if not init.reach_accept then
           Printf.eprintf "Clause line %d is unreachable\n"
