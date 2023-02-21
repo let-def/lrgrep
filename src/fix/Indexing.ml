@@ -126,6 +126,12 @@ module Index = struct
       yield i
     done
 
+  let rev_iter (n : 'n cardinal) (yield : 'n index -> unit) =
+    let n = cardinal n in
+    for i = n - 1 downto 0 do
+      yield i
+    done
+
   exception End_of_set
 
   let enumerate (n : 'n cardinal) : unit -> 'n index =
@@ -187,4 +193,16 @@ module Vector = struct
   let copy = Array.copy
   let iter = Array.iter
   let iteri = Array.iteri
+
+  module type V = sig type n type a val vector : (n, a) vector end
+  let of_array (type a) (arr : a array) : (module V with type a = a) =
+    (module struct type n type nonrec a = a let vector = arr end)
+
+  module Of_array(A : sig type a val array : a array end) :
+    V with type a = A.a =
+  struct
+    type n
+    type a = A.a
+    let vector = A.array
+  end
 end

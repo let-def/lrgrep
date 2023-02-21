@@ -142,6 +142,10 @@ module Index : sig
      [\[0, n)], in increasing order. *)
   val iter : 'n cardinal -> ('n index -> unit) -> unit
 
+  (**[rev_iter n yield] calls [yield i] successively for every index in the range
+     [\[0, n)], in decreasing order. *)
+  val rev_iter : 'n cardinal -> ('n index -> unit) -> unit
+
   (**This exception is raised by an iterator (created by {!enumerate}) that is
      queried after it has been exhausted. *)
   exception End_of_set
@@ -221,4 +225,9 @@ module Vector : sig
   val iter : ('a -> unit) -> ('n, 'a) t -> unit
 
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
+
+  module type V = sig type n type a val vector : (n, a) vector end
+  val of_array : 'a array -> (module V with type a = 'a)
+  module Of_array(A : sig type a val array : a array end) :
+    V with type a = A.a
 end
