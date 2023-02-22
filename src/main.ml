@@ -352,6 +352,11 @@ module Transl = struct
     (!reached, !immediate)
 
   let rec transl ~for_reduction re =
+    let order_index = ref (-1) in
+    let ordering kind =
+      incr order_index;
+      {RE. kind; index = !order_index}
+    in
     let desc = match re.desc with
       | Atom (capture, symbol) ->
         if for_reduction && Option.is_some capture then
@@ -367,8 +372,8 @@ module Transl = struct
         RE.Set (set, None)
       | Alternative res ->
         RE.Alt (List.map (transl ~for_reduction) res)
-      | Repetition re ->
-        RE.Star (transl ~for_reduction re)
+      | Repetition {expr; kind} ->
+        RE.Star (transl ~for_reduction expr, ordering kind)
       | Reduce {capture; kind; expr} ->
         if for_reduction then
           error re.position "Reductions cannot be nested";
@@ -381,107 +386,7 @@ module Transl = struct
           "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
           (IndexSet.cardinal pattern) (cardinal Redgraph.state)
           (IndexSet.cardinal immediate);
-        (*begin
-          prerr_endline (string_concat_map ", " string_of_index (IndexSet.elements pattern));
-          let oc = open_out "reduce.dot" in
-          let fp fmt = Printf.fprintf oc fmt in
-          fp "digraph G {\n";
-          fp "  rankdir=\"LR\";\n";
-          fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
-          fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
-          let output_states = Hashtbl.create 7 in
-          let reachable set = not (IndexSet.disjoint set pattern) in
-          let reachable_step step = reachable step.Redgraph.reachable in
-          let reachable_state state = reachable (Redgraph.reachable state) in
-          let rec output_steps output_st src st popped get_filter = function
-            | step :: rest when reachable_step step ->
-              List.iter (fun (candidate : _ Redgraph.goto_candidate) ->
-                  let label = get_filter candidate.filter in
-                  if reachable_state candidate.target then (
-                    let label = (match label with
-                        | None -> ""
-                        | Some sets ->
-                          IndexSet.elements sets
-                          |> List.filter_map Lr1.incoming
-                          |> List.sort_uniq compare_index
-                          |> List.map Symbol.name
-                          |> List.filter (function
-                              | "MINUSGREATER" -> true
-                              | "COLON" -> true
-                              | _ -> false
-                            )
-                          |> String.concat ",\n"
-                      )
-                    in
-                    if label <> "" then
-                      fp "  st_%d -> st_%d [label=%s]\n" src
-                        (Index.to_int candidate.target)
-                        (escape_and_align_left
-                           "%s :: \n%s"
-                           (string_concat_map " :: \n"
-                              (fun lr1 -> Symbol.name (Option.get (Lr1.incoming lr1)))
-                              popped)
-                           label
-                        );
-                    output_st candidate.target
-                  )
-                ) step.candidates;
-              let st = IndexSet.choose (Lr1.predecessors st) in
-              let popped = st :: popped in
-              ignore (output_steps output_st src st popped get_filter rest : bool);
-              true
-            | _ -> false
-          in
-          let output_steps output_st src st f tr =
-            output_steps output_st src st [] f tr
-          in
-          let rec output_st st =
-            if not (Hashtbl.mem output_states st) then (
-              Hashtbl.add output_states st ();
-              let (top, rest) = Redgraph.get_stack st in
-              let items =
-                Format.asprintf "%a"
-                  Grammar.Print.itemset
-                  (List.map
-                     (fun (p, n) -> Production.to_g p, n)
-                     (Lr1.items top))
-              in
-              fp "  st_%d[label=%s];\n"
-                (Index.to_int st)
-                (escape_and_align_left "%s: %s\n%s"
-                   (string_of_index st)
-                   (Lr1.list_to_string (List.rev (top :: rest)))
-                   items
-                );
-              let lr1 = match List.rev rest with
-                | [] -> top
-                | x :: _ -> x
-              in
-              ignore (output_transitions (Index.to_int st) lr1 (Redgraph.get_transitions st) : bool)
-            )
-          and output_transitions src lr1 {Redgraph. inner; outer} =
-            let i = output_steps output_st src lr1 (fun () -> None) inner in
-            let o = output_steps output_st src lr1 Option.some outer in
-            i || o
-          in
-          Vector.iteri (fun lr1 trs ->
-              let index = (100000 + Index.to_int lr1) in
-              if output_transitions index lr1 trs then
-                fp " st_%d[label=%S];\n" index (Lr1.to_string lr1);
-            ) Redgraph.initial;
-          output_st (Index.of_int Redgraph.state 911);
-          output_st (Index.of_int Redgraph.state 453);
-          fp "}\n";
-          close_out oc;
-        end;*)
-        (*begin
-          let strings = ref StringSet.empty in
-          IndexSet.iter
-            (fun state -> strings := StringSet.add (Redgraph.to_string state) !strings)
-            pattern;
-          StringSet.iter prerr_endline !strings;
-        end;*)
-        let r = RE.Reduce {capture = None; pattern} in
+        let r = RE.Reduce {capture = None; pattern; ordering = ordering kind} in
         if IndexSet.is_empty immediate then
           r
         else if immediate == Lr1.all then
@@ -722,6 +627,7 @@ module Nfa = struct
       type t = {
         k: KSet.t;
         accept: IntSet.t;
+        visited: Lr1.set;
       }
       include IndexBuffer.Gen(struct type nonrec _ t = t end)()
     end in
@@ -739,10 +645,13 @@ module Nfa = struct
       match KSetMap.find_opt k !dfa with
       | Some dfa_st -> dfa_st
       | None ->
+        let visited =
+          List.fold_left (fun acc st -> Lr1.intersect acc st.visited) Lr1.all states
+        in
         let accept =
           List.fold_left (fun acc st -> IntSet.union st.accept acc) IntSet.empty states
         in
-        let index = State.add {k; accept} in
+        let index = State.add {k; accept; visited} in
         dfa := KSetMap.add k index !dfa;
         List.concat_map (fun st ->
             let set' = Lr1.set_predecessors st.visited in
@@ -783,22 +692,49 @@ module Nfa = struct
           (fun st -> if not (IntSet.is_empty (State.get st).accept) then f st)
 
       let refinements refine =
-        let acc = ref [] in
-        Index.iter states (fun st ->
-            if not (IntSet.is_empty (State.get st).accept) then
-              push acc st
-          );
-        Misc.group_by !acc
-          ~compare:(fun st1 st2 ->
-              IntSet.compare (State.get st1).accept (State.get st2).accept)
-          ~group:(fun st sts -> st :: sts)
-        |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
-
+        (* Refine states by accepted actions *)
+        begin
+          let acc = ref [] in
+          Index.iter states (fun st ->
+              if not (IntSet.is_empty (State.get st).accept) then
+                push acc st
+            );
+          Misc.group_by !acc
+            ~compare:(fun st1 st2 ->
+                IntSet.compare (State.get st1).accept (State.get st2).accept)
+            ~group:(fun st sts -> st :: sts)
+          |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
+        end;
+        (* Refine states by the lr1 set that can reach them *)
+        (*begin
+            let module Lr1Set = struct
+              type t = Lr1.set
+              let compare = IndexSet.compare
+            end in
+            let module SetMap = Map.Make(Lr1Set) in
+            let acc = ref SetMap.empty in
+            Index.iter states (fun st ->
+                acc := SetMap.update (State.get st).visited (function
+                    | None -> Some [st]
+                    | Some xs -> Some (st :: xs)
+                  ) !acc
+              );
+            SetMap.iter (fun _ xs -> refine (fun ~add -> List.iter add xs)) !acc
+          end*)
     end in
     let module MIN = Valmari.Minimize
         (struct type t = Lr1.set let compare = IndexSet.compare end)
         (DFA)
     in
+    let label_domain = Vector.make MIN.states IndexSet.empty in
+    Index.iter DFA.states (fun st ->
+        match MIN.transport_state st with
+        | None -> ()
+        | Some st' ->
+          let domain = Vector.get label_domain st' in
+          let domain = IndexSet.union domain (State.get st).visited in
+          Vector.set label_domain st' domain
+      );
     Printf.eprintf "Minimized DFA states: %d\n" (cardinal MIN.states);
     List.iter2 (fun init (clause : Syntax.clause) ->
         if not init.reach_accept then

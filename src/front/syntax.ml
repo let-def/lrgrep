@@ -11,6 +11,10 @@ type location = {
   start_col : int;
 }
 
+type quantifier_kind =
+  | Longest  (* aka "greedy" *)
+  | Shortest (* aka "lazy" *)
+
 (** This represents a piece of OCaml code, as appearing in semantic
     actions, as well as in the header and trailer. *)
 type ocaml_code = location * string
@@ -38,12 +42,15 @@ type regular_desc =
   | Alternative of regular_expr list
   (** A disjunction of multiple expressions.
       [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
-  | Repetition of regular_expr
+  | Repetition of {
+      kind: quantifier_kind;
+      expr: regular_expr;
+    }
   (** [Repetition e] represents [e*] *)
   | Reduce of {
       capture: string option;
-      kind: [`Longest | `Shortest];
-      expr: regular_expr
+      kind: quantifier_kind;
+      expr: regular_expr;
     }
   (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
@@ -163,9 +170,9 @@ let cmon_capture cap =
 let cmon_wild_symbol sym =
   cmon_option cmon_symbol sym
 
-let cmon_longest_or_shortest = function
-  | `Longest -> Cmon.string "`Longest"
-  | `Shortest -> Cmon.string "`Shortest"
+let cmon_quantifier_kind = function
+  | Longest -> Cmon.constant "Longest"
+  | Shortest -> Cmon.constant "Shortest"
 
 let rec cmon_regular_term = function
   | Atom (cap, sym) ->
@@ -174,12 +181,15 @@ let rec cmon_regular_term = function
     Cmon.constructor "Alternative" (Cmon.list_map cmon_regular_expression res)
   | Concat res ->
     Cmon.constructor "Concat" (Cmon.list_map cmon_regular_expression res)
-  | Repetition re ->
-    Cmon.constructor "Repetition" (cmon_regular_expression re)
+  | Repetition {kind; expr} ->
+    Cmon.crecord "Repetition" [
+      "kind", cmon_quantifier_kind kind;
+      "expr", cmon_regular_expression expr;
+    ]
   | Reduce {capture; kind; expr} ->
     Cmon.crecord "Reduce" [
       "capture", cmon_capture capture;
-      "kind", cmon_longest_or_shortest kind;
+      "kind", cmon_quantifier_kind kind;
       "expr", cmon_regular_expression expr;
     ]
   | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->

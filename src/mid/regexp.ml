@@ -72,9 +72,15 @@ module type RE = sig
       parsing. *)
   type uid = private int
 
+  type quantifier_ordering = {
+    kind: Syntax.quantifier_kind;
+    index: int;
+  }
+
   type reduction = {
     pattern: redstate indexset;
     capture: (var index * var index) option;
+    ordering: quantifier_ordering;
   }
 
   val compare_reduction : reduction -> reduction -> int
@@ -100,7 +106,7 @@ module type RE = sig
     | Seq of t list
     (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
         [Seq []] represents the {ε}. *)
-    | Star of t
+    | Star of t * quantifier_ordering
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
     | Reduce of reduction
@@ -378,16 +384,28 @@ struct
       let k = ref 0 in
       fun () -> incr k; !k
 
+    type quantifier_ordering = {
+      kind: Syntax.quantifier_kind;
+      index: int;
+    }
+
     type reduction = {
       pattern: Redgraph.state indexset;
       capture: (var index * var index) option;
+      ordering: quantifier_ordering;
     }
 
     let compare_reduction r1 r2 =
       if r1 == r2 then 0 else
         let c = IndexSet.compare r1.pattern r2.pattern in
         if c <> 0 then c else
-          Option.compare (compare_pair compare_index compare_index) r1.capture r2.capture
+          let c =
+            Option.compare
+              (compare_pair compare_index compare_index)
+              r1.capture r2.capture
+          in
+          if c <> 0 then c else
+            compare r1.ordering r2.ordering
 
     type t = {
       uid : uid;
@@ -398,7 +416,7 @@ struct
       | Set of Lr1.set * var index option
       | Alt of t list
       | Seq of t list
-      | Star of t
+      | Star of t * quantifier_ordering
       | Filter of Lr1.set
       | Reduce of reduction
 
@@ -407,10 +425,17 @@ struct
     let compare t1 t2 =
       Int.compare t1.uid t2.uid
 
-    let cmon_reduction ?(var=cmon_var) {capture; pattern} =
+    let cmon_quantifier_ordering {kind; index} =
+      Cmon.record [
+        "kind",  Syntax.cmon_quantifier_kind kind;
+        "index", Cmon.int index;
+      ]
+
+    let cmon_reduction ?(var=cmon_var) {capture; pattern; ordering} =
       Cmon.record [
         "capture", cmon_option (cmon_pair var var) capture;
         "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
+        "ordering", cmon_quantifier_ordering ordering;
       ]
 
     let cmon ?(var=cmon_var) t =
@@ -425,7 +450,7 @@ struct
           ]
         | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
         | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
-        | Star t -> Cmon.constructor "Star" (aux t)
+        | Star (t, o) -> Cmon.construct "Star" [aux t; cmon_quantifier_ordering o]
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
         | Reduce r ->
@@ -641,7 +666,7 @@ struct
         | Alt es ->
           List.iter (fun e -> process_k filter (More (e, next))) es
 
-        | Star r ->
+        | Star (r, _todo) ->
           process_k filter next;
           process_k filter (More (r, self))
 
