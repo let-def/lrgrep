@@ -102,17 +102,18 @@ regleaf:
 | capture wild_symbol { mk_re (Atom ($1, $2)) $endpos }
 | capture "[" regexp "]"
   { let kind, expr = match $3.desc with
-        | Reduce {capture=None; kind=`Shortest; expr} -> `Longest, expr
-        | _ -> `Shortest, $3
+        | Reduce {capture=None; kind=Shortest; expr} -> Longest, expr
+        | _ -> Shortest, $3
     in
     mk_re (Reduce {capture=$1; kind; expr}) $endpos
   }
 ;
 
 regterm:
-| regleaf     { $1 }
-| regleaf "*" { mk_re (Repetition $1) $endpos }
-| regleaf "?" { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
+| regleaf         { $1 }
+| regleaf "*"     { mk_re (Repetition {expr=$1; kind=Shortest}) $endpos }
+| regleaf "*" "*" { mk_re (Repetition {expr=$1; kind=Longest}) $endpos }
+| regleaf "?"     { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
 ;
 
 filter:
