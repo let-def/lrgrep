@@ -323,26 +323,25 @@ module Transl = struct
     let immediate = ref IndexSet.empty in
     let rec step node k =
       K.derive
-        ~accept:(fun ?set () ->
+        ~accept:(fun label () ->
+            assert (label.vars = []);
             if node == lr1_trie_root then
-              immediate :=
-                IndexSet.union !immediate
-                  (Option.value set ~default:Lr1.all)
+              immediate := IndexSet.union !immediate label.filter
             else
               reached := (
-                match set with
-                | None -> IndexSet.union node.reached !reached
-                | Some set ->
-                  IndexMap.fold (fun label node' acc ->
-                      if IndexSet.mem label set
+                if IndexSet.equal Lr1.all label.filter then
+                  IndexSet.union node.reached !reached
+                else
+                  IndexMap.fold (fun lr1 node' acc ->
+                      if IndexSet.mem lr1 label.filter
                       then IndexSet.union acc node'.reached
                       else acc
                     ) node.sub !reached
               )
           )
-        ~direct:(fun labels _ k' ->
-            IndexMap.iter (fun label node' ->
-                if IndexSet.mem label labels then
+        ~direct:(fun label k' ->
+            IndexMap.iter (fun lr1 node' ->
+                if IndexSet.mem lr1 label.filter then
                   step node' k'
               ) node.sub
           )
@@ -431,12 +430,14 @@ module Nfa = struct
   module KSet = Set.Make(K)
   module KSetMap = Map.Make(KSet)
 
+  type label = Regexp.K.label
+
   type state = {
     (* State construction *)
     index: int;
     k: k;
     accept: IntSet.t;
-    transitions: (Lr1.set * state lazy_t) list;
+    transitions: (label * state lazy_t) list;
 
     (* NFA construction *)
     mutable visited: Lr1.set;
@@ -446,6 +447,16 @@ module Nfa = struct
     mutable predecessors: state list;
     mutable reach_accept: bool;
   }
+
+  let is_immediate_label : label -> bool = function
+    | {filter; vars = []; ordering = []} ->
+      IndexSet.equal filter Lr1.all
+    | _ -> false
+
+  let merge_labels (l1 : label) (l2 : label) : label =
+    {filter = IndexSet.union l1.filter l2.filter;
+     vars = l1.vars @ l2.vars;
+     ordering = l1.ordering @ l2.ordering}
 
   let process_entry _oc (entry : Syntax.entry) =
     let count = ref 0 in
@@ -458,15 +469,16 @@ module Nfa = struct
         incr count;
         let accepted = ref IntSet.empty in
         let transitions = ref KMap.empty in
-        let direct label _capture k' =
+        let direct label k' =
           match KMap.find_opt k' !transitions with
-          | Some labels -> labels := IndexSet.union label !labels
+          | Some label' -> label' := merge_labels label !label'
           | None -> transitions := KMap.add k' (ref label) !transitions
         in
-        let accept ?set x =
-          match set with
-          | None -> accepted := IntSet.add x !accepted
-          | Some set -> direct set None (Done x)
+        let accept label x =
+          if is_immediate_label label then
+            accepted := IntSet.add x !accepted
+          else
+            direct label (Done x)
         in
         Regexp.K.derive ~accept ~direct k;
         let accept = !accepted in
@@ -498,8 +510,8 @@ module Nfa = struct
       let states = Lr1.set_predecessors st.scheduled in
       st.visited <- IndexSet.union st.scheduled st.visited;
       st.scheduled <- IndexSet.empty;
-      List.iter (fun (states', st) ->
-          let states' = IndexSet.inter states states' in
+      List.iter (fun (label, st) ->
+          let states' = IndexSet.inter states label.Regexp.K.filter in
           if not (IndexSet.is_empty states') then
             schedule (Lazy.force st) states'
         ) st.transitions
@@ -655,11 +667,11 @@ module Nfa = struct
         dfa := KSetMap.add k index !dfa;
         List.concat_map (fun st ->
             let set' = Lr1.set_predecessors st.visited in
-            List.filter_map (fun (set, st') ->
+            List.filter_map (fun (label, st') ->
                 if Lazy.is_val st' then
                   let st' = Lazy.force st' in
                   if st'.reach_accept then
-                    Some (Lr1.intersect set set', st')
+                    Some (Lr1.intersect label.Regexp.K.filter set', st')
                   else
                     None
                 else
