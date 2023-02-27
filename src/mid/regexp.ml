@@ -5,24 +5,16 @@ open Misc
 
 module Positive = Const(struct let cardinal = max_int end)
 
-include (struct
-  type var = Positive.n
-  let var i = Index.of_int Positive.n i
-end : sig
-  type var
-  val var : int -> var index
-end)
-
 let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
 
 let cmon_option f = function
   | None -> Cmon.constant "None"
   | Some x -> Cmon.constructor "Some" (f x)
 
-let cmon_var x = Cmon.constructor "Var" (cmon_index x)
-
 let cmon_set_cardinal set =
   Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
+
+type var = string
 
 module type REDGRAPH = sig
   module Info : Info.S
@@ -79,13 +71,13 @@ module type RE = sig
 
   type reduction = {
     pattern: redstate indexset;
-    capture: (var index * var index) option;
+    capture: var option;
     ordering: quantifier_ordering;
   }
 
   val compare_reduction : reduction -> reduction -> int
 
-  val cmon_reduction : ?var:(var index -> Cmon.t) -> reduction -> Cmon.t
+  val cmon_reduction : reduction -> Cmon.t
 
   (** A regular expression term with its unique ID, its description and its
       position. *)
@@ -97,7 +89,7 @@ module type RE = sig
 
   (** The different constructors of regular expressions*)
   and desc =
-    | Set of Lr1.set * var index option
+    | Set of Lr1.set * var option
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of t list
@@ -120,7 +112,7 @@ module type RE = sig
 
   (** Print a term to a [Cmon] document. [var] arguments allow to customize
       printing of variables. *)
-  val cmon : ?var:(var index -> Cmon.t) -> t -> Cmon.t
+  val cmon : t -> Cmon.t
 end
 
 module type S = sig
@@ -135,6 +127,12 @@ module type S = sig
      and type redstate := Redgraph.state
 
   module K : sig
+    type label = {
+      filter: Lr1.set;
+      vars: var list;
+      ordering: RE.quantifier_ordering list
+    }
+
     type 'a t =
       | Done of 'a
       | More of RE.t * 'a t
@@ -145,10 +143,10 @@ module type S = sig
           next: 'a t;
         }
     val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
-    val cmon : ?var:(var index -> Cmon.t) -> ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
+    val cmon : ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
     val derive :
-      accept:(?set:Lr1.set -> 'a -> unit) ->
-      direct:(Lr1.set -> var index option -> 'a t -> unit) ->
+      accept:(label -> 'a -> unit) ->
+      direct:(label -> 'a t -> unit) ->
       'a t -> unit
   end
 end
@@ -391,7 +389,7 @@ struct
 
     type reduction = {
       pattern: Redgraph.state indexset;
-      capture: (var index * var index) option;
+      capture: string option;
       ordering: quantifier_ordering;
     }
 
@@ -399,11 +397,7 @@ struct
       if r1 == r2 then 0 else
         let c = IndexSet.compare r1.pattern r2.pattern in
         if c <> 0 then c else
-          let c =
-            Option.compare
-              (compare_pair compare_index compare_index)
-              r1.capture r2.capture
-          in
+          let c = Option.compare String.compare r1.capture r2.capture in
           if c <> 0 then c else
             compare r1.ordering r2.ordering
 
@@ -413,7 +407,7 @@ struct
       position : Syntax.position;
     }
     and desc =
-      | Set of Lr1.set * var index option
+      | Set of Lr1.set * string option
       | Alt of t list
       | Seq of t list
       | Star of t * quantifier_ordering
@@ -431,22 +425,20 @@ struct
         "index", Cmon.int index;
       ]
 
-    let cmon_reduction ?(var=cmon_var) {capture; pattern; ordering} =
+    let cmon_reduction {capture; pattern; ordering} =
       Cmon.record [
-        "capture", cmon_option (cmon_pair var var) capture;
+        "capture", cmon_option Cmon.string capture;
         "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
         "ordering", cmon_quantifier_ordering ordering;
       ]
 
-    let cmon ?(var=cmon_var) t =
+    let cmon t =
       let rec aux t =
         match t.desc with
-        | Set (lr1s, v) ->
+        | Set (lr1s, var) ->
           Cmon.construct "Set" [
             cmon_set_cardinal lr1s;
-            match v with
-            | None -> Cmon.constant "None"
-            | Some x -> Cmon.constructor "Some" (var x)
+            cmon_option Cmon.string var;
           ]
         | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
         | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
@@ -454,12 +446,18 @@ struct
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
         | Reduce r ->
-          Cmon.constructor "Reduce" (cmon_reduction ~var r)
+          Cmon.constructor "Reduce" (cmon_reduction r)
       in
       aux t
   end
 
   module K = struct
+    type label = {
+      filter: Lr1.set;
+      vars: var list;
+      ordering: RE.quantifier_ordering list
+    }
+
     type 'a t =
       | Done of 'a
       | More of RE.t * 'a t
@@ -557,24 +555,34 @@ struct
         "outer", cmon_transitions ~candidate:cmon_outer_candidate outer;
       ]*)
 
-    let rec cmon ?var ?(accept=fun _ -> Cmon.constant "_") = function
-      | Done a ->
-        Cmon.constructor "Done" (accept a)
-      | More (re, next) ->
-        Cmon.construct "More" [RE.cmon ?var re; cmon ?var next]
-      | Reducing {reduction; lookahead; transitions; next} ->
-        Cmon.crecord "Reducing" [
-          "reduction"   , RE.cmon_reduction ?var reduction;
-          "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
-          "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
-          "next"        , cmon ?var next;
-        ]
+    let cmon ?(accept=fun _ -> Cmon.constant "_") =
+      let rec self = function
+        | Done a ->
+          Cmon.constructor "Done" (accept a)
+        | More (re, next) ->
+          Cmon.construct "More" [RE.cmon re; self next]
+        | Reducing {reduction; lookahead; transitions; next} ->
+          Cmon.crecord "Reducing" [
+            "reduction"   , RE.cmon_reduction reduction;
+            "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
+            "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
+            "next"        , self next;
+          ]
+      in
+      self
 
     let not_empty s1 =
       not (IndexSet.is_empty s1)
 
     let intersecting s1 s2 =
       not (IndexSet.disjoint s1 s2)
+
+    let label_filter label filter =
+      let filter = Lr1.intersect label.filter filter in
+      if not_empty filter then
+        Some {label with filter}
+      else
+        None
 
     let live_redstep (red : RE.reduction) (step : _ Redgraph.reduction_step) =
       intersecting red.pattern step.reachable
@@ -612,85 +620,98 @@ struct
       !matched
 
     let derive ~accept ~direct k =
-      let rec reduce_outer matching next filter reduction lookahead = function
+      let rec reduce_outer matching next label reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
           let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
-            let filter = Lr1.intersect filter candidate.filter in
-            if not_empty filter &&
-               reduce_target reduction candidate.target
-                 ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
-                 ~on_outer:(reduce_outer matching next filter)
-            then matching := IndexSet.union filter !matching
+            match label_filter label candidate.filter with
+            | Some label when
+                reduce_target reduction candidate.target
+                  ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
+                  ~on_outer:(reduce_outer matching next label) ->
+              matching := IndexSet.union label.filter !matching
+            | _ -> ()
           in
           List.iter visit_candidate step.candidates;
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
-              direct filter None
-                (Reducing {reduction; transitions; lookahead; next});
+              direct label (Reducing {reduction; transitions; lookahead; next});
             | _ -> ()
           end
         | _ -> ()
       in
-      let reduce_outer next filter reduction lookahead transitions =
+      let reduce_outer next label reduction lookahead transitions =
         let matching = ref IndexSet.empty in
-        reduce_outer matching next filter reduction lookahead transitions;
-        !matching
+        reduce_outer matching next label reduction lookahead transitions;
+        if not_empty !matching then
+          Some {label with filter = !matching}
+        else
+          None
       in
-      let rec process_k filter k =
-        if not_empty filter then
-          match k with
-          | Done a ->
-            let set =
-              if IndexSet.equal filter Lr1.all
-              then None
-              else Some filter
-            in
-            accept ?set a
+      let rec process_k label k =
+        match k with
+        | Done a ->
+          accept label a
 
-          | More (re, next) as self ->
-            process_re filter self next re.desc
+        | More (re, next) as self ->
+          process_re label self next re.desc
 
-          | Reducing {reduction; transitions; lookahead; next} ->
-            visited_target := IndexSet.empty;
-            let matching =
-              reduce_outer next filter reduction lookahead transitions
-            in
-            process_k matching next
+        | Reducing {reduction; transitions; lookahead; next} ->
+          visited_target := IndexSet.empty;
+          let l' = reduce_outer next label reduction lookahead transitions in
+          begin match l' with
+            | None -> ()
+            | Some label -> process_k label next
+          end
 
-      and process_re filter self next = function
+      and process_re label self next = function
         | Set (s, var) ->
-          let s = Lr1.intersect filter s in
-          if not_empty s then
-            direct s var next
+          begin match label_filter label s with
+            | None -> ()
+            | Some label ->
+              let label = match var with
+                | None -> label
+                | Some var -> {label with vars = var :: label.vars}
+              in
+              direct label next
+          end
 
         | Alt es ->
-          List.iter (fun e -> process_k filter (More (e, next))) es
+          List.iter (fun e -> process_k label (More (e, next))) es
 
         | Star (r, _todo) ->
-          process_k filter next;
-          process_k filter (More (r, self))
+          process_k label next;
+          process_k label (More (r, self))
 
         | Seq es ->
-          process_k filter (List.fold_right (fun e k -> More (e, k)) es next)
+          process_k label (List.fold_right (fun e k -> More (e, k)) es next)
 
-        | Filter filter' ->
-          process_k (Lr1.intersect filter' filter) next
+        | Filter filter ->
+          begin match label_filter label filter with
+            | None -> ()
+            | Some label' -> process_k label' next
+          end
 
         | Reduce r ->
           let matching = IndexSet.filter (fun lr1 ->
               let steps = Vector.get Redgraph.initial lr1 in
               let on_outer reduction lookahead = function
                 | (step :: _) as transitions when live_redstep reduction step ->
-                  direct (IndexSet.singleton lr1) None
+                  direct {label with filter = IndexSet.singleton lr1}
                     (Reducing {reduction; lookahead; transitions; next})
                 | _ -> ()
               in
               reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
-            ) filter
+            ) label.filter
           in
-          process_k matching next
+          if not_empty matching then
+            process_k {label with filter = matching} next
       in
-      process_k Lr1.all k
+      let label = {
+        filter = Lr1.all;
+        vars = [];
+        ordering = [];
+      } in
+      process_k label k
 
   end
 end
