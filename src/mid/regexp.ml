@@ -5,6 +5,86 @@ open Misc
 
 module Positive = Const(struct let cardinal = max_int end)
 
+module Var : sig
+  type n
+  type t = n index
+  type set = n indexset
+  val gensym : unit -> unit -> n index
+end = struct
+  include Positive
+  type t = n index
+  type set = n indexset
+  let gensym () =
+    let r = ref (-1) in
+    fun () -> incr r; Index.of_int n !r
+end
+
+module Clause : sig
+  type n
+  type t = n index
+  type set = n indexset
+  val of_int : int -> n index
+end = struct
+  include Positive
+  type t = n index
+  type set = n indexset
+  let of_int = Index.of_int n
+end
+
+module Ordering : sig
+  type n
+  type t = n index
+  type set = n indexset
+  val gensym : unit -> negative:bool -> n index
+
+  type order = (n, int) indexmap
+  val order : order -> order -> int
+end = struct
+  include Positive
+
+  type t = n index
+  type set = n indexset
+  type order = (n, int) indexmap
+
+  let gensym () =
+    let r = ref 0 in
+    fun ~negative ->
+      let result = if negative then !r + 1 else !r in
+      r := !r + 2;
+      Index.of_int n result
+
+  let is_negative (index : t) =
+    Index.to_int index land 1 = 0
+
+  let order_bool b =
+    if b then +1 else -1
+
+  let order map1 map2 =
+    let rec loop = function
+      | Seq.Cons ((k1, v1), s1), Seq.Cons ((k2, v2), s2) ->
+        let c = compare_index k1 k2 in
+        if c < 0 then
+          - order_bool (is_negative k1)
+        else if c > 0 then
+          + order_bool (is_negative k2)
+        else (
+          let c = Int.compare v1 v2 in
+          if c = 0 then
+            loop (s1 (), s2 ())
+          else if is_negative k1 then
+            -c
+          else
+            c
+        )
+      | Seq.Nil, Seq.Nil -> 0
+      | Seq.Cons ((k, _), _), Seq.Nil ->
+        - order_bool (is_negative k)
+      | Seq.Nil, Seq.Cons ((k, _), _) ->
+        + order_bool (is_negative k)
+    in
+    loop (IndexMap.to_seq map1 (), IndexMap.to_seq map2 ())
+end
+
 let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
 
 let cmon_option f = function
@@ -13,8 +93,6 @@ let cmon_option f = function
 
 let cmon_set_cardinal set =
   Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
-
-type var = string
 
 module type REDGRAPH = sig
   module Info : Info.S
@@ -64,15 +142,10 @@ module type RE = sig
       parsing. *)
   type uid = private int
 
-  type quantifier_ordering = {
-    kind: Syntax.quantifier_kind;
-    index: int;
-  }
-
   type reduction = {
     pattern: redstate indexset;
-    capture: var option;
-    ordering: quantifier_ordering;
+    capture: Var.set;
+    ordering: Ordering.set;
   }
 
   val compare_reduction : reduction -> reduction -> int
@@ -89,7 +162,7 @@ module type RE = sig
 
   (** The different constructors of regular expressions*)
   and desc =
-    | Set of Lr1.set * var option
+    | Set of Lr1.set * Var.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of t list
@@ -98,7 +171,7 @@ module type RE = sig
     | Seq of t list
     (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
         [Seq []] represents the {ε}. *)
-    | Star of t * quantifier_ordering
+    | Star of t * Ordering.set
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
     | Reduce of reduction
@@ -129,25 +202,27 @@ module type S = sig
   module K : sig
     type label = {
       filter: Lr1.set;
-      vars: var list;
-      ordering: RE.quantifier_ordering list
+      vars: Var.set;
+      ordering: Ordering.set;
     }
 
-    type 'a t =
-      | Done of 'a
-      | More of RE.t * 'a t
+    val compare_label : label -> label -> int
+
+    type t =
+      | Done of Clause.n index
+      | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
           lookahead: Terminal.set;
           transitions: Redgraph.outer_transitions;
-          next: 'a t;
+          next: t;
         }
-    val compare : ('a -> 'a -> int) -> 'a t -> 'a t -> int
-    val cmon : ?accept:('a -> Cmon.t) -> 'a t -> Cmon.t
+    val compare : t -> t -> int
+    val cmon : t -> Cmon.t
     val derive :
-      accept:(label -> 'a -> unit) ->
-      direct:(label -> 'a t -> unit) ->
-      'a t -> unit
+      accept:(label -> Clause.n index -> unit) ->
+      direct:(label -> t -> unit) ->
+      t -> unit
   end
 end
 
@@ -382,22 +457,17 @@ struct
       let k = ref 0 in
       fun () -> incr k; !k
 
-    type quantifier_ordering = {
-      kind: Syntax.quantifier_kind;
-      index: int;
-    }
-
     type reduction = {
       pattern: Redgraph.state indexset;
-      capture: string option;
-      ordering: quantifier_ordering;
+      capture: Var.set;
+      ordering: Ordering.set;
     }
 
     let compare_reduction r1 r2 =
       if r1 == r2 then 0 else
         let c = IndexSet.compare r1.pattern r2.pattern in
         if c <> 0 then c else
-          let c = Option.compare String.compare r1.capture r2.capture in
+          let c = IndexSet.compare r1.capture r2.capture in
           if c <> 0 then c else
             compare r1.ordering r2.ordering
 
@@ -407,10 +477,10 @@ struct
       position : Syntax.position;
     }
     and desc =
-      | Set of Lr1.set * string option
+      | Set of Lr1.set * Var.set
       | Alt of t list
       | Seq of t list
-      | Star of t * quantifier_ordering
+      | Star of t * Ordering.set
       | Filter of Lr1.set
       | Reduce of reduction
 
@@ -419,17 +489,11 @@ struct
     let compare t1 t2 =
       Int.compare t1.uid t2.uid
 
-    let cmon_quantifier_ordering {kind; index} =
-      Cmon.record [
-        "kind",  Syntax.cmon_quantifier_kind kind;
-        "index", Cmon.int index;
-      ]
-
     let cmon_reduction {capture; pattern; ordering} =
       Cmon.record [
-        "capture", cmon_option Cmon.string capture;
+        "capture", cmon_indexset capture;
         "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
-        "ordering", cmon_quantifier_ordering ordering;
+        "ordering", cmon_indexset ordering;
       ]
 
     let cmon t =
@@ -438,11 +502,11 @@ struct
         | Set (lr1s, var) ->
           Cmon.construct "Set" [
             cmon_set_cardinal lr1s;
-            cmon_option Cmon.string var;
+            cmon_indexset var;
           ]
         | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
         | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
-        | Star (t, o) -> Cmon.construct "Star" [aux t; cmon_quantifier_ordering o]
+        | Star (t, o) -> Cmon.construct "Star" [aux t; cmon_indexset o]
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
         | Reduce r ->
@@ -454,18 +518,26 @@ struct
   module K = struct
     type label = {
       filter: Lr1.set;
-      vars: var list;
-      ordering: RE.quantifier_ordering list
+      vars: Var.set;
+      ordering: Ordering.set;
     }
 
-    type 'a t =
-      | Done of 'a
-      | More of RE.t * 'a t
+    let compare_label l1 l2 =
+      let c = IndexSet.compare l1.filter l2.filter in
+      if c <> 0 then c else
+        let c = IndexSet.compare l1.vars l2.vars in
+        if c <> 0 then c else
+          let c = IndexSet.compare l1.ordering l2.ordering in
+          c
+
+    type t =
+      | Done of Clause.n index
+      | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
           lookahead: Terminal.set;
           transitions: Redgraph.outer_transitions;
-          next: 'a t;
+          next: t;
         }
 
     let rec list_compare f xxs yys =
@@ -490,14 +562,14 @@ struct
       if c <> 0 then c else
         list_compare compare_outer_candidate r1.candidates r2.candidates
 
-    let rec compare cmp_a t1 t2 =
+    let rec compare t1 t2 =
       if t1 == t2 then 0 else
         match t1, t2 with
-        | Done a1, Done a2 -> cmp_a a1 a2
+        | Done a1, Done a2 -> compare_index a1 a2
         | More (e1, t1'), More (e2, t2') ->
           let c = RE.compare e1 e2 in
           if c <> 0 then c else
-            compare cmp_a t1' t2'
+            compare t1' t2'
         | Reducing r1, Reducing r2 ->
           let c = RE.compare_reduction r1.reduction r2.reduction in
           if c <> 0 then c else
@@ -505,7 +577,7 @@ struct
             if c <> 0 then c else
               let c = IndexSet.compare r1.lookahead r2.lookahead in
               if c <> 0 then c else
-                compare cmp_a r1.next r2.next
+                compare r1.next r2.next
         | Done _, (More _ | Reducing _) -> -1
         | (More _ | Reducing _), Done _ -> +1
         | More _, Reducing _ -> -1
@@ -555,21 +627,18 @@ struct
         "outer", cmon_transitions ~candidate:cmon_outer_candidate outer;
       ]*)
 
-    let cmon ?(accept=fun _ -> Cmon.constant "_") =
-      let rec self = function
-        | Done a ->
-          Cmon.constructor "Done" (accept a)
-        | More (re, next) ->
-          Cmon.construct "More" [RE.cmon re; self next]
-        | Reducing {reduction; lookahead; transitions; next} ->
-          Cmon.crecord "Reducing" [
-            "reduction"   , RE.cmon_reduction reduction;
-            "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
-            "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
-            "next"        , self next;
-          ]
-      in
-      self
+    let rec cmon = function
+      | Done a ->
+        Cmon.constructor "Done" (cmon_index a)
+      | More (re, next) ->
+        Cmon.construct "More" [RE.cmon re; cmon next]
+      | Reducing {reduction; lookahead; transitions; next} ->
+        Cmon.crecord "Reducing" [
+          "reduction"   , RE.cmon_reduction reduction;
+          "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
+          "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
+          "next"        , cmon next;
+        ]
 
     let not_empty s1 =
       not (IndexSet.is_empty s1)
@@ -583,6 +652,12 @@ struct
         Some {label with filter}
       else
         None
+
+    let label_capture label vars =
+      if not_empty vars then
+        {label with vars = IndexSet.union label.vars vars}
+      else
+        label
 
     let live_redstep (red : RE.reduction) (step : _ Redgraph.reduction_step) =
       intersecting red.pattern step.reachable
@@ -668,11 +743,7 @@ struct
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              let label = match var with
-                | None -> label
-                | Some var -> {label with vars = var :: label.vars}
-              in
-              direct label next
+              direct (label_capture label var) next
           end
 
         | Alt es ->
@@ -708,8 +779,8 @@ struct
       in
       let label = {
         filter = Lr1.all;
-        vars = [];
-        ordering = [];
+        vars = IndexSet.empty;
+        ordering = IndexSet.empty;
       } in
       process_k label k
 

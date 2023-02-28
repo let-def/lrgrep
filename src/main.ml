@@ -107,7 +107,8 @@ let lexer_definition =
 
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
 module Info = Mid.Info.Make(Grammar)
-module Regexp = Mid.Regexp.Make(Info)()
+open Mid.Regexp
+module Regexp = Make(Info)()
 
 (* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
 
@@ -323,8 +324,9 @@ module Transl = struct
     let immediate = ref IndexSet.empty in
     let rec step node k =
       K.derive
-        ~accept:(fun label () ->
-            assert (label.vars = []);
+        ~accept:(fun label clause ->
+            assert (Index.to_int clause = 0);
+            assert (IndexSet.is_empty label.vars);
             if node == lr1_trie_root then
               immediate := IndexSet.union !immediate label.filter
             else
@@ -347,62 +349,74 @@ module Transl = struct
           )
         k
     in
-    step lr1_trie_root (K.More (re, K.Done ()));
+    step lr1_trie_root (K.More (re, K.Done (Clause.of_int 0)));
     (!reached, !immediate)
 
-  let rec transl ~for_reduction re =
-    let order_index = ref (-1) in
-    let ordering kind =
-      incr order_index;
-      {RE. kind; index = !order_index}
+
+  let transl ~ordering =
+    let mk_ordering kind =
+      let negative = match kind with
+        | Shortest -> true
+        | Longest  -> false
+      in
+      IndexSet.singleton (ordering ~negative)
     in
-    let desc = match re.desc with
-      | Atom (capture, symbol) ->
-        if for_reduction && Option.is_some capture then
-          error re.position "Captures are not allowed inside reductions";
-        let set = match symbol with
-          | None -> Lr1.all
-          | Some sym ->
-            let sym = Lr1_index.get_symbol re.position sym in
-            if for_reduction && Symbol.is_terminal sym then
-              warn re.position "A reduction can only match non-terminals";
-            Lr1_index.states_of_symbol sym
-        in
-        RE.Set (set, None)
-      | Alternative res ->
-        RE.Alt (List.map (transl ~for_reduction) res)
-      | Repetition {expr; kind} ->
-        RE.Star (transl ~for_reduction expr, ordering kind)
-      | Reduce {capture; kind; expr} ->
-        if for_reduction then
-          error re.position "Reductions cannot be nested";
-        ignore capture;
-        ignore kind;
-        (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
-        let re = transl ~for_reduction:true expr in
-        let pattern, immediate = compile_reduce_expr re in
-        warn re.position
-          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
-          (IndexSet.cardinal immediate);
-        let r = RE.Reduce {capture = None; pattern; ordering = ordering kind} in
-        if IndexSet.is_empty immediate then
-          r
-        else if immediate == Lr1.all then
-          RE.Alt [RE.make re.position r; RE.make re.position (RE.Seq [])]
-        else
-          RE.Alt [RE.make re.position r; RE.make re.position (RE.Filter immediate)]
-      | Concat res ->
-        RE.Seq (List.map (transl ~for_reduction) res)
-      | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
-        let states =
-          transl_filter re.position ~lhs ~pre_anchored ~prefix ~suffix ~post_anchored
-        in
-        if IndexSet.is_empty states then
-          warn re.position "No items match this filter";
-        RE.Filter states
+    let rec transl ~for_reduction re =
+      let desc = match re.desc with
+        | Atom (capture, symbol) ->
+          if for_reduction && Option.is_some capture then
+            error re.position "Captures are not allowed inside reductions";
+          let set = match symbol with
+            | None -> Lr1.all
+            | Some sym ->
+              let sym = Lr1_index.get_symbol re.position sym in
+              if for_reduction && Symbol.is_terminal sym then
+                warn re.position "A reduction can only match non-terminals";
+              Lr1_index.states_of_symbol sym
+          in
+          RE.Set (set, IndexSet.empty)
+        | Alternative res ->
+          RE.Alt (List.map (transl ~for_reduction) res)
+        | Repetition {expr; kind} ->
+          RE.Star (transl ~for_reduction expr,
+                   mk_ordering kind)
+        | Reduce {capture; kind; expr} ->
+          if for_reduction then
+            error re.position "Reductions cannot be nested";
+          ignore capture;
+          ignore kind;
+          (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
+          let re = transl ~for_reduction:true expr in
+          let pattern, immediate = compile_reduce_expr re in
+          warn re.position
+            "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
+            (IndexSet.cardinal pattern) (cardinal Redgraph.state)
+            (IndexSet.cardinal immediate);
+          let r = RE.Reduce {
+              capture = IndexSet.empty;
+              pattern;
+              ordering = mk_ordering kind;
+            } in
+          if IndexSet.is_empty immediate then
+            r
+          else if immediate == Lr1.all then
+            RE.Alt [RE.make re.position r; RE.make re.position (RE.Seq [])]
+          else
+            RE.Alt [RE.make re.position r; RE.make re.position (RE.Filter immediate)]
+        | Concat res ->
+          RE.Seq (List.map (transl ~for_reduction) res)
+        | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
+          let states =
+            transl_filter re.position ~lhs ~pre_anchored ~prefix ~suffix ~post_anchored
+          in
+          if IndexSet.is_empty states then
+            warn re.position "No items match this filter";
+          RE.Filter states
+      in
+      RE.make re.position desc
     in
-    RE.make re.position desc
+    transl
+
 
 end
 
@@ -419,13 +433,7 @@ let parser_module =
 
 module Nfa = struct
   open Info
-  type k = int Regexp.K.t
-
-  module K = struct
-    type t = k
-    let compare t1 t2 = Regexp.K.compare Int.compare t1 t2
-  end
-
+  module K = Regexp.K
   module KMap = Map.Make(K)
   module KSet = Set.Make(K)
   module KSetMap = Map.Make(KSet)
@@ -435,259 +443,185 @@ module Nfa = struct
   type state = {
     (* State construction *)
     index: int;
-    k: k;
-    accept: IntSet.t;
+    k: K.t;
+    accept: Clause.set;
     transitions: (label * state lazy_t) list;
 
     (* NFA construction *)
     mutable visited: Lr1.set;
     mutable scheduled: Lr1.set;
-
-    (* Liveness analysis *)
-    mutable predecessors: state list;
-    mutable reach_accept: bool;
   }
 
-  let is_immediate_label : label -> bool = function
-    | {filter; vars = []; ordering = []} ->
-      IndexSet.equal filter Lr1.all
-    | _ -> false
+  let is_immediate_label {Regexp.K. filter; vars; ordering} =
+    IndexSet.equal filter Lr1.all &&
+    IndexSet.is_empty vars &&
+    IndexSet.is_empty ordering
 
-  let merge_labels (l1 : label) (l2 : label) : label =
-    {filter = IndexSet.union l1.filter l2.filter;
-     vars = l1.vars @ l2.vars;
-     ordering = l1.ordering @ l2.ordering}
+  let merge_labels (l1 : label) (l2 : label) : label = {
+    filter   = IndexSet.union l1.filter   l2.filter;
+    vars     = IndexSet.union l1.vars     l2.vars;
+    ordering = IndexSet.union l1.ordering l2.ordering;
+  }
 
-  let process_entry _oc (entry : Syntax.entry) =
-    let count = ref 0 in
-    let nfa = ref KMap.empty in
-    let rec get_state k =
-      match KMap.find_opt k !nfa with
-      | Some t -> t
-      | None ->
-        let index = !count in
-        incr count;
-        let accepted = ref IntSet.empty in
-        let transitions = ref KMap.empty in
-        let direct label k' =
-          match KMap.find_opt k' !transitions with
-          | Some label' -> label' := merge_labels label !label'
-          | None -> transitions := KMap.add k' (ref label) !transitions
-        in
-        let accept label x =
-          if is_immediate_label label then
-            accepted := IntSet.add x !accepted
-          else
-            direct label (Done x)
-        in
-        Regexp.K.derive ~accept ~direct k;
-        let accept = !accepted in
-        let transitions =
-          KMap.fold
-            (fun k' label acc -> (!label, lazy (get_state k')) :: acc)
-            !transitions []
-        in
-        let t = {
-          index; k; accept; transitions;
-          visited = IndexSet.empty;
-          scheduled = IndexSet.empty;
-          predecessors = [];
-          reach_accept = false;
-        } in
-        nfa := KMap.add k t !nfa;
-        t
-    in
-    let scheduled = ref [] in
-    let schedule st lr1s =
-      let lr1s = IndexSet.diff lr1s st.visited in
-      if not (IndexSet.is_empty lr1s) then (
-        if IndexSet.is_empty st.scheduled then
-          push scheduled st;
-        st.scheduled <- IndexSet.union st.scheduled lr1s
+  let get_transitions st =
+    let set' = Lr1.set_predecessors st.visited in
+    st.transitions
+    |> List.filter_map (fun ((label : label), st') ->
+        if Lazy.is_val st' then
+          let filter = Lr1.intersect label.filter set' in
+          Some ({label with filter}, Lazy.force st')
+        else
+          None
       )
-    in
-    let process st =
-      let states = Lr1.set_predecessors st.scheduled in
-      st.visited <- IndexSet.union st.scheduled st.visited;
-      st.scheduled <- IndexSet.empty;
-      List.iter (fun (label, st) ->
-          let states' = IndexSet.inter states label.Regexp.K.filter in
-          if not (IndexSet.is_empty states') then
-            schedule (Lazy.force st) states'
-        ) st.transitions
-    in
-    let rec flush () =
-      match !scheduled with
-      | [] -> ()
-      | todo ->
-        scheduled := [];
-        List.iter process todo;
-        flush ()
-    in
-    let initial_states =
-      entry.clauses |>
-      List.mapi begin fun i (clause : Syntax.clause) ->
-        (*print_cmon stderr (Front.Syntax.cmon_regular_expression clause.pattern);*)
-        let re = Transl.transl ~for_reduction:false clause.pattern in
-        let state = get_state Regexp.K.(More (re, Done i)) in
+
+  module Entry (E : sig val entry : Syntax.entry end)() = struct
+    open Fix.Indexing
+
+    module NFA = struct
+      let get_state =
+        let count = ref 0 in
+        let nfa = ref KMap.empty in
+        let rec aux k =
+          match KMap.find_opt k !nfa with
+          | Some t -> t
+          | None ->
+            let index = !count in
+            incr count;
+            let accepted = ref IndexSet.empty in
+            let transitions = ref KMap.empty in
+            let direct label k' =
+              match KMap.find_opt k' !transitions with
+              | Some label' -> label' := merge_labels label !label'
+              | None -> transitions := KMap.add k' (ref label) !transitions
+            in
+            let accept label x =
+              if is_immediate_label label then
+                accepted := IndexSet.add x !accepted
+              else
+                direct label (Regexp.K.Done x)
+            in
+            Regexp.K.derive ~accept ~direct k;
+            let accept = !accepted in
+            let transitions =
+              KMap.fold
+                (fun k' label acc -> (!label, lazy (aux k')) :: acc)
+                !transitions []
+            in
+            let t = {
+              index; k; accept; transitions;
+              visited = IndexSet.empty;
+              scheduled = IndexSet.empty;
+            } in
+            nfa := KMap.add k t !nfa;
+            t
+        in
+        aux
+
+      let scheduled = ref []
+
+      let schedule st lr1s =
+        let lr1s = IndexSet.diff lr1s st.visited in
+        if not (IndexSet.is_empty lr1s) then (
+          if IndexSet.is_empty st.scheduled then
+            push scheduled st;
+          st.scheduled <- IndexSet.union st.scheduled lr1s
+        )
+
+      let process st =
+        let states = Lr1.set_predecessors st.scheduled in
+        st.visited <- IndexSet.union st.scheduled st.visited;
+        st.scheduled <- IndexSet.empty;
+        List.iter (fun (label, st) ->
+            let states' = IndexSet.inter states label.Regexp.K.filter in
+            if not (IndexSet.is_empty states') then
+              schedule (Lazy.force st) states'
+          ) st.transitions
+
+      let rec flush () =
+        match !scheduled with
+        | [] -> ()
+        | todo ->
+          scheduled := [];
+          List.iter process todo;
+          flush ()
+
+      let process_clause ~ordering i (clause : Syntax.clause) =
+        let re = Transl.transl ~ordering ~for_reduction:false clause.pattern in
+        let state = get_state Regexp.K.(More (re, Done (Clause.of_int i))) in
         schedule state Lr1.idle;
         state
+
+      let initial =
+        let ordering = Ordering.gensym () in
+        let result = List.mapi (process_clause ~ordering) E.entry.clauses in
+        flush ();
+        result
+    end
+
+    module PreDFA = struct
+      module State = struct
+        type t = {
+          k: KSet.t;
+          accept: Clause.set;
+          visited: Lr1.set;
+        }
+        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
       end
-    in
-    flush ();
-    Printf.eprintf "NFA states: %d\n" (KMap.cardinal !nfa);
-    KMap.iter (fun _ source ->
-        List.iter (fun (_, target) ->
-            if Lazy.is_val target then (
-              let lazy target = target in
-              target.predecessors <- source :: target.predecessors
-            )
-          ) source.transitions
-      ) !nfa;
-    (*begin
-      let oc = open_out "nfa.dot" in
-      let fp fmt = Printf.fprintf oc fmt in
-      fp "digraph G {\n";
-      fp "  rankdir=\"LR\";\n";
-      fp "  node[fontname=%S nojustify=true shape=box];\n" "Monospace";
-      fp "  edge[fontname=%S nojustify=true shape=box];\n" "Monospace";
-      KMap.iter (fun _ source ->
-          let states = IndexSet.elements source.visited in
-          let rec take n = function
-            | x :: xs when n > 0 -> x :: take (n - 1) xs
-            | _ -> []
+
+      module Transition = struct
+        type t = {
+          source: State.n index;
+          target: State.n index;
+          label: label;
+        }
+        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+      end
+
+      let map = ref KSetMap.empty
+
+      let rec determinize states =
+        let k = List.fold_left (fun k st -> KSet.add st.k k) KSet.empty states in
+        match KSetMap.find_opt k !map with
+        | Some dfa_st -> dfa_st
+        | None ->
+          let visited =
+            List.fold_left (fun acc st -> Lr1.intersect acc st.visited)
+              Lr1.all states
           in
-          let states = take 100 states in
-          let expr = Format.asprintf "%a" Cmon.format (Regexp.K.cmon source.k) in
-          let items =
-            if source.predecessors = [] then
-              "<initial>"
-            else
-              Format.asprintf "%a"
-                Grammar.Print.itemset
-                (List.concat_map (fun state ->
-                     (List.map
-                        (fun (p, n) -> Production.to_g p, n)
-                        (Lr1.items state))
-                   ) states)
+          let accept =
+            List.fold_left (fun acc st -> IndexSet.union st.accept acc)
+              IndexSet.empty states
           in
-          fp " st%d[label=%s];\n" source.index
-            (escape_and_align_left
-               "%s\n%d transitions\n%s\nincoming: %s\noutgoing: %s"
-               expr
-               (List.length source.transitions)
-               items
-               (if IndexSet.cardinal source.visited < 100
-                then string_of_indexset ~index:Lr1.to_string source.visited
-                else "...")
-               (if IndexSet.cardinal source.visited < 20
-                then string_of_indexset ~index:Lr1.to_string (Lr1.set_predecessors source.visited)
-                else "...")
-            )
-          ;
-          List.iter (fun (label, target) ->
-              if Lazy.is_val target then (
-                let target = Lazy.force target in
-                let label =
-                  if label == Lr1.all then "_"
-                  else if IndexSet.cardinal label <= 10 then (
-                    Lr1.set_to_string label ^ "\n predecessors: " ^
-                    Lr1.set_to_string (Lr1.set_predecessors label)
-                  ) else
-                    List.map (fun lr1 ->
-                        match Lr1.incoming lr1 with
-                        | None -> "<initial>"
-                        | Some sym -> Symbol.name sym
-                      ) (IndexSet.elements label)
-                    |> List.sort_uniq String.compare
-                    |> String.concat "\n"
-                in
-                let label =
-                  if String.length label > 1024 then
-                    String.sub label 0 1020 ^ "..."
-                  else
-                    label
-                in
-                fp "st%d -> st%d [label=%S];\n"
-                  source.index target.index label
-              )
-            ) source.transitions;
-        ) !nfa;
-      fp "}\n";
-      close_out oc;
-    end;*)
-    let live = ref 0 in
-    let rec set_accept st =
-      if not st.reach_accept then (
-        incr live;
-        st.reach_accept <- true;
-        List.iter set_accept st.predecessors
-      )
-    in
-    KMap.iter
-      (fun _ st -> if not (IntSet.is_empty st.accept) then set_accept st)
-      !nfa;
-    let reduce_count = ref 0 in
-    KMap.iter (fun k st ->
-        match k with
-        | Regexp.K.Reducing _ when st.reach_accept -> incr reduce_count
-        | _ -> ()
-      ) !nfa;
-    Printf.eprintf "NFA live states: %d (%d reductions)\n" !live !reduce_count;
-    let open Fix.Indexing in
-    let module State = struct
-      type t = {
-        k: KSet.t;
-        accept: IntSet.t;
-        visited: Lr1.set;
-      }
-      include IndexBuffer.Gen(struct type nonrec _ t = t end)()
-    end in
-    let module Transition = struct
-      type t = {
-        source: State.n index;
-        target: State.n index;
-        label: Lr1.set;
-      }
-      include IndexBuffer.Gen(struct type nonrec _ t = t end)()
-    end in
-    let dfa = ref KSetMap.empty in
-    let rec determinize states =
-      let k = List.fold_left (fun k st -> KSet.add st.k k) KSet.empty states in
-      match KSetMap.find_opt k !dfa with
-      | Some dfa_st -> dfa_st
-      | None ->
-        let visited =
-          List.fold_left (fun acc st -> Lr1.intersect acc st.visited) Lr1.all states
-        in
-        let accept =
-          List.fold_left (fun acc st -> IntSet.union st.accept acc) IntSet.empty states
-        in
-        let index = State.add {k; accept; visited} in
-        dfa := KSetMap.add k index !dfa;
-        List.concat_map (fun st ->
-            let set' = Lr1.set_predecessors st.visited in
-            List.filter_map (fun (label, st') ->
-                if Lazy.is_val st' then
-                  let st' = Lazy.force st' in
-                  if st'.reach_accept then
-                    Some (Lr1.intersect label.Regexp.K.filter set', st')
-                  else
-                    None
-                else
-                  None
-              ) st.transitions
-          ) states
-        |> IndexRefine.annotated_partition
-        |> List.iter (fun (label, states) ->
-            ignore (Transition.add
-                      {source=index; label; target=determinize states})
-          );
-        index
-    in
-    let initial_state = determinize initial_states in
-    Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !dfa);
-    let module DFA = struct
+          let source = State.add {k; accept; visited} in
+          map := KSetMap.add k source !map;
+          let prepare_for_partition ((l : label), st') = (l.filter, (l, st')) in
+          let add_transition (filter, labelled_states) =
+            let label : label = {
+              filter;
+              vars = List.fold_left
+                  (fun acc ((l' : label), _) -> IndexSet.union acc l'.vars)
+                  IndexSet.empty labelled_states;
+              ordering = List.fold_left
+                  (fun acc ((l' : label), _) -> IndexSet.union acc l'.ordering)
+                  IndexSet.empty labelled_states;
+            } in
+            let states = List.map snd labelled_states in
+            let target = determinize states in
+            ignore (Transition.add {source; label; target})
+          in
+          states
+          |> List.concat_map
+            (fun st -> List.map prepare_for_partition (get_transitions st))
+          |> IndexRefine.annotated_partition
+          |> List.iter add_transition;
+          source
+
+      let initial_state = determinize NFA.initial
+    end
+
+    module DFA = struct
+      open PreDFA
+
       type states = State.n
       let states = State.n
 
@@ -701,22 +635,22 @@ module Nfa = struct
       let initials f = f initial_state
       let finals f =
         Index.iter states
-          (fun st -> if not (IntSet.is_empty (State.get st).accept) then f st)
+          (fun st -> if not (IndexSet.is_empty (State.get st).accept) then f st)
 
       let refinements refine =
         (* Refine states by accepted actions *)
         begin
           let acc = ref [] in
           Index.iter states (fun st ->
-              if not (IntSet.is_empty (State.get st).accept) then
+              if not (IndexSet.is_empty (State.get st).accept) then
                 push acc st
             );
           Misc.group_by !acc
             ~compare:(fun st1 st2 ->
-                IntSet.compare (State.get st1).accept (State.get st2).accept)
+                IndexSet.compare (State.get st1).accept (State.get st2).accept)
             ~group:(fun st sts -> st :: sts)
           |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
-        end;
+        end
         (* Refine states by the lr1 set that can reach them *)
         (*begin
             let module Lr1Set = struct
@@ -733,26 +667,33 @@ module Nfa = struct
               );
             SetMap.iter (fun _ xs -> refine (fun ~add -> List.iter add xs)) !acc
           end*)
-    end in
-    let module MIN = Valmari.Minimize
-        (struct type t = Lr1.set let compare = IndexSet.compare end)
-        (DFA)
-    in
-    let label_domain = Vector.make MIN.states IndexSet.empty in
+    end
+
+    module MinDFA = Valmari.Minimize (struct
+        type t = Regexp.K.label
+        let compare = Regexp.K.compare_label
+      end) (DFA)
+  end
+
+  let process_entry _oc (entry : Syntax.entry) =
+    let open Fix.Indexing in
+    let open Entry(struct let entry = entry end)() in
+    Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !PreDFA.map);
+    let label_domain = Vector.make MinDFA.states IndexSet.empty in
     Index.iter DFA.states (fun st ->
-        match MIN.transport_state st with
+        match MinDFA.transport_state st with
         | None -> ()
         | Some st' ->
           let domain = Vector.get label_domain st' in
-          let domain = IndexSet.union domain (State.get st).visited in
+          let domain = IndexSet.union domain (PreDFA.State.get st).visited in
           Vector.set label_domain st' domain
       );
-    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MIN.states);
-    List.iter2 (fun init (clause : Syntax.clause) ->
+    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states)
+    (*List.iter2 (fun init (clause : Syntax.clause) ->
         if not init.reach_accept then
           Printf.eprintf "Clause line %d is unreachable\n"
             clause.pattern.position.line;
-      ) initial_states entry.clauses;
+      ) initial_states entry.clauses;*)
 end
 
 
