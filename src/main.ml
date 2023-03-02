@@ -353,13 +353,22 @@ module Transl = struct
     (!reached, !immediate)
 
 
-  let transl ~ordering =
+  let transl ~capture ~ordering ~for_reduction re =
+    let all_ord = ref IndexSet.empty in
+    let all_cap = ref IndexSet.empty in
     let mk_ordering kind =
       let negative = match kind with
         | Shortest -> true
         | Longest  -> false
       in
-      IndexSet.singleton (ordering ~negative)
+      let index = ordering ~negative in
+      all_ord := IndexSet.add index !all_ord;
+      IndexSet.singleton index
+    in
+    let mk_capture kind name =
+      let index = capture kind name in
+      all_cap := IndexSet.add index !all_cap;
+      IndexSet.singleton index
     in
     let rec transl ~for_reduction re =
       let desc = match re.desc with
@@ -374,7 +383,11 @@ module Transl = struct
                 warn re.position "A reduction can only match non-terminals";
               Lr1_index.states_of_symbol sym
           in
-          RE.Set (set, IndexSet.empty)
+          let cap = match capture with
+            | None -> IndexSet.empty
+            | Some name -> mk_capture `Value name
+          in
+          RE.Set (set, cap)
         | Alternative res ->
           RE.Alt (List.map (transl ~for_reduction) res)
         | Repetition {expr; kind} ->
@@ -383,8 +396,6 @@ module Transl = struct
         | Reduce {capture; kind; expr} ->
           if for_reduction then
             error re.position "Reductions cannot be nested";
-          ignore capture;
-          ignore kind;
           (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
           let re = transl ~for_reduction:true expr in
           let pattern, immediate = compile_reduce_expr re in
@@ -392,11 +403,15 @@ module Transl = struct
             "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
             (IndexSet.cardinal pattern) (cardinal Redgraph.state)
             (IndexSet.cardinal immediate);
-          let r = RE.Reduce {
-              capture = IndexSet.empty;
-              pattern;
-              ordering = mk_ordering kind;
-            } in
+          let capture0, capture = match capture with
+            | None -> IndexSet.empty, IndexSet.empty
+            | Some name ->
+              let capture0 = mk_capture `Start_loc name in
+              let capture = mk_capture `End_loc name in
+              (capture0, capture)
+          in
+          let ordering = mk_ordering kind in
+          let r = RE.Reduce (capture0, {capture; pattern; ordering}) in
           if IndexSet.is_empty immediate then
             r
           else if immediate == Lr1.all then
@@ -415,7 +430,8 @@ module Transl = struct
       in
       RE.make re.position desc
     in
-    transl
+    let result = transl ~for_reduction re in
+    (!all_ord, !all_cap, result)
 
 
 end
@@ -442,7 +458,6 @@ module Nfa = struct
 
   type state = {
     (* State construction *)
-    index: int;
     k: K.t;
     accept: Clause.set;
     transitions: (label * state lazy_t) list;
@@ -478,15 +493,12 @@ module Nfa = struct
     open Fix.Indexing
 
     module NFA = struct
-      let get_state =
-        let count = ref 0 in
+      let get_state () =
         let nfa = ref KMap.empty in
         let rec aux k =
           match KMap.find_opt k !nfa with
           | Some t -> t
           | None ->
-            let index = !count in
-            incr count;
             let accepted = ref IndexSet.empty in
             let transitions = ref KMap.empty in
             let direct label k' =
@@ -508,73 +520,92 @@ module Nfa = struct
                 !transitions []
             in
             let t = {
-              index; k; accept; transitions;
+              k; accept; transitions;
               visited = IndexSet.empty;
               scheduled = IndexSet.empty;
             } in
             nfa := KMap.add k t !nfa;
             t
         in
-        aux
+        nfa, aux
 
-      let scheduled = ref []
+      let force_lr1_stacks initial =
+        let scheduled = ref [] in
+        let schedule st lr1s =
+          let lr1s = IndexSet.diff lr1s st.visited in
+          if not (IndexSet.is_empty lr1s) then (
+            if IndexSet.is_empty st.scheduled then
+              push scheduled st;
+            st.scheduled <- IndexSet.union st.scheduled lr1s
+          )
+        in
+        let process st =
+          let states = Lr1.set_predecessors st.scheduled in
+          st.visited <- IndexSet.union st.scheduled st.visited;
+          st.scheduled <- IndexSet.empty;
+          List.iter (fun (label, st) ->
+              let states' = IndexSet.inter states label.Regexp.K.filter in
+              if not (IndexSet.is_empty states') then
+                schedule (Lazy.force st) states'
+            ) st.transitions
+        in
+        let rec flush () =
+          match !scheduled with
+          | [] -> ()
+          | todo ->
+            scheduled := [];
+            List.iter process todo;
+            flush ()
+        in
+        schedule initial Lr1.idle;
+        flush ()
 
-      let schedule st lr1s =
-        let lr1s = IndexSet.diff lr1s st.visited in
-        if not (IndexSet.is_empty lr1s) then (
-          if IndexSet.is_empty st.scheduled then
-            push scheduled st;
-          st.scheduled <- IndexSet.union st.scheduled lr1s
-        )
-
-      let process st =
-        let states = Lr1.set_predecessors st.scheduled in
-        st.visited <- IndexSet.union st.scheduled st.visited;
-        st.scheduled <- IndexSet.empty;
-        List.iter (fun (label, st) ->
-            let states' = IndexSet.inter states label.Regexp.K.filter in
-            if not (IndexSet.is_empty states') then
-              schedule (Lazy.force st) states'
-          ) st.transitions
-
-      let rec flush () =
-        match !scheduled with
-        | [] -> ()
-        | todo ->
-          scheduled := [];
-          List.iter process todo;
-          flush ()
-
-      let process_clause ~ordering i (clause : Syntax.clause) =
-        let re = Transl.transl ~ordering ~for_reduction:false clause.pattern in
-        let state = get_state Regexp.K.(More (re, Done (Clause.of_int i))) in
-        schedule state Lr1.idle;
-        state
+      let process_clause ~capture ~ordering i (clause : Syntax.clause) =
+        let all_cap, all_ord, re =
+          Transl.transl ~capture ~ordering ~for_reduction:false clause.pattern
+        in
+        let nfa, get_state = get_state () in
+        let initial = get_state Regexp.K.(More (re, Done (Clause.of_int i))) in
+        force_lr1_stacks initial;
+        (all_cap, all_ord, !nfa, initial)
 
       let initial =
         let ordering = Ordering.gensym () in
-        let result = List.mapi (process_clause ~ordering) E.entry.clauses in
-        flush ();
+        let capture = Var.gensym () in
+        let captures_spec = ref IndexMap.empty in
+        let capture kind name =
+          let index = capture () in
+          captures_spec := IndexMap.add index (kind, name) !captures_spec;
+          index
+        in
+        let result = List.mapi (process_clause ~capture ~ordering) E.entry.clauses in
         result
+
+      let total =
+        let result = ref IndexSet.empty in
+        List.iteri (fun i (clause : Syntax.clause) ->
+            let is_total =
+              match clause.action with
+              | Syntax.Total _ -> true
+              | Syntax.Unreachable -> true
+              | Syntax.Partial _ -> false
+            in
+            if is_total then
+              result := IndexSet.add (Clause.of_int i) !result
+          ) E.entry.clauses;
+        !result
     end
 
-    module PreDFA = struct
+    module DFA = struct
       module State = struct
-        type t = {
+        type 'st t = {
           k: KSet.t;
           accept: Clause.set;
           visited: Lr1.set;
+          mutable fwd: (label * 'st index) list;
+          mutable bkd: (label * 'st index) list;
         }
-        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
-      end
-
-      module Transition = struct
-        type t = {
-          source: State.n index;
-          target: State.n index;
-          label: label;
-        }
-        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+        include IndexBuffer.Gen(struct type nonrec 'st t = 'st t end)()
       end
 
       let map = ref KSetMap.empty
@@ -582,7 +613,7 @@ module Nfa = struct
       let rec determinize states =
         let k = List.fold_left (fun k st -> KSet.add st.k k) KSet.empty states in
         match KSetMap.find_opt k !map with
-        | Some dfa_st -> dfa_st
+        | Some index -> index
         | None ->
           let visited =
             List.fold_left (fun acc st -> Lr1.intersect acc st.visited)
@@ -592,10 +623,11 @@ module Nfa = struct
             List.fold_left (fun acc st -> IndexSet.union st.accept acc)
               IndexSet.empty states
           in
-          let source = State.add {k; accept; visited} in
+          let source_state = {State. k; accept; visited; fwd = []; bkd = []} in
+          let source = State.add source_state in
           map := KSetMap.add k source !map;
           let prepare_for_partition ((l : label), st') = (l.filter, (l, st')) in
-          let add_transition (filter, labelled_states) =
+          let add_back_transition (filter, labelled_states) =
             let label : label = {
               filter;
               vars = List.fold_left
@@ -607,23 +639,66 @@ module Nfa = struct
             } in
             let states = List.map snd labelled_states in
             let target = determinize states in
-            ignore (Transition.add {source; label; target})
+            let target_state = State.get target in
+            target_state.bkd <- (label, source) :: target_state.bkd;
+            source_state.fwd <- (label, target) :: source_state.fwd;
           in
           states
           |> List.concat_map
             (fun st -> List.map prepare_for_partition (get_transitions st))
           |> IndexRefine.annotated_partition
-          |> List.iter add_transition;
+          |> List.iter add_back_transition;
           source
 
-      let initial_state = determinize NFA.initial
+      let initial = determinize (List.map (fun (_,_,_,t) -> t ) NFA.initial)
     end
 
-    module DFA = struct
-      open PreDFA
+    module Analysis = struct
+      (* The DFA is initialized with backward transitions. Dataflow analysis:
+
+         1) Reachability
+
+         Determine which actions are reachable from each path
+         - start from accepting states, backpropagate accepted states
+         - don't propagate if an accepting state with higher priority has been reached
+         - find fix point
+
+         Remove bkd transitions which source is a total accepting state with
+         higher priority.
+
+         2) Captures
+         Find which capture are total and the set of transitions that trigger them
+
+         find total captures: backpropagate captured values for each clause
+
+         3) Ordering
+
+         4) Register allocation
+
+      *)
+    end
+
+    module MinimizableDFA = struct
+      open DFA
 
       type states = State.n
       let states = State.n
+
+      module Transition = struct
+        type t = {
+          source: State.n index;
+          target: State.n index;
+          label: label;
+        }
+        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+
+        let () =
+          KSetMap.iter (fun _ source ->
+              List.iter (fun (label, target) ->
+                  ignore (add {source; target; label})
+                ) (DFA.State.get source).fwd
+            ) !DFA.map
+      end
 
       type transitions = Transition.n
       let transitions = Transition.n
@@ -632,7 +707,7 @@ module Nfa = struct
       let source i = (Transition.get i).source
       let target i = (Transition.get i).target
 
-      let initials f = f initial_state
+      let initials f = f DFA.initial
       let finals f =
         Index.iter states
           (fun st -> if not (IndexSet.is_empty (State.get st).accept) then f st)
@@ -672,20 +747,20 @@ module Nfa = struct
     module MinDFA = Valmari.Minimize (struct
         type t = Regexp.K.label
         let compare = Regexp.K.compare_label
-      end) (DFA)
+      end) (MinimizableDFA)
   end
 
   let process_entry _oc (entry : Syntax.entry) =
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
-    Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !PreDFA.map);
+    Printf.eprintf "DFA states: %d\n" (KSetMap.cardinal !DFA.map);
     let label_domain = Vector.make MinDFA.states IndexSet.empty in
-    Index.iter DFA.states (fun st ->
+    Index.iter MinimizableDFA.states (fun st ->
         match MinDFA.transport_state st with
         | None -> ()
         | Some st' ->
           let domain = Vector.get label_domain st' in
-          let domain = IndexSet.union domain (PreDFA.State.get st).visited in
+          let domain = IndexSet.union domain (DFA.State.get st).visited in
           Vector.set label_domain st' domain
       );
     Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states)
