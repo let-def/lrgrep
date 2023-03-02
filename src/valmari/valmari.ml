@@ -79,6 +79,10 @@ sig
     transitions index -> In.transitions index
 end = struct
 
+  let () =
+    if cardinal In.transitions = 0 then
+      invalid_arg "Valmari: degenerate input, no transition"
+
   (* State partition *)
   let blocks = Partition.create In.states
 
