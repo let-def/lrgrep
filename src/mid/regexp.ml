@@ -174,7 +174,7 @@ module type RE = sig
     | Star of t * Ordering.set
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
-    | Reduce of reduction
+    | Reduce of Var.set * reduction
     (** The reduction operator *)
 
   (** Introduce a new term, allocating a unique ID *)
@@ -482,7 +482,7 @@ struct
       | Seq of t list
       | Star of t * Ordering.set
       | Filter of Lr1.set
-      | Reduce of reduction
+      | Reduce of Var.set * reduction
 
     let make position desc = {uid = uid (); desc; position}
 
@@ -509,8 +509,8 @@ struct
         | Star (t, o) -> Cmon.construct "Star" [aux t; cmon_indexset o]
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-        | Reduce r ->
-          Cmon.constructor "Reduce" (cmon_reduction r)
+        | Reduce (var, r) ->
+          Cmon.construct "Reduce" [cmon_indexset var; cmon_reduction r]
       in
       aux t
   end
@@ -762,7 +762,8 @@ struct
             | Some label' -> process_k label' next
           end
 
-        | Reduce r ->
+        | Reduce (cap, r) ->
+          let label = label_capture label cap in
           let matching = IndexSet.filter (fun lr1 ->
               let steps = Vector.get Redgraph.initial lr1 in
               let on_outer reduction lookahead = function
