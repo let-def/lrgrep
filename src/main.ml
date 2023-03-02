@@ -467,6 +467,8 @@ module Automata = struct
           let array = Array.of_list E.entry.clauses
         end)
 
+      let n = Vector.length vector
+
       let total =
         IndexSet.init_from_set (Vector.length vector)
           (fun clause ->
@@ -636,6 +638,7 @@ module Automata = struct
       type 'st t = {
         threads: ThSet.t;
         accept: Clauses.n indexset;
+        mutable reachable: Clauses.n indexset;
         visited: Lr1.set;
         mutable fwd: (label * 'st index) list;
         mutable bkd: (label * 'st index) list;
@@ -660,7 +663,10 @@ module Automata = struct
               )
               threads (IndexSet.empty, Lr1.all)
           in
-          let source_state = {threads; accept; visited; fwd = []; bkd = []} in
+          let source_state = {
+            threads; accept; visited; reachable=IndexSet.empty;
+            fwd = []; bkd = [];
+          } in
           let source = add source_state in
           map := ThSetMap.add threads source !map;
           let prepare_for_partition clause (l, nfa) =
@@ -712,17 +718,71 @@ module Automata = struct
 
          Remove bkd transitions which source is a total accepting state with
          higher priority.
-
-         2) Captures
-         Find which capture are total and the set of transitions that trigger them
-
-         find total captures: backpropagate captured values for each clause
-
-         3) Ordering
-
-         4) Register allocation
-
       *)
+
+      let () =
+        let reachable st reached =
+          match IndexSet.minimum (IndexSet.inter Clauses.total st.DFA.accept) with
+          | None -> reached
+          | Some minimum ->
+            IndexSet.inter
+              reached
+              (IndexSet.init_interval (Index.of_int Clauses.n 0) minimum)
+        in
+        let update_reachable (st : _ DFA.t) reached =
+          let reached = reachable st reached in
+          let result = not (IndexSet.subset reached st.reachable) in
+          if result then
+            st.reachable <- IndexSet.union st.reachable reached;
+          result
+        in
+        let compute_reachable () =
+          let todo = ref [] in
+          let process target =
+            let st = DFA.get target in
+            let reachable = IndexSet.union st.accept st.reachable in
+            List.iter (fun (_, source) ->
+                if update_reachable (DFA.get source) reachable then
+                  push todo source
+              ) st.bkd
+          in
+          Index.iter DFA.n process;
+          let rec loop () =
+            match !todo with
+            | [] -> ()
+            | more ->
+              todo := [];
+              List.iter process more;
+              loop ()
+          in
+          loop ()
+        in
+        compute_reachable ();
+        (* Remove unreachable back transitions *)
+        let filtered = ref 0 in
+        Index.iter DFA.n (fun target ->
+            let st = DFA.get target in
+            let reached = IndexSet.union st.accept st.reachable in
+            st.bkd <-
+              List.filter (fun (_, source) ->
+                  let reached = reachable (DFA.get source) reached in
+                  let remove = IndexSet.is_empty reached in
+                  if remove then incr filtered;
+                  not remove
+                ) st.bkd
+          );
+        Printf.eprintf "Action reachability: removed %d back transitions\n" !filtered
+
+      (*
+       2) Captures
+       Find which capture are total and the set of transitions that trigger them
+       Backpropagate captured values for each clause
+
+       3) Ordering
+
+       4) Register allocation
+     *)
+
     end
 
     module MinimizableDFA = struct
@@ -738,10 +798,10 @@ module Automata = struct
         include IndexBuffer.Gen(struct type nonrec _ t = t end)()
 
         let () =
-          DFA.ThSetMap.iter (fun _ source ->
-              List.iter (fun (label, target) ->
+          DFA.ThSetMap.iter (fun _ target ->
+              List.iter (fun (label, source) ->
                   ignore (add {source; target; label})
-                ) (DFA.get source).fwd
+                ) (DFA.get target).bkd
             ) !DFA.map
       end
 
