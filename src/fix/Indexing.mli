@@ -227,7 +227,18 @@ module Vector : sig
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
 
   module type V = sig type n type a val vector : (n, a) vector end
+
+  val fold_left : ('a -> 'b -> 'a) -> 'a -> (_, 'b) t -> 'a
+  val fold_right : ('b -> 'a -> 'a) -> (_, 'b) t -> 'a -> 'a
+
+  val to_array : (_, 'a) t -> 'a array
+  val to_list : (_, 'a) t -> 'a list
   val of_array : 'a array -> (module V with type a = 'a)
+  val of_list : 'a list -> (module V with type a = 'a)
+
   module Of_array(A : sig type a val array : a array end) :
+    V with type a = A.a
+
+  module Of_list(A : sig type a val list : a list end) :
     V with type a = A.a
 end

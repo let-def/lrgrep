@@ -19,18 +19,6 @@ end = struct
     fun () -> incr r; Index.of_int n !r
 end
 
-module Clause : sig
-  type n
-  type t = n index
-  type set = n indexset
-  val of_int : int -> n index
-end = struct
-  include Positive
-  type t = n index
-  type set = n indexset
-  let of_int = Index.of_int n
-end
-
 module Ordering : sig
   type n
   type t = n index
@@ -209,7 +197,7 @@ module type S = sig
     val compare_label : label -> label -> int
 
     type t =
-      | Done of Clause.n index
+      | Done
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
@@ -219,10 +207,23 @@ module type S = sig
         }
     val compare : t -> t -> int
     val cmon : t -> Cmon.t
-    val derive :
-      accept:(label -> Clause.n index -> unit) ->
-      direct:(label -> t -> unit) ->
-      t -> unit
+
+    (* TODO
+       There is no way to detect immediate match (empty (sub-)regex leading
+       immediately to Done).
+       The case is handled by looking for [(empty_label, Done)] in the result
+       list, where [empty_label] is a label capturing and filtering nothing
+       (vars and ordering are empty, filter = Lr1.all).
+
+       However, this does not allow to distinguish between the regular
+       expressions ϵ and _ which will both lead to "Done" while matching no
+       transitions.
+
+       TODO not sure.
+       To simplify the NFA a bit, we could normalize by splitting disjunctions
+       before derivation.
+    *)
+    val derive : t -> (label * t) list
   end
 end
 
@@ -531,7 +532,7 @@ struct
           c
 
     type t =
-      | Done of Clause.n index
+      | Done
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
@@ -565,7 +566,7 @@ struct
     let rec compare t1 t2 =
       if t1 == t2 then 0 else
         match t1, t2 with
-        | Done a1, Done a2 -> compare_index a1 a2
+        | Done, Done -> 0
         | More (e1, t1'), More (e2, t2') ->
           let c = RE.compare e1 e2 in
           if c <> 0 then c else
@@ -578,8 +579,8 @@ struct
               let c = IndexSet.compare r1.lookahead r2.lookahead in
               if c <> 0 then c else
                 compare r1.next r2.next
-        | Done _, (More _ | Reducing _) -> -1
-        | (More _ | Reducing _), Done _ -> +1
+        | Done, (More _ | Reducing _) -> -1
+        | (More _ | Reducing _), Done -> +1
         | More _, Reducing _ -> -1
         | Reducing _, More _ -> +1
 
@@ -628,8 +629,8 @@ struct
       ]*)
 
     let rec cmon = function
-      | Done a ->
-        Cmon.constructor "Done" (cmon_index a)
+      | Done ->
+        Cmon.constant "Done"
       | More (re, next) ->
         Cmon.construct "More" [RE.cmon re; cmon next]
       | Reducing {reduction; lookahead; transitions; next} ->
@@ -694,7 +695,8 @@ struct
         on_outer r lookahead outer;
       !matched
 
-    let derive ~accept ~direct k =
+    let derive k =
+      let acc = ref [] in
       let rec reduce_outer matching next label reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
           let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
@@ -709,7 +711,7 @@ struct
           List.iter visit_candidate step.candidates;
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
-              direct label (Reducing {reduction; transitions; lookahead; next});
+              push acc (label, Reducing {reduction; transitions; lookahead; next});
             | _ -> ()
           end
         | _ -> ()
@@ -722,10 +724,9 @@ struct
         else
           None
       in
-      let rec process_k label k =
-        match k with
-        | Done a ->
-          accept label a
+      let rec process_k label = function
+        | Done ->
+          push acc (label, Done)
 
         | More (re, next) as self ->
           process_re label self next re.desc
@@ -743,7 +744,7 @@ struct
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              direct (label_capture label var) next
+              push acc(label_capture label var, next)
           end
 
         | Alt es ->
@@ -768,8 +769,9 @@ struct
               let steps = Vector.get Redgraph.initial lr1 in
               let on_outer reduction lookahead = function
                 | (step :: _) as transitions when live_redstep reduction step ->
-                  direct {label with filter = IndexSet.singleton lr1}
-                    (Reducing {reduction; lookahead; transitions; next})
+                  let label = {label with filter = IndexSet.singleton lr1} in
+                  let next = Reducing {reduction; lookahead; transitions; next} in
+                  push acc (label, next)
                 | _ -> ()
               in
               reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
@@ -783,7 +785,8 @@ struct
         vars = IndexSet.empty;
         ordering = IndexSet.empty;
       } in
-      process_k label k
+      process_k label k;
+      !acc
 
   end
 end
