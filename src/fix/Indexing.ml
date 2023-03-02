@@ -115,7 +115,8 @@ module Index = struct
 
   let of_int (n : 'n cardinal) i : 'n index =
     let n = cardinal n in
-    assert (0 <= i && i < n);
+    if i < 0 || i >= n then
+      invalid_arg "Index.of_int";
     i
 
   let to_int i = i
@@ -194,9 +195,19 @@ module Vector = struct
   let iter = Array.iter
   let iteri = Array.iteri
 
+  let fold_left = Array.fold_left
+  let fold_right = Array.fold_right
+
   module type V = sig type n type a val vector : (n, a) vector end
+
   let of_array (type a) (arr : a array) : (module V with type a = a) =
     (module struct type n type nonrec a = a let vector = arr end)
+
+  let of_list (type a) (arr : a list) : (module V with type a = a) =
+    (module struct type n type nonrec a = a let vector = Array.of_list arr end)
+
+  let to_list = Array.to_list
+  let to_array x = x
 
   module Of_array(A : sig type a val array : a array end) :
     V with type a = A.a =
@@ -204,5 +215,13 @@ module Vector = struct
     type n
     type a = A.a
     let vector = A.array
+  end
+
+  module Of_list(A : sig type a val list : a list end) :
+    V with type a = A.a =
+  struct
+    type n
+    type a = A.a
+    let vector = Array.of_list A.list
   end
 end
