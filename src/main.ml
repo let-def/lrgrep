@@ -591,7 +591,7 @@ module Automata = struct
         schedule initial Lr1.idle;
         flush ()
 
-      let rec compute_ranks next st =
+      let compute_ranks next st =
         assert (st.rank <> -1);
         let rank = st.rank + 1 in
         List.fold_left (fun acc (_, st') ->
@@ -608,8 +608,7 @@ module Automata = struct
       let compute_ranks st =
         let rec loop = function
           | [] -> ()
-          | states ->
-            loop (List.fold_left compute_ranks [] states)
+          | states -> loop (List.fold_left compute_ranks [] states)
         in
         assert (st.rank = -1);
         st.rank <- 0;
@@ -732,6 +731,10 @@ module Automata = struct
             NFA.clauses
         in
         determinize (Vector.fold_right ThSet.add threads ThSet.empty)
+
+      let vector = freeze ()
+
+      let get = Vector.get vector
     end
 
     module Analysis = struct
@@ -801,15 +804,72 @@ module Automata = struct
           );
         Printf.eprintf "Action reachability: removed %d back transitions\n" !filtered
 
-      (*
-       2) Captures
-       Find which capture are total and the set of transitions that trigger them
-       Backpropagate captured values for each clause
+      (* 2) Captures
+         Find which capture are total and the set of transitions that trigger them
+         Backpropagate captured values for each clause *)
 
-       3) Ordering
+      module One = Const(struct let cardinal = 1 end)
+      let one = Index.of_int One.n 0
 
-       4) Register allocation
-     *)
+      let _ =
+        let captures = Vector.make DFA.n (IndexSet.empty, IndexMap.empty) in
+        let todo = ref [] in
+        let update st (pending, bound) =
+          let (pending', bound') = Vector.get captures st in
+          let pending = IndexSet.union pending pending' in
+          let bound =
+            IndexMap.union (fun _ a b -> Some (IndexSet.union a b))
+              bound bound'
+          in
+          if not (IndexMap.equal IndexSet.equal bound bound') ||
+             not (IndexSet.equal pending pending') then (
+            Vector.set captures st (pending, bound);
+            push todo st
+          )
+        in
+        let process src =
+          let (pending, bound) = Vector.get captures src in
+          List.iter (fun (label, tgt) ->
+              let pending = IndexSet.diff pending label.K.vars in
+              let bound =
+                IndexSet.fold (fun var cap -> IndexMap.add var label.filter cap)
+                  label.vars bound
+              in
+              update tgt (pending, bound)
+            ) (DFA.get src).bkd
+        in
+        let rec loop () =
+          match !todo with
+          | [] -> ()
+          | todo' ->
+            todo := [];
+            List.iter process todo';
+            loop ()
+        in
+        Index.iter DFA.n (fun st ->
+            let accept = (DFA.get st).accept in
+            if not (IndexSet.is_empty accept) then
+              let pending = indexset_bind accept (fun i -> (Vector.get NFA.clauses i).captures) in
+              if not (IndexSet.is_empty pending) then
+                update st (pending, IndexMap.empty)
+          );
+        loop ();
+        let pending, bound = Vector.get captures DFA.initial in
+        Printf.eprintf "unbound variables: %s\n\
+                        bound variables:\n%s\n"
+          (string_of_indexset pending)
+          (string_concat_map "\n"
+             (fun (var, lr1s) ->
+                string_of_index var ^ " -> " ^
+                string_concat_map ~wrap:("{","}") ", "
+                  Lr1.to_string
+                  (IndexSet.elements lr1s))
+             (IndexMap.bindings bound)
+          )
+
+      (* 3) Ordering *)
+
+      (* 4) Register allocation *)
 
     end
 
