@@ -654,13 +654,48 @@ module Automata = struct
         nfa: NFA.t;
       }
 
-      module ThSet = Set.Make(struct
-          type t = thread
-          let compare t1 t2 =
-            NFA.compare t1.nfa t2.nfa
-        end)
+      let compare_thread t1 t2 =
+        NFA.compare t1.nfa t2.nfa
 
-      module ThSetMap = Map.Make(ThSet)
+      module ThSet : sig
+        type t = private thread array
+        val compare : t -> t -> int
+        val make : thread list -> t
+        val fold : ('a -> thread -> 'a) -> 'a -> t -> 'a
+        val index_of : thread -> t -> int
+      end = struct
+        type t = thread array
+
+        let compare t1 t2 =
+          let len = Array.length t1 in
+          let c = Int.compare len (Array.length t2) in
+          if c <> 0 then c else (
+            let rec loop i =
+              if i < len then
+                let c = compare_thread t1.(i) t2.(i) in
+                if c <> 0 then c else
+                  loop (i + 1)
+              else
+                0
+            in
+            loop 0
+          )
+
+        let make ts =
+          Array.of_list (List.sort_uniq compare_thread ts)
+
+        let fold = Array.fold_left
+
+        let index_of th t =
+          let rec loop i =
+            if compare_thread t.(i) th = 0
+            then i
+            else loop (i + 1)
+          in
+          loop 0
+      end
+
+      module ThMap = Map.Make(ThSet)
 
       type 'st t = {
         threads: ThSet.t;
@@ -672,14 +707,14 @@ module Automata = struct
       }
       include IndexBuffer.Gen(struct type nonrec 'st t = 'st t end)()
 
-      let map = ref ThSetMap.empty
+      let map = ref ThMap.empty
 
       let rec determinize threads =
-        match ThSetMap.find_opt threads !map with
+        match ThMap.find_opt threads !map with
         | Some index -> index
         | None ->
           let accept, visited =
-            ThSet.fold (fun th (accept, visited) ->
+            ThSet.fold (fun (accept, visited) th ->
                 let accept =
                   if th.nfa.accept
                   then IndexSet.add th.clause accept
@@ -688,14 +723,14 @@ module Automata = struct
                 let visited = Lr1.intersect visited th.nfa.visited in
                 (accept, visited)
               )
-              threads (IndexSet.empty, Lr1.all)
+              (IndexSet.empty, Lr1.all) threads
           in
           let source_state = {
             threads; accept; visited; reachable=IndexSet.empty;
             fwd = []; bkd = [];
           } in
           let source = add source_state in
-          map := ThSetMap.add threads source !map;
+          map := ThMap.add threads source !map;
           let prepare_for_partition clause (l, nfa) =
             (l.K.filter, (l, {clause; nfa}))
           in
@@ -707,19 +742,20 @@ module Automata = struct
               vars = List.fold_left add_vars IndexSet.empty targets;
               ordering = List.fold_left add_ord IndexSet.empty targets;
             } in
-            let target = determinize (ThSet.of_list (List.map snd targets)) in
+            let target = determinize (ThSet.make (List.map snd targets)) in
             let target_state = get target in
             target_state.bkd <- (label, source) :: target_state.bkd;
             source_state.fwd <- (label, target) :: source_state.fwd;
           in
-          ThSet.fold (fun th acc ->
+          threads
+          |> ThSet.fold (fun acc th ->
               let trs =
                 th.nfa
                 |> NFA.get_transitions
                 |> List.map (prepare_for_partition th.clause)
               in
               trs @ acc
-            ) threads []
+            ) []
           |> IndexRefine.annotated_partition
           |> List.iter add_transition;
           source
@@ -730,7 +766,7 @@ module Automata = struct
             (fun clause def -> {clause; nfa = def.NFA.initial})
             NFA.clauses
         in
-        determinize (Vector.fold_right ThSet.add threads ThSet.empty)
+        determinize (ThSet.make (Vector.to_list threads))
 
       let vector = freeze ()
 
@@ -886,7 +922,7 @@ module Automata = struct
         include IndexBuffer.Gen(struct type nonrec _ t = t end)()
 
         let () =
-          DFA.ThSetMap.iter (fun _ target ->
+          DFA.ThMap.iter (fun _ target ->
               List.iter (fun (label, source) ->
                   ignore (add {source; target; label})
                 ) (DFA.get target).bkd
@@ -946,7 +982,7 @@ module Automata = struct
   let process_entry _oc (entry : Syntax.entry) =
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
-    Printf.eprintf "DFA states: %d\n" (DFA.ThSetMap.cardinal !DFA.map);
+    Printf.eprintf "DFA states: %d\n" (DFA.ThMap.cardinal !DFA.map);
     let label_domain = Vector.make MinDFA.states IndexSet.empty in
     Index.iter MinimizableDFA.states (fun st ->
         match MinDFA.transport_state st with
