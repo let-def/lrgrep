@@ -328,27 +328,27 @@ module Transl = struct
     let reached = ref IndexSet.empty in
     let immediate = ref IndexSet.empty in
     let rec step node k =
-      let next = K.derive k in
-      List.iter (function
-          | (label, K.Done) when is_immediate_label label ->
-            if node == lr1_trie_root then
-              immediate := IndexSet.union !immediate label.filter
-            else
-              reached := (
-                if IndexSet.equal Lr1.all label.filter then
-                  IndexSet.union node.reached !reached
-                else
-                  IndexMap.fold (fun lr1 node' acc ->
-                      if IndexSet.mem lr1 label.filter
-                      then IndexSet.union acc node'.reached
-                      else acc
-                    ) node.sub !reached
-              )
-          | (label, k') ->
-            IndexMap.iter (fun lr1 node' ->
-                if IndexSet.mem lr1 label.filter then
-                  step node' k'
-              ) node.sub
+      let matches, next = K.derive k in
+      List.iter (fun label ->
+          if node == lr1_trie_root then
+            immediate := IndexSet.union !immediate label.K.filter
+          else
+            reached := (
+              if IndexSet.equal Lr1.all label.filter then
+                IndexSet.union node.reached !reached
+              else
+                IndexMap.fold (fun lr1 node' acc ->
+                    if IndexSet.mem lr1 label.filter
+                    then IndexSet.union acc node'.reached
+                    else acc
+                  ) node.sub !reached
+            )
+        ) matches;
+      List.iter (fun (label, k') ->
+          IndexMap.iter (fun lr1 node' ->
+              if IndexSet.mem lr1 label.K.filter then
+                step node' k'
+            ) node.sub
         ) next
     in
     step lr1_trie_root (K.More (re, K.Done));
@@ -524,14 +524,15 @@ module Automata = struct
           match KMap.find_opt k !nfa with
           | Some t -> t
           | None ->
+            let accept', transitions = K.derive k in
             let accept, transitions =
-              let process (accept, transitions) (label, k') =
-                match k' with
-                | K.Done when Transl.is_immediate_label label ->
+              let process (accept, transitions) label =
+                if Transl.is_immediate_label label then
                   (true, transitions)
-                | _ -> (accept, (label, k') :: transitions)
+                else
+                  (accept, (label, K.Done) :: transitions)
               in
-              List.fold_left process (false, []) (K.derive k)
+              List.fold_left process (false, transitions) accept'
             in
             let transitions =
               let prepare_transition (label, k') rest =

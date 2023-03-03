@@ -223,7 +223,7 @@ module type S = sig
        To simplify the NFA a bit, we could normalize by splitting disjunctions
        before derivation.
     *)
-    val derive : t -> (label * t) list
+    val derive : t -> label list * (label * t) list
   end
 end
 
@@ -696,7 +696,8 @@ struct
       !matched
 
     let derive k =
-      let acc = ref [] in
+      let ls = ref [] in
+      let ks = ref [] in
       let rec reduce_outer matching next label reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
           let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
@@ -711,7 +712,7 @@ struct
           List.iter visit_candidate step.candidates;
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
-              push acc (label, Reducing {reduction; transitions; lookahead; next});
+              push ks (label, Reducing {reduction; transitions; lookahead; next});
             | _ -> ()
           end
         | _ -> ()
@@ -726,7 +727,7 @@ struct
       in
       let rec process_k label = function
         | Done ->
-          push acc (label, Done)
+          push ls label
 
         | More (re, next) as self ->
           process_re label self next re.desc
@@ -744,7 +745,7 @@ struct
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              push acc(label_capture label var, next)
+              push ks (label_capture label var, next)
           end
 
         | Alt es ->
@@ -771,7 +772,7 @@ struct
                 | (step :: _) as transitions when live_redstep reduction step ->
                   let label = {label with filter = IndexSet.singleton lr1} in
                   let next = Reducing {reduction; lookahead; transitions; next} in
-                  push acc (label, next)
+                  push ks (label, next)
                 | _ -> ()
               in
               reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
@@ -786,7 +787,7 @@ struct
         ordering = IndexSet.empty;
       } in
       process_k label k;
-      !acc
+      (!ls, !ks)
 
   end
 end
