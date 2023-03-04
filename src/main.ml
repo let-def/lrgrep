@@ -658,11 +658,13 @@ module Automata = struct
       let compare_thread t1 t2 =
         NFA.compare t1.nfa t2.nfa
 
+      module ThreadIndex = Positive
+
       module ThSet : sig
         type t = private thread array
         val compare : t -> t -> int
-        val make : thread list -> t
-        val fold : ('a -> thread -> 'a) -> 'a -> t -> 'a
+        val make : (thread * 'a indexset) list -> t * 'a indexset array
+        val fold : (ThreadIndex.n index -> thread -> 'a -> 'a) -> t -> 'a -> 'a
         val index_of : thread -> t -> int
       end = struct
         type t = thread array
@@ -683,9 +685,23 @@ module Automata = struct
           )
 
         let make ts =
-          Array.of_list (List.sort_uniq compare_thread ts)
+          let ts = List.sort (fun (x, _) (y, _) -> compare_thread x y) ts in
+          let rec merge = function
+            | (x1, m1) :: (x2, m2) :: xs when compare_thread x1 x2 = 0 ->
+              merge ((x1, IndexSet.union m1 m2) :: xs)
+            | (x1, m1) :: rest ->
+              (x1, m1) :: merge rest
+            | tl -> tl
+          in
+          let ts, ms = List.split (merge ts) in
+          Array.of_list ts, Array.of_list ms
 
-        let fold = Array.fold_left
+        let fold f x acc =
+          let acc = ref acc in
+          for i = 0 to Array.length x - 1 do
+            acc := f (Index.of_int Positive.n i) x.(i) !acc;
+          done;
+          !acc
 
         let index_of th t =
           let rec loop i =
@@ -703,8 +719,8 @@ module Automata = struct
         accept: Clauses.n indexset;
         mutable reachable: Clauses.n indexset;
         visited: Lr1.set;
-        mutable fwd: (label * 'st index) list;
-        mutable bkd: (label * 'st index) list;
+        mutable fwd: (label * ThreadIndex.n indexset array * 'st index) list;
+        mutable bkd: (label * ThreadIndex.n indexset array * 'st index) list;
       }
       include IndexBuffer.Gen(struct type nonrec 'st t = 'st t end)()
 
@@ -715,7 +731,7 @@ module Automata = struct
         | Some index -> index
         | None ->
           let accept, visited =
-            ThSet.fold (fun (accept, visited) th ->
+            ThSet.fold (fun _ th (accept, visited) ->
                 let accept =
                   if th.nfa.accept
                   then IndexSet.add th.clause accept
@@ -724,7 +740,7 @@ module Automata = struct
                 let visited = Lr1.intersect visited th.nfa.visited in
                 (accept, visited)
               )
-              (IndexSet.empty, Lr1.all) threads
+              threads (IndexSet.empty, Lr1.all)
           in
           let source_state = {
             threads; accept; visited; reachable=IndexSet.empty;
@@ -732,8 +748,8 @@ module Automata = struct
           } in
           let source = add source_state in
           map := ThMap.add threads source !map;
-          let prepare_for_partition clause (l, nfa) =
-            (l.K.filter, (l, {clause; nfa}))
+          let prepare_for_partition i th (l, nfa) =
+            (l.K.filter, (l, ({clause=th.clause; nfa}, IndexSet.singleton i)))
           in
           let add_transition (filter, targets) =
             let add_vars acc (l, _) = IndexSet.union acc l.K.vars in
@@ -743,20 +759,19 @@ module Automata = struct
               vars = List.fold_left add_vars IndexSet.empty targets;
               ordering = List.fold_left add_ord IndexSet.empty targets;
             } in
-            let target = determinize (ThSet.make (List.map snd targets)) in
+            let threads = List.map snd targets in
+            let threads, mapping = (ThSet.make threads) in
+            let target = determinize threads in
             let target_state = get target in
-            target_state.bkd <- (label, source) :: target_state.bkd;
-            source_state.fwd <- (label, target) :: source_state.fwd;
+            target_state.bkd <- (label, mapping, source) :: target_state.bkd;
+            source_state.fwd <- (label, [||], target) :: source_state.fwd;
           in
-          threads
-          |> ThSet.fold (fun acc th ->
-              let trs =
-                th.nfa
-                |> NFA.get_transitions
-                |> List.map (prepare_for_partition th.clause)
-              in
-              trs @ acc
-            ) []
+          ThSet.fold (fun i th acc ->
+              List.map
+                (prepare_for_partition i th)
+                (NFA.get_transitions th.nfa)
+              @ acc
+            ) threads[]
           |> IndexRefine.annotated_partition
           |> List.iter add_transition;
           source
@@ -764,10 +779,11 @@ module Automata = struct
       let initial =
         let threads =
           Vector.mapi
-            (fun clause def -> {clause; nfa = def.NFA.initial})
+            (fun clause def -> {clause; nfa = def.NFA.initial}, IndexSet.empty)
             NFA.clauses
         in
-        determinize (ThSet.make (Vector.to_list threads))
+        let target, _mapping = ThSet.make (Vector.to_list threads) in
+        determinize target
 
       let vector = freeze ()
 
@@ -809,7 +825,7 @@ module Automata = struct
           let process target =
             let st = DFA.get target in
             let reachable = IndexSet.union st.accept st.reachable in
-            List.iter (fun (_, source) ->
+            List.iter (fun (_label, _mapping, source) ->
                 if update_reachable (DFA.get source) reachable then
                   push todo source
               ) st.bkd
@@ -832,7 +848,7 @@ module Automata = struct
             let st = DFA.get target in
             let reached = IndexSet.union st.accept st.reachable in
             st.bkd <-
-              List.filter (fun (_, source) ->
+              List.filter (fun (_label, _mapping, source) ->
                   let reached = reachable (DFA.get source) reached in
                   let remove = IndexSet.is_empty reached in
                   if remove then incr filtered;
@@ -844,9 +860,6 @@ module Automata = struct
       (* 2) Captures
          Find which capture are total and the set of transitions that trigger them
          Backpropagate captured values for each clause *)
-
-      module One = Const(struct let cardinal = 1 end)
-      let one = Index.of_int One.n 0
 
       let _ =
         let captures = Vector.make DFA.n (IndexSet.empty, IndexMap.empty) in
@@ -866,7 +879,7 @@ module Automata = struct
         in
         let process src =
           let (pending, bound) = Vector.get captures src in
-          List.iter (fun (label, tgt) ->
+          List.iter (fun (label, _mapping, tgt) ->
               let pending = IndexSet.diff pending label.K.vars in
               let bound =
                 IndexSet.fold (fun var cap -> IndexMap.add var label.filter cap)
@@ -924,7 +937,7 @@ module Automata = struct
 
         let () =
           DFA.ThMap.iter (fun _ target ->
-              List.iter (fun (label, source) ->
+              List.iter (fun (label, _mapping, source) ->
                   ignore (add {source; target; label})
                 ) (DFA.get target).bkd
             ) !DFA.map
