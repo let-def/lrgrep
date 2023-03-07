@@ -490,7 +490,6 @@ module Automata = struct
         (* NFA construction *)
         mutable visited: Lr1.set;
         mutable scheduled: Lr1.set;
-        mutable rank: int;
       }
 
       let compare t1 t2 =
@@ -554,7 +553,6 @@ module Automata = struct
               k; accept; transitions;
               visited = IndexSet.empty;
               scheduled = IndexSet.empty;
-              rank = -1;
             } in
             nfa := KMap.add k t !nfa;
             t
@@ -592,29 +590,6 @@ module Automata = struct
         schedule initial Lr1.idle;
         flush ()
 
-      let compute_ranks next st =
-        assert (st.rank <> -1);
-        let rank = st.rank + 1 in
-        List.fold_left (fun acc (_, st') ->
-            if Lazy.is_val st' then
-              let st' = Lazy.force st' in
-              if st'.rank = -1 then (
-                st'.rank <- rank;
-                st' :: acc
-              )
-              else acc
-            else acc
-          ) next st.transitions
-
-      let compute_ranks st =
-        let rec loop = function
-          | [] -> ()
-          | states -> loop (List.fold_left compute_ranks [] states)
-        in
-        assert (st.rank = -1);
-        st.rank <- 0;
-        loop [st]
-
       type clause = {
         captures: Var.set;
         orderings: Ordering.set;
@@ -629,7 +604,6 @@ module Automata = struct
         let nfa, get_state = get_state () in
         let initial = get_state Regexp.K.(More (re, Done)) in
         force_lr1_stacks initial;
-        compute_ranks initial;
         let nfa = !nfa in
         {captures; orderings; nfa; initial}
 
