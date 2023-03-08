@@ -43,14 +43,14 @@ type regular_desc =
   (** A disjunction of multiple expressions.
       [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
   | Repetition of {
-      kind: quantifier_kind;
       expr: regular_expr;
+      policy: quantifier_kind;
     }
   (** [Repetition e] represents [e*] *)
   | Reduce of {
       capture: string option;
-      kind: quantifier_kind;
       expr: regular_expr;
+      policy: quantifier_kind;
     }
   (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
@@ -181,16 +181,16 @@ let rec cmon_regular_term = function
     Cmon.constructor "Alternative" (Cmon.list_map cmon_regular_expression res)
   | Concat res ->
     Cmon.constructor "Concat" (Cmon.list_map cmon_regular_expression res)
-  | Repetition {kind; expr} ->
+  | Repetition {policy; expr} ->
     Cmon.crecord "Repetition" [
-      "kind", cmon_quantifier_kind kind;
       "expr", cmon_regular_expression expr;
+      "policy", cmon_quantifier_kind policy;
     ]
-  | Reduce {capture; kind; expr} ->
+  | Reduce {capture; policy; expr} ->
     Cmon.crecord "Reduce" [
       "capture", cmon_capture capture;
-      "kind", cmon_quantifier_kind kind;
       "expr", cmon_regular_expression expr;
+      "policy", cmon_quantifier_kind policy;
     ]
   | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
     Cmon.crecord "Filter" [
