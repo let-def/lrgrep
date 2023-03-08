@@ -253,10 +253,9 @@ module Transl = struct
   open Fix.Indexing
   open Regexp
 
-  let is_immediate_label {K. filter; vars; ordering} =
+  let is_immediate_label {K. filter; captures} =
     IndexSet.equal filter Lr1.all &&
-    IndexSet.is_empty vars &&
-    IndexSet.is_empty ordering
+    IndexSet.is_empty captures
 
   let match_sym sym = function
     | None -> true
@@ -328,8 +327,8 @@ module Transl = struct
     let reached = ref IndexSet.empty in
     let immediate = ref IndexSet.empty in
     let rec step node k =
-      let matches, next = K.derive k in
-      List.iter (fun label ->
+      let process_next = function
+        | (label, None) ->
           if node == lr1_trie_root then
             immediate := IndexSet.union !immediate label.K.filter
           else
@@ -343,13 +342,13 @@ module Transl = struct
                     else acc
                   ) node.sub !reached
             )
-        ) matches;
-      List.iter (fun (label, k') ->
+        | (label, Some k') ->
           IndexMap.iter (fun lr1 node' ->
               if IndexSet.mem lr1 label.K.filter then
                 step node' k'
             ) node.sub
-        ) next
+      in
+      List.iter process_next (K.derive k)
     in
     step lr1_trie_root (K.More (re, K.Done));
     (!reached, !immediate)
@@ -392,10 +391,9 @@ module Transl = struct
           RE.Set (set, cap)
         | Alternative res ->
           RE.Alt (List.map (transl ~for_reduction) res)
-        | Repetition {expr; kind} ->
-          RE.Star (transl ~for_reduction expr,
-                   mk_ordering kind)
-        | Reduce {capture; kind; expr} ->
+        | Repetition {expr; policy} ->
+          RE.Star (transl ~for_reduction expr, policy)
+        | Reduce {capture; policy; expr} ->
           if for_reduction then
             error re.position "Reductions cannot be nested";
           (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
@@ -412,8 +410,7 @@ module Transl = struct
               let capture = mk_capture `End_loc name in
               (capture0, capture)
           in
-          let ordering = mk_ordering kind in
-          let r = RE.Reduce (capture0, {capture; pattern; ordering}) in
+          let r = RE.Reduce (capture0, {capture; pattern; policy}) in
           if IndexSet.is_empty immediate then
             r
           else if immediate == Lr1.all then
@@ -487,20 +484,13 @@ module Automata = struct
         accept: bool;
         transitions: (label * t lazy_t) list;
 
-        (* NFA construction *)
+        (* Data for NFA fixpoint construction *)
         mutable visited: Lr1.set;
         mutable scheduled: Lr1.set;
       }
 
       let compare t1 t2 =
         Int.compare t1.uid t2.uid
-
-      let order_compatible_transition (l1, k1 : label * k) (l2, k2 : label * k) =
-        let c = IndexSet.compare l1.vars l2.vars in
-        if c <> 0 then c else
-          let c = IndexSet.compare l1.ordering l2.ordering in
-          if c <> 0 then c else
-            K.compare k1 k2
 
       let get_transitions st =
         let set' = Lr1.set_predecessors st.visited in
@@ -517,33 +507,25 @@ module Automata = struct
         let k = ref 0 in
         fun () -> incr k; !k
 
+      exception Accept of (label * k) list
+
       let get_state () =
         let nfa = ref KMap.empty in
         let rec aux k =
           match KMap.find_opt k !nfa with
           | Some t -> t
           | None ->
-            let accept', transitions = K.derive k in
-            let accept, transitions =
-              let process (accept, transitions) label =
-                if Transl.is_immediate_label label then
-                  (true, transitions)
-                else
-                  (accept, (label, K.Done) :: transitions)
+            let transitions = K.derive k in
+            let prepare_transition (label, k') rest =
+              let filter =
+                List.fold_left
+                  (fun filter (label', _) -> IndexSet.union filter label'.K.filter)
+                  label.K.filter rest
               in
-              List.fold_left process (false, transitions) accept'
+              let st = lazy (aux k') in
+              ({label with filter}, st)
             in
-            let transitions =
-              let prepare_transition (label, k') rest =
-                let filter =
-                  List.fold_left
-                    (fun filter (label', _) -> IndexSet.union filter label'.K.filter)
-                    label.K.filter rest
-                in
-                let st = lazy (aux k') in
-                ({label with filter}, st)
-              in
-              sort_and_merge
+            sort_and_merge
                 order_compatible_transition
                 prepare_transition
                 transitions
@@ -553,6 +535,12 @@ module Automata = struct
               k; accept; transitions;
               visited = IndexSet.empty;
               scheduled = IndexSet.empty;
+
+              bkd = [];
+              cap_pending = IndexSet.empty;
+              cap_bound = IndexMap.empty;
+              cnt_pending = IndexSet.empty;
+              cnt_bound = IndexSet.empty;
             } in
             nfa := KMap.add k t !nfa;
             t
@@ -591,10 +579,9 @@ module Automata = struct
         flush ()
 
       type clause = {
-        captures: Var.set;
-        orderings: Ordering.set;
         nfa: t KMap.t;
         initial: t;
+        accepting: t list;
       }
 
       let process_clause ~capture ~ordering (clause : Syntax.clause) =

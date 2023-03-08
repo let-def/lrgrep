@@ -19,60 +19,6 @@ end = struct
     fun () -> incr r; Index.of_int n !r
 end
 
-module Ordering : sig
-  type n
-  type t = n index
-  type set = n indexset
-  val gensym : unit -> negative:bool -> n index
-
-  type order = (n, int) indexmap
-  val order : order -> order -> int
-end = struct
-  include Positive
-
-  type t = n index
-  type set = n indexset
-  type order = (n, int) indexmap
-
-  let gensym () =
-    let r = ref 0 in
-    fun ~negative ->
-      let result = if negative then !r + 1 else !r in
-      r := !r + 2;
-      Index.of_int n result
-
-  let is_negative (index : t) =
-    Index.to_int index land 1 = 0
-
-  let order_bool b =
-    if b then +1 else -1
-
-  let order map1 map2 =
-    let rec loop = function
-      | Seq.Cons ((k1, v1), s1), Seq.Cons ((k2, v2), s2) ->
-        let c = compare_index k1 k2 in
-        if c < 0 then
-          - order_bool (is_negative k1)
-        else if c > 0 then
-          + order_bool (is_negative k2)
-        else (
-          let c = Int.compare v1 v2 in
-          if c = 0 then
-            loop (s1 (), s2 ())
-          else if is_negative k1 then
-            -c
-          else
-            c
-        )
-      | Seq.Nil, Seq.Nil -> 0
-      | Seq.Cons ((k, _), _), Seq.Nil ->
-        - order_bool (is_negative k)
-      | Seq.Nil, Seq.Cons ((k, _), _) ->
-        + order_bool (is_negative k)
-    in
-    loop (IndexMap.to_seq map1 (), IndexMap.to_seq map2 ())
-end
-
 let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
 
 let cmon_option f = function
@@ -132,8 +78,8 @@ module type RE = sig
 
   type reduction = {
     pattern: redstate indexset;
-    capture: Var.set;
-    ordering: Ordering.set;
+    capture: Capture.set;
+    policy: Syntax.quantifier_kind;
   }
 
   val compare_reduction : reduction -> reduction -> int
@@ -159,7 +105,7 @@ module type RE = sig
     | Seq of t list
     (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
         [Seq []] represents the {ε}. *)
-    | Star of t * Ordering.set
+    | Star of t * Syntax.quantifier_kind
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
     | Reduce of Var.set * reduction
@@ -190,8 +136,7 @@ module type S = sig
   module K : sig
     type label = {
       filter: Lr1.set;
-      vars: Var.set;
-      ordering: Ordering.set;
+      captures: Capture.set;
     }
 
     val compare_label : label -> label -> int
@@ -223,7 +168,7 @@ module type S = sig
        To simplify the NFA a bit, we could normalize by splitting disjunctions
        before derivation.
     *)
-    val derive : t -> label list * (label * t) list
+    val derive : t -> (label * t option) list
   end
 end
 
@@ -460,17 +405,15 @@ struct
 
     type reduction = {
       pattern: Redgraph.state indexset;
-      capture: Var.set;
-      ordering: Ordering.set;
+      capture: Capture.set;
+      policy: Syntax.quantifier_kind;
     }
 
     let compare_reduction r1 r2 =
       if r1 == r2 then 0 else
         let c = IndexSet.compare r1.pattern r2.pattern in
         if c <> 0 then c else
-          let c = IndexSet.compare r1.capture r2.capture in
-          if c <> 0 then c else
-            compare r1.ordering r2.ordering
+          IndexSet.compare r1.capture r2.capture
 
     type t = {
       uid : uid;
@@ -481,7 +424,7 @@ struct
       | Set of Lr1.set * Var.set
       | Alt of t list
       | Seq of t list
-      | Star of t * Ordering.set
+      | Star of t * Syntax.quantifier_kind
       | Filter of Lr1.set
       | Reduce of Var.set * reduction
 
@@ -490,11 +433,11 @@ struct
     let compare t1 t2 =
       Int.compare t1.uid t2.uid
 
-    let cmon_reduction {capture; pattern; ordering} =
+    let cmon_reduction {capture; pattern; policy} =
       Cmon.record [
         "capture", cmon_indexset capture;
         "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
-        "ordering", cmon_indexset ordering;
+        "policy", Syntax.cmon_quantifier_kind policy;
       ]
 
     let cmon t =
@@ -507,7 +450,7 @@ struct
           ]
         | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
         | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
-        | Star (t, o) -> Cmon.construct "Star" [aux t; cmon_indexset o]
+        | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
         | Filter lr1s ->
           Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
         | Reduce (var, r) ->
@@ -519,17 +462,14 @@ struct
   module K = struct
     type label = {
       filter: Lr1.set;
-      vars: Var.set;
-      ordering: Ordering.set;
+      captures: Capture.set;
     }
 
     let compare_label l1 l2 =
-      let c = IndexSet.compare l1.filter l2.filter in
-      if c <> 0 then c else
-        let c = IndexSet.compare l1.vars l2.vars in
+      if l1 == l2 then 0 else
+        let c = IndexSet.compare l1.filter l2.filter in
         if c <> 0 then c else
-          let c = IndexSet.compare l1.ordering l2.ordering in
-          c
+          IndexSet.compare l1.captures l2.captures
 
     type t =
       | Done
@@ -696,14 +636,13 @@ struct
       !matched
 
     let derive k =
-      let ls = ref [] in
       let ks = ref [] in
       let rec reduce_outer matching next label reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
           let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
             match label_filter label candidate.filter with
-            | Some label when
-                reduce_target reduction candidate.target
+            | Some label
+              when reduce_target reduction candidate.target
                   ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
                   ~on_outer:(reduce_outer matching next label) ->
               matching := IndexSet.union label.filter !matching
@@ -712,7 +651,8 @@ struct
           List.iter visit_candidate step.candidates;
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
-              push ks (label, Reducing {reduction; transitions; lookahead; next});
+              push ks
+                (label, Some (Reducing {reduction; transitions; lookahead; next}));
             | _ -> ()
           end
         | _ -> ()
@@ -727,7 +667,7 @@ struct
       in
       let rec process_k label = function
         | Done ->
-          push ls label
+          push ks (label, None)
 
         | More (re, next) as self ->
           process_re label self next re.desc
@@ -745,15 +685,21 @@ struct
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              push ks (label_capture label var, next)
+              push ks (label_capture label var, Some next)
           end
 
         | Alt es ->
           List.iter (fun e -> process_k label (More (e, next))) es
 
-        | Star (r, _todo) ->
-          process_k label next;
-          process_k label (More (r, self))
+        | Star (r, qk) ->
+          begin match qk with
+            | Shortest ->
+              process_k label next;
+              process_k label (More (r, self));
+            | Longest ->
+              process_k label (More (r, self));
+              process_k label next;
+          end
 
         | Seq es ->
           process_k label (List.fold_right (fun e k -> More (e, k)) es next)
@@ -765,29 +711,34 @@ struct
           end
 
         | Reduce (cap, r) ->
+          let match_first = match r.RE.policy with
+            | Shortest -> true
+            | Longest -> false
+          in
           let label = label_capture label cap in
+          let ks' = if match_first then ref [] else ks in
           let matching = IndexSet.filter (fun lr1 ->
               let steps = Vector.get Redgraph.initial lr1 in
               let on_outer reduction lookahead = function
                 | (step :: _) as transitions when live_redstep reduction step ->
                   let label = {label with filter = IndexSet.singleton lr1} in
                   let next = Reducing {reduction; lookahead; transitions; next} in
-                  push ks (label, next)
+                  push ks' (label, Some next)
                 | _ -> ()
               in
               reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
             ) label.filter
           in
           if not_empty matching then
-            process_k {label with filter = matching} next
+            process_k {label with filter = matching} next;
+          if match_first then
+            ks := !ks' @ !ks
       in
       let label = {
         filter = Lr1.all;
-        vars = IndexSet.empty;
-        ordering = IndexSet.empty;
+        captures = IndexSet.empty;
       } in
       process_k label k;
-      (!ls, !ks)
-
+      List.rev !ks
   end
 end
