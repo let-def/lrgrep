@@ -5,7 +5,7 @@ open Misc
 
 module Positive = Const(struct let cardinal = max_int end)
 
-module Var : sig
+module Capture : sig
   type n
   type t = n index
   type set = n indexset
@@ -96,7 +96,7 @@ module type RE = sig
 
   (** The different constructors of regular expressions*)
   and desc =
-    | Set of Lr1.set * Var.set
+    | Set of Lr1.set * Capture.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of t list
@@ -108,7 +108,7 @@ module type RE = sig
     | Star of t * Syntax.quantifier_kind
     (** [Star t] is represents the Kleene star of [t] *)
     | Filter of Lr1.set
-    | Reduce of Var.set * reduction
+    | Reduce of Capture.set * reduction
     (** The reduction operator *)
 
   (** Introduce a new term, allocating a unique ID *)
@@ -421,12 +421,12 @@ struct
       position : Syntax.position;
     }
     and desc =
-      | Set of Lr1.set * Var.set
+      | Set of Lr1.set * Capture.set
       | Alt of t list
       | Seq of t list
       | Star of t * Syntax.quantifier_kind
       | Filter of Lr1.set
-      | Reduce of Var.set * reduction
+      | Reduce of Capture.set * reduction
 
     let make position desc = {uid = uid (); desc; position}
 
@@ -596,7 +596,7 @@ struct
 
     let label_capture label vars =
       if not_empty vars then
-        {label with vars = IndexSet.union label.vars vars}
+        {label with captures = IndexSet.union label.captures vars}
       else
         label
 

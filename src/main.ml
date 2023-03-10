@@ -354,18 +354,8 @@ module Transl = struct
     (!reached, !immediate)
 
 
-  let transl ~capture ~ordering ~for_reduction re =
-    let all_ord = ref IndexSet.empty in
+  let transl ~capture ~for_reduction re =
     let all_cap = ref IndexSet.empty in
-    let mk_ordering kind =
-      let negative = match kind with
-        | Shortest -> true
-        | Longest  -> false
-      in
-      let index = ordering ~negative in
-      all_ord := IndexSet.add index !all_ord;
-      IndexSet.singleton index
-    in
     let mk_capture kind name =
       let index = capture kind name in
       all_cap := IndexSet.add index !all_cap;
@@ -430,7 +420,7 @@ module Transl = struct
       RE.make re.position desc
     in
     let result = transl ~for_reduction re in
-    (!all_ord, !all_cap, result)
+    (!all_cap, result)
 
 
 end
@@ -481,27 +471,14 @@ module Automata = struct
         (* State construction *)
         uid: int;
         k: k;
-        accept: bool;
         transitions: (label * t lazy_t) list;
-
-        (* Data for NFA fixpoint construction *)
-        mutable visited: Lr1.set;
-        mutable scheduled: Lr1.set;
+        accept: bool;
+        clause: Clauses.n index;
+        mutable mark: unit ref;
       }
 
       let compare t1 t2 =
         Int.compare t1.uid t2.uid
-
-      let get_transitions st =
-        let set' = Lr1.set_predecessors st.visited in
-        st.transitions
-        |> List.filter_map (fun ((label : label), st') ->
-            if Lazy.is_val st' then
-              let filter = Lr1.intersect label.filter set' in
-              Some ({label with filter}, Lazy.force st')
-            else
-              None
-          )
 
       let uid =
         let k = ref 0 in
@@ -509,94 +486,47 @@ module Automata = struct
 
       exception Accept of (label * k) list
 
-      let get_state () =
+      let default_mark = ref ()
+
+      let make clause =
         let nfa = ref KMap.empty in
         let rec aux k =
           match KMap.find_opt k !nfa with
           | Some t -> t
           | None ->
-            let transitions = K.derive k in
-            let prepare_transition (label, k') rest =
-              let filter =
-                List.fold_left
-                  (fun filter (label', _) -> IndexSet.union filter label'.K.filter)
-                  label.K.filter rest
-              in
-              let st = lazy (aux k') in
-              ({label with filter}, st)
+            let accept = ref false in
+            let rec process_transitions = function
+              | [] -> []
+              | (label, target) :: rest ->
+                begin match target with
+                  | None when Transl.is_immediate_label label ->
+                    accept := true;
+                    []
+                  | None ->
+                    (label, accepting) :: process_transitions rest
+                  | Some k' ->
+                    (label, lazy (aux k')) :: process_transitions rest
+                end
             in
-            sort_and_merge
-                order_compatible_transition
-                prepare_transition
-                transitions
-            in
-            let t = {
-              uid = uid ();
-              k; accept; transitions;
-              visited = IndexSet.empty;
-              scheduled = IndexSet.empty;
-
-              bkd = [];
-              cap_pending = IndexSet.empty;
-              cap_bound = IndexMap.empty;
-              cnt_pending = IndexSet.empty;
-              cnt_bound = IndexSet.empty;
-            } in
+            let transitions = process_transitions (K.derive k) in
+            let uid = uid () in
+            let accept = !accept in
+            let t = {uid; k; transitions; accept; clause; mark=default_mark} in
             nfa := KMap.add k t !nfa;
             t
+        and accepting = lazy (aux K.Done)
         in
-        nfa, aux
+        aux
 
-      let force_lr1_stacks initial =
-        let scheduled = ref [] in
-        let schedule st lr1s =
-          let lr1s = IndexSet.diff lr1s st.visited in
-          if not (IndexSet.is_empty lr1s) then (
-            if IndexSet.is_empty st.scheduled then
-              push scheduled st;
-            st.scheduled <- IndexSet.union st.scheduled lr1s
-          )
+      let process_clause ~capture index (def : Syntax.clause) =
+        let captures, re =
+          Transl.transl ~capture ~for_reduction:false def.pattern
         in
-        let process st =
-          let states = Lr1.set_predecessors st.scheduled in
-          st.visited <- IndexSet.union st.scheduled st.visited;
-          st.scheduled <- IndexSet.empty;
-          List.iter (fun (label, st) ->
-              let states' = IndexSet.inter states label.Regexp.K.filter in
-              if not (IndexSet.is_empty states') then
-                schedule (Lazy.force st) states'
-            ) st.transitions
-        in
-        let rec flush () =
-          match !scheduled with
-          | [] -> ()
-          | todo ->
-            scheduled := [];
-            List.iter process todo;
-            flush ()
-        in
-        schedule initial Lr1.idle;
-        flush ()
-
-      type clause = {
-        nfa: t KMap.t;
-        initial: t;
-        accepting: t list;
-      }
-
-      let process_clause ~capture ~ordering (clause : Syntax.clause) =
-        let orderings, captures, re =
-          Transl.transl ~capture ~ordering ~for_reduction:false clause.pattern
-        in
-        let nfa, get_state = get_state () in
-        let initial = get_state Regexp.K.(More (re, Done)) in
-        force_lr1_stacks initial;
-        let nfa = !nfa in
-        {captures; orderings; nfa; initial}
+        let initial = make index Regexp.K.(More (re, Done)) in
+        (initial, captures)
 
       let captures, clauses =
-        let ordering = Ordering.gensym () in
-        let capture = Var.gensym () in
+        let capture = Capture.gensym () in
         let captures = ref IndexMap.empty in
         let capture kind name =
           let index = capture () in
@@ -604,58 +534,50 @@ module Automata = struct
           index
         in
         let clauses =
-          Vector.map (process_clause ~capture ~ordering) Clauses.vector
+          Vector.mapi (process_clause ~capture) Clauses.vector
         in
         (!captures, clauses)
 
     end
 
     module DFA = struct
-      type thread = {
-        clause: Clauses.n index;
-        nfa: NFA.t;
-      }
-
-      let compare_thread t1 t2 =
-        NFA.compare t1.nfa t2.nfa
-
       module ThreadIndex = Positive
 
-      module ThSet : sig
-        type t = private thread array
+      type thread = NFA.t
+
+      module Threads : sig
+        type t
         val compare : t -> t -> int
-        val make : (thread * 'a indexset) list -> t * 'a indexset array
+        val make : (thread * 'a) list -> t * 'a array
         val fold : (ThreadIndex.n index -> thread -> 'a -> 'a) -> t -> 'a -> 'a
         val index_of : thread -> t -> int
       end = struct
         type t = thread array
 
         let compare t1 t2 =
-          let len = Array.length t1 in
-          let c = Int.compare len (Array.length t2) in
-          if c <> 0 then c else (
-            let rec loop i =
-              if i < len then
-                let c = compare_thread t1.(i) t2.(i) in
-                if c <> 0 then c else
-                  loop (i + 1)
-              else
-                0
-            in
-            loop 0
-          )
+          array_compare NFA.compare t1 t2
 
         let make ts =
-          let ts = List.sort (fun (x, _) (y, _) -> compare_thread x y) ts in
-          let rec merge = function
-            | (x1, m1) :: (x2, m2) :: xs when compare_thread x1 x2 = 0 ->
-              merge ((x1, IndexSet.union m1 m2) :: xs)
-            | (x1, m1) :: rest ->
-              (x1, m1) :: merge rest
-            | tl -> tl
+          let mark = ref () in
+          let last_accepted = ref `None in
+          let ts = List.filter (fun ((th : thread), _) ->
+              (th.mark != mark) && (
+                th.mark <- mark;
+                match !last_accepted with
+                | `Total -> false
+                | `Some clause when th.clause = clause -> false
+                | _ ->
+                  if th.accept then (
+                    if IndexSet.mem th.clause Clauses.total
+                    then last_accepted := `Total
+                    else last_accepted := `Some th.clause
+                  );
+                  true
+              )
+            ) ts
           in
-          let ts, ms = List.split (merge ts) in
-          Array.of_list ts, Array.of_list ms
+          let txs = Array.of_list ts in
+          (Array.map fst txs, Array.map snd txs)
 
         let fold f x acc =
           let acc = ref acc in
@@ -666,22 +588,22 @@ module Automata = struct
 
         let index_of th t =
           let rec loop i =
-            if compare_thread t.(i) th = 0
+            if NFA.compare t.(i) th = 0
             then i
             else loop (i + 1)
           in
           loop 0
       end
 
-      module ThMap = Map.Make(ThSet)
+      type threads = Threads.t
+      type thread_mapping = (ThreadIndex.n index * Capture.set) array
+
+      module ThMap = Map.Make(Threads)
 
       type 'st t = {
-        threads: ThSet.t;
-        accept: Clauses.n indexset;
-        mutable reachable: Clauses.n indexset;
-        visited: Lr1.set;
-        mutable fwd: (label * ThreadIndex.n indexset array * 'st index) list;
-        mutable bkd: (label * ThreadIndex.n indexset array * 'st index) list;
+        threads: threads;
+        transitions: (Lr1.set * (thread_mapping * 'st index) lazy_t) list;
+        (*mutable bkd: (Lr1.set * (ThreadIndex.n index * Capture.set) array * ('st index) lazy_t) list;*)
       }
       include IndexBuffer.Gen(struct type nonrec 'st t = 'st t end)()
 
@@ -691,75 +613,43 @@ module Automata = struct
         match ThMap.find_opt threads !map with
         | Some index -> index
         | None ->
-          let accept, visited =
-            ThSet.fold (fun _ th (accept, visited) ->
-                let accept =
-                  if th.nfa.accept
-                  then IndexSet.add th.clause accept
-                  else accept
-                in
-                let visited = Lr1.intersect visited th.nfa.visited in
-                (accept, visited)
-              )
-              threads (IndexSet.empty, Lr1.all)
+          let rev_transitions =
+            let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
+            Threads.fold
+              (fun i (th : thread) acc -> List.rev_map (make i) th.NFA.transitions @ acc)
+              threads []
           in
-          let source_state = {
-            threads; accept; visited; reachable=IndexSet.empty;
-            fwd = []; bkd = [];
-          } in
-          let source = add source_state in
+          let rev_partitions = IndexRefine.annotated_partition rev_transitions in
+          let process_class (label, rev_targets) =
+            label, lazy (
+              let prepare_target (index, captures, lazy nfa) =
+                nfa, (index, captures)
+              in
+              let threads, mapping =
+                Threads.make (List.rev_map prepare_target rev_targets)
+              in
+              mapping, determinize threads
+            )
+          in
+          let transitions = List.map process_class rev_partitions in
+          let source = add {threads; transitions} in
           map := ThMap.add threads source !map;
-          let prepare_for_partition i th (l, nfa) =
-            (l.K.filter, (l, ({clause=th.clause; nfa}, IndexSet.singleton i)))
-          in
-          let add_transition (filter, targets) =
-            let add_vars acc (l, _) = IndexSet.union acc l.K.vars in
-            let add_ord acc (l, _) = IndexSet.union acc l.K.ordering in
-            let label : label = {
-              filter;
-              vars = List.fold_left add_vars IndexSet.empty targets;
-              ordering = List.fold_left add_ord IndexSet.empty targets;
-            } in
-            let threads = List.map snd targets in
-            let threads, mapping = (ThSet.make threads) in
-            let target = determinize threads in
-            let target_state = get target in
-            target_state.bkd <- (label, mapping, source) :: target_state.bkd;
-            source_state.fwd <- (label, [||], target) :: source_state.fwd;
-          in
-          ThSet.fold (fun i th acc ->
-              List.map
-                (prepare_for_partition i th)
-                (NFA.get_transitions th.nfa)
-              @ acc
-            ) threads[]
-          |> IndexRefine.annotated_partition
-          |> List.iter add_transition;
           source
 
       let initial =
-        let threads =
-          Vector.mapi
-            (fun clause def -> {clause; nfa = def.NFA.initial}, IndexSet.empty)
-            NFA.clauses
-        in
-        let target, _mapping = ThSet.make (Vector.to_list threads) in
+        let target, _mapping = Threads.make (Vector.to_list NFA.clauses) in
         determinize target
-
-      let vector = freeze ()
-
-      let get = Vector.get vector
     end
 
-    module Analysis = struct
+    (*module Analysis = struct
       (* The DFA is initialized with backward transitions. Dataflow analysis:
 
          1) Reachability
 
          Determine which actions are reachable from each path
-         - start from accepting states, backpropagate accepted states
-         - don't propagate if an accepting state with higher priority has been reached
-         - find fix point
+      - start from accepting states, backpropagate accepted states
+      - don't propagate if an accepting state with higher priority has been reached
+      - find fix point
 
          Remove bkd transitions which source is a total accepting state with
          higher priority.
@@ -822,7 +712,7 @@ module Automata = struct
          Find which capture are total and the set of transitions that trigger them
          Backpropagate captured values for each clause *)
 
-      let _ =
+      (*let _ =
         let captures = Vector.make DFA.n (IndexSet.empty, IndexMap.empty) in
         let todo = ref [] in
         let update st (pending, bound) =
@@ -841,10 +731,10 @@ module Automata = struct
         let process src =
           let (pending, bound) = Vector.get captures src in
           List.iter (fun (label, _mapping, tgt) ->
-              let pending = IndexSet.diff pending label.K.vars in
+              let pending = IndexSet.diff pending label.K.captures in
               let bound =
                 IndexSet.fold (fun var cap -> IndexMap.add var label.filter cap)
-                  label.vars bound
+                  label.captures bound
               in
               update tgt (pending, bound)
             ) (DFA.get src).bkd
@@ -876,13 +766,12 @@ module Automata = struct
                   Lr1.to_string
                   (IndexSet.elements lr1s))
              (IndexMap.bindings bound)
-          )
+          )*)
 
       (* 3) Ordering *)
 
       (* 4) Register allocation *)
-
-    end
+      end*)
 
     module MinimizableDFA = struct
       type states = DFA.n
@@ -901,6 +790,7 @@ module Automata = struct
               List.iter (fun (label, _mapping, source) ->
                   ignore (add {source; target; label})
                 ) (DFA.get target).bkd
+
             ) !DFA.map
       end
 
