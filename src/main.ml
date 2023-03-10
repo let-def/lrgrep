@@ -540,18 +540,19 @@ module Automata = struct
 
     end
 
-    module DFA = struct
-      module ThreadIndex = Positive
+    module LazyDFA = struct
 
       type thread = NFA.t
 
       module Threads : sig
+        type index = private int
         type t
         val compare : t -> t -> int
         val make : (thread * 'a) list -> t * 'a array
-        val fold : (ThreadIndex.n index -> thread -> 'a -> 'a) -> t -> 'a -> 'a
+        val fold : (index -> thread -> 'a -> 'a) -> t -> 'a -> 'a
         val index_of : thread -> t -> int
       end = struct
+        type index = int
         type t = thread array
 
         let compare t1 t2 =
@@ -582,7 +583,7 @@ module Automata = struct
         let fold f x acc =
           let acc = ref acc in
           for i = 0 to Array.length x - 1 do
-            acc := f (Index.of_int Positive.n i) x.(i) !acc;
+            acc := f i x.(i) !acc;
           done;
           !acc
 
@@ -596,186 +597,115 @@ module Automata = struct
       end
 
       type threads = Threads.t
-      type thread_mapping = (ThreadIndex.n index * Capture.set) array
+      type thread_mapping = (Threads.index * Capture.set) array
 
       module ThMap = Map.Make(Threads)
 
       type 'st t = {
+        uid: int;
         threads: threads;
         transitions: (Lr1.set * (thread_mapping * 'st index) lazy_t) list;
-        (*mutable bkd: (Lr1.set * (ThreadIndex.n index * Capture.set) array * ('st index) lazy_t) list;*)
+        mutable visited: Lr1.set;
+        mutable scheduled: Lr1.set;
       }
-      include IndexBuffer.Gen(struct type nonrec 'st t = 'st t end)()
 
-      let map = ref ThMap.empty
+      include IndexBuffer.Gen(struct type nonrec 'a t = 'a t end)()
 
-      let rec determinize threads =
-        match ThMap.find_opt threads !map with
-        | Some index -> index
-        | None ->
-          let rev_transitions =
-            let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
-            Threads.fold
-              (fun i (th : thread) acc -> List.rev_map (make i) th.NFA.transitions @ acc)
-              threads []
-          in
-          let rev_partitions = IndexRefine.annotated_partition rev_transitions in
-          let process_class (label, rev_targets) =
-            label, lazy (
-              let prepare_target (index, captures, lazy nfa) =
-                nfa, (index, captures)
-              in
-              let threads, mapping =
-                Threads.make (List.rev_map prepare_target rev_targets)
-              in
-              mapping, determinize threads
-            )
-          in
-          let transitions = List.map process_class rev_partitions in
-          let source = add {threads; transitions} in
-          map := ThMap.add threads source !map;
-          source
+      let determinize threads =
+        let ruid = ref 0 in
+        let map = ref ThMap.empty in
+        let rec aux threads =
+          match ThMap.find_opt threads !map with
+          | Some index -> index
+          | None ->
+            let rev_transitions =
+              let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
+              Threads.fold
+                (fun i (th : thread) acc -> List.rev_map (make i) th.NFA.transitions @ acc)
+                threads []
+            in
+            let rev_partitions = IndexRefine.annotated_partition rev_transitions in
+            let process_class (label, rev_targets) =
+              label, lazy (
+                let prepare_target (index, captures, lazy nfa) =
+                  nfa, (index, captures)
+                in
+                let threads, mapping =
+                  Threads.make (List.rev_map prepare_target rev_targets)
+                in
+                mapping, aux threads
+              )
+            in
+            let transitions = List.map process_class rev_partitions in
+            let uid = !ruid in
+            incr ruid;
+            let index = add {
+              uid; threads; transitions;
+              scheduled=IndexSet.empty; visited=IndexSet.empty
+            } in
+            map := ThMap.add threads index !map;
+            index
+        in
+        aux threads
 
       let initial =
         let target, _mapping = Threads.make (Vector.to_list NFA.clauses) in
         determinize target
-    end
-
-    (*module Analysis = struct
-      (* The DFA is initialized with backward transitions. Dataflow analysis:
-
-         1) Reachability
-
-         Determine which actions are reachable from each path
-      - start from accepting states, backpropagate accepted states
-      - don't propagate if an accepting state with higher priority has been reached
-      - find fix point
-
-         Remove bkd transitions which source is a total accepting state with
-         higher priority.
-      *)
 
       let () =
-        let reachable st reached =
-          match IndexSet.minimum (IndexSet.inter Clauses.total st.DFA.accept) with
-          | None -> reached
-          | Some minimum ->
-            IndexSet.inter
-              reached
-              (IndexSet.init_interval (Index.of_int Clauses.n 0) minimum)
-        in
-        let update_reachable (st : _ DFA.t) reached =
-          let reached = reachable st reached in
-          let result = not (IndexSet.subset reached st.reachable) in
-          if result then
-            st.reachable <- IndexSet.union st.reachable reached;
-          result
-        in
-        let compute_reachable () =
-          let todo = ref [] in
-          let process target =
-            let st = DFA.get target in
-            let reachable = IndexSet.union st.accept st.reachable in
-            List.iter (fun (_label, _mapping, source) ->
-                if update_reachable (DFA.get source) reachable then
-                  push todo source
-              ) st.bkd
-          in
-          Index.iter DFA.n process;
-          let rec loop () =
-            match !todo with
-            | [] -> ()
-            | more ->
-              todo := [];
-              List.iter process more;
-              loop ()
-          in
-          loop ()
-        in
-        compute_reachable ();
-        (* Remove unreachable back transitions *)
-        let filtered = ref 0 in
-        Index.iter DFA.n (fun target ->
-            let st = DFA.get target in
-            let reached = IndexSet.union st.accept st.reachable in
-            st.bkd <-
-              List.filter (fun (_label, _mapping, source) ->
-                  let reached = reachable (DFA.get source) reached in
-                  let remove = IndexSet.is_empty reached in
-                  if remove then incr filtered;
-                  not remove
-                ) st.bkd
-          );
-        Printf.eprintf "Action reachability: removed %d back transitions\n" !filtered
-
-      (* 2) Captures
-         Find which capture are total and the set of transitions that trigger them
-         Backpropagate captured values for each clause *)
-
-      (*let _ =
-        let captures = Vector.make DFA.n (IndexSet.empty, IndexMap.empty) in
         let todo = ref [] in
-        let update st (pending, bound) =
-          let (pending', bound') = Vector.get captures st in
-          let pending = IndexSet.union pending pending' in
-          let bound =
-            IndexMap.union (fun _ a b -> Some (IndexSet.union a b))
-              bound bound'
-          in
-          if not (IndexMap.equal IndexSet.equal bound bound') ||
-             not (IndexSet.equal pending pending') then (
-            Vector.set captures st (pending, bound);
-            push todo st
+        let schedule i set =
+          let t = get i in
+          if not (IndexSet.subset set t.visited) then (
+            if IndexSet.is_empty t.scheduled then (
+              push todo t;
+              t.scheduled <- set
+            ) else (
+              t.scheduled <- IndexSet.union t.scheduled set
+            )
           )
         in
-        let process src =
-          let (pending, bound) = Vector.get captures src in
-          List.iter (fun (label, _mapping, tgt) ->
-              let pending = IndexSet.diff pending label.K.captures in
-              let bound =
-                IndexSet.fold (fun var cap -> IndexMap.add var label.filter cap)
-                  label.captures bound
-              in
-              update tgt (pending, bound)
-            ) (DFA.get src).bkd
+        let update t =
+          let preds = Lr1.set_predecessors (IndexSet.diff t.scheduled t.visited) in
+          t.visited <- IndexSet.union t.visited t.scheduled;
+          t.scheduled <- IndexSet.empty;
+          List.iter (fun (label, target) ->
+              let label' = IndexSet.inter label preds in
+              if not (IndexSet.is_empty label') then
+                let lazy (_, t') = target in
+                schedule t' label'
+            ) t.transitions
         in
         let rec loop () =
           match !todo with
           | [] -> ()
           | todo' ->
             todo := [];
-            List.iter process todo';
+            List.iter update todo';
             loop ()
         in
-        Index.iter DFA.n (fun st ->
-            let accept = (DFA.get st).accept in
-            if not (IndexSet.is_empty accept) then
-              let pending = indexset_bind accept (fun i -> (Vector.get NFA.clauses i).captures) in
-              if not (IndexSet.is_empty pending) then
-                update st (pending, IndexMap.empty)
-          );
-        loop ();
-        let pending, bound = Vector.get captures DFA.initial in
-        Printf.eprintf "unbound variables: %s\n\
-                        bound variables:\n%s\n"
-          (string_of_indexset pending)
-          (string_concat_map "\n"
-             (fun (var, lr1s) ->
-                string_of_index var ^ " -> " ^
-                string_concat_map ~wrap:("{","}") ", "
-                  Lr1.to_string
-                  (IndexSet.elements lr1s))
-             (IndexMap.bindings bound)
-          )*)
+        schedule initial Lr1.idle;
+        loop ()
 
-      (* 3) Ordering *)
+      let vector = freeze ()
 
-      (* 4) Register allocation *)
-      end*)
+      let iter_transitions i f =
+        let t = Vector.get vector i in
+        let set = Lr1.set_predecessors t.visited in
+        List.iter (fun (label, target) ->
+            if Lazy.is_val target then (
+              let set = IndexSet.inter set label in
+              if not (IndexSet.is_empty set) then
+                let lazy (mapping, t') = target in
+                f set mapping t'
+            )
+          ) t.transitions
+    end
+
 
     module MinimizableDFA = struct
-      type states = DFA.n
-      let states = DFA.n
+      type states = LazyDFA.n
+      let states = LazyDFA.n
 
       module Transition = struct
         type t = {
@@ -786,12 +716,9 @@ module Automata = struct
         include IndexBuffer.Gen(struct type nonrec _ t = t end)()
 
         let () =
-          DFA.ThMap.iter (fun _ target ->
-              List.iter (fun (label, _mapping, source) ->
-                  ignore (add {source; target; label})
-                ) (DFA.get target).bkd
-
-            ) !DFA.map
+          Index.iter states @@ fun source ->
+          LazyDFA.iter_transitions source @@ fun filter _mapping target ->
+          ignore (add {source; target; label={K.filter; captures=IndexSet.empty}})
       end
 
       type transitions = Transition.n
@@ -801,23 +728,31 @@ module Automata = struct
       let source i = (Transition.get i).source
       let target i = (Transition.get i).target
 
-      let initials f = f DFA.initial
+      let initials f = f LazyDFA.initial
       let finals f =
         Index.iter states
-          (fun st -> if not (IndexSet.is_empty (DFA.get st).accept) then f st)
+          (fun st ->
+             if LazyDFA.Threads.fold
+                 (fun _ nfa acc -> acc || nfa.NFA.accept)
+                 (LazyDFA.get st).threads false
+             then f st)
 
       let refinements refine =
         (* Refine states by accepted actions *)
         begin
           let acc = ref [] in
           Index.iter states (fun st ->
-              if not (IndexSet.is_empty (DFA.get st).accept) then
-                push acc st
+              let accepted =
+                LazyDFA.Threads.fold
+                  (fun _ nfa acc -> if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc)
+                  (LazyDFA.get st).threads IndexSet.empty
+              in
+              if not (IndexSet.is_empty accepted) then
+                push acc (accepted, st)
             );
           Misc.group_by !acc
-            ~compare:(fun st1 st2 ->
-                IndexSet.compare (DFA.get st1).accept (DFA.get st2).accept)
-            ~group:(fun st sts -> st :: sts)
+            ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
+            ~group:(fun (_, st) sts -> st :: List.map snd sts)
           |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
         end
         (* Refine states by the lr1 set that can reach them *)
@@ -847,8 +782,8 @@ module Automata = struct
   let process_entry _oc (entry : Syntax.entry) =
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
-    Printf.eprintf "DFA states: %d\n" (DFA.ThMap.cardinal !DFA.map);
-    let label_domain = Vector.make MinDFA.states IndexSet.empty in
+    Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.vector));
+    (*let label_domain = Vector.make MinDFA.states IndexSet.empty in
     Index.iter MinimizableDFA.states (fun st ->
         match MinDFA.transport_state st with
         | None -> ()
@@ -856,7 +791,7 @@ module Automata = struct
           let domain = Vector.get label_domain st' in
           let domain = IndexSet.union domain (DFA.get st).visited in
           Vector.set label_domain st' domain
-      );
+      ); *)
     Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states)
     (*List.iter2 (fun init (clause : Syntax.clause) ->
         if not init.reach_accept then
