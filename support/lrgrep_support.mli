@@ -58,7 +58,7 @@ type transition_action = {
 }
 
 type state = {
-  accept: (RT.clause * RT.register * int) list;
+  accept: (RT.clause * RT.register option array) list;
   (** a clause to accept in this state. *)
 
   halting: IntSet.t;

@@ -52,14 +52,18 @@ type program_instruction =
     (** [Store r] stores the state at the top of the parser stack in
         register [r]. *)
   | Move of register * register
+  | Clear of register
   | Yield of program_counter
     (** Jump and consume input:
         [Yield pc] stops the current interpretation to consume one state of the
         input stack. After consuming, execution should resume at [pc]. *)
-  | Accept of clause * int * int
-    (** When reaching [Accept id], the matcher found that clause number [id] is
-        matching. Add it to the set of matching candidates and resume
-        execution. *)
+  | Accept of clause * register option array
+    (** When reaching [Accept (clause, captures)], the matcher found that clause
+        number [clause] is matching. Add it to the set of matching candidates and
+        resume execution. [captures] defines the variables captured in the
+        clause definition: [None] if it is unbound, [Some reg] if it is bound to
+        the value stored in register [reg].
+    *)
   | Match of sparse_index
     (** [Match sidx] lookup the sparse table for a cell matching the state
         at the top of the parser stack at index [sidx].
