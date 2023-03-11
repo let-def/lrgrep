@@ -19,15 +19,6 @@ end = struct
     fun () -> incr r; Index.of_int n !r
 end
 
-let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
-
-let cmon_option f = function
-  | None -> Cmon.constant "None"
-  | Some x -> Cmon.constructor "Some" (f x)
-
-let cmon_set_cardinal set =
-  Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
-
 module type REDGRAPH = sig
   module Info : Info.S
   open Info

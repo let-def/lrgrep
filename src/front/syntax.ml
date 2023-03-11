@@ -80,7 +80,7 @@ type clause_action =
 (** A clause is a pair of a pattern and an action, representing one rule *)
 type clause = {
   pattern: regular_expr; (** the pattern *)
-  lookaheads: string list; (** restrict matching to these lookahead terminals, or [] for all terminals *)
+  lookaheads: (string * position) list; (** restrict matching to these lookahead terminals, or [] for all terminals *)
   action: clause_action; (** the semantic action *)
 }
 
@@ -215,7 +215,7 @@ let cmon_clause_action = function
 let cmon_clause {pattern; lookaheads; action} =
   Cmon.record [
     "pattern", cmon_regular_expression pattern;
-    "lookaheads", Cmon.list_map Cmon.string lookaheads;
+    "lookaheads", Cmon.list_map (Utils.Misc.cmon_pair Cmon.string cmon_position) lookaheads;
     "action", cmon_clause_action action;
   ]
 

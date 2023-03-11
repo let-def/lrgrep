@@ -192,6 +192,15 @@ let cmon_index =
 let cmon_indexset ?(index=cmon_index) xs =
   Cmon.list_map index (IndexSet.elements xs)
 
+let cmon_set_cardinal set =
+  Cmon.constant ("{" ^ string_of_int (IndexSet.cardinal set) ^ " elements}")
+
+let cmon_pair f g (x, y) = Cmon.tuple [f x; g y]
+
+let cmon_option f = function
+  | None -> Cmon.constant "None"
+  | Some x -> Cmon.constructor "Some" (f x)
+
 (** Print a cmon document to a channel with sensible defaults *)
 let print_cmon oc cmon =
   PPrint.ToChannel.pretty 0.8 80 oc (Cmon.print cmon)

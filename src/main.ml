@@ -9,6 +9,7 @@ let source_name = ref None
 let output_name = ref None
 let grammar_file = ref None
 let check_coverage = ref false
+let verbose = ref false
 
 let escape_and_align_left fmt =
   Printf.ksprintf (fun str ->
@@ -50,8 +51,8 @@ let specs = [
   " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
   "-g", Arg.String (fun x -> grammar_file := Some x),
   " <file.cmly>  Path of the Menhir compiled grammar to analyse (*.cmly)";
-  "-v", Arg.Unit print_version_string,
-  " Print version and exit";
+  "-v", Arg.Set verbose,
+  " Increase output verbosity";
   "-version", Arg.Unit print_version_string,
   " Print version and exit";
   "-vnum", Arg.Unit print_version_num,
@@ -885,50 +886,133 @@ module Automata = struct
     module MinDFA = Valmari.Minimize (MinimizableDFA.Label) (MinimizableDFA)
   end
 
+  let gen_code entry oc optionals vars var_typeable clauses =
+    let print fmt = Printf.fprintf oc fmt in
+    print
+      "let execute_%s %s : \
+         (int * %s.MenhirInterpreter.element option array) * %s.token \
+         -> _ option = function\n"
+      entry.Syntax.name (String.concat " " entry.Syntax.args)
+      parser_module parser_module;
+    List.iteri (fun index ((varnames, varindices), clause) ->
+        let recover_types =
+          let symbol_matcher s = match Info.Symbol.prj s with
+            | L t -> "T T_" ^ Info.Terminal.to_string t
+            | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
+          in
+          List.fold_left2 begin fun acc name index ->
+            let is_optional = IndexSet.mem index optionals in
+            let types = match IndexMap.find_opt index var_typeable with
+              | None -> None
+              | Some (typ, cases) ->
+                let matchers =
+                  List.map symbol_matcher (IndexSet.elements cases)
+                in
+                Some (
+                  Printf.sprintf "\
+                  match %s.MenhirInterpreter.incoming_symbol st with \
+                  | %s -> ((x : %s), startp, endp)
+                  | _ -> assert false
+                  " parser_module
+                    (String.concat " | " matchers) typ
+                )
+            in
+            match is_optional, types with
+            | true, None -> acc
+            | true, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with \
+                | None -> None \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  Some (%s) in" name name parser_module types
+              :: acc
+            | false, None ->
+              Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
+                name name :: acc
+            | false, Some types ->
+              Printf.sprintf "\
+              let %s = match %s with None -> assert false \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  %s in" name name parser_module types :: acc
+          end [] varnames (IndexSet.elements varindices)
+          |> String.concat "\n"
+        in
+        let print_loc (loc : Syntax.location) =
+          Printf.sprintf "# %d %S\n%s"
+            loc.start_line loc.loc_file
+            (String.make loc.start_col ' ')
+        in
+        let lookahead_constraint = match clause.Syntax.lookaheads with
+          | [] -> None
+          | terminals ->
+            let sym_pattern (sym, pos) =
+              match Info.Symbol.prj (Lr1_index.get_symbol pos (Syntax.Name sym)) with
+              | R n ->
+                failwith ("Lookahead should be a terminal, " ^
+                          Info.Nonterminal.to_string n ^ " is a nonterminal")
+              | L t ->
+                let name = Info.Terminal.to_string t in
+                match Info.Terminal.semantic_value t with
+                | None -> name
+                | Some _ -> name ^ " _"
+            in
+            Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
+        in
+        print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
+          index
+          (String.concat ";" varnames)
+          (Option.value lookahead_constraint ~default:"_")
+          recover_types
+          (match clause.Syntax.action with
+           | Unreachable -> "failwith \"Should be unreachable\""
+           | Partial (loc, str) ->
+             print_loc loc ^ str
+           | Total (loc, str) ->
+             "Some (\n" ^ print_loc loc ^ str ^ ")");
+        if Option.is_some lookahead_constraint then
+          print "  | (%d, [|%s|]), _ -> None\n"
+            index (string_concat_map ";" (fun _ -> "_") varnames)
+      ) (List.combine vars clauses);
+    print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
+
+
+  let output_table oc entry registers (program, table, remap) =
+    let print fmt = Printf.fprintf oc fmt in
+    print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
+      entry.Syntax.name;
+    print "  let registers = %d\n" registers;
+    print "  let initial = %d\n" remap.(0);
+    print "  let table = %S\n" table;
+    print "  let program = %S\n" program;
+    print "end\n"
+
   let process_entry _oc (entry : Syntax.entry) =
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
     Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.vector));
-    (*let label_domain = Vector.make MinDFA.states IndexSet.empty in
-    Index.iter MinimizableDFA.states (fun st ->
-        match MinDFA.transport_state st with
-        | None -> ()
-        | Some st' ->
-          let domain = Vector.get label_domain st' in
-          let domain = IndexSet.union domain (DFA.get st).visited in
-          Vector.set label_domain st' domain
-      ); *)
-    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states)
-    (*List.iter2 (fun init (clause : Syntax.clause) ->
-        if not init.reach_accept then
-          Printf.eprintf "Clause line %d is unreachable\n"
-            clause.pattern.position.line;
-      ) initial_states entry.clauses;*)
+    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
+    Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.)
+
 end
 
 
 let () = (
-  (*let doc = Cmon.list_map (KRE.cmon ()) kst.direct in
-  if verbose then (
+  (*if !verbose then (
+    let doc = Cmon.list_map Regexp.K.cmon kst.direct in
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
-  );*)
-  (*let oc = match !output_name with
-    | None -> None
-    | Some path ->
-      let oc = open_out_bin path in
-      output_string oc (snd lexer_definition.header);
-      Some oc
-    in*)
-  let oc = None in
-  prerr_newline ();
+    );*)
+  let oc = Option.map open_out_bin !output_name in
+
+  oc |> Option.iter (fun oc -> output_string oc (snd lexer_definition.header));
+
   List.iter (Automata.process_entry oc) lexer_definition.entrypoints;
-  (*begin match oc with
-    | None -> ()
-    | Some oc ->
+
+  oc |> Option.iter (fun oc ->
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
-      close_out oc
-    end;*)
+    );
+
+  Option.iter close_out oc;
   (* Print matching functions *)
 )
