@@ -52,6 +52,8 @@ module type S1 = sig
 
   val minimum: 'a t -> 'a element option
 
+  val maximum: 'a t -> 'a element option
+
   (* [mem x s] returns [true] if and only if [x] appears in the set
      [s]. *)
 
