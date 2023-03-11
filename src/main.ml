@@ -550,7 +550,10 @@ module Automata = struct
         val compare : t -> t -> int
         val make : (thread * 'a) list -> t * 'a array
         val fold : (index -> thread -> 'a -> 'a) -> t -> 'a -> 'a
-        val index_of : thread -> t -> int
+        val index_of : thread -> t -> index
+        val count : t -> int
+        val get_index : 'a array -> index -> 'a
+        val set_index : 'a array -> index -> 'a -> unit
       end = struct
         type index = int
         type t = thread array
@@ -594,6 +597,10 @@ module Automata = struct
             else loop (i + 1)
           in
           loop 0
+
+        let count = Array.length
+        let get_index = Array.get
+        let set_index = Array.set
       end
 
       type threads = Threads.t
@@ -691,34 +698,154 @@ module Automata = struct
 
       let iter_transitions i f =
         let t = Vector.get vector i in
+        List.iter (fun (label, target) ->
+            if Lazy.is_val target then (
+              let lazy (mapping, t') = target in
+              f label mapping t'
+            )
+          ) t.transitions
+
+      let iter_refined_transitions i f =
+        let t = Vector.get vector i in
         let set = Lr1.set_predecessors t.visited in
         List.iter (fun (label, target) ->
             if Lazy.is_val target then (
-              let set = IndexSet.inter set label in
-              if not (IndexSet.is_empty set) then
-                let lazy (mapping, t') = target in
-                f set mapping t'
+              let lazy (mapping, t') = target in
+              f (IndexSet.inter set label) mapping t'
             )
           ) t.transitions
-    end
 
+      let liveness =
+        let reserve t = Array.make (Threads.count t.threads) IndexSet.empty in
+        Vector.map reserve vector
+
+      let () =
+        let todo = ref [] in
+        let process i =
+          let bank = Vector.get liveness i in
+          let process_transition _label mapping j =
+            let changed = ref false in
+            let bank' = Vector.get liveness j in
+            let process_mapping jj (ii, captures) =
+              let live = IndexSet.union (Threads.get_index bank ii) captures in
+              let live' = bank'.(jj) in
+              if not (IndexSet.equal live live') then (
+                bank'.(jj) <- live;
+                changed := true;
+              )
+            in
+            Array.iteri process_mapping mapping;
+            if !changed then
+              push todo j
+          in
+          iter_transitions i process_transition
+        in
+        Index.iter (Vector.length vector) process;
+        let rec loop () =
+          match !todo with
+          | [] -> ()
+          | todo' ->
+            todo := [];
+            List.iter process todo';
+            loop ()
+        in
+        loop ()
+
+      let registers = Vector.make (Vector.length vector) [||]
+
+      let () =
+        let process i threads =
+          iter_transitions i @@ fun _ mapping j ->
+          let allocated = Array.map (fun x -> IndexMap.fold (fun _ -> IntSet.add) x IntSet.empty) threads in
+          if Array.length (Vector.get registers j) = 0 then (
+            let live = Vector.get liveness j in
+            let in_use =
+              ref (Array.fold_right
+                     (fun (ii, _) set -> IntSet.union set (Threads.get_index allocated ii))
+                     mapping IntSet.empty)
+            in
+            (* Allocate fresh registers *)
+            let bank =
+              Array.mapi begin fun jj (ii, _) ->
+                let allocated = Threads.get_index threads ii in
+                let live = live.(jj) in
+                let to_allocate = IndexSet.diff live (IndexMap.domain allocated) in
+                IndexSet.fold (fun cap allocated ->
+                    let index, in_use' = IntSet.allocate !in_use in
+                    in_use := in_use';
+                    IndexMap.add cap index allocated
+                  ) to_allocate allocated
+              end mapping
+            in
+            Vector.set registers j bank
+          )
+        in
+        let zero = Index.of_int (Vector.length vector) 0 in
+        Vector.set registers zero
+          (Array.make (Threads.count (Vector.get vector zero).threads) IndexMap.empty);
+        Vector.iteri process registers;
+        let max_live = ref 0 in
+        let max_index = ref (-1) in
+        Vector.iter (fun threads ->
+            let max_live' =
+              Array.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 threads
+            in
+            max_live := max !max_live max_live';
+            max_index := Array.fold_right (IndexMap.fold (fun _ -> max)) threads !max_index
+          ) registers;
+        Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n" !max_live !max_index
+
+    end
 
     module MinimizableDFA = struct
       type states = LazyDFA.n
       let states = LazyDFA.n
 
+      module Label = struct
+        type t = {
+          filter: Lr1.set;
+          captures: (Capture.n, int) indexmap;
+          moves: int IntMap.t;
+        }
+
+        let compare t1 t2 =
+          let c = IndexSet.compare t1.filter t2.filter in
+          if c <> 0 then c else
+            let c = IndexMap.compare Int.compare t1.captures t2.captures in
+            if c <> 0 then c else
+              let c = IntMap.compare Int.compare t1.moves t2.moves in
+              c
+      end
+
       module Transition = struct
         type t = {
           source: states index;
           target: states index;
-          label: label;
+          label: Label.t;
         }
         include IndexBuffer.Gen(struct type nonrec _ t = t end)()
 
         let () =
           Index.iter states @@ fun source ->
-          LazyDFA.iter_transitions source @@ fun filter _mapping target ->
-          ignore (add {source; target; label={K.filter; captures=IndexSet.empty}})
+          let src_regs = Vector.get LazyDFA.registers source in
+          LazyDFA.iter_refined_transitions source @@ fun filter mapping target ->
+          let tgt_regs = Vector.get LazyDFA.registers target in
+          let captures = ref IndexMap.empty in
+          let moves = ref IntMap.empty in
+          let process_mapping (src_i, captured) tgt_bank =
+            let src_bank = LazyDFA.Threads.get_index src_regs src_i in
+            IndexMap.iter (fun capture tgt_reg ->
+                if IndexSet.mem capture captured then
+                  captures := IndexMap.add capture tgt_reg !captures
+                else
+                  let src_reg = IndexMap.find capture src_bank in
+                  if src_reg <> tgt_reg then
+                    moves := IntMap.add src_reg tgt_reg !moves
+              ) tgt_bank
+          in
+          Array.iter2 process_mapping mapping tgt_regs;
+          let label = {Label.filter; captures=(!captures); moves=(!moves)} in
+          ignore (add {source; target; label})
       end
 
       type transitions = Transition.n
@@ -739,44 +866,23 @@ module Automata = struct
 
       let refinements refine =
         (* Refine states by accepted actions *)
-        begin
-          let acc = ref [] in
-          Index.iter states (fun st ->
-              let accepted =
-                LazyDFA.Threads.fold
-                  (fun _ nfa acc -> if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc)
-                  (LazyDFA.get st).threads IndexSet.empty
-              in
-              if not (IndexSet.is_empty accepted) then
-                push acc (accepted, st)
-            );
-          Misc.group_by !acc
-            ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
-            ~group:(fun (_, st) sts -> st :: List.map snd sts)
-          |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
-        end
-        (* Refine states by the lr1 set that can reach them *)
-        (*begin
-            let module Lr1Set = struct
-              type t = Lr1.set
-              let compare = IndexSet.compare
-            end in
-            let module SetMap = Map.Make(Lr1Set) in
-            let acc = ref SetMap.empty in
-            Index.iter states (fun st ->
-                acc := SetMap.update (State.get st).visited (function
-                    | None -> Some [st]
-                    | Some xs -> Some (st :: xs)
-                  ) !acc
-              );
-            SetMap.iter (fun _ xs -> refine (fun ~add -> List.iter add xs)) !acc
-          end*)
+        let acc = ref [] in
+        Index.iter states (fun st ->
+            let accepted =
+              LazyDFA.Threads.fold
+                (fun _ nfa acc -> if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc)
+                (LazyDFA.get st).threads IndexSet.empty
+            in
+            if not (IndexSet.is_empty accepted) then
+              push acc (accepted, st)
+          );
+        Misc.group_by !acc
+          ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
+          ~group:(fun (_, st) sts -> st :: List.map snd sts)
+        |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
     end
 
-    module MinDFA = Valmari.Minimize (struct
-        type t = K.label
-        let compare = K.compare_label
-      end) (MinimizableDFA)
+    module MinDFA = Valmari.Minimize (MinimizableDFA.Label) (MinimizableDFA)
   end
 
   let process_entry _oc (entry : Syntax.entry) =

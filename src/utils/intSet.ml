@@ -230,6 +230,19 @@ let minimum s =
   with Found x ->
     Some x
 
+let rec maximum = function
+  | N -> None
+  | C (addr, ss, N) ->
+    let i = ref 0 in
+    let ss = ref (ss lsr 1) in
+    while !ss > 0 do
+      incr i;
+      ss := !ss lsr 1
+    done;
+    Some (addr + !i)
+  | C (_, _, rest) ->
+    maximum rest
+
 let rec compare s1 s2 =
   if s1 == s2 then 0 else
     match s1, s2 with
@@ -398,3 +411,28 @@ let rec filter f = function
       filter f ss
     else
       C (addr, !word, filter f ss)
+
+let rec allocate result = function
+  | N ->
+    result := 0;
+    C (0, 1, N)
+
+  | C (addr, -1, N) ->
+    let next = addr + word_size in
+    result := next;
+    C (addr, -1, C (next, 1, N))
+
+  | C (addr, -1, qs) ->
+    C (addr, -1, allocate result qs)
+
+  | C (addr, word, qs) ->
+    let i = ref 0 in
+    while word land (1 lsl !i) <> 0
+    do incr i done;
+    result := addr + !i;
+    C (addr, word lor (1 lsl !i), qs)
+
+let allocate qs =
+  let result = ref 0 in
+  let qs = allocate result qs in
+  !result, qs
