@@ -1,4 +1,4 @@
 (executable
  (name main)
  (public_name lrgrep)
- (libraries front mid fix cmon utils menhirSdk valmari))
+ (libraries front mid fix cmon utils menhirSdk valmari support))
