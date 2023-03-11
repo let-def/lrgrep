@@ -13,8 +13,9 @@ type program_counter = int
 type program_instruction =
   | Store of register
   | Move of register * register
+  | Clear of register
   | Yield of program_counter
-  | Accept of clause * int * int
+  | Accept of clause * register option array
   | Match of sparse_index
   | Halt
 
@@ -50,17 +51,23 @@ let program_step (t : program) (r : program_counter ref)
     r := !r + 3;
     Move (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
   | '\x03' ->
-    r := !r + 4;
-    Yield (get_int t ~offset:(pc + 1) 3)
+    r := !r + 2;
+    Clear (String.get_uint8 t (pc + 1))
   | '\x04' ->
     r := !r + 4;
-    Accept (String.get_uint8 t (pc + 1),
-            String.get_uint8 t (pc + 2),
-            String.get_uint8 t (pc + 3))
+    Yield (get_int t ~offset:(pc + 1) 3)
   | '\x05' ->
+    let arity = String.get_uint8 t (pc + 1) in
+    r := !r + 3 + arity;
+    let registers = Array.init arity (fun i ->
+        let x = String.get_uint8 t (pc + 3 + i) in
+        if x = 255 then None else Some x
+      ) in
+    Accept (String.get_uint8 t (pc + 2), registers)
+  | '\x06' ->
     r := !r + 3;
     Match (String.get_uint16_be t (pc + 1))
-  | '\x06' ->
+  | '\x07' ->
     r := !r + 1;
     Halt
   | _ -> assert false
@@ -94,12 +101,19 @@ struct
         (*prerr_endline "Store";*)
         bank.(r1) <- bank.(r2);
         loop ()
+      | Clear r1 ->
+        bank.(r1) <- None;
+        loop ()
       | Yield pc' ->
         (*prerr_endline "Yield";*)
         Some pc'
-      | Accept (clause, start, count) ->
+      | Accept (clause, registers) ->
         (*prerr_endline "Accept";*)
-        candidate := (clause, Array.sub bank start count) :: !candidate;
+        let may_get = function
+          | None -> None
+          | Some i -> bank.(i)
+        in
+        candidate := (clause, Array.map may_get registers) :: !candidate;
         loop ()
       | Match index ->
         (*prerr_endline "Match";*)

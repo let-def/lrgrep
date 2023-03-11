@@ -145,36 +145,44 @@ end = struct
 
   let emit t : RT.program_instruction -> _ = function
     | Store i ->
-      assert (i <= 0xFF);
+      assert (i < 0xFF);
       Buffer.add_char t.buffer '\x01';
       Buffer.add_uint8 t.buffer i
     | Move (i, j) ->
-      assert (i <= 0xFF && j <= 0xFF);
+      assert (i < 0xFF && j < 0xFF);
       if i <> j then (
         Buffer.add_char t.buffer '\x02';
         Buffer.add_uint8 t.buffer i;
         Buffer.add_uint8 t.buffer j
       )
+    | Clear i ->
+      assert (i < 0xFF);
+      Buffer.add_char t.buffer '\x03';
+      Buffer.add_uint8 t.buffer i
     | Yield pos ->
       assert (pos <= 0xFFFFFF);
-      Buffer.add_char t.buffer '\x03';
+      Buffer.add_char t.buffer '\x04';
       Buffer.add_uint16_be t.buffer (pos land 0xFFFF);
       Buffer.add_uint8 t.buffer (pos lsr 16)
-    | Accept (clause, start, count) ->
-      assert (start <= 0xFF && count <= 0xFF);
-      Buffer.add_char t.buffer '\x04';
-      Buffer.add_uint8 t.buffer clause;
-      Buffer.add_uint8 t.buffer start;
-      Buffer.add_uint8 t.buffer count
-    | Match index ->
+    | Accept (clause, registers) ->
       Buffer.add_char t.buffer '\x05';
+      Buffer.add_uint8 t.buffer (Array.length registers);
+      Buffer.add_uint8 t.buffer clause;
+      Array.iter (function
+          | None -> Buffer.add_uint8 t.buffer 0xFF;
+          | Some i ->
+            assert (i < 0xFF);
+            Buffer.add_uint8 t.buffer i
+        ) registers
+    | Match index ->
+      Buffer.add_char t.buffer '\x06';
       assert (index <= 0xFFFF);
       Buffer.add_uint16_be t.buffer index
     | Halt ->
-      Buffer.add_char t.buffer '\x06'
+      Buffer.add_char t.buffer '\x07'
 
   let emit_yield_reloc t reloc =
-    Buffer.add_char t.buffer '\x03';
+    Buffer.add_char t.buffer '\x04';
     let pos = Buffer.length t.buffer in
     Buffer.add_string t.buffer "   ";
     t.reloc <- (pos, reloc) :: t.reloc
@@ -196,7 +204,7 @@ type transition_action = {
 }
 
 type state = {
-  accept: (RT.clause * RT.register * int) list;
+  accept: (RT.clause * RT.register option array) list;
   halting: IntSet.t;
   transitions: (IntSet.t * transition_action) list;
 }
@@ -279,8 +287,8 @@ let compact (dfa : dfa) =
       assert (!pc = -1);
       pc := Code_emitter.position code;
       List.iter
-        (fun (clause, start, count) ->
-           Code_emitter.emit code (Accept (clause, start, count)))
+        (fun (clause, registers) ->
+           Code_emitter.emit code (Accept (clause, registers)))
         accept;
       begin match
         List.concat_map
