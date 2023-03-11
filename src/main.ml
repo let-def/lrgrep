@@ -806,6 +806,7 @@ module Automata = struct
         type t = {
           filter: Lr1.set;
           captures: (Capture.n, int) indexmap;
+          clear: IntSet.t;
           moves: int IntMap.t;
         }
 
@@ -815,8 +816,12 @@ module Automata = struct
             let c = IndexMap.compare Int.compare t1.captures t2.captures in
             if c <> 0 then c else
               let c = IntMap.compare Int.compare t1.moves t2.moves in
-              c
+              if c <> 0 then c else
+                let c = IntSet.compare t1.clear t1.clear in
+                c
       end
+
+      let partial_captures = ref IndexSet.empty
 
       module Transition = struct
         type t = {
@@ -833,19 +838,24 @@ module Automata = struct
           let tgt_regs = Vector.get LazyDFA.registers target in
           let captures = ref IndexMap.empty in
           let moves = ref IntMap.empty in
+          let clear = ref IntSet.empty in
           let process_mapping (src_i, captured) tgt_bank =
             let src_bank = LazyDFA.Threads.get_index src_regs src_i in
             IndexMap.iter (fun capture tgt_reg ->
                 if IndexSet.mem capture captured then
                   captures := IndexMap.add capture tgt_reg !captures
                 else
-                  let src_reg = IndexMap.find capture src_bank in
-                  if src_reg <> tgt_reg then
-                    moves := IntMap.add src_reg tgt_reg !moves
+                  match IndexMap.find_opt capture src_bank with
+                  | Some src_reg ->
+                    if src_reg <> tgt_reg then
+                      moves := IntMap.add src_reg tgt_reg !moves
+                  | None ->
+                    partial_captures := IndexSet.add capture !partial_captures;
+                    clear := IntSet.add tgt_reg !clear
               ) tgt_bank
           in
           Array.iter2 process_mapping mapping tgt_regs;
-          let label = {Label.filter; captures=(!captures); moves=(!moves)} in
+          let label = {Label.filter; captures=(!captures); moves=(!moves); clear=(!clear)} in
           ignore (add {source; target; label})
       end
 
@@ -886,115 +896,113 @@ module Automata = struct
     module MinDFA = Valmari.Minimize (MinimizableDFA.Label) (MinimizableDFA)
   end
 
-  let gen_code entry oc optionals vars var_typeable clauses =
-    let print fmt = Printf.fprintf oc fmt in
-    print
-      "let execute_%s %s : \
-         (int * %s.MenhirInterpreter.element option array) * %s.token \
-         -> _ option = function\n"
-      entry.Syntax.name (String.concat " " entry.Syntax.args)
-      parser_module parser_module;
-    List.iteri (fun index ((varnames, varindices), clause) ->
-        let recover_types =
-          let symbol_matcher s = match Info.Symbol.prj s with
-            | L t -> "T T_" ^ Info.Terminal.to_string t
-            | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
-          in
-          List.fold_left2 begin fun acc name index ->
-            let is_optional = IndexSet.mem index optionals in
-            let types = match IndexMap.find_opt index var_typeable with
-              | None -> None
-              | Some (typ, cases) ->
-                let matchers =
-                  List.map symbol_matcher (IndexSet.elements cases)
-                in
-                Some (
-                  Printf.sprintf "\
-                  match %s.MenhirInterpreter.incoming_symbol st with \
-                  | %s -> ((x : %s), startp, endp)
-                  | _ -> assert false
-                  " parser_module
-                    (String.concat " | " matchers) typ
-                )
-            in
-            match is_optional, types with
-            | true, None -> acc
-            | true, Some types ->
-              Printf.sprintf "\
-              let %s = match %s with \
-                | None -> None \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  Some (%s) in" name name parser_module types
-              :: acc
-            | false, None ->
-              Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
-                name name :: acc
-            | false, Some types ->
-              Printf.sprintf "\
-              let %s = match %s with None -> assert false \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  %s in" name name parser_module types :: acc
-          end [] varnames (IndexSet.elements varindices)
-          |> String.concat "\n"
-        in
-        let print_loc (loc : Syntax.location) =
-          Printf.sprintf "# %d %S\n%s"
-            loc.start_line loc.loc_file
-            (String.make loc.start_col ' ')
-        in
-        let lookahead_constraint = match clause.Syntax.lookaheads with
-          | [] -> None
-          | terminals ->
-            let sym_pattern (sym, pos) =
-              match Info.Symbol.prj (Lr1_index.get_symbol pos (Syntax.Name sym)) with
-              | R n ->
-                failwith ("Lookahead should be a terminal, " ^
-                          Info.Nonterminal.to_string n ^ " is a nonterminal")
-              | L t ->
-                let name = Info.Terminal.to_string t in
-                match Info.Terminal.semantic_value t with
-                | None -> name
-                | Some _ -> name ^ " _"
-            in
-            Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
-        in
-        print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
-          index
-          (String.concat ";" varnames)
-          (Option.value lookahead_constraint ~default:"_")
-          recover_types
-          (match clause.Syntax.action with
-           | Unreachable -> "failwith \"Should be unreachable\""
-           | Partial (loc, str) ->
-             print_loc loc ^ str
-           | Total (loc, str) ->
-             "Some (\n" ^ print_loc loc ^ str ^ ")");
-        if Option.is_some lookahead_constraint then
-          print "  | (%d, [|%s|]), _ -> None\n"
-            index (string_concat_map ";" (fun _ -> "_") varnames)
-      ) (List.combine vars clauses);
-    print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
-
-
-  let output_table oc entry registers (program, table, remap) =
-    let print fmt = Printf.fprintf oc fmt in
-    print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
-      entry.Syntax.name;
-    print "  let registers = %d\n" registers;
-    print "  let initial = %d\n" remap.(0);
-    print "  let table = %S\n" table;
-    print "  let program = %S\n" program;
-    print "end\n"
-
   let process_entry _oc (entry : Syntax.entry) =
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
     Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.vector));
     Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.)
-
 end
 
+let gen_code entry oc optionals vars var_typeable clauses =
+  let print fmt = Printf.fprintf oc fmt in
+  print
+    "let execute_%s %s : \
+     (int * %s.MenhirInterpreter.element option array) * %s.token \
+     -> _ option = function\n"
+    entry.Syntax.name (String.concat " " entry.Syntax.args)
+    parser_module parser_module;
+  List.iteri (fun index ((varnames, varindices), clause) ->
+      let recover_types =
+        let symbol_matcher s = match Info.Symbol.prj s with
+          | L t -> "T T_" ^ Info.Terminal.to_string t
+          | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
+        in
+        List.fold_left2 begin fun acc name index ->
+          let is_optional = IndexSet.mem index optionals in
+          let types = match IndexMap.find_opt index var_typeable with
+            | None -> None
+            | Some (typ, cases) ->
+              let matchers =
+                List.map symbol_matcher (IndexSet.elements cases)
+              in
+              Some (
+                Printf.sprintf "\
+                  match %s.MenhirInterpreter.incoming_symbol st with \
+                  | %s -> ((x : %s), startp, endp)
+                  | _ -> assert false
+                  " parser_module
+                  (String.concat " | " matchers) typ
+              )
+          in
+          match is_optional, types with
+          | true, None -> acc
+          | true, Some types ->
+            Printf.sprintf "\
+              let %s = match %s with \
+                | None -> None \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  Some (%s) in" name name parser_module types
+            :: acc
+          | false, None ->
+            Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
+              name name :: acc
+          | false, Some types ->
+            Printf.sprintf "\
+              let %s = match %s with None -> assert false \
+                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
+                  %s in" name name parser_module types :: acc
+        end [] varnames (IndexSet.elements varindices)
+        |> String.concat "\n"
+      in
+      let print_loc (loc : Syntax.location) =
+        Printf.sprintf "# %d %S\n%s"
+          loc.start_line loc.loc_file
+          (String.make loc.start_col ' ')
+      in
+      let lookahead_constraint = match clause.Syntax.lookaheads with
+        | [] -> None
+        | terminals ->
+          let sym_pattern (sym, pos) =
+            match Info.Symbol.prj (Lr1_index.get_symbol pos (Syntax.Name sym)) with
+            | R n ->
+              failwith ("Lookahead should be a terminal, " ^
+                        Info.Nonterminal.to_string n ^ " is a nonterminal")
+            | L t ->
+              let name = Info.Terminal.to_string t in
+              match Info.Terminal.semantic_value t with
+              | None -> name
+              | Some _ -> name ^ " _"
+          in
+          Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
+      in
+      print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
+        index
+        (String.concat ";" varnames)
+        (Option.value lookahead_constraint ~default:"_")
+        recover_types
+        (match clause.Syntax.action with
+         | Unreachable -> "failwith \"Should be unreachable\""
+         | Partial (loc, str) ->
+           print_loc loc ^ str
+         | Total (loc, str) ->
+           "Some (\n" ^ print_loc loc ^ str ^ ")");
+      if Option.is_some lookahead_constraint then
+        print "  | (%d, [|%s|]), _ -> None\n"
+          index (string_concat_map ";" (fun _ -> "_") varnames)
+    ) (List.combine vars clauses);
+  print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
+
+
+let output_table oc entry registers (program, table, remap) =
+  let print fmt = Printf.fprintf oc fmt in
+  print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
+    entry.Syntax.name;
+  print "  let registers = %d\n" registers;
+  print "  let initial = %d\n" remap.(0);
+  print "  let table = %S\n" table;
+  print "  let program = %S\n" program;
+  print "end\n"
 
 let () = (
   (*if !verbose then (
