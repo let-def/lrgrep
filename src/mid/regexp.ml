@@ -597,8 +597,6 @@ struct
     let live_redstate (red : RE.reduction) (state : Redgraph.state index) =
       intersecting red.pattern (Redgraph.reachable state)
 
-    let visited_target = ref IndexSet.empty
-
     let rec reduce_target ~on_outer r ~lookahead target =
       not_empty lookahead && (
         (live_redstate r target &&
@@ -664,7 +662,6 @@ struct
           process_re label self next re.desc
 
         | Reducing {reduction; transitions; lookahead; next} ->
-          visited_target := IndexSet.empty;
           let l' = reduce_outer next label reduction lookahead transitions in
           begin match l' with
             | None -> ()
