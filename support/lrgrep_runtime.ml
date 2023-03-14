@@ -147,6 +147,18 @@ struct
         loop env pc'
     in
     loop env PE.initial;
-    !candidate
-    |> List.sort_uniq (fun (a,_) (b,_) -> Int.compare a b)
+    let rec uniq k v = function
+      | [] -> [k, v]
+      | (k', v') :: rest ->
+        if Int.equal k k' then
+          uniq k v rest
+        else
+          (k, v) :: uniq k' v' rest
+    in
+    match
+      List.stable_sort (fun (a,_) (b,_) -> Int.compare a b)
+        !candidate
+    with
+    | (k, v) :: rest -> uniq k v rest
+    | [] -> []
 end
