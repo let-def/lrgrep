@@ -1,4 +1,6 @@
 open Utils
+open Fix.Indexing
+
 module RT = Lrgrep_runtime
 
 (* Pack a sparse list of transition using the sparse vector representation
@@ -51,21 +53,22 @@ end
 (** The action of a transition is pair of:
     - a possibly empty list of registers to save the current state to
     - a target state (index of the state in the dfa array) *)
-type transition_action = {
+type 'state transition_action = {
   move: (RT.register * RT.register) list;
   store: RT.register list;
-  target: int;
+  clear: RT.register list;
+  target: 'state index;
 }
 
-type state = {
-  accept: (RT.clause * RT.register option array) list;
+type ('state, 'clause, 'lr1) state = {
+  accept: ('clause index * RT.register option array) list;
   (** a clause to accept in this state. *)
 
-  halting: IntSet.t;
+  halting: 'lr1 IndexSet.t;
   (** The set of labels that should cause matching to halt (this can be seen as
       a transition to a "virtual" sink state). *)
 
-  transitions: (IntSet.t * transition_action) list;
+  transitions: ('lr1 IndexSet.t * 'state transition_action) list;
   (** Transitions for this state, as a list of labels and actions. *)
 }
 
@@ -78,13 +81,10 @@ type state = {
    the optimizer is free to chose the interpretation that suits it the most.
 *)
 
-(** Before compaction a dfa is just an array of state *)
-type dfa = state array
-
 (** The result of compaction is a program, a sparse table, and an array
     mapping each DFA state to the PC of the instructions that implement this
     state. *)
 type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
 
 (** Run the compaction algorithm on a dfa *)
-val compact : dfa -> compact_dfa
+val compact : 'state cardinal -> ('state index -> ('state, _, _) state) -> compact_dfa

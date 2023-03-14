@@ -164,6 +164,7 @@ module type S1 = sig
   val init_interval : 'a element -> 'a element -> 'a t
   val init_subset : 'a element -> 'a element -> ('a element -> bool) -> 'a t
   val filter : ('a element -> bool) -> 'a t -> 'a t
+  val filter_map : ('a element -> 'b element option) -> 'a t -> 'b t
 end
 
 module type S0 = sig
