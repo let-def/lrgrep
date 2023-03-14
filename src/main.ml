@@ -665,6 +665,7 @@ module Automata = struct
         let schedule i set =
           let t = get i in
           if not (IndexSet.subset set t.visited) then (
+            let set = IndexSet.diff set t.visited in
             if IndexSet.is_empty t.scheduled then (
               push todo t;
               t.scheduled <- set
@@ -674,14 +675,14 @@ module Automata = struct
           )
         in
         let update t =
-          let preds = Lr1.set_predecessors (IndexSet.diff t.scheduled t.visited) in
-          t.visited <- IndexSet.union t.visited t.scheduled;
+          let todo = t.scheduled in
+          t.visited <- IndexSet.union t.visited todo;
           t.scheduled <- IndexSet.empty;
           List.iter (fun (label, target) ->
-              let label' = IndexSet.inter label preds in
+              let label' = IndexSet.inter label todo in
               if not (IndexSet.is_empty label') then
                 let lazy (_, t') = target in
-                schedule t' label'
+                schedule t' (Lr1.set_predecessors label')
             ) t.transitions
         in
         let rec loop () =
@@ -708,7 +709,7 @@ module Automata = struct
 
       let iter_refined_transitions i f =
         let t = Vector.get vector i in
-        let set = Lr1.set_predecessors t.visited in
+        let set = t.visited in
         List.iter (fun (label, target) ->
             if Lazy.is_val target then (
               let lazy (mapping, t') = target in
