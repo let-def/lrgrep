@@ -832,42 +832,33 @@ module Automata = struct
         }
         include IndexBuffer.Gen(struct type nonrec _ t = t end)()
 
-        let get_labelled_transitions source =
-          let src_regs = Vector.get LazyDFA.registers source in
-          let acc = ref [] in
-          let process_transition filter mapping target =
-            let tgt_regs = Vector.get LazyDFA.registers target in
-            let captures = ref IndexMap.empty in
-            let moves = ref IntMap.empty in
-            let clear = ref IntSet.empty in
-            let process_mapping (src_i, captured) tgt_bank =
-              let src_bank = LazyDFA.Threads.get_index src_regs src_i in
-              IndexMap.iter (fun capture tgt_reg ->
-                  if IndexSet.mem capture captured then
-                    captures := IndexMap.add capture tgt_reg !captures
-                  else
-                    match IndexMap.find_opt capture src_bank with
-                    | Some src_reg ->
-                      if src_reg <> tgt_reg then
-                        moves := IntMap.add src_reg tgt_reg !moves
-                    | None ->
-                      partial_captures := IndexSet.add capture !partial_captures;
-                      clear := IntSet.add tgt_reg !clear
-                ) tgt_bank
-            in
-            Array.iter2 process_mapping mapping tgt_regs;
-            let captures = !captures and moves = !moves and clear = !clear in
-            push acc ({Label.filter; captures; moves; clear}, target)
-          in
-          LazyDFA.iter_refined_transitions source process_transition;
-          !acc
-
         let () =
-          Index.iter states (fun source ->
-              List.iter
-                (fun (label, target) -> ignore (add {source; target; label}))
-                (get_labelled_transitions source)
-            )
+          Index.iter states @@ fun source ->
+          let src_regs = Vector.get LazyDFA.registers source in
+          LazyDFA.iter_refined_transitions source @@ fun filter mapping target ->
+          let tgt_regs = Vector.get LazyDFA.registers target in
+          let captures = ref IndexMap.empty in
+          let moves = ref IntMap.empty in
+          let clear = ref IntSet.empty in
+          let process_mapping (src_i, captured) tgt_bank =
+            let src_bank = LazyDFA.Threads.get_index src_regs src_i in
+            IndexMap.iter (fun capture tgt_reg ->
+                if IndexSet.mem capture captured then
+                  captures := IndexMap.add capture tgt_reg !captures
+                else
+                  match IndexMap.find_opt capture src_bank with
+                  | Some src_reg ->
+                    if src_reg <> tgt_reg then
+                      moves := IntMap.add src_reg tgt_reg !moves
+                  | None ->
+                    partial_captures := IndexSet.add capture !partial_captures;
+                    clear := IntSet.add tgt_reg !clear
+              ) tgt_bank
+          in
+          Array.iter2 process_mapping mapping tgt_regs;
+          let captures = !captures and moves = !moves and clear = !clear in
+          let label = {Label.filter; captures; moves; clear} in
+          ignore (add {source; target; label})
       end
 
       type transitions = Transition.n
@@ -1039,20 +1030,30 @@ module Automata = struct
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
     Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.vector));
-    Printf.eprintf "Minimized DFA states: %d\n" (cardinal LazyDFA.n);
+    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-    let halting = Vector.mapi begin fun index (def : _ LazyDFA.t) ->
-        let visited = ref def.visited in
-        LazyDFA.iter_refined_transitions index
-          (fun filter _mapping _target ->
-             visited := IndexSet.diff !visited filter
-          );
-        !visited
-      end LazyDFA.vector
-    in
+    let transitions = Vector.make MinDFA.states IndexSet.empty in
+    let halting = Vector.make MinDFA.states IndexSet.empty in
+    Vector.iteri (fun source (def : _ LazyDFA.t) ->
+        match MinDFA.transport_state source with
+        | None -> ()
+        | Some index ->
+          let visited = Vector.get halting index in
+          let visited = IndexSet.union def.visited visited in
+          Vector.set halting index visited
+      ) LazyDFA.vector;
+    Index.rev_iter MinDFA.transitions begin fun tr ->
+      let index = MinDFA.source tr in
+      let label = MinDFA.label tr in
+      let visited = Vector.get halting index in
+      let visited = IndexSet.diff visited label.filter in
+      Vector.set halting index visited;
+      vector_set_add transitions index tr;
+    end;
     let get_state_for_compaction index =
-      let threads = (Vector.get LazyDFA.vector index).threads in
-      let registers = Vector.get LazyDFA.registers index in
+      let index' = MinDFA.represent_state index in
+      let threads = (Vector.get LazyDFA.vector index').threads in
+      let registers = Vector.get LazyDFA.registers index' in
       let add_accepting i {NFA. accept; clause; _} acc =
         if not accept then acc else
           let _, (cap, _) = Vector.get NFA.clauses clause in
@@ -1069,29 +1070,28 @@ module Automata = struct
           in
           (clause, registers) :: acc
       in
-      let prepare_transition ({MinimizableDFA.Label. filter; captures; clear; moves}, target) =
+      let add_transition tr acc =
+        let {MinimizableDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
         let actions = {
           Lrgrep_support.
           move = IntMap.bindings moves;
           store = List.map snd (IndexMap.bindings captures);
           clear = IntSet.elements clear;
-          target;
+          target = MinDFA.target tr;
         } in
-        (filter, actions)
+        (filter, actions) :: acc
       in
       {
         Lrgrep_support.
         accept = List.rev (LazyDFA.Threads.fold add_accepting threads []);
         halting = Vector.get halting index;
         transitions =
-          List.map
-            prepare_transition
-            (MinimizableDFA.Transition.get_labelled_transitions index)
+          IndexSet.fold add_transition (Vector.get transitions index) [];
       }
     in
     LazyDFA.register_count,
-    Index.to_int LazyDFA.initial,
-    let program = Lrgrep_support.compact LazyDFA.n get_state_for_compaction in
+    Index.to_int MinDFA.initials.(0),
+    let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
     Option.iter output_code oc;
     program
   )
