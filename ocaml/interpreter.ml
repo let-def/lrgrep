@@ -138,7 +138,11 @@ let get_states env =
   List.rev (get_states [] env)
 
 let print_lr1 state =
-  Option.map Info.Symbol.name (Info.Lr1.incoming state)
+  match Info.Lr1.incoming state with
+  | None -> None
+  | Some sym -> Some (
+      Info.Symbol.name sym ^ " " ^ string_of_int (Index.to_int state)
+    )
 
 module RR = Regexp.Redgraph
 
@@ -210,7 +214,7 @@ let process_result lexbuf = function
           | None ->
             let find_state (_,_,state') = state' = Info.Lr1.to_g state in
             let nt, _prod, _ = List.find find_state Grammar.Grammar.entry_points in
-            print_endline (Grammar.Nonterminal.name nt)
+            print_endline (Grammar.Nonterminal.name nt ^ " " ^ string_of_int (Index.to_int state))
           | Some sym -> print_endline sym
         end;
         if i = 0 || !opt_stack_items then (
