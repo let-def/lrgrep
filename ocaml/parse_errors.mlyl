@@ -43,7 +43,7 @@ rule error_message token = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
-| [structure_item]; semi=SEMI; [let_bindings(ext)] (*LET; ext; list(attribute); rec_flag; [let_binding_body]*)
+| [structure_item]; semi=SEMI; [let_bindings(ext)]
   { let (), startp, _endp = semi in
     "Might be due to the semicolon line "
     ^ string_of_int startp.pos_lnum
