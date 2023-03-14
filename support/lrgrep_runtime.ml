@@ -99,7 +99,7 @@ struct
         loop ()
       | Move (r1, r2) ->
         (*prerr_endline "Store";*)
-        bank.(r1) <- bank.(r2);
+        bank.(r2) <- bank.(r1);
         loop ()
       | Clear r1 ->
         bank.(r1) <- None;

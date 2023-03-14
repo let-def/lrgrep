@@ -249,12 +249,12 @@ let compact (type dfa clause lr1)
   Code_emitter.emit code Halt;
   let pcs = Vector.init dfa (fun _ -> ref (-1)) in
   let rec emit_moves = function
-    | (i, j) :: rest ->
+    | (j, i) :: rest ->
       if i < j then (
         emit_moves rest;
-        Code_emitter.emit code (Move (i, j));
+        Code_emitter.emit code (Move (j, i));
       ) else if i > j then (
-        Code_emitter.emit code (Move (i, j));
+        Code_emitter.emit code (Move (j, i));
         emit_moves rest;
       ) else
         emit_moves rest
