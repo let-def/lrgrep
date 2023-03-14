@@ -490,8 +490,6 @@ module Automata = struct
         let k = ref 0 in
         fun () -> incr k; !k
 
-      exception Accept of (label * k) list
-
       let default_mark = ref ()
 
       let make clause =
@@ -569,12 +567,13 @@ module Automata = struct
               (th.mark != mark) && (
                 th.mark <- mark;
                 match !last_accepted with
-                | `Total -> false
-                | `Some clause when th.clause = clause -> false
+                | `Total clause -> assert (clause <= th.clause); false
+                | `Some clause
+                  when assert (clause <= th.clause); th.clause = clause -> false
                 | _ ->
                   if th.accept then (
                     if IndexSet.mem th.clause Clauses.total
-                    then last_accepted := `Total
+                    then last_accepted := `Total th.clause
                     else last_accepted := `Some th.clause
                   );
                   true
