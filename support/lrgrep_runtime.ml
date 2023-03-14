@@ -65,8 +65,8 @@ let program_step (t : program) (r : program_counter ref)
       ) in
     Accept (String.get_uint8 t (pc + 2), registers)
   | '\x06' ->
-    r := !r + 4;
-    Match (get_int t ~offset:(pc + 1) 3)
+    r := !r + 3;
+    Match (String.get_uint16_be t (pc + 1))
   | '\x07' ->
     r := !r + 1;
     Halt
