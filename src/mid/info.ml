@@ -60,6 +60,7 @@ module type S = sig
     val to_string : t -> string
     val all : set
     val kind : t -> [`REGULAR | `START]
+    val semantic_value : t -> string option
   end
 
   module Symbol : sig
@@ -81,6 +82,7 @@ module type S = sig
     val to_g : t -> Grammar.symbol
 
     val name : ?mangled:bool -> t -> string
+    val semantic_value : t -> string option
   end
 
   module Production : sig
@@ -236,6 +238,8 @@ struct
     let to_string i = Grammar.Nonterminal.name (to_g i)
     let all = all n
     let kind i = Grammar.Nonterminal.kind (to_g i)
+    let semantic_value i =
+      Grammar.Nonterminal.typ (to_g i)
   end
 
   module Symbol = struct
@@ -270,6 +274,10 @@ struct
     let is_nonterminal t = match prj t with
       | L _ -> false
       | R _ -> true
+
+    let semantic_value t = match prj t with
+      | L t -> Some (Option.value (Terminal.semantic_value t) ~default:"unit")
+      | R n -> Nonterminal.semantic_value n
   end
 
   module Production = struct

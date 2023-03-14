@@ -104,6 +104,11 @@ and loop f qs i ss accu =
 let map f t =
   fold (fun x xs -> add (f x) xs) t empty
 
+let filter_map f t =
+  fold (fun x ys -> match f x with
+      | None -> ys
+      | Some y -> add y ys) t empty
+
 let iter f s =
   fold (fun x () -> f x) s ()
 
@@ -127,7 +132,7 @@ let cardinal s =
   fold (fun _ m -> m + 1) s 0
 
 let elements s =
-  fold (fun tl hd -> tl :: hd) s []
+  List.rev (fold (fun tl hd -> tl :: hd) s [])
 
 let rec subset s1 s2 =
   match s1, s2 with

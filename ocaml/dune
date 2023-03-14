@@ -1,8 +1,8 @@
-; (executable
-;   (name frontend)
-;   (modules frontend parse_errors)
-;   (modes byte native)
-;   (libraries ocaml_parser))
+(executable
+  (name frontend)
+  (modules frontend parse_errors)
+  (modes byte native)
+  (libraries ocaml_parser))
 
 (executable
   (name interpreter)
@@ -24,7 +24,7 @@
   (name ocaml_parser)
   (modules lexer_raw parser_raw parser_def)
   (wrapped false)
-  (libraries compiler-libs.common menhirLib)) ; lrgrep.runtime))
+  (libraries compiler-libs.common menhirLib lrgrep.runtime))
 
 (ocamllex lexer_raw)
 

@@ -1,4 +1,5 @@
 open Utils
+open Fix.Indexing
 
 module RT = Lrgrep_runtime
 
@@ -95,30 +96,30 @@ end = struct
       do
         decr length;
       done;
-      Array.init !length (fun i ->
-          match packer.table.(i) with
-          | Unused -> Unused
-          | Used (k, v) ->
-            let v = value_repr v in
-            assert (v >= 0);
-            if k > !max_k then max_k := k;
-            if v > !max_v then max_v := v;
-            Used (k, v)
-        )
+      Array.init !length begin fun i ->
+        match packer.table.(i) with
+        | Unused -> Unused
+        | Used (k, v) ->
+          let v = value_repr v in
+          assert (v >= 0);
+          if k > !max_k then max_k := k;
+          if v > !max_v then max_v := v;
+          Used (k, v)
+      end
     in
     let k_size = int_size !max_k in
     let v_size = int_size !max_v in
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
-    Array.iteri (fun i cell ->
-        let offset = 2 + i * (k_size + v_size) in
-        match cell with
-        | Unused -> set_int repr ~offset ~value:0 k_size
-        | Used (k, v) ->
-          set_int repr ~offset ~value:k k_size;
-          set_int repr ~offset:(offset + k_size) ~value:v v_size;
-      ) table;
+    Array.iteri begin fun i cell ->
+      let offset = 2 + i * (k_size + v_size) in
+      match cell with
+      | Unused -> set_int repr ~offset ~value:0 k_size
+      | Used (k, v) ->
+        set_int repr ~offset ~value:k k_size;
+        set_int repr ~offset:(offset + k_size) ~value:v v_size;
+    end table;
     Printf.eprintf "key size: %d\nvalue size: %d\ntable size:%d\n" k_size v_size (Array.length table);
     Bytes.unsafe_to_string repr
 end
@@ -197,18 +198,27 @@ end = struct
     Bytes.unsafe_to_string buf
 end
 
-type transition_action = {
+(** The action of a transition is pair of:
+    - a possibly empty list of registers to save the current state to
+    - a target state (index of the state in the dfa array) *)
+type 'state transition_action = {
   move: (RT.register * RT.register) list;
   store: RT.register list;
-  target: int;
+  clear: RT.register list;
+  target: 'state index;
 }
 
-type state = {
-  accept: (RT.clause * RT.register option array) list;
-  halting: IntSet.t;
-  transitions: (IntSet.t * transition_action) list;
+type ('state, 'clause, 'lr1) state = {
+  accept: ('clause index * RT.register option array) list;
+  (** a clause to accept in this state. *)
+
+  halting: 'lr1 IndexSet.t;
+  (** The set of labels that should cause matching to halt (this can be seen as
+      a transition to a "virtual" sink state). *)
+
+  transitions: ('lr1 IndexSet.t * 'state transition_action) list;
+  (** Transitions for this state, as a list of labels and actions. *)
 }
-type dfa = state array
 
 type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
 
@@ -218,20 +228,26 @@ let compare_ints (i1, j1) (i2, j2) =
     Int.compare j1 j2
 
 let compare_transition_action t1 t2 =
-  let c = Int.compare t1.target t2.target in
+  let c = Int.compare (Index.to_int t1.target) (Index.to_int t2.target) in
   if c <> 0 then c else
     let c = List.compare compare_ints t1.move t2.move in
     if c <> 0 then c else
-      List.compare Int.compare t1.store t2.store
+      let c = List.compare Int.compare t1.store t2.store in
+      if c <> 0 then c else
+        let c = List.compare Int.compare t1.clear t2.clear in
+        c
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
-let compact (dfa : dfa) =
+let compact (type dfa clause lr1)
+    (dfa : dfa cardinal)
+    (get_state : dfa index -> (dfa, clause, lr1) state)
+  =
   let code = Code_emitter.make () in
-  let index = Sparse_packer.make () in
+  let packer = Sparse_packer.make () in
   let halt_pc = ref (Code_emitter.position code) in
   Code_emitter.emit code Halt;
-  let pcs = Array.init (Array.length dfa) (fun _ -> ref (-1)) in
+  let pcs = Vector.init dfa (fun _ -> ref (-1)) in
   let rec emit_moves = function
     | (i, j) :: rest ->
       if i < j then (
@@ -247,7 +263,8 @@ let compact (dfa : dfa) =
   let emit_action act =
     emit_moves act.move;
     List.iter (fun i -> Code_emitter.emit code (Store i)) act.store;
-    Code_emitter.emit_yield_reloc code pcs.(act.target);
+    List.iter (fun i -> Code_emitter.emit code (Clear i)) act.clear;
+    Code_emitter.emit_yield_reloc code (Vector.get pcs act.target);
   in
   let goto_action action = (*function
     | ([], target) -> pcs.(target)
@@ -259,54 +276,63 @@ let compact (dfa : dfa) =
   let transition_count = ref 0 in
   let transition_dom = ref 0 in
   let cell_count = ref 0 in
-  Array.iter2 (fun {accept; halting; transitions} pc ->
-      let default, other_transitions =
-        let _, most_frequent_action =
-          List.fold_left (fun (count, _ as default) (dom, action) ->
-              let count' = IntSet.cardinal dom in
-              incr transition_count;
-              transition_dom := !transition_dom + count';
-              if count' > count
-              then (count', Some action)
-              else default
-            ) (IntSet.cardinal halting, None) transitions
-        in
-        let prepare_transition (dom, action) =
-          match most_frequent_action with
-          | Some action' when same_action action action' -> None
-          | _ -> Some (dom, goto_action action)
-        in
-        let other = List.filter_map prepare_transition transitions in
-        let other =
-          if Option.is_some most_frequent_action && IntSet.cardinal halting > 0
-          then (halting, halt_pc) :: other
-          else other
-        in
-        (most_frequent_action, other)
+  let process_state index pc =
+    let {accept; halting; transitions} = get_state index in
+    let default, other_transitions =
+      let _, most_frequent_action =
+        List.fold_left (fun (count, _ as default) (dom, action) ->
+            let count' = IndexSet.cardinal dom in
+            incr transition_count;
+            transition_dom := !transition_dom + count';
+            if count' > count
+            then (count', Some action)
+            else default
+          ) (IndexSet.cardinal halting, None) transitions
       in
-      assert (!pc = -1);
-      pc := Code_emitter.position code;
-      List.iter
-        (fun (clause, registers) ->
-           Code_emitter.emit code (Accept (clause, registers)))
-        accept;
-      begin match
+      let prepare_transition (dom, action) =
+        match most_frequent_action with
+        | Some action' when same_action action action' -> None
+        | _ -> Some (dom, goto_action action)
+      in
+      let other = List.filter_map prepare_transition transitions in
+      let other =
+        if Option.is_some most_frequent_action &&
+           IndexSet.cardinal halting > 0
+        then (halting, halt_pc) :: other
+        else other
+      in
+      (most_frequent_action, other)
+    in
+    assert (!pc = -1);
+    pc := Code_emitter.position code;
+    List.iter
+      (fun (clause, registers) ->
+         Code_emitter.emit code (Accept (Index.to_int clause, registers)))
+      accept;
+    begin match
         List.concat_map
           (fun (dom, target) ->
-             List.map (fun x -> (x, target)) (IntSet.elements dom))
+             List.map (fun x -> (x, target)) (IndexSet.elements dom))
           other_transitions
-        with
-        | [] -> ()
-        | cells ->
-          cell_count := !cell_count + List.length cells;
-          let i = Sparse_packer.add_vector index cells in
-          Code_emitter.emit code (Match i);
-      end;
-      begin match default with
-        | None -> Code_emitter.emit code Halt
-        | Some default -> emit_action default
-      end
-    ) dfa pcs;
+      with
+      | [] -> ()
+      | cells ->
+        cell_count := !cell_count + List.length cells;
+        let i =
+          Sparse_packer.add_vector packer
+            (cells : (lr1 index * _) list :> (RT.lr1 * _) list)
+        in
+        Code_emitter.emit code (Match i);
+    end;
+    begin match default with
+      | None -> Code_emitter.emit code Halt
+      | Some default -> emit_action default
+    end
+  in
+  Vector.iteri process_state pcs;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
-  (Code_emitter.link code, Sparse_packer.pack index (!), Array.map (!) pcs)
+  let code = Code_emitter.link code in
+  let index = Sparse_packer.pack packer (!) in
+  let pcs = (Vector.map (!) pcs : _ vector :> _ array) in
+  (code, index, pcs)
