@@ -130,7 +130,7 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
     let parts = compute_parts sets in
     let union = keyed_union_parts parts in
     let annotate key =
-      IntSet.fold (fun i acc -> annotations.(i) :: acc) key []
+      List.rev (IntSet.fold (fun i acc -> annotations.(i) :: acc) key [])
     in
     List.map (fun (set, key) -> set, annotate key) union
 
