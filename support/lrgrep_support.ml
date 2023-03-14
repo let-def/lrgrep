@@ -144,11 +144,6 @@ end = struct
 
   let position t = Buffer.length t.buffer
 
-  let add_uint24 b n =
-    assert (n <= 0xFFFFFF);
-    Buffer.add_uint16_be b (n land 0xFFFF);
-    Buffer.add_uint8 b (n lsr 16)
-
   let emit t : RT.program_instruction -> _ = function
     | Store i ->
       assert (i < 0xFF);
@@ -166,8 +161,10 @@ end = struct
       Buffer.add_char t.buffer '\x03';
       Buffer.add_uint8 t.buffer i
     | Yield pos ->
+      assert (pos <= 0xFFFFFF);
       Buffer.add_char t.buffer '\x04';
-      add_uint24 t.buffer pos
+      Buffer.add_uint16_be t.buffer (pos land 0xFFFF);
+      Buffer.add_uint8 t.buffer (pos lsr 16)
     | Accept (clause, registers) ->
       Buffer.add_char t.buffer '\x05';
       Buffer.add_uint8 t.buffer (Array.length registers);
@@ -180,7 +177,8 @@ end = struct
         ) registers
     | Match index ->
       Buffer.add_char t.buffer '\x06';
-      add_uint24 t.buffer index
+      assert (index <= 0xFFFF);
+      Buffer.add_uint16_be t.buffer index
     | Halt ->
       Buffer.add_char t.buffer '\x07'
 
