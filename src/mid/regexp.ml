@@ -625,15 +625,14 @@ struct
       !matched
 
     let derive k =
-      let ks = ref [] in
-      let rec reduce_outer matching next label reduction lookahead = function
+      let rec reduce_outer ks matching next label reduction lookahead = function
         | step :: transitions when live_redstep reduction step ->
           let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
             match label_filter label candidate.filter with
             | Some label
               when reduce_target reduction candidate.target
                   ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
-                  ~on_outer:(reduce_outer matching next label) ->
+                  ~on_outer:(reduce_outer ks matching next label) ->
               matching := IndexSet.union label.filter !matching
             | _ -> ()
           in
@@ -647,13 +646,18 @@ struct
         | _ -> ()
       in
       let reduce_outer next label reduction lookahead transitions =
+        let ks = ref [] in
         let matching = ref IndexSet.empty in
-        reduce_outer matching next label reduction lookahead transitions;
-        if not_empty !matching then
-          Some {label with filter = !matching}
-        else
-          None
+        reduce_outer ks matching next label reduction lookahead transitions;
+        let matching =
+          if not_empty !matching then
+            Some {label with filter = !matching}
+          else
+            None
+        in
+        (matching, !ks)
       in
+      let ks = ref [] in
       let rec process_k label = function
         | Done ->
           push ks (label, None)
@@ -662,11 +666,15 @@ struct
           process_re label self next re.desc
 
         | Reducing {reduction; transitions; lookahead; next} ->
-          let l' = reduce_outer next label reduction lookahead transitions in
-          begin match l' with
-            | None -> ()
-            | Some label -> process_k label next
-          end
+          let l', ks' = reduce_outer next label reduction lookahead transitions in
+          match l', reduction.policy with
+          | None, _ -> ks := List.rev_append ks' !ks
+          | Some label, Longest ->
+            ks := ks' @ !ks;
+            process_k label next
+          | Some label, Shortest ->
+            process_k label next;
+            ks := ks' @ !ks
 
       and process_re label self next = function
         | Set (s, var) ->
@@ -699,28 +707,31 @@ struct
           end
 
         | Reduce (cap, r) ->
-          let match_first = match r.RE.policy with
-            | Shortest -> true
-            | Longest -> false
-          in
           let label = label_capture label cap in
-          let ks' = if match_first then ref [] else ks in
-          let matching = IndexSet.filter (fun lr1 ->
-              let steps = Vector.get Redgraph.initial lr1 in
-              let on_outer reduction lookahead = function
-                | (step :: _) as transitions when live_redstep reduction step ->
-                  let label = {label with filter = IndexSet.singleton lr1} in
-                  let next = Reducing {reduction; lookahead; transitions; next} in
-                  push ks' (label, Some next)
-                | _ -> ()
-              in
-              reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
-            ) label.filter
+          let ks' = ref [] in
+          let matching =
+            IndexSet.filter (fun lr1 ->
+                let steps = Vector.get Redgraph.initial lr1 in
+                let on_outer reduction lookahead = function
+                  | (step :: _) as transitions when live_redstep reduction step ->
+                    let label = {label with filter = IndexSet.singleton lr1} in
+                    let next = Reducing {reduction; lookahead; transitions; next} in
+                    push ks' (label, Some next)
+                  | _ -> ()
+                in
+                reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
+              ) label.filter
           in
-          if not_empty matching then
-            process_k {label with filter = matching} next;
-          if match_first then
-            ks := !ks' @ !ks
+          begin match r.RE.policy with
+            | Shortest ->
+              if not_empty matching then
+                process_k {label with filter = matching} next;
+              ks := !ks' @ !ks
+            | Longest ->
+              ks := !ks' @ !ks;
+              if not_empty matching then
+                process_k {label with filter = matching} next;
+          end
       in
       let label = {
         filter = Lr1.all;
