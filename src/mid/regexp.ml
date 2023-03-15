@@ -170,9 +170,11 @@ struct
 
   module Redgraph : REDGRAPH with module Info := Info =
   struct
-    include Gensym()
-    type state = n
-    let state = n
+    open IndexBuffer
+
+    module State = Gen.Make()
+    type state = State.n
+    let state = State.n
 
     type stack = Lr1.t * Lr1.t list
 
@@ -210,8 +212,7 @@ struct
       | otherwise ->
         [] :: group_reductions (depth + 1) otherwise
 
-    let states =
-      IndexBuffer.make ((Index.of_int Lr1.n 0, []), ([], []))
+    let states = State.get_generator ()
 
     let nodes = Hashtbl.create 7
 
@@ -219,11 +220,9 @@ struct
       match Hashtbl.find_opt nodes stack with
       | Some state -> state
       | None ->
-        let state = fresh () in
-        Hashtbl.add nodes stack state;
-        IndexBuffer.set states state
-          (stack, visit_transitions stack);
-        state
+        fst @@ Gen.add' states @@ fun index ->
+        Hashtbl.add nodes stack index;
+        (stack, visit_transitions stack)
 
     and visit_transitions (top, _ as stack) =
       Lr1.reductions top
@@ -269,11 +268,11 @@ struct
     let initial =
       Vector.init Lr1.n (fun lr1 -> visit_transitions (lr1, []))
 
-    let states_def = IndexBuffer.contents states state
+    let states = Gen.freeze states
 
     let reachable =
       let reachable =
-        states_def |> Vector.mapi begin fun self (_stack, (inner, outer)) ->
+        states |> Vector.mapi begin fun self (_stack, (inner, outer)) ->
           let add_target acc step = IndexSet.add step.target acc in
           let acc = IndexSet.singleton self in
           let acc = List.fold_left (List.fold_left add_target) acc inner in
@@ -367,14 +366,11 @@ struct
       in
       {inner = process_steps inner; outer = process_steps outer}
 
-    let states_def =
-      Vector.map
-        (fun (stack, steps) -> (stack, make_reduction_step steps))
-        states_def
+    let states = Vector.map (fun (stack, steps) -> (stack, make_reduction_step steps)) states
 
     let initial = Vector.map make_reduction_step initial
 
-    let get_def = Vector.get states_def
+    let get_def = Vector.get states
     let get_stack st = fst (get_def st)
     let get_transitions st = snd (get_def st)
 

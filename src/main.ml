@@ -236,11 +236,14 @@ module Lr1_index = struct
       aux sym;
       Buffer.contents buffer
 
-  let find_symbol =
+  let find_linearized_symbol =
     let table = Hashtbl.create 7 in
     let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
     Index.iter Symbol.n add_symbol;
-    fun name -> Hashtbl.find_opt table (linearize_symbol name)
+    Hashtbl.find_opt table
+
+  let find_symbol name =
+    find_linearized_symbol (linearize_symbol name)
 
   let get_symbol pos sym =
     match find_symbol sym with
@@ -540,6 +543,7 @@ module Automata = struct
     end
 
     module LazyDFA = struct
+      open IndexBuffer
 
       type thread = NFA.t
 
@@ -608,18 +612,21 @@ module Automata = struct
 
       module ThMap = Map.Make(Threads)
 
-      type 'st t = {
-        uid: int;
+      module State = Gen.Make()
+      type n = State.n
+      let n = State.n
+
+      type t = {
+        index: n index;
         threads: threads;
-        transitions: (Lr1.set * (thread_mapping * 'st index) lazy_t) list;
+        transitions: (Lr1.set * (thread_mapping * n index) lazy_t) list;
         mutable visited: Lr1.set;
         mutable scheduled: Lr1.set;
       }
 
-      include IndexBuffer.Gen(struct type nonrec 'a t = 'a t end)()
+      let states = State.get_generator ()
 
       let determinize threads =
-        let ruid = ref 0 in
         let map = ref ThMap.empty in
         let rec aux threads =
           match ThMap.find_opt threads !map with
@@ -644,12 +651,11 @@ module Automata = struct
               )
             in
             let transitions = List.map process_class rev_partitions in
-            let uid = !ruid in
-            incr ruid;
-            let index = add {
-              uid; threads; transitions;
-              scheduled=IndexSet.empty; visited=IndexSet.empty
-            } in
+            let index, _ = Gen.add' states (fun index -> {
+                  index; threads; transitions;
+                  scheduled=IndexSet.empty; visited=IndexSet.empty
+                })
+            in
             map := ThMap.add threads index !map;
             index
         in
@@ -662,7 +668,7 @@ module Automata = struct
       let () =
         let todo = ref [] in
         let schedule i set =
-          let t = get i in
+          let t = Gen.get states i in
           if not (IndexSet.subset set t.visited) then (
             let set = IndexSet.diff set t.visited in
             if IndexSet.is_empty t.scheduled then (
@@ -695,10 +701,10 @@ module Automata = struct
         schedule initial Lr1.idle;
         loop ()
 
-      let vector = freeze ()
+      let states = Gen.freeze states
 
       let iter_transitions i f =
-        let t = Vector.get vector i in
+        let t = Vector.get states i in
         List.iter (fun (label, target) ->
             if Lazy.is_val target then (
               let lazy (mapping, t') = target in
@@ -707,7 +713,7 @@ module Automata = struct
           ) t.transitions
 
       let iter_refined_transitions i f =
-        let t = Vector.get vector i in
+        let t = Vector.get states i in
         let set = t.visited in
         List.iter (fun (label, target) ->
             if Lazy.is_val target then (
@@ -718,7 +724,7 @@ module Automata = struct
 
       let liveness =
         let reserve t = Array.make (Threads.count t.threads) IndexSet.empty in
-        Vector.map reserve vector
+        Vector.map reserve states
 
       let () =
         let todo = ref [] in
@@ -741,7 +747,7 @@ module Automata = struct
           in
           iter_transitions i process_transition
         in
-        Index.iter (Vector.length vector) process;
+        Index.iter (Vector.length states) process;
         let rec loop () =
           match !todo with
           | [] -> ()
@@ -752,7 +758,7 @@ module Automata = struct
         in
         loop ()
 
-      let registers = Vector.make (Vector.length vector) [||]
+      let registers = Vector.make (Vector.length states) [||]
 
       let register_count =
         let process i threads =
@@ -781,9 +787,9 @@ module Automata = struct
             Vector.set registers j bank
           )
         in
-        let zero = Index.of_int (Vector.length vector) 0 in
+        let zero = Index.of_int (Vector.length states) 0 in
         Vector.set registers zero
-          (Array.make (Threads.count (Vector.get vector zero).threads) IndexMap.empty);
+          (Array.make (Threads.count (Vector.get states zero).threads) IndexMap.empty);
         Vector.iteri process registers;
         let max_live = ref 0 in
         let max_index = ref (-1) in
@@ -797,6 +803,38 @@ module Automata = struct
         Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n" !max_live !max_index;
         !max_index + 1
     end
+
+    let () =
+      if false then
+      let state = ref LazyDFA.initial in
+      let rec loop () =
+        let threads = (Vector.get LazyDFA.states !state).threads in
+        LazyDFA.Threads.fold (fun _ nfa () ->
+            Format.eprintf "- clause %d\n%!%a\n%!"
+              (Index.to_int nfa.NFA.clause)
+              Cmon.format (K.cmon nfa.NFA.k)
+          ) threads ();
+        Printf.eprintf "state %d\n> %!" (Index.to_int !state);
+        let line = input_line stdin in
+        let lr1 = Index.of_int Lr1.n (int_of_string line) in
+        Printf.eprintf "input: %s\n" (Lr1.to_string lr1);
+        (*let red = Vector.get Regexp.Redgraph.initial lr1 in
+        Printf.eprintf "no transition (but %d inner and %d outer reductions)\n"
+          (List.length red.inner)
+          (List.length (List.filter (fun x -> IndexSet.mem lr1 (List.hd x.Regexp.Redgraph.candidates).filter) red.outer));*)
+        let target = ref None in
+        let check_transition filter _ target' =
+          if IndexSet.mem lr1 filter then
+            target := Some target'
+        in
+        LazyDFA.iter_refined_transitions !state check_transition;
+        begin match !target with
+          | None -> Printf.eprintf "no transition\n"
+          | Some target -> state := target
+        end;
+        loop ()
+      in
+      loop ()
 
     module MinimizableDFA = struct
       type states = LazyDFA.n
@@ -824,12 +862,16 @@ module Automata = struct
       let partial_captures = ref IndexSet.empty
 
       module Transition = struct
+        open IndexBuffer
+
         type t = {
           source: states index;
           target: states index;
           label: Label.t;
         }
-        include IndexBuffer.Gen(struct type nonrec _ t = t end)()
+        include Gen.Make()
+
+        let all = get_generator ()
 
         let () =
           Index.iter states @@ fun source ->
@@ -857,15 +899,17 @@ module Automata = struct
           Array.iter2 process_mapping mapping tgt_regs;
           let captures = !captures and moves = !moves and clear = !clear in
           let label = {Label.filter; captures; moves; clear} in
-          ignore (add {source; target; label})
+          ignore (Gen.add all {source; target; label})
+
+        let all = Gen.freeze all
       end
 
       type transitions = Transition.n
       let transitions = Transition.n
 
-      let label i = (Transition.get i).label
-      let source i = (Transition.get i).source
-      let target i = (Transition.get i).target
+      let label i = (Vector.get Transition.all i).label
+      let source i = (Vector.get Transition.all i).source
+      let target i = (Vector.get Transition.all i).target
 
       let initials f = f LazyDFA.initial
       let finals f =
@@ -873,7 +917,7 @@ module Automata = struct
           (fun st ->
              if LazyDFA.Threads.fold
                  (fun _ nfa acc -> acc || nfa.NFA.accept)
-                 (LazyDFA.get st).threads false
+                 (Vector.get LazyDFA.states st).threads false
              then f st)
 
       let refinements refine =
@@ -883,7 +927,7 @@ module Automata = struct
             let accepted =
               LazyDFA.Threads.fold
                 (fun _ nfa acc -> if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc)
-                (LazyDFA.get st).threads IndexSet.empty
+                (Vector.get LazyDFA.states st).threads IndexSet.empty
             in
             if not (IndexSet.is_empty accepted) then
               push acc (accepted, st)
@@ -1028,19 +1072,19 @@ module Automata = struct
   let process_entry oc (entry : Syntax.entry) = (
     let open Fix.Indexing in
     let open Entry(struct let entry = entry end)() in
-    Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.vector));
+    Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.states));
     Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
     let transitions = Vector.make MinDFA.states IndexSet.empty in
     let halting = Vector.make MinDFA.states IndexSet.empty in
-    Vector.iteri (fun source (def : _ LazyDFA.t) ->
+    Vector.iteri (fun source (def : LazyDFA.t) ->
         match MinDFA.transport_state source with
         | None -> ()
         | Some index ->
           let visited = Vector.get halting index in
           let visited = IndexSet.union def.visited visited in
           Vector.set halting index visited
-      ) LazyDFA.vector;
+      ) LazyDFA.states;
     Index.rev_iter MinDFA.transitions begin fun tr ->
       let index = MinDFA.source tr in
       let label = MinDFA.label tr in
@@ -1051,7 +1095,7 @@ module Automata = struct
     end;
     let get_state_for_compaction index =
       let index' = MinDFA.represent_state index in
-      let threads = (Vector.get LazyDFA.vector index').threads in
+      let threads = (Vector.get LazyDFA.states index').threads in
       let registers = Vector.get LazyDFA.registers index' in
       let add_accepting i {NFA. accept; clause; _} acc =
         if not accept then acc else
