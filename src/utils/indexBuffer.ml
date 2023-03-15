@@ -1,83 +1,106 @@
 open Fix.Indexing
 
-type ('n, 'a) t = {
-  default: 'a;
-  mutable values: 'a array;
-}
-
-let make default = { default; values = [||] }
-
-let get t i =
-  let i = (i : _ index :> int) in
-  if Array.length t.values <= i
-  then t.default
-  else t.values.(i)
-
 let rec next_pow2 i n =
-if i < n then
-n
-else next_pow2 i (n * 2 + 1)
+  if i < n then
+    n
+  else next_pow2 i (n * 2 + 1)
 
-let set t i x =
-  let i = (i : _ index :> int) in
-  let n = Array.length t.values in
-  if i >= n then (
-    let values' = Array.make (next_pow2 i n) t.default in
-    Array.blit t.values 0 values' 0 n;
-    t.values <- values';
-  );
-  t.values.(i) <- x
+module Dyn = struct
+  type ('n, 'a) t = {
+    default: 'a;
+    mutable values: 'a array;
+  }
 
-let contents t c =
-  let vector = Vector.make c t.default in
-  let len = min (cardinal c) (Array.length t.values) in
-  Array.blit t.values 0 (vector : _ vector :> _ array) 0 len;
-  vector
+  let make default = { default; values = [||] }
 
-module type GEN = sig
-  type 'n elt
-  type n
-  val n : n cardinal
+  let get t i =
+    let i = (i : _ index :> int) in
+    if Array.length t.values <= i
+    then t.default
+    else t.values.(i)
 
-  val add : n elt -> n index
+  let set t i x =
+    let i = (i : _ index :> int) in
+    let n = Array.length t.values in
+    if i >= n then (
+      let values' = Array.make (next_pow2 i n) t.default in
+      Array.blit t.values 0 values' 0 n;
+      t.values <- values';
+    );
+    t.values.(i) <- x
 
-  val get : n index -> n elt
-  val set : n index -> n elt -> unit
-
-  val freeze : unit -> (n, n elt) vector
+  let contents t c =
+    let vector = Vector.make c t.default in
+    let len = min (cardinal c) (Array.length t.values) in
+    Array.blit t.values 0 (vector : _ vector :> _ array) 0 len;
+    vector
 end
 
-module Gen(T : sig type 'a t end)() : GEN with type 'a elt = 'a T.t = struct
-  type 'a elt = 'a T.t
+module Gen = struct
+  type ('n ,'a) t = {
+    cardinal : 'n cardinal;
+    fresh : unit -> 'n index;
+    mutable last : int;
+    mutable last_locked : int;
+    mutable lock : int;
+    mutable values : 'a array;
+  }
 
-  include Gensym()
+  let raw_set t i x =
+    let n = Array.length t.values in
+    if i >= n then (
+      let values' = Array.make (next_pow2 i n) x in
+      Array.blit t.values 0 values' 0 n;
+      t.values <- values';
+    );
+    t.values.(i) <- x
 
-  let buffer : (n, 'a elt) t option ref = ref None
+  let add t x =
+    let i = t.fresh () in
+    let i' = (i : _ index :> int) in
+    if t.lock = 0 then
+      t.last <- i'
+    else
+      t.last_locked <- i';
+    raw_set t i' x;
+    i
 
-  let get_buffer () =
-    match !buffer with
-    | Some buffer -> buffer
-    | None -> assert false
+  let add' t f =
+    t.lock <- t.lock + 1;
+    let i = t.fresh () in
+    let i' = (i : _ index :> int) in
+    t.last_locked <- i';
+    let x = f i in
+    raw_set t i' x;
+    t.lock <- t.lock - 1;
+    if t.lock = 0 then
+      t.last <- t.last_locked;
+    (i, x)
 
-  let add x =
-    let result = fresh () in
-    let buffer = match !buffer with
-      | Some buffer -> buffer
-      | None -> let buf = make x in buffer := Some buf; buf
-    in
-    set buffer result x;
-    result
+  let get t i =
+    let i' = (i : _ index :> int) in
+    if i' > t.last then
+      invalid_arg "Gen.get: accessing locked index";
+    t.values.(i')
 
-  let get i = (get_buffer ()).values.((i : _ index :> int))
+  let set t i x =
+    let i' = (i : _ index :> int) in
+    if i' > t.last then
+      invalid_arg "Gen.set: accessing locked index";
+    t.values.(i') <- x
 
-  let set i x = set (get_buffer ()) i x
+  let freeze t =
+    let vector = Vector.make' t.cardinal (fun () -> t.values.(0)) in
+    Array.blit t.values 0 (vector : _ vector :> _ array) 0 (cardinal t.cardinal);
+    vector
 
-  let freeze () =
-    match !buffer with
-    | None -> Vector.make' n (fun _ -> assert false)
-    | Some buf -> contents buf n
+  module Make () = struct
+    include Gensym()
+
+    let used = ref false
+    let get_generator () : (n, 'a) t =
+      if !used then invalid_arg "Gen.Make.get_generator: already used";
+      used := true;
+      {cardinal = n; fresh; last = -1; last_locked = -1; lock = 0; values = [||]}
+  end
 end
-
-(*type 'a gen = (module GEN with type elt = 'a)
-let gen (type a) () : a gen =
-  (module Gen(struct type t = a end)() : GEN with type elt = a)*)

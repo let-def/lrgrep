@@ -1,25 +1,27 @@
 open Fix.Indexing
 
-type ('n, 'a) t
-
-val make : 'a -> ('n, 'a) t
-val get : ('n, 'a) t -> 'n index -> 'a
-val set : ('n, 'a) t -> 'n index -> 'a -> unit
-val contents : ('n, 'a) t -> 'n cardinal -> ('n, 'a) vector
-
-module type GEN = sig
-  type 'n elt
-  type n
-  val n : n cardinal
-
-  val add : n elt -> n index
-
-  val get : n index -> n elt
-  val set : n index -> n elt -> unit
-
-  val freeze : unit -> (n, n elt) vector
+module Dyn : sig
+  type ('n, 'a) t
+  val make : 'a -> ('n, 'a) t
+  val get : ('n, 'a) t -> 'n index -> 'a
+  val set : ('n, 'a) t -> 'n index -> 'a -> unit
+  val contents : ('n, 'a) t -> 'n cardinal -> ('n, 'a) vector
 end
 
-module Gen(T : sig type 'n t end)() : GEN with type 'n elt := 'n T.t
 
-(*val gen : unit -> (module GEN with type elt = 'a)*)
+module Gen : sig
+  type ('n, 'a) t
+
+  val add : ('n, 'a) t -> 'a -> 'n index
+  val add' : ('n, 'a) t -> ('n index -> 'a) -> 'n index * 'a
+
+  val get : ('n, 'a) t -> 'n index -> 'a
+  val set : ('n, 'a) t -> 'n index -> 'a -> unit
+  val freeze : ('n, 'a) t -> ('n, 'a) vector
+
+  module Make () : sig
+    type n
+    val n : n cardinal
+    val get_generator : unit -> (n, 'a) t
+  end
+end
