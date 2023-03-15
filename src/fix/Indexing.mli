@@ -199,7 +199,7 @@ module Vector : sig
   val set_cons : ('n, 'a list) t -> 'n index -> 'a -> unit
 
   (**{!empty} is the empty vector. *)
-  val empty : (_, _) t
+  val empty : (Empty.n, _) t
 
   (**{!make} is analogous to [Array.make]. Invoking [make n x] fixes the
      cardinal [n]. *)
