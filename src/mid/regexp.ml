@@ -130,6 +130,8 @@ module type S = sig
       captures: Capture.set;
     }
 
+    val is_immediate_label : label -> bool
+
     val compare_label : label -> label -> int
 
     type t =
@@ -161,6 +163,7 @@ module type S = sig
     *)
     val derive : t -> (label * t option) list
   end
+  module KMap : Map.S with type key = K.t
 end
 
 module Make (Info : Info.S)() : S with module Info = Info =
@@ -454,6 +457,10 @@ struct
       captures: Capture.set;
     }
 
+    let is_immediate_label {filter; captures} =
+      IndexSet.equal filter Lr1.all &&
+      IndexSet.is_empty captures
+
     let compare_label l1 l2 =
       if l1 == l2 then 0 else
         let c = IndexSet.compare l1.filter l2.filter in
@@ -738,4 +745,6 @@ struct
       process_k label k;
       List.rev !ks
   end
+
+  module KMap = Map.Make(K)
 end
