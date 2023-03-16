@@ -467,9 +467,10 @@ module Automata = struct
 
       let total =
         IndexSet.init_from_set (Vector.length vector)
-          (fun clause ->
-             match (Vector.get vector clause).action with
-             | Syntax.Total _ -> true
+          (fun index ->
+             let clause = Vector.get vector index in
+             match clause.action with
+             | Syntax.Total _ -> clause.lookaheads = []
              | Syntax.Unreachable -> true
              | Syntax.Partial _ -> false
           )
