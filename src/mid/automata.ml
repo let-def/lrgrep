@@ -103,7 +103,7 @@ struct
       Vector.mapi (process_clause ~capture:(Capture.gensym ())) Clauses.vector
   end
 
-  module LazyDFA = struct
+  module DFA = struct
     open IndexBuffer
 
     let group_make (type a) (prj : a -> NFA.t) (ts : a list) : a array =
@@ -383,9 +383,9 @@ struct
 
   let () =
     if false then
-      let rstate = ref (Vector.get LazyDFA.states LazyDFA.initial) in
+      let rstate = ref (Vector.get DFA.states DFA.initial) in
       let rec loop () =
-        let LazyDFA.Packed state = !rstate in
+        let DFA.Packed state = !rstate in
         let group = state.group in
         Vector.iter (fun nfa ->
             Format.eprintf "- clause %d\n%!%a\n%!"
@@ -401,11 +401,11 @@ struct
           (List.length red.inner)
           (List.length (List.filter (fun x -> IndexSet.mem lr1 (List.hd x.Regexp.Redgraph.candidates).filter) red.outer));*)
         let target = ref None in
-        let check_transition filter (LazyDFA.Mapping (_, target')) =
+        let check_transition filter (DFA.Mapping (_, target')) =
           if IndexSet.mem lr1 filter then
-            target := Some (LazyDFA.Packed target')
+            target := Some (DFA.Packed target')
         in
-        LazyDFA.iter_refined_transitions state check_transition;
+        DFA.iter_refined_transitions state check_transition;
         begin match !target with
           | None -> Printf.eprintf "no transition\n"
           | Some target -> rstate := target
@@ -414,9 +414,9 @@ struct
       in
       loop ()
 
-  module MinimizableDFA = struct
-    type states = LazyDFA.n
-    let states = LazyDFA.n
+  module RunDFA = struct
+    type states = DFA.n
+    let states = DFA.n
 
     module Label = struct
       type t = {
@@ -452,11 +452,11 @@ struct
       let all = get_generator ()
 
       let () =
-        let process_state (LazyDFA.Packed source) =
-          let src_regs = LazyDFA.get_registers source in
-          LazyDFA.iter_refined_transitions source @@
-          fun filter (LazyDFA.Mapping (mapping, target)) ->
-          let tgt_regs = LazyDFA.get_registers target in
+        let process_state (DFA.Packed source) =
+          let src_regs = DFA.get_registers source in
+          DFA.iter_refined_transitions source @@
+          fun filter (DFA.Mapping (mapping, target)) ->
+          let tgt_regs = DFA.get_registers target in
           let captures = ref IndexMap.empty in
           let moves = ref IntMap.empty in
           let clear = ref IntSet.empty in
@@ -480,7 +480,7 @@ struct
           let label = {Label.filter; captures; moves; clear} in
           ignore (Gen.add all {source = source.index; target = target.index; label})
         in
-        Vector.iter process_state LazyDFA.states
+        Vector.iter process_state DFA.states
 
       let all = Gen.freeze all
     end
@@ -488,36 +488,51 @@ struct
     type transitions = Transition.n
     let transitions = Transition.n
 
+    let partial_captures =
+      let acc = !partial_captures in
+      Vector.fold_left begin fun acc (DFA.Packed st) ->
+        Vector.fold_left2 begin fun acc (nfa : NFA.t) regs ->
+          if nfa.accept then
+            let _, (cap, _) = Vector.get NFA.clauses nfa.clause in
+            IndexSet.fold begin fun var acc ->
+              if IndexMap.mem var regs
+              then acc
+              else IndexSet.add var acc
+            end cap acc
+          else acc
+        end acc st.group (DFA.get_registers st)
+      end acc DFA.states
+
     let label i = (Vector.get Transition.all i).label
     let source i = (Vector.get Transition.all i).source
     let target i = (Vector.get Transition.all i).target
 
-    let initials f = f LazyDFA.initial
+    let initials f = f DFA.initial
     let finals f =
-      Vector.iter (fun (LazyDFA.Packed st) ->
+      Vector.iter (fun (DFA.Packed st) ->
           let is_final acc nfa = acc || nfa.NFA.accept in
           if Vector.fold_left is_final false st.group then
             f st.index
-        ) LazyDFA.states
+        ) DFA.states
 
     let refinements refine =
       (* Refine states by accepted actions *)
       let acc = ref [] in
-      Vector.iter (fun (LazyDFA.Packed st) ->
+      Vector.iter (fun (DFA.Packed st) ->
           let add_final acc nfa =
             if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc
           in
           let accepted = Vector.fold_left add_final IndexSet.empty st.group in
           if not (IndexSet.is_empty accepted) then
             push acc (accepted, st.index)
-        ) LazyDFA.states;
+        ) DFA.states;
       Misc.group_by !acc
         ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
         ~group:(fun (_, st) sts -> st :: List.map snd sts)
       |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
   end
 
-  module MinDFA = Valmari.Minimize (MinimizableDFA.Label) (MinimizableDFA)
+  module MinDFA = Valmari.Minimize (RunDFA.Label) (RunDFA)
 
   let captures_lr1 =
     let map = ref IndexMap.empty in
@@ -544,7 +559,7 @@ struct
           | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
         in
         IndexMap.fold begin fun index (_def, name) acc ->
-          let is_optional = IndexSet.mem index !MinimizableDFA.partial_captures in
+          let is_optional = IndexSet.mem index RunDFA.partial_captures in
           let typ =
             try
               let lr1s = IndexMap.find index captures_lr1 in
