@@ -754,77 +754,77 @@ module Automata = struct
       print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
   end
 
-  let process_entry oc (entry : Syntax.entry) = (
-    let open Fix.Indexing in
-    let open Entry(struct let entry = entry end)() in
-    Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.states));
-    Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
-    Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-    let transitions = Vector.make MinDFA.states IndexSet.empty in
-    let halting = Vector.make MinDFA.states IndexSet.empty in
-    Vector.iter (fun (LazyDFA.Packed source) ->
-        match MinDFA.transport_state source.index with
-        | None -> ()
-        | Some index ->
-          let visited = Vector.get halting index in
-          let visited = IndexSet.union source.visited visited in
-          Vector.set halting index visited
-      ) LazyDFA.states;
-    Index.rev_iter MinDFA.transitions begin fun tr ->
-      let index = MinDFA.source tr in
-      let label = MinDFA.label tr in
-      let visited = Vector.get halting index in
-      let visited = IndexSet.diff visited label.filter in
-      Vector.set halting index visited;
-      vector_set_add transitions index tr;
-    end;
-    let get_state_for_compaction index =
-      let LazyDFA.Packed source =
-        Vector.get LazyDFA.states (MinDFA.represent_state index)
-      in
-      let registers = LazyDFA.get_registers source in
-      let add_accepting {NFA. accept; clause; _} regs acc =
-        if not accept then acc else
-          let _, (cap, _) = Vector.get NFA.clauses clause in
-          let registers =
-            let add_reg cap acc =
-              let reg = IndexMap.find_opt cap regs in
-              if Option.is_none reg then
-                MinimizableDFA.partial_captures :=
-                  IndexSet.add cap !MinimizableDFA.partial_captures;
-              reg :: acc
-            in
-            Array.of_list (List.rev (IndexSet.fold add_reg cap []))
-          in
-          (clause, registers) :: acc
-      in
-      let add_transition tr acc =
-        let {MinimizableDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
-        let actions = {
-          Lrgrep_support.
-          move = IntMap.bindings moves;
-          store = List.map snd (IndexMap.bindings captures);
-          clear = IntSet.elements clear;
-          target = MinDFA.target tr;
-        } in
-        (filter, actions) :: acc
-      in
-      {
-        Lrgrep_support.
-        accept = Vector.fold_right2 add_accepting source.group registers [];
-        halting = Vector.get halting index;
-        transitions =
-          IndexSet.fold add_transition (Vector.get transitions index) [];
-      }
-    in
-    LazyDFA.register_count,
-    Index.to_int MinDFA.initials.(0),
-    let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
-    Option.iter output_code oc;
-    program
-  )
-
 end
+
+let process_entry oc (entry : Syntax.entry) = (
+  let open Fix.Indexing in
+  let open Automata.Entry(struct let entry = entry end)() in
+  Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.states));
+  Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
+  Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
+  let transitions = Vector.make MinDFA.states IndexSet.empty in
+  let halting = Vector.make MinDFA.states IndexSet.empty in
+  Vector.iter (fun (LazyDFA.Packed source) ->
+      match MinDFA.transport_state source.index with
+      | None -> ()
+      | Some index ->
+        let visited = Vector.get halting index in
+        let visited = IndexSet.union source.visited visited in
+        Vector.set halting index visited
+    ) LazyDFA.states;
+  Index.rev_iter MinDFA.transitions begin fun tr ->
+    let index = MinDFA.source tr in
+    let label = MinDFA.label tr in
+    let visited = Vector.get halting index in
+    let visited = IndexSet.diff visited label.filter in
+    Vector.set halting index visited;
+    vector_set_add transitions index tr;
+  end;
+  let get_state_for_compaction index =
+    let LazyDFA.Packed source =
+      Vector.get LazyDFA.states (MinDFA.represent_state index)
+    in
+    let registers = LazyDFA.get_registers source in
+    let add_accepting {NFA. accept; clause; _} regs acc =
+      if not accept then acc else
+        let _, (cap, _) = Vector.get NFA.clauses clause in
+        let registers =
+          let add_reg cap acc =
+            let reg = IndexMap.find_opt cap regs in
+            if Option.is_none reg then
+              MinimizableDFA.partial_captures :=
+                IndexSet.add cap !MinimizableDFA.partial_captures;
+            reg :: acc
+          in
+          Array.of_list (List.rev (IndexSet.fold add_reg cap []))
+        in
+        (clause, registers) :: acc
+    in
+    let add_transition tr acc =
+      let {MinimizableDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
+      let actions = {
+        Lrgrep_support.
+        move = IntMap.bindings moves;
+        store = List.map snd (IndexMap.bindings captures);
+        clear = IntSet.elements clear;
+        target = MinDFA.target tr;
+      } in
+      (filter, actions) :: acc
+    in
+    {
+      Lrgrep_support.
+      accept = Vector.fold_right2 add_accepting source.group registers [];
+      halting = Vector.get halting index;
+      transitions =
+        IndexSet.fold add_transition (Vector.get transitions index) [];
+    }
+  in
+  LazyDFA.register_count,
+  Index.to_int MinDFA.initials.(0),
+  let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
+  Option.iter output_code oc;
+  program
+)
 
 
 let output_table oc entry (registers, initial, (program, table, remap)) =
@@ -848,7 +848,7 @@ let () = (
   oc |> Option.iter (fun oc -> output_string oc (snd lexer_definition.header));
 
   List.iter (fun entry ->
-      let program = Automata.process_entry oc entry in
+      let program = process_entry oc entry in
       Option.iter (fun oc -> output_table oc entry program) oc
     ) lexer_definition.entrypoints;
 
