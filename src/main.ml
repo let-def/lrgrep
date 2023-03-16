@@ -120,18 +120,18 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       let parser_name = parser_name
       let entry = entry
     end)() in
-  Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length LazyDFA.states));
+  Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length DFA.states));
   Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
   let transitions = Vector.make MinDFA.states IndexSet.empty in
   let halting = Vector.make MinDFA.states IndexSet.empty in
-  Vector.iter (fun (LazyDFA.Packed source) ->
+  Vector.iter (fun (DFA.Packed source) ->
       match MinDFA.transport_state source.index with
       | None -> ()
       | Some index ->
         Vector.set halting index
           (IndexSet.union source.visited (Vector.get halting index))
-    ) LazyDFA.states;
+    ) DFA.states;
   Index.rev_iter MinDFA.transitions begin fun tr ->
     let index = MinDFA.source tr in
     let label = MinDFA.label tr in
@@ -141,27 +141,21 @@ let process_entry oc (entry : Front.Syntax.entry) = (
     vector_set_add transitions index tr;
   end;
   let get_state_for_compaction index =
-    let LazyDFA.Packed source =
-      Vector.get LazyDFA.states (MinDFA.represent_state index)
+    let DFA.Packed source =
+      Vector.get DFA.states (MinDFA.represent_state index)
     in
-    let registers = LazyDFA.get_registers source in
+    let registers = DFA.get_registers source in
     let add_accepting {NFA. accept; clause; _} regs acc =
       if not accept then acc else
         let _, (cap, _) = Vector.get NFA.clauses clause in
         let registers =
-          let add_reg cap acc =
-            let reg = IndexMap.find_opt cap regs in
-            if Option.is_none reg then
-              MinimizableDFA.partial_captures :=
-                IndexSet.add cap !MinimizableDFA.partial_captures;
-            reg :: acc
-          in
+          let add_reg cap acc = IndexMap.find_opt cap regs :: acc in
           Array.of_list (List.rev (IndexSet.fold add_reg cap []))
         in
         (clause, registers) :: acc
     in
     let add_transition tr acc =
-      let {MinimizableDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
+      let {RunDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
       let actions = {
         Lrgrep_support.
         move = IntMap.bindings moves;
@@ -179,7 +173,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
         IndexSet.fold add_transition (Vector.get transitions index) [];
     }
   in
-  LazyDFA.register_count,
+  DFA.register_count,
   Index.to_int MinDFA.initials.(0),
   let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
   Option.iter output_code oc;
