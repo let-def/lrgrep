@@ -334,5 +334,5 @@ let compact (type dfa clause lr1)
     !transition_count !transition_dom !cell_count;
   let code = Code_emitter.link code in
   let index = Sparse_packer.pack packer (!) in
-  let pcs = (Vector.map (!) pcs : _ vector :> _ array) in
+  let pcs = Vector.as_array (Vector.map (!) pcs) in
   (code, index, pcs)

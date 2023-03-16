@@ -32,7 +32,7 @@ module Dyn = struct
   let contents t c =
     let vector = Vector.make c t.default in
     let len = min (cardinal c) (Array.length t.values) in
-    Array.blit t.values 0 (vector : _ vector :> _ array) 0 len;
+    Array.blit t.values 0 (Vector.as_array vector) 0 len;
     vector
 end
 
@@ -41,10 +41,12 @@ module Gen = struct
     cardinal : 'n cardinal;
     fresh : unit -> 'n index;
     mutable last : int;
-    mutable last_locked : int;
+    mutable last_reserved : int;
     mutable lock : int;
     mutable values : 'a array;
   }
+
+  type 'n reservation = {index : 'n index; mutable committed: bool}
 
   let raw_set t i x =
     let n = Array.length t.values in
@@ -56,26 +58,32 @@ module Gen = struct
     t.values.(i) <- x
 
   let add t x =
-    let i = t.fresh () in
-    let i' = (i : _ index :> int) in
+    let index = t.fresh () in
+    let i = (index : _ index :> int) in
     if t.lock = 0 then
-      t.last <- i'
+      t.last <- i
     else
-      t.last_locked <- i';
-    raw_set t i' x;
-    i
+      t.last_reserved <- i;
+    raw_set t i x;
+    index
 
-  let add' t f =
+  let reserve t =
     t.lock <- t.lock + 1;
-    let i = t.fresh () in
-    let i' = (i : _ index :> int) in
-    t.last_locked <- i';
-    let x = f i in
-    raw_set t i' x;
+    let index = t.fresh () in
+    t.last_reserved <- (index : _ index :> int);
+    {index; committed = false}
+
+  let index r = r.index
+
+  let commit t r x =
+    if r.committed then
+      invalid_arg "Gen.commit: already committed";
+    r.committed <- true;
+    let i = (r.index : _ index :> int) in
+    raw_set t i x;
     t.lock <- t.lock - 1;
     if t.lock = 0 then
-      t.last <- t.last_locked;
-    (i, x)
+      t.last <- t.last_reserved
 
   let get t i =
     let i' = (i : _ index :> int) in
@@ -91,7 +99,7 @@ module Gen = struct
 
   let freeze t =
     let vector = Vector.make' t.cardinal (fun () -> t.values.(0)) in
-    Array.blit t.values 0 (vector : _ vector :> _ array) 0 (cardinal t.cardinal);
+    Array.blit t.values 0 (Vector.as_array vector) 0 (cardinal t.cardinal);
     vector
 
   module Make () = struct
@@ -101,6 +109,6 @@ module Gen = struct
     let get_generator () : (n, 'a) t =
       if !used then invalid_arg "Gen.Make.get_generator: already used";
       used := true;
-      {cardinal = n; fresh; last = -1; last_locked = -1; lock = 0; values = [||]}
+      {cardinal = n; fresh; last = -1; last_reserved = -1; lock = 0; values = [||]}
   end
 end

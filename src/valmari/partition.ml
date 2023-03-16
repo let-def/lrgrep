@@ -23,7 +23,7 @@ let create (type a) ?partition (set : a cardinal) =
   let n = cardinal set in
   let t = {
     set_count = if n = 0 then 0 else 1;
-    element  = (Vector.init set (fun x -> x) : _ vector :> _ array);
+    element  = Vector.as_array (Vector.init set (fun x -> x));
     location = Array.init n id;
     set_of = Array.make n 0;
     first = Array.make n undefined;

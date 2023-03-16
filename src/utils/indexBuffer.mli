@@ -12,8 +12,12 @@ end
 module Gen : sig
   type ('n, 'a) t
 
+  type 'n reservation
+
   val add : ('n, 'a) t -> 'a -> 'n index
-  val add' : ('n, 'a) t -> ('n index -> 'a) -> 'n index * 'a
+  val reserve : ('n, 'a) t -> 'n reservation
+  val index  : 'n reservation -> 'n index
+  val commit : ('n, 'a) t -> 'n reservation -> 'a -> unit
 
   val get : ('n, 'a) t -> 'n index -> 'a
   val set : ('n, 'a) t -> 'n index -> 'a -> unit

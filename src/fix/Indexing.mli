@@ -39,6 +39,11 @@ type 'n cardinal
    added. *)
 val cardinal : 'n cardinal -> int
 
+type (_, _) eq = Refl : ('a, 'a) eq
+
+val assert_equal_cardinal : 'n cardinal -> 'm cardinal -> ('n, 'm) eq
+val check_equal_cardinal : 'n cardinal -> 'm cardinal -> ('n, 'm) eq option
+
 (**If [n] is a type-level name for a finite set, then a value [i] of type
    [n index] is an integer value that is guaranteed to inhabit the set [n].
 
@@ -175,8 +180,7 @@ end
 
 (**A vector of type [(n, a) vector] is a (fixed-size) array whose indices lie
    in the type-level set [n] and whose elements have type [a]. *)
-type ('n, 'a) vector =
-  private 'a array
+type ('n, 'a) vector
 
 (**The submodule {!Vector} allows safely manipulating indices into a vector. *)
 module Vector : sig
@@ -219,26 +223,25 @@ module Vector : sig
   val map : ('a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
 
   val copy : ('n, 'a) t -> ('n, 'a) t
-
   val mapi : ('n index -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
-
   val iter : ('a -> unit) -> ('n, 'a) t -> unit
-
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
-
-  module type V = sig type n type a val vector : (n, a) vector end
+  val iter2 : ('a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit
 
   val fold_left : ('a -> 'b -> 'a) -> 'a -> (_, 'b) t -> 'a
   val fold_right : ('b -> 'a -> 'a) -> (_, 'b) t -> 'a -> 'a
 
-  val to_array : (_, 'a) t -> 'a array
+  val fold_left2 : ('a -> 'b -> 'c -> 'a) -> 'a -> ('n, 'b) t -> ('n, 'c) t -> 'a
+  val fold_right2 : ('b -> 'c -> 'a -> 'a) -> ('n, 'b) t -> ('n, 'c) t -> 'a -> 'a
+
+  val cast_array : 'n cardinal -> 'a array -> ('n, 'a) t
+  val as_array : (_, 'a) t -> 'a array
   val to_list : (_, 'a) t -> 'a list
-  val of_array : 'a array -> (module V with type a = 'a)
-  val of_list : 'a list -> (module V with type a = 'a)
 
-  module Of_array(A : sig type a val array : a array end) :
-    V with type a = A.a
+  type 'a packed = Packed : (_, 'a) vector -> 'a packed
+  val of_array : 'a array -> 'a packed
+  val of_list : 'a list -> 'a packed
 
-  module Of_list(A : sig type a val list : a list end) :
-    V with type a = A.a
+  module type V = sig type n type a val vector : (n, a) t end
+  module Of_array (A : sig type a val array : a array end) : V with type a = A.a
 end
