@@ -220,9 +220,11 @@ struct
       match Hashtbl.find_opt nodes stack with
       | Some state -> state
       | None ->
-        fst @@ Gen.add' states @@ fun index ->
+        let reservation = Gen.reserve states in
+        let index = Gen.index reservation in
         Hashtbl.add nodes stack index;
-        (stack, visit_transitions stack)
+        Gen.commit states reservation (stack, visit_transitions stack);
+        index
 
     and visit_transitions (top, _ as stack) =
       Lr1.reductions top

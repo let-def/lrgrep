@@ -13,12 +13,29 @@
 (* A suspension is used to represent a cardinal-that-may-still-be-unknown. *)
 
 type 'n cardinal =
-  int Lazy.t
+  Cardinal : int Lazy.t -> unit cardinal [@@ocaml.unboxed]
 
 (* The function [cardinal] forces the cardinal to become fixed. *)
 
-let cardinal =
-  Lazy.force
+let cardinal (type n) (Cardinal (lazy c) : n cardinal) = c
+
+let is_val (type n) (Cardinal l : n cardinal) = Lazy.is_val l
+
+type (_, _) eq = Refl : ('a, 'a) eq
+
+let assert_equal_cardinal (type n m) (n : n cardinal) (m : m cardinal) : (n, m) eq =
+  let Cardinal (lazy n) = n in
+  let Cardinal (lazy m) = m in
+  if not (Int.equal n m) then
+    invalid_arg "Indexing.equal_cardinal: not equal";
+  Refl
+
+let check_equal_cardinal (type n m) (n : n cardinal) (m : m cardinal) : (n, m) eq option =
+  let Cardinal (lazy n) = n in
+  let Cardinal (lazy m) = m in
+  if Int.equal n m
+  then Some Refl
+  else None
 
 type 'n index =
   int
@@ -27,20 +44,20 @@ module type CARDINAL = sig type n val n : n cardinal end
 
 (* [Empty] and [Const] produce sets whose cardinal is known. *)
 
-module Empty : CARDINAL = struct
-  type n
-  let n = lazy 0
+module Empty = struct
+  type n = unit
+  let n = Cardinal (lazy 0)
 end
 
 module Const (X : sig val cardinal : int end) : CARDINAL = struct
-  type n
+  type n = unit
   let () = assert (X.cardinal >= 0)
-  let n = lazy X.cardinal
+  let n = Cardinal (lazy X.cardinal)
 end
 
 let const c : (module CARDINAL) =
   assert (c >= 0);
-  (module struct type n let n = lazy c end)
+  (module struct type n = unit let n = Cardinal (lazy c) end)
 
 (* [Gensym] produces a set whose cardinal is a priori unknown. A new reference
    stores the current cardinal, which grows when [fresh()] is invoked. [fresh]
@@ -48,12 +65,12 @@ let const c : (module CARDINAL) =
 
 module Gensym () = struct
 
-  type n
+  type n = unit
   let counter = ref 0
-  let n = lazy !counter
+  let n = Cardinal (lazy !counter)
 
   let fresh () =
-    assert (not (Lazy.is_val n));
+    assert (not (is_val n));
     let result = !counter in
     incr counter;
     result
@@ -74,7 +91,7 @@ end
 
 module Sum (L : CARDINAL)(R : CARDINAL) = struct
 
-  type n
+  type n = unit
 
   type l = L.n
   type r = R.n
@@ -84,16 +101,16 @@ module Sum (L : CARDINAL)(R : CARDINAL) = struct
      projections to make sense. *)
   let l : int = cardinal L.n
   (* The right-hand set can remain open-ended. *)
-  let r : int cardinal = R.n
+  let r : r cardinal = R.n
 
-  let n =
+  let n : n cardinal =
     (* We optimize the case where [r] is fixed already, but the code
        in the [else] branch would work always. *)
-    if Lazy.is_val r then
+    if is_val r then
       let n = l + cardinal r in
-      lazy n
+      Cardinal (lazy n)
     else
-      lazy (l + cardinal r)
+      Cardinal (lazy (l + cardinal r))
 
   (* Injections. The two sets are numbered side by side. *)
   let inj_l x = x
@@ -155,73 +172,92 @@ module Index = struct
 
 end
 
-type ('n, 'a) vector =
-  'a array
+type ('n, 'a) vector = Vector : 'a array -> (unit, 'a) vector [@@ocaml.unboxed]
 
 module Vector = struct
 
   type ('n, 'a) t = ('n, 'a) vector
 
-  let get = Array.unsafe_get
-  let set = Array.unsafe_set
+  let get (type n) (Vector a : (n, _) t) i = Array.unsafe_get a i
+  let set (type n) (Vector a : (n, _) t) i x = Array.unsafe_set a i x
 
   let set_cons t i x =
     set t i (x :: get t i)
 
-  let length a =
+  let length (type n) (Vector a : (n, _) t) : n cardinal =
     let n = Array.length a in
-    lazy n
+    Cardinal (lazy n)
 
-  let empty = [||]
+  let empty : (Empty.n, _) t = Vector [||]
 
-  let make (n : _ cardinal) x =
-    let n = cardinal n in
-    Array.make n x
+  let make (type n) (Cardinal n : n cardinal) x : (n, _) t =
+    Vector (Array.make (Lazy.force n) x)
 
-  let make' (n : _ cardinal) f =
-    let n = cardinal n in
-    if n = 0 then
-      empty
-    else
-      Array.make n (f())
+  let make' (type n) (Cardinal n : n cardinal) f : (n, _) t=
+    match Lazy.force n with
+    | 0 -> empty
+    | n -> Vector (Array.make n (f()))
 
-  let init (n : _ cardinal) f =
-    let n = cardinal n in
-    Array.init n f
+  let init (type n) (Cardinal n : n cardinal) f : (n, _) t=
+    Vector (Array.init (Lazy.force n) f)
 
-  let map = Array.map
-  let mapi = Array.mapi
-  let copy = Array.copy
-  let iter = Array.iter
-  let iteri = Array.iteri
+  let map (type n) f (Vector a : (n, _) t) : (n, _) t =
+    Vector (Array.map f a)
 
-  let fold_left = Array.fold_left
-  let fold_right = Array.fold_right
+  let mapi (type n) f (Vector a : (n, _) t) : (n, _) t =
+    Vector (Array.mapi f a)
 
-  module type V = sig type n type a val vector : (n, a) vector end
+  let copy (type n) (Vector a : (n, _) t) : (n, _) t =
+    Vector (Array.copy a)
 
-  let of_array (type a) (arr : a array) : (module V with type a = a) =
-    (module struct type n type nonrec a = a let vector = arr end)
+  let iter (type n) f (Vector a : (n, _) t) =
+    Array.iter f a
 
-  let of_list (type a) (arr : a list) : (module V with type a = a) =
-    (module struct type n type nonrec a = a let vector = Array.of_list arr end)
+  let iteri (type n) f (Vector a : (n, _) t) =
+    Array.iteri f a
 
-  let to_list = Array.to_list
-  let to_array x = x
+  let iter2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    Array.iter2 f a b
 
-  module Of_array(A : sig type a val array : a array end) :
-    V with type a = A.a =
-  struct
-    type n
+  let fold_left (type n) f acc (Vector a : (n, _) t) =
+    Array.fold_left f acc a
+
+  let fold_right(type n) f (Vector a : (n, _) t) acc =
+    Array.fold_right f a acc
+
+  let fold_left2 (type n) f acc (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    let acc = ref acc in
+    for i = 0 to Array.length a - 1 do
+      acc := f !acc a.(i) b.(i)
+    done;
+    !acc
+
+  let fold_right2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
+    let acc = ref acc in
+    for i = 0 to Array.length a - 1 do
+      acc := f a.(i) b.(i) !acc
+    done;
+    !acc
+
+  let as_array (type n) (Vector a : (n, _) t) = a
+
+  let to_list (type n) (Vector a : (n, _) t) = Array.to_list a
+
+  let cast_array (type n) (Cardinal n : n cardinal) arr : (n, _) t =
+    if Lazy.force n <> Array.length arr then
+      invalid_arg "Vector.cast_array: incorrect length";
+    Vector arr
+
+  type 'a packed = Packed : (_, 'a) vector -> 'a packed
+
+  let of_array a = Packed (Vector a)
+
+  let of_list l = Packed (Vector (Array.of_list l))
+
+  module type V = sig type n type a val vector : (n, a) t end
+  module Of_array (A : sig type a val array : a array end) = struct
+    type n = unit
     type a = A.a
-    let vector = A.array
-  end
-
-  module Of_list(A : sig type a val list : a list end) :
-    V with type a = A.a =
-  struct
-    type n
-    type a = A.a
-    let vector = Array.of_list A.list
+    let vector = Vector A.array
   end
 end
