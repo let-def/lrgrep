@@ -1,0 +1,4 @@
+(library
+ (name lrijkstra_utils)
+ (wrapped false)
+ (libraries utils fix))

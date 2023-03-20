@@ -12,7 +12,7 @@ open Fix.Indexing
 open Utils
 open Misc
 
-module Make (Info : Mid.Sigs.INFO)() =
+module Make (Info : Info.S)() =
 struct
   open Info
 
@@ -163,14 +163,14 @@ struct
 
       let visit_lr1 f lr1 =
         match Lr1.incoming lr1 with
-        | None | Some (T _) -> ()
-        | Some (N _) ->
+        | Some sym when Symbol.is_nonterminal sym ->
           List.iter (fun tr ->
               match Transition.split tr with
               | L nt -> f (Node.inj_r nt)
               | R _ -> assert false
             )
             (Transition.predecessors lr1)
+        | _ -> ()
 
       let successors f i =
         match Node.prj i with
@@ -252,8 +252,8 @@ struct
        symbol is a terminal *)
     let () = Index.iter Lr1.n (fun lr1 ->
         match Lr1.incoming lr1 with
-        | Some (N _) -> ()
-        | None | Some (T _) ->
+        | Some sym when Symbol.is_nonterminal sym -> ()
+        | None | Some _ ->
           Vector.set classes (Node.inj_l lr1) [Terminal.all]
       )
 
@@ -285,7 +285,7 @@ struct
        [pre_transition tr] indexes the rows of cost matrix for [tr].
     *)
     let pre_transition tr =
-      match Transition.symbol tr with
+      match Symbol.desc (Transition.symbol tr) with
       | T t -> t_singletons t
       | N _ -> for_lr1 (Transition.source tr)
 
