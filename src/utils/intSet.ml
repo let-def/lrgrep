@@ -385,7 +385,7 @@ let init_interval i j =
       then C (addr, -1 lsl (i - addr), acc)
       else loop (C (addr, -1, acc)) (addr - word_size)
     in
-    loop (C (addr, (-1) lsr (word_size - j - addr + 1), N)) (addr - word_size)
+    loop (C (addr, (-1) lsr (word_size - (j - addr + 1)), N)) (addr - word_size)
 
 let init_subset i j f =
   let i, j = if i < j then i, j else j, i in
