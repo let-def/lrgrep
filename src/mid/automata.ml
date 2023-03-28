@@ -543,90 +543,138 @@ struct
       );
     !map
 
+  let recover_type index =
+    try
+      let lr1s = IndexMap.find index captures_lr1 in
+      let symbols = IndexSet.map (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | None -> raise Not_found
+          | Some sym -> sym
+        ) lr1s
+      in
+      let typ = IndexSet.fold (fun sym acc ->
+          let typ = match Symbol.semantic_value sym with
+            | None -> raise Not_found
+            | Some typ -> String.trim typ
+          in
+          match acc with
+          | None -> Some typ
+          | Some typ' ->
+            if typ <> typ' then raise Not_found;
+            acc
+        ) symbols None
+      in
+      match typ with
+      | None -> None
+      | Some typ -> Some (symbols, typ)
+    with Not_found -> None
+
+  let print_loc (loc : Syntax.location) =
+    Printf.sprintf "# %d %S\n%s"
+      loc.start_line loc.loc_file
+      (String.make loc.start_col ' ')
+
+  let symbol_matcher s = match Info.Symbol.prj s with
+    | L t -> "T T_" ^ Info.Terminal.to_string t
+    | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
+
+  let bytes_match b i str =
+    Bytes.length b >= i + String.length str &&
+    let exception Exit in
+    match
+      for j = 0 to String.length str - 1 do
+        if Bytes.get b (i + j) <> String.get str j then
+          raise Exit
+      done
+    with
+    | () -> true
+    | exception Exit -> false
+
+  let rewrite_loc_keywords str =
+    let b = Bytes.of_string str in
+    let l = Bytes.length b in
+    let i = ref 0 in
+    while !i < l do
+      if Bytes.get b !i = '$' &&
+         (bytes_match b (!i + 1) "startloc(" ||
+          bytes_match b (!i + 1) "endloc(")
+      then (
+        Bytes.set b !i '_';
+        while Bytes.get b !i <> '(' do incr i; done;
+        Bytes.set b !i '_';
+        while !i < l  && Bytes.get b !i <> ')' do incr i; done;
+        if !i < l then Bytes.set b !i '_'
+      )
+      else incr i
+    done;
+    Bytes.to_string b
+
+  let bind_capture ~print ~roffset index (def, name) =
+    let print fmt = Printf.ksprintf print fmt in
+    let is_optional = IndexSet.mem index RunDFA.partial_captures in
+    let none = if is_optional then "None" else "assert false" in
+    let some x = if is_optional then "Some (" ^ x ^ ")" else x in
+    let offset = !roffset in
+    incr roffset;
+    match def with
+    | Value ->
+      let typ = recover_type index in
+      print
+        "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
+        \      | None -> %s\n\
+        \      | Some (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->"
+        name name name offset
+        (if is_optional then "(None, None, None)" else "assert false")
+        E.parser_name
+        (if Option.is_none typ then "_" else "st")
+        (if Option.is_none typ then "_" else "x")
+        (if Option.is_none typ then "as x" else "");
+      begin match typ with
+        | None -> ()
+        | Some (symbols, typ) ->
+          let matchers =
+            List.map symbol_matcher (IndexSet.elements symbols)
+          in
+          print "      let x = match %s.MenhirInterpreter.incoming_symbol st with\n\
+                \        | %s -> (x : %s) \n\
+                \        | _ -> assert false\n\
+                \      in\n"
+            E.parser_name (String.concat " | " matchers) typ
+      end;
+      print "      (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
+      print "    in\n";
+      print "    let _ = %s in\n" name
+    | Start_loc ->
+      print
+        "    let _startloc_%s_ = match __registers.(%d) with\n\
+        \      | None -> %s\n\
+        \      | Some (%s.MenhirInterpreter.Element (_, _, p, _)) -> p\n\
+        \    in"
+        name offset
+        none
+        E.parser_name
+    | End_loc ->
+      print
+        "    let _endloc_%s_ = match __registers.(%d) with\n\
+        \      | None -> %s\n\
+        \      | Some (%s.MenhirInterpreter.Element (_, _, _, p)) -> p\n\
+        \    in"
+        name offset
+        none
+        E.parser_name
+
   let output_code oc =
     let print fmt = Printf.fprintf oc fmt in
     print
-      "let execute_%s %s : \
-       (int * %s.MenhirInterpreter.element option array) * %s.token \
-       -> _ option = function\n"
+      "let execute_%s %s\n
+      \  (__clause, (__registers : %s.MenhirInterpreter.element option array))\n\
+      \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
+      \  : _ option = match __clause, token with\n"
       E.entry.name (String.concat " " E.entry.args)
       E.parser_name E.parser_name;
-    let output_clause index (_nfa, (captures, captures_def)) =
+    let output_clause index (_nfa, (_captures, captures_def)) =
       let clause = Vector.get Clauses.vector index in
-      let recover_types =
-        let symbol_matcher s = match Info.Symbol.prj s with
-          | L t -> "T T_" ^ Info.Terminal.to_string t
-          | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
-        in
-        IndexMap.fold begin fun index (_def, name) acc ->
-          let is_optional = IndexSet.mem index RunDFA.partial_captures in
-          let typ =
-            try
-              let lr1s = IndexMap.find index captures_lr1 in
-              let symbols = IndexSet.map (fun lr1 ->
-                  match Lr1.incoming lr1 with
-                  | None -> raise Not_found
-                  | Some sym -> sym
-                ) lr1s
-              in
-              let typ = IndexSet.fold (fun sym acc ->
-                  let typ = match Symbol.semantic_value sym with
-                    | None -> raise Not_found
-                    | Some typ -> String.trim typ
-                  in
-                  match acc with
-                  | None -> Some typ
-                  | Some typ' ->
-                    if typ <> typ' then raise Not_found;
-                    acc
-                ) symbols None
-              in
-              match typ with
-              | None -> None
-              | Some typ -> Some (symbols, typ)
-            with Not_found -> None
-          in
-          let typ =
-            match typ with
-            | None -> None
-            | Some (symbols, typ) ->
-              let matchers =
-                List.map symbol_matcher (IndexSet.elements symbols)
-              in
-              Some (
-                Printf.sprintf "\
-                  match %s.MenhirInterpreter.incoming_symbol st with \
-                  | %s -> ((x : %s), startp, endp)
-                  | _ -> assert false
-                  " E.parser_name
-                  (String.concat " | " matchers) typ
-              )
-          in
-          match is_optional, typ with
-          | true, None -> acc
-          | true, Some typ ->
-            Printf.sprintf "\
-              let %s = match %s with \
-                | None -> None \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  Some (%s) in" name name E.parser_name typ
-            :: acc
-          | false, None ->
-            Printf.sprintf "let %s = match %s with None -> assert false | Some x -> x in"
-              name name :: acc
-          | false, Some types ->
-            Printf.sprintf "\
-              let %s = match %s with None -> assert false \
-                | Some (%s.MenhirInterpreter.Element (st, x, startp, endp)) -> \
-                  %s in" name name E.parser_name types :: acc
-        end captures_def []
-        |> String.concat "\n"
-      in
-      let print_loc (loc : Syntax.location) =
-        Printf.sprintf "# %d %S\n%s"
-          loc.start_line loc.loc_file
-          (String.make loc.start_col ' ')
-      in
+      let roffset = ref 0 in
       let lookahead_constraint = match clause.Syntax.lookaheads with
         | [] -> None
         | terminals ->
@@ -643,21 +691,23 @@ struct
           in
           Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
       in
-      print "  | (%d, [|%s|]), %s -> %s begin\n%s\n    end\n"
+      print "  | %d, %s -> begin\n"
         (Index.to_int index)
-        (String.concat ";" (List.map (fun (_,(_,x)) -> x) (IndexMap.bindings captures_def)))
-        (Option.value lookahead_constraint ~default:"_")
-        recover_types
-        (match clause.Syntax.action with
-         | Unreachable -> "failwith \"Should be unreachable\""
-         | Partial (loc, str) ->
-           print_loc loc ^ str
-         | Total (loc, str) ->
-           "Some (\n" ^ print_loc loc ^ str ^ ")");
+        (Option.value lookahead_constraint ~default:"_");
+      IndexMap.iter (bind_capture ~print:(output_string oc) ~roffset) captures_def;
+      begin match clause.Syntax.action with
+        | Unreachable ->
+          print "    failwith \"Should be unreachable\"\n"
+        | Partial (loc, str) ->
+          print "%s%s\n"
+            (print_loc loc) (rewrite_loc_keywords str)
+        | Total (loc, str) ->
+          print "    Some (\n%s%s\n    )\n"
+            (print_loc loc) (rewrite_loc_keywords str)
+      end;
+      print "    end\n";
       if Option.is_some lookahead_constraint then
-        print "  | (%d, [|%s|]), _ -> None\n"
-          (Index.to_int index)
-          (string_concat_map ";" (fun _ -> "_") (IndexSet.elements captures))
+        print "  | %d, _ -> None\n" (Index.to_int index)
     in
     Vector.iteri output_clause NFA.clauses;
     print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
