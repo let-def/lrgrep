@@ -21,6 +21,9 @@ let lexbuf =
   Lexing.set_filename lexbuf infile;
   lexbuf
 
+let wrap_token_with_loc lexbuf tok =
+  (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
+
 let get_token =
   let state = Lexer_raw.make Lexer_raw.keyword_table in
   let rec extract_token = function
@@ -31,7 +34,9 @@ let get_token =
         Location.print_report (Lexer_raw.prepare_error loc err);
       exit 1
   in
-  fun lexbuf -> extract_token (Lexer_raw.token_without_comments state lexbuf)
+  fun lexbuf ->
+    let tok = extract_token (Lexer_raw.token_without_comments state lexbuf) in
+    wrap_token_with_loc lexbuf tok
 
 let do_parse
     (type a)
@@ -51,13 +56,10 @@ let do_parse
     Format.eprintf "%a\n" Location.print_report report;
     exit 1
   in
-  let wrap_tok lexbuf tok =
-    (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
-  in
   let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
       let tok' = get_token lexbuf in
-      loop env' tok' (I.offer cp (wrap_tok lexbuf tok'))
+      loop env' tok' (I.offer cp tok')
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
       loop env tok (I.resume cp)
     | I.Accepted x -> x
@@ -71,7 +73,7 @@ let do_parse
         let rec loop = function
           | [] -> error_and_exit "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
-            match Parse_errors.execute_error_message tok (m, tok) with
+            match Parse_errors.execute_error_message m tok with
             | None -> loop ms
             | Some err -> error_and_exit err
         in
@@ -81,7 +83,7 @@ let do_parse
     match cp with
     | I.InputNeeded env ->
       let tok = get_token lexbuf in
-      loop env tok (I.offer cp (wrap_tok lexbuf tok))
+      loop env tok (I.offer cp tok)
     | _ -> assert false
   in
   Pparse.write_ast kind "/dev/fd/1"
