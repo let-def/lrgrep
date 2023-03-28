@@ -462,8 +462,10 @@ struct
         set.
         Start productions are not included. *)
     let reductions =
+      let prepare_red (t, ps) = (t, List.hd ps) in
       let import_red reds =
         reds
+        |> List.map prepare_red
         |> List.filter_map (fun (t, p) ->
             let p = Production.of_g p in
             match Production.kind p with

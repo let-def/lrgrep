@@ -46,14 +46,15 @@ let specs = [
 
 let () = Arg.parse specs (fun name -> opt_infile := Some name) usage
 
-module Grammar = MenhirSdk.Cmly_read.Lift(struct
-    let grammar : MenhirSdk.Cmly_format.grammar =
-      let magic_number = "CMLY" ^ MenhirSdk.Version.version in
-      let magic_length = String.length magic_number in
-      if String.sub Interpreter_data.grammar 0 magic_length <> magic_number then
-        failwith "Internal error: grammar has invalid magic number";
-      Marshal.from_string Interpreter_data.grammar magic_length
-  end)
+let grammar_filename =
+  let filename, oc = Filename.open_temp_file "lrgrep-interpreter" "cmly" in
+  output_string oc Interpreter_data.grammar;
+  close_out oc;
+  filename
+
+module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
+
+let () = Sys.remove grammar_filename
 
 module Info = Mid.Info.Make(Grammar)
 module Regexp = Mid.Regexp.Make(Info)()

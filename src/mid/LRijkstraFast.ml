@@ -89,11 +89,14 @@ struct
           ) states
       end
 
+    let lr1_reductions lr1 =
+      List.map (fun (t, ps) -> (t, List.hd ps)) (Grammar.Lr1.reductions lr1)
+
     let has_default_reduction lr1 =
       match Grammar.Lr1.transitions lr1 with
       | _ :: _ -> None
       | [] ->
-        match Grammar.Lr1.reductions lr1 with
+        match lr1_reductions lr1 with
         | [] -> None
         | (_, p) :: ps when List.for_all (fun (_, p') -> p' = p) ps ->
           Some p
@@ -114,7 +117,7 @@ struct
             | `ERROR -> acc
             | _ -> ((t, p) :: acc)
           in
-          List.fold_left add [] (Grammar.Lr1.reductions lr1)
+          List.fold_left add [] (lr1_reductions lr1)
         in
         (* Regroup lookahead tokens by production *)
         Utils.Misc.group_by raw
