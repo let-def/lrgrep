@@ -68,8 +68,8 @@ let do_parse
       match PE.run env with
       | [] -> error_and_exit "Syntax error (no handler for it)"
       | matches ->
-        Printf.eprintf "Matches: %s\n"
-          (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches));
+        (* Printf.eprintf "Matches: %s\n"
+          (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches)); *)
         let rec loop = function
           | [] -> error_and_exit "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
