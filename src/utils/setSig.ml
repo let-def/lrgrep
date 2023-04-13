@@ -173,3 +173,50 @@ module type S0 = sig
   include S1 with type 'a element := element
               and type 'a t := t
 end
+
+module type StdSetS1 = sig
+  type 'a elt
+  type 'a t
+  val empty: 'a t
+  val is_empty: 'a t -> bool
+  val mem: 'a elt -> 'a t -> bool
+  val add: 'a elt -> 'a t -> 'a t
+  val singleton: 'a elt -> 'a t
+  val remove: 'a elt -> 'a t -> 'a t
+  val union: 'a t -> 'a t -> 'a t
+  val inter: 'a t -> 'a t -> 'a t
+  val disjoint: 'a t -> 'a t -> bool
+  val diff: 'a t -> 'a t -> 'a t
+  val compare: 'a t -> 'a t -> int
+  val equal: 'a t -> 'a t -> bool
+  val subset: 'a t -> 'a t -> bool
+  val iter: ('a elt -> unit) -> 'a t -> unit
+  val map: ('a elt -> 'b elt) -> 'a t -> 'b t
+  val fold: ('a elt -> 'b -> 'b) -> 'a t -> 'b -> 'b
+  val for_all: ('a elt -> bool) -> 'a t -> bool
+  val exists: ('a elt -> bool) -> 'a t -> bool
+  val filter: ('a elt -> bool) -> 'a t -> 'a t
+  val filter_map: ('a elt -> 'b elt option) -> 'a t -> 'b t
+  val partition: ('a elt -> bool) -> 'a t -> 'a t * 'a t
+  val cardinal: 'a t -> int
+  val elements: 'a t -> 'a elt list
+  val min_elt: 'a t -> 'a elt
+  val min_elt_opt: 'a t -> 'a elt option
+  val max_elt: 'a t -> 'a elt
+  val max_elt_opt: 'a t -> 'a elt option
+  val choose: 'a t -> 'a elt
+  val choose_opt: 'a t -> 'a elt option
+  val split: 'a elt -> 'a t -> 'a t * bool * 'a t
+  val find: 'a elt -> 'a t -> 'a elt
+  val find_opt: 'a elt -> 'a t -> 'a elt option
+  val find_first: ('a elt -> bool) -> 'a t -> 'a elt
+  val find_first_opt: ('a elt -> bool) -> 'a t -> 'a elt option
+  val find_last: ('a elt -> bool) -> 'a t -> 'a elt
+  val find_last_opt: ('a elt -> bool) -> 'a t -> 'a elt option
+  val of_list: 'a elt list -> 'a t
+  val to_seq_from : 'a elt -> 'a t -> 'a elt Seq.t
+  val to_seq : 'a t -> 'a elt Seq.t
+  val to_rev_seq : 'a t -> 'a elt Seq.t
+  val add_seq : 'a elt Seq.t -> 'a t -> 'a t
+  val of_seq : 'a elt Seq.t -> 'a t
+end

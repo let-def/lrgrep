@@ -8,3 +8,6 @@ module CoerceSum(X : CARDINAL)(Y : CARDINAL) : sig
 end
 
 val init_from_set : 'a cardinal -> ('a index -> bool) -> 'a t
+
+module Set : SetSig.StdSetS1 with type 'a t = private IntSetSet.t
+                              and type 'a elt = 'a t
