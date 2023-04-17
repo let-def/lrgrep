@@ -220,3 +220,49 @@ module type StdSetS1 = sig
   val add_seq : 'a elt Seq.t -> 'a t -> 'a t
   val of_seq : 'a elt Seq.t -> 'a t
 end
+
+module type StdMapS1 = sig
+  type 'n key
+  type ('n, 'a) t
+  val empty: ('n, 'a) t
+  val is_empty: ('n, 'a) t -> bool
+  val mem:  'n key -> ('n, 'a) t -> bool
+  val add: 'n key -> 'a -> ('n, 'a) t -> ('n, 'a) t
+  val update: 'n key -> ('a option -> 'a option) -> ('n, 'a) t -> ('n, 'a) t
+  val singleton: 'n key -> 'a -> ('n, 'a) t
+  val remove: 'n key -> ('n, 'a) t -> ('n, 'a) t
+  val merge:
+    ('n key -> 'a option -> 'b option -> 'c option) -> ('n, 'a) t -> ('n, 'b) t -> ('n, 'c) t
+  val union: ('n key -> 'a -> 'a -> 'a option) -> ('n, 'a) t -> ('n, 'a) t -> ('n, 'a) t
+  val compare: ('a -> 'a -> int) -> ('n, 'a) t -> ('n, 'a) t -> int
+  val equal: ('a -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t -> bool
+  val iter: ('n key -> 'a -> unit) -> ('n, 'a) t -> unit
+  val fold: ('n key -> 'a -> 'b -> 'b) -> ('n, 'a) t -> 'b -> 'b
+  val for_all: ('n key -> 'a -> bool) -> ('n, 'a) t -> bool
+  val exists: ('n key -> 'a -> bool) -> ('n, 'a) t -> bool
+  val filter: ('n key -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t
+  val filter_map: ('n key -> 'a -> 'b option) -> ('n, 'a) t -> ('n, 'b) t
+  val partition: ('n key -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t * ('n, 'a) t
+  val cardinal: ('n, 'a) t -> int
+  val bindings: ('n, 'a) t -> ('n key * 'a) list
+  val min_binding: ('n, 'a) t -> ('n key * 'a)
+  val min_binding_opt: ('n, 'a) t -> ('n key * 'a) option
+  val max_binding: ('n, 'a) t -> ('n key * 'a)
+  val max_binding_opt: ('n, 'a) t -> ('n key * 'a) option
+  val choose: ('n, 'a) t -> ('n key * 'a)
+  val choose_opt: ('n, 'a) t -> ('n key * 'a) option
+  val split: 'n key -> ('n, 'a) t -> ('n, 'a) t * 'a option * ('n, 'a) t
+  val find: 'n key -> ('n, 'a) t -> 'a
+  val find_opt: 'n key -> ('n, 'a) t -> 'a option
+  val find_first: ('n key -> bool) -> ('n, 'a) t -> 'n key * 'a
+  val find_first_opt: ('n key -> bool) -> ('n, 'a) t -> ('n key * 'a) option
+  val find_last: ('n key -> bool) -> ('n, 'a) t -> 'n key * 'a
+  val find_last_opt: ('n key -> bool) -> ('n, 'a) t -> ('n key * 'a) option
+  val map: ('a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
+  val mapi: ('n key -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
+  val to_seq : ('n, 'a) t -> ('n key * 'a) Seq.t
+  val to_rev_seq : ('n, 'a) t -> ('n key * 'a) Seq.t
+  val to_seq_from : 'n key -> ('n, 'a) t -> ('n key * 'a) Seq.t
+  val add_seq : ('n key * 'a) Seq.t -> ('n, 'a) t -> ('n, 'a) t
+  val of_seq : ('n key * 'a) Seq.t -> ('n, 'a) t
+end
