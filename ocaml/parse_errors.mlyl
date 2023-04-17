@@ -98,8 +98,13 @@ rule error_message = parse error
   { report_currified_constructor ~outer inner token }
 
 | constr_longident; [simple_expr]
-  @ LPAREN | LIDENT | UIDENT
-  { "Application of n-ary constructors cannot be currified, \
+  @ first(expr)
+  // LPAREN | LIDENT | UIDENT
+  { // Expliquer le raisonnement
+    // Plusieurs niveaux d'explications ?
+    // Message court identifiant la situation
+    // Hint pour détailler. (Rappel de la syntaxe)
+    "Application of n-ary constructors cannot be currified, \
      arguments should be wrapped between parentheses and comma separated" }
 
 | inner=constr_longident;
