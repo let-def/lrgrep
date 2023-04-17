@@ -192,9 +192,12 @@ struct
     }
 
     and node = {
-      accept: Terminal.set;
+      lr1: Lr1.t;
       reductions: reduction list;
-      mutable partitions: Terminal.n IndexSet.Set.t;
+      mutable accept: Terminal.set;
+      mutable partition: Terminal.n IndexSet.Set.t;
+      mutable imm_fail : Terminal.set;
+      mutable may_fail : Terminal.set;
     }
 
     type stack =
@@ -215,9 +218,15 @@ struct
         (m, pop_n stack (m - n))
       in
       let rec reductions_at stack lr1 =
-        let accept = Lr1.shift_on lr1 in
         let reductions = simulate_reductions (0, Goto (lr1, stack)) (Lr1.reductions lr1) in
-        {accept; reductions; partitions = IndexSet.Set.empty}
+        {
+          lr1;
+          accept = IndexSet.empty;
+          reductions;
+          partition = IndexSet.Set.empty;
+          imm_fail = IndexSet.empty;
+          may_fail = IndexSet.empty;
+        }
       and simulate_reductions (n, stack) = function
         | [] -> []
         | (production, lookahead) :: rest ->
@@ -245,12 +254,14 @@ struct
       in
       (initial, goto_transitions)
 
+    let () = time "Redgraph: generate nodes"
+
     let () =
       let todo = Vector.make Transition.goto IndexSet.Set.empty in
       let todo_dom = ref IndexSet.empty in
       let propagate_goto la tr =
         let node = Vector.get goto_transitions tr in
-        if not (IndexSet.Set.mem la node.partitions) then (
+        if not (IndexSet.Set.mem la node.partition) then (
           let todo' = Vector.get todo tr in
           if IndexSet.Set.is_empty todo' then
             todo_dom := IndexSet.add tr !todo_dom;
@@ -258,8 +269,8 @@ struct
         )
       in
       let rec propagate_node la node =
-        if not (IndexSet.Set.mem la node.partitions) then (
-          node.partitions <- IndexSet.Set.add la node.partitions;
+        if not (IndexSet.Set.mem la node.partition) then (
+          node.partition <- IndexSet.Set.add la node.partition;
           List.iter (propagate_reduction la) node.reductions;
         )
       and propagate_reduction la red =
@@ -283,13 +294,17 @@ struct
           ) todo_dom'
       done
 
+    let () = time "Redgraph: partition lookaheads"
+
     let () =
       let rec normalize_node node =
-        node.partitions <-
-          node.partitions
-          |> IndexSet.Set.elements
-          |> IndexRefine.partition
-          |> IndexSet.Set.of_list;
+        let partition, total =
+          IndexRefine.partition_and_total
+            (IndexSet.Set.elements node.partition)
+        in
+        node.partition <- IndexSet.Set.of_list partition;
+        node.imm_fail <-
+          IndexSet.(diff (diff Terminal.all total) node.accept);
         node.reductions |> List.iter @@ fun red ->
         match red.transition with
         | Inner node -> normalize_node node
@@ -297,9 +312,84 @@ struct
       in
       IndexMap.iter (fun _ node -> normalize_node node) initial;
       Vector.iter normalize_node goto_transitions
+
+    let failures =
+      let rec failures node =
+        if IndexSet.is_empty node.may_fail then (
+          node.may_fail <- Terminal.all;
+          update_failures node;
+        );
+        node.may_fail
+      and update_failures node =
+        node.may_fail <-
+          IndexSet.diff
+            (List.fold_left next_failures IndexSet.empty node.reductions)
+            node.accept;
+
+      and next_failures acc red =
+        IndexSet.union acc @@
+        Terminal.intersect red.lookahead @@
+        match red.transition with
+        | Inner node -> failures node
+        | Outer {reach; pop=_} ->
+          IndexSet.fold
+            (fun goto acc -> IndexSet.union acc (failures (Vector.get goto_transitions goto)))
+            reach IndexSet.empty
+      in
+      (*TODO: look for a fixed point
+        For OCaml grammar:
+        first pass removes 9327 partitions
+        with 4-passes, we can remove up to 9363 partitions
+      *)
+      failures
+
+    let () =
+      let filtered = ref 0 in
+      let filter_node node =
+        let failures = failures node in
+        node.partition <- IndexSet.Set.filter_map (fun set ->
+            let set = IndexSet.inter set failures in
+            if IndexSet.is_empty set then
+              (incr filtered; None)
+            else
+              Some set
+          ) node.partition;
+        node.accept <- IndexSet.union
+            (Lr1.shift_on node.lr1)
+            (IndexSet.diff (Lr1.reduce_on node.lr1) node.may_fail)
+      in
+      let rec filter_tree node =
+        filter_node node;
+        List.iter
+          (fun red -> match red.transition with
+             | Inner node -> filter_tree node
+             | Outer _ -> ())
+          node.reductions
+      in
+      IndexMap.iter (fun _ node -> filter_tree node) initial;
+      Vector.iter filter_tree goto_transitions;
+      Printf.eprintf "filtered %d partitions\n" !filtered
+
+    let () = time "Redgraph: filter non-failing partitions"
   end
 
-  let () = time "Redgraph"
+  (* Check that goto transitions are non-deterministic for Lrc.
+     => Yep *)
+  (*let () =
+    let nondet = ref 0 in
+    Index.iter Transition.goto (fun tr ->
+        let target = Transition.(target (of_goto tr)) in
+        let preds = ref IndexSet.empty in
+        IndexSet.iter (fun lrc ->
+            let preds' = Lrc.predecessors lrc in
+            if not (IndexSet.disjoint !preds preds') then
+              incr nondet;
+            preds := IndexSet.union !preds preds'
+          ) (Lrc.lrcs_of_lr1 target)
+      );
+    Printf.eprintf "%d nondeterministic lrc-goto transitions\n" !nondet*)
+
+
 
   (* What is the relation between the lookahead partition computed at each goto
      node and LRijkstra classes of the target of a goto transition ? *)
@@ -316,6 +406,7 @@ struct
         |> LRijkstra.Classes.for_lr1
         |> Array.iter @@ fun classe ->
         node.Redgraph.partitions |> IndexSet.Set.iter @@ fun classe' ->
+
         if not (IndexSet.disjoint classe classe') then (
           if IndexSet.equal classe classe' then
             incr same

@@ -111,6 +111,8 @@ module Info = Mid.Info.Make(Grammar)
 module Regexp = Mid.Regexp.Make(Info)()
 module Transl = Mid.Transl.Make(Regexp)
 
+module Lrc = Mid.Lrc.Make(Info)()
+
 let parser_name =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
