@@ -2,3 +2,7 @@ _build
 .depend
 .merlin
 #*#
+
+# LaTeX noise
+doc/pres/main.en.*
+doc/pres/main.fr.*
