@@ -236,14 +236,12 @@ This '(' might be unmatched
 
   $$
   \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \big|\
-    \vext{viable}(u) \wedge \neg \vext{viable}(u.t)
-  \right\} \\
-  \qquad \text{where} \text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L
+    \text{viable}(u) \wedge \neg \text{viable}(u.t)
+  \right\}
   $$
+  \qquad where $\text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L$
   \pause
-
-  \ \\
-
+  \\ \ \\
   In this set of pairs $(u,t)$, $u$ is a valid prefix and $t$ is a terminal that will cause the analysis to fail.
 \end{frame}
 
@@ -272,7 +270,7 @@ This '(' might be unmatched
 
 \begin{frame}{Intuition on ``Shift-Reduce'' parsers}
 
-  {\em Bottom-up} analysis:
+  {\em Bottom-up} analysis using a stack:
   \begin{itemize}
     \item the input is consumed left to right \only<2->{({\em push})}
     \item the derivation is built starting from the leaves,

@@ -5,16 +5,30 @@ dfa.%.pdf: dfa.%.odg
 	exit 1
 
 main.fr.pdf: main.fr.tex dfa.fr.pdf
-	latexmk -xelatex main.fr.tex
+	tectonic -k $<
 
 main.en.pdf: main.en.tex dfa.en.pdf
-	latexmk -xelatex main.en.tex
+	tectonic -k $<
 
 clean:
-	latexmk -c
+	rm -f main.*.{aux,nav,out,toc,vrb}
 
 distclean:
-	latexmk -C
-	rm -f *.snm *.vrb *.nav
+	$(MAKE) clean
+	rm -f main.fr.pdf main.en.pdf
 
-.PHONY: all clean
+#  TeXlive / latexmk workflow
+# main.fr.pdf: main.fr.tex dfa.fr.pdf
+# 	#latexmk -xelatex main.fr.tex
+# 
+# main.en.pdf: main.en.tex dfa.en.pdf
+# 	#latexmk -xelatex main.en.tex
+# 
+# clean:
+# 	latexmk -c
+# 
+# distclean:
+# 	latexmk -C
+# 	rm -f *.snm *.vrb *.nav
+
+.PHONY: all clean distclean
