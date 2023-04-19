@@ -238,10 +238,10 @@ This '(' might be unmatched
   Considérons l'ensemble de ces entrées erronées et minimales :
   $$
   \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \big|\
-    \vext{viable}(u) \wedge \neg \vext{viable}(u.t)
-  \right\} \\
-  \qquad \text{avec} \text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L
+    \text{viable}(u) \wedge \neg \text{viable}(u.t)
+  \right\}
   $$
+  \qquad avec $\text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L$
   \pause
   \\ \ \\
   Les $u$ sont des préfixes valides et les $t$ sont les premiers terminaux
@@ -290,9 +290,9 @@ This '(' might be unmatched
 
   L'analyse {\em bottom-up} se fait avec une pile:
   \begin{itemize}
-    \item on consomme l'entrée de gauche à droite ({\em push})
+    \item on consomme l'entrée de gauche à droite ({\em empile})
     \item on construit la dérivation en partant des feuilles,
-          que l'on enracine progressivement ({\em pop} feuilles, {\em push} noeud)
+          que l'on enracine progressivement ({\em dépile} les feuilles, {\em empile} un noeud)
     \item la pile sauvegarde les dérivations intermédiaires
     \item l'analyse se termine avec la racine de la dérivation sur la pile
   \end{itemize}
