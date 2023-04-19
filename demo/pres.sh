@@ -37,7 +37,9 @@ function lrgrep_ocamlc()
   OCAMLPARAM="$LRGREPOCAMLPARAM" unbuffer ocamlc -c "$i" | ghead -n -4
 }
 
-for i in test_ko_03.ml test_ko_01.ml test_ko_05.ml test_ko_06.ml test_ko_08.ml curry_pattern_4.ml; do
+function process()
+(
+  i=$1
   printf "\033c"
   printf "$ cat $i\n"
   hl "$i" | invert
@@ -52,4 +54,17 @@ for i in test_ko_03.ml test_ko_01.ml test_ko_05.ml test_ko_06.ml test_ko_08.ml c
   read
   ocamlc -c "$i"
   read
+)
+
+files=(test_ko_03.ml test_ko_01.ml test_ko_05.ml test_ko_06.ml test_ko_08.ml curry_pattern_4.ml)
+
+trap on_sigint SIGINT
+on_sigint() {
+	((index-=2))
+}
+
+
+for ((index=0; index>=0 && index<${#files[@]}; index++))
+do
+	process "${files[index]}"
 done
