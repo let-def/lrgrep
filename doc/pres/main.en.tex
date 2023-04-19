@@ -70,14 +70,13 @@
     \pro \textbf{Efficient} \\
          {\small Analysis in $O(n)$.}
     \pro \textbf{Unambiguous} \\
-    That's so cool!
          {\small Statically rule out ambiguities.}
     \pause
     \con \textbf{Limited expressiveness} \\
          {\small Some languages are not LR.}
-    \con \textbf{Grammaire pas naturelle} \\
-         {\small Some languages are hardly LR!}
-    \con \textbf{Poor story for error reporting} \\
+    \con \textbf{Contrived grammars} \\
+         {\small Some languages are hardly LR! (There might be a grammar...)}
+    \con \textbf{Poor story for reporting errors} \\
          {\small Easy to locate a problem, hard to explain it.}
   \end{itemize}
 
@@ -123,9 +122,10 @@ This '(' might be unmatched
     \item Menhir (Pottier 2016)
       \begin{itemize}
         \item Enumerate examples to cover all error states
-        \item Control reductions
+        \item Control reductions \only<3>{{\em ``(1 + 2''}}
         \item Application industrielle d'envergure (CompCert)
       \end{itemize}
+    \pause
     \pause
     \item Menhir': {\em Faster reachability analysis for LR(1) parsers} (Bour \& Pottier, 2021)
       \begin{itemize}
@@ -136,25 +136,25 @@ This '(' might be unmatched
 
 \begin{frame}{Goal}
 
-  Augment an LR grammar with a specification of error messages that:
+  Augment an LR grammar with a specification of error messages that is:
   \begin{itemize}
-    \item is Declarative
+    \item declarative
       % Bison, Merr, Menhir, ...
       % Un langage spécifique auquel on peut donner plusieurs interprétations :
       % opérationnelle pour produire des messages d'erreur à l'exécution
       % statique, pour décider de la couverture, du code mort
-    \item is Expressive (\& concise)
+    \item expressive (\& concise)
       % Contrairement à Merr et Menhir.
       % Factoriser des cas communs
       % Pour se référer à des éléments grammaticaux comme Bison
-    \item is Maintenable
+    \item easy to maintain
       % Contrairement à Merr et Menhir.
-    \item Complements the grammar
+    \item separate from the grammar
       % Contrairement à Bison
   \end{itemize}
 \end{frame}
 
-\section{Integration \& demonstration}
+\section{Integrating with Menhir \& demonstration}
 
 \begin{frame}{Integration to a Menhir parser}
 
@@ -205,7 +205,7 @@ This '(' might be unmatched
   Action!
 \end{frame}
 
-\section{Theoretical fundation and concepts behind LRgrep}
+\section{Theoretical foundation and concepts behind LRgrep}
 
 \begin{frame}{Characterizing errors (1/3): langage complement}
   A grammar $G$ denotes a language $L$, a subset of the words on some alphabet $\Sigma$ (also known as terminals).
@@ -220,48 +220,49 @@ This '(' might be unmatched
   $$
 
   \pause
-  The grammar also gives structure to the words: the grammatical derivations.
+  The grammar also gives structure to the words: the derivations.
   \\
   Can we give some structure to the errors?
 \end{frame}
 
 \begin{frame}{Characterizing errors (2/3): the error front}
-  An LR parser consumes the input from left to right, and fail as early as possible (as soon as the input is not a prefix of any word of the language).
+  An LR parser consumes the input from left to right, and fail as early as possible (as soon as the input is not a prefix of any word of the language, {\em the viable-prefix property}).
 
   % Attention aux conflits cependant !
   % C'est grâce à ça qu'on peut raporter au moins la position de l'erreur.
 
   \pause
-  Lets considers this miminal set of failing prefixes:
+  Lets considers this set of minimal failing prefixes:
 
   $$
-  \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \bigg|\ \bigwedge
-  \begin{array}{l}
-      \exists v \in \Sigma^* \ u . v \in L \\
-      \nexists v' \in \Sigma^* \ u . t . v' \in L
-  \end{array}
-  \right\}
+  \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \big|\
+    \vext{viable}(u) \wedge \neg \vext{viable}(u.t)
+  \right\} \\
+  \qquad \text{where} \text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L
   $$
+  \pause
+
+  \ \\
 
   In this set of pairs $(u,t)$, $u$ is a valid prefix and $t$ is a terminal that will cause the analysis to fail.
 \end{frame}
 
-\begin{frame}{Characterizing errors (3/3): regularisation}
-  Since the $u$-prefixes are valid, we can feed them to a parser and get a {\em stack} (technically a {\em right sentential form}).
-
-  Let's call $im$ the function associating a valid prefix to a stack. We define:
+\begin{frame}[t]{Characterizing errors (3/3): regularisation}
+  Since the $u$ are valid prefixes, we can feed them to a parser and get a {\em stack}. We call this operation $im$ and define:
 
   $$
   \mathcal E_G = \left\{\ (im(u), t)\ \mid\ (u, t) \in \mathcal E_L\ \right\}
   $$
 
   \pause
-  \begin{block}{Theorem}
-    The set of all viable prefixes of the right sentential forms of a grammar is a regular language.
+  \begin{block}{Theorem (Aho \& Ullman, 1972)}
+    The set of all \only<-2>{\em viable prefixes of the right sentential forms of a grammar}\only<3->{\textbf{stacks of an LR automaton}} is a regular language.
   \end{block}
 
   \pause
+  \pause
 
+  \ \\
   Therefore $\mathcal E_G$ is a regular set!
 
   \textbf{Good news:} many properties are decidable on regular sets, we have
@@ -273,12 +274,14 @@ This '(' might be unmatched
 
   {\em Bottom-up} analysis:
   \begin{itemize}
-    \item the input is consumed left to right
+    \item the input is consumed left to right \only<2->{({\em push})}
     \item the derivation is built starting from the leaves,
-          that are progressibely rooted.
+          that are progressively rooted \only<2->{({\em pop} leaves, {\em push} node)}
     \item a stack is used to save the intermediate (sub-)derivations
+    \item the analysis ends with the root of the derivation on the stack
   \end{itemize}
 
+  \pause
   \pause
 
   Example with a minimalist grammar:
@@ -428,9 +431,11 @@ This '(' might be unmatched
 \begin{frame}{Also...}
   The implementation also have extra features useful in practice:
   \begin{itemize}
-    \item captures (to refer to semantic values and locations on the stack)
-    \item ``greedy'' quantifiers (for ambiguous matches, should we keep the longest or the shortest result?)
-    \item partial rules (can resume matching, like ``guarded'' patterns)
+    \item captures (refer to semantic values and locations on the stack)
+    \item ``greedy'' repetitions of Kleene-star and handles (should we keep the longest or the shortest result?)
+    \item filters to restrict states to specific {\em items}
+    \item constraints on lookahead tokens (the $t$'s of the $\mathcal E_G$ set)
+    \item partial rules (like ``guarded'' patterns)
     \item total order on clauses to resolve ambiguities
     \item \ldots
   \end{itemize}
@@ -444,23 +449,23 @@ This '(' might be unmatched
   To add a new error message:
   \begin{itemize}
     \item start from an example, usually an issue reported by a user
-    \item throw this example to an ``interpreter'' that provides information on the LR stack and {\em handles}
+    \item throw this example to an ``interpreter'' that provides information on the LR stack and on {\em handles}
     \item then its our work to generalise from this example
   \end{itemize}
   \pause
   \begin{block}{If you happen to use OCaml: help!}
-    Don't hesitate to report interesting errors you stumble upon.
+    Don't hesitate to report the ``interesting'' errors you encounter.
   \end{block}
 \end{frame}
 
 \section{Conclusion}
 
 \begin{frame}{Conclusion}
-  LRgrep is a DSL ({\em domain specific language}) to identify errors of LR parsers.
+  LRgrep is a new DSL ({\em domain specific language}) to identify errors of LR parsers.
 
 \
 
-  The first results are encouraging: we can precisely identify a rather large class of errors for the OCaml grammar. Tools are provided to help the author work out error patterns.
+  The early results are encouraging: we can precisely identify a rather large class of errors for the OCaml grammar. Tools are provided to help the author work out error patterns.
 
 \
 
@@ -479,7 +484,7 @@ This '(' might be unmatched
   \item displaying the outcome to the user
 \end{itemize}
 
-This feature will be crucial to maintain the specfications (as a grammar evolve).
+This feature will be crucial to maintain the specifications (as a grammar evolve).
 
 \
 

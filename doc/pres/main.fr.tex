@@ -6,6 +6,7 @@
 \usepackage[french]{babel}        % Set language
 \usepackage[utf8x]{inputenc}      % Set encoding
 \usepackage{verbatim}      % Set encoding
+\usepackage[normalem]{ulem}
 
 \mode<presentation>            % Set options
 {
@@ -76,7 +77,8 @@
     \con \textbf{Expressivité limitée} \\
          {\small Certains langages ne sont pas LR.}
     \con \textbf{Grammaire pas naturelle} \\
-         {\small Certains langages sont difficilement LR !}
+         {\small Il peut exister une grammaire LR, mais difficile de la trouver.}
+         %{\small Certains langages sont difficilement LR !}
     \con \textbf{Difficulté à gérer les erreurs} \\
          {\small On peut situer le problème mais pas l'expliquer.}
   \end{itemize}
@@ -123,9 +125,10 @@ This '(' might be unmatched
     \item Menhir (Pottier 2016)
       \begin{itemize}
         \item Énumération d'exemples couvrant tous les états d'erreur
-        \item On peut contrôler les réductions
+        \item On peut contrôler les réductions \only<3>{{\em ``(1 + 2''}}
         \item Application industrielle d'envergure (CompCert)
       \end{itemize}
+    \pause
     \pause
     \item Menhir': {\em Faster reachability analysis for LR(1) parsers} (Bour \& Pottier, 2021)
       \begin{itemize}
@@ -149,12 +152,12 @@ This '(' might be unmatched
       % Pour se référer à des éléments grammaticaux comme Bison
     \item Maintenable
       % Contrairement à Merr et Menhir.
-    \item Complémentaire de la grammaire
+    \item Séparée de la grammaire
       % Contrairement à Bison
   \end{itemize}
 \end{frame}
 
-\section{Intégration \& démonstration}
+\section{Intégration à Menhir \& démonstration}
 
 \begin{frame}{Intégration à un analyseur Menhir}
 
@@ -207,7 +210,7 @@ This '(' might be unmatched
 
 \section{Théorie et concepts de LRgrep}
 
-\begin{frame}{Caractériser les erreurs (1/3): complémentaire}
+\begin{frame}{Caractériser les erreurs: complémentaire}
   Une grammaire $G$ dénote un langage $L$, un sous-ensemble des mots sur un alphabet $\Sigma$ (aussi appelé ensemble des terminaux).
   $$
   [\![G\,]\!] = L \subset \Sigma^*
@@ -225,41 +228,54 @@ This '(' might be unmatched
   Quelle structure peut-on donner aux erreurs ?
 \end{frame}
 
-\begin{frame}{Caractériser les erreurs (2/3): le front d'erreur}
-  Un analyseur LR reconnaît l'entrée de gauche à droite et échoue dès que l'entrée n'est préfixe d'aucun mot du langage (c'est-à-dire le plus tôt possible).
+\begin{frame}{Caractériser les erreurs: le front d'erreur}
+  Un analyseur LR reconnaît l'entrée de gauche à droite et échoue dès que l'entrée n'est préfixe d'aucun mot du langage (c'est-à-dire le plus tôt possible, c'est la {\em propriété du préfixe viable}).
 
   % Attention aux conflits cependant !
   % C'est grâce à ça qu'on peut raporter au moins la position de l'erreur.
 
   \pause
   Considérons l'ensemble de ces entrées erronées et minimales :
-
   $$
-  \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \bigg|\ \bigwedge
-  \begin{array}{l}
-      \exists v \in \Sigma^* \ u . v \in L \\
-      \nexists v' \in \Sigma^* \ u . t . v' \in L
-  \end{array}
-  \right\}
+  \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \big|\
+    \vext{viable}(u) \wedge \neg \vext{viable}(u.t)
+  \right\} \\
+  \qquad \text{avec} \text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L
   $$
-
+  \pause
+  \\ \ \\
   Les $u$ sont des préfixes valides et les $t$ sont les premiers terminaux
   à faire échouer l'analyse.
+
 \end{frame}
 
-\begin{frame}{Caractériser les erreurs (3/3): régularisation}
-  Comme les $u$ sont valides, on peut considérer leur image $im$ par l'automate LR : ce sont des {\em formes sententielles droites} (des piles).
+%\begin{frame}{}
+  %\begin{block}
+%{Intuition sur les analyseurs << Shift-Reduce >>}
+%Comment interpréter la pile d'un analyseur?
+  %\end{block}
+%\end{frame}
+
+\begin{frame}[t]{Caractériser les erreurs: régularisation}
+
+ \  \\
+ \
+
+  Comme les $u$ sont valides, on peut les donner comme une entrée partielle à l'automate LR et récupérer une pile. On note cette opération $\text{im}$, et on construit :
 
   $$
-  \mathcal E_G = \left\{\ (im(u), t)\ \mid\ (u, t) \in \mathcal E_L\ \right\}
+  \mathcal E_G = \left\{\ (\text{im}(u), t)\ \mid\ (u, t) \in \mathcal E_L\ \right\}
   $$
 
   \pause
-  \begin{block}{Théorème}
-  L'ensemble de tous les préfixes viables des formes sententielles droites
-  d'une grammaire est un langage régulier.
+  \begin{block}{Théorème (Aho \& Ullman, 1972)}
+  %L'ensemble des \only<3->\sout{préfixes viables des formes sententielles droites
+  %d'une grammaire}\only<3->{ \textbf{piles d'un automate LR}} est un langage régulier. \\
+  L'ensemble des \only<-2>{{\em préfixes viables des formes sententielles droites
+  d'une grammaire}}\only<3->{\textbf{piles d'un automate LR}} est un langage régulier. \only<3->{ \\ \ } \\
   \end{block}
 
+  \pause
   \pause
 
   Donc $\mathcal E_G$ est un ensemble régulier (rationnel)!
@@ -272,12 +288,13 @@ This '(' might be unmatched
 
 \begin{frame}{Intuition sur les analyseurs << Shift-Reduce >>}
 
-  Analyse {\em bottom-up}:
+  L'analyse {\em bottom-up} se fait avec une pile:
   \begin{itemize}
-    \item on consomme l'entrée de gauche à droite
+    \item on consomme l'entrée de gauche à droite ({\em push})
     \item on construit la dérivation en partant des feuilles,
-          que l'on enracine progressivement
-    \item une pile sauvegarde les dérivations intermédiaires
+          que l'on enracine progressivement ({\em pop} feuilles, {\em push} noeud)
+    \item la pile sauvegarde les dérivations intermédiaires
+    \item l'analyse se termine avec la racine de la dérivation sur la pile
   \end{itemize}
 
   \pause
@@ -430,11 +447,11 @@ This '(' might be unmatched
   L'implémentation a des fonctionnalités supplémentaires utiles en pratique :
   \begin{itemize}
     \item captures (pour se référer aux valeurs sémantiques et aux locations)
-    \item quantificateurs << greedy >> (souhaite-t-on garder le résultat le plus long ou le plus court?)
+    \item répétitions << greedy >> (pour l'étoile de Kleene et les {\em handles}, souhaite-t-on garder le résultat le plus long ou le plus court?)
     \item filtres pour restreindre des états à certains {\em items}
     \item contraintes sur les {\em tokens} de {\em lookahead} (les $t$ de l'ensemble $\mathcal E_G$)
     \item règles partielles (gardes)
-    \item ordre totale sur les clauses pour résoudre les ambiguités
+    \item ordre total sur les clauses pour résoudre les ambiguités
     \item \ldots
   \end{itemize}
 
@@ -468,7 +485,7 @@ This '(' might be unmatched
 
 \
 
-  L'approche s'appuie sur une nouvelle application d'une théorie bien comprise, ce qui laisse espérer des progrès rapides.
+  L'approche s'appuie sur une nouvelle application d'une théorie bien comprise, les langages rationnels. Cela laisse espérer des progrès rapides.
 
 \end{frame}
 
@@ -487,7 +504,8 @@ Cette fonctionnalité sera cruciale pour la maintenance des spécifications.
 \
 
 \pause
-Application à d'autres grammaires.
+Application à d'autres grammaires. On commence à regarder d'autres candidats (des grammaires Menhir) : Catala, EasyCrypt, \ldots
+
 Un contributeur extérieur s'intéresse déjà à la grammaire Lua.
 
 \end{frame}
