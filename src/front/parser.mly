@@ -79,12 +79,12 @@ case_action:
 | UNREACHABLE      { Unreachable }
 
 
-positioned_IDENT:
-| IDENT { ($1, make_position $startpos) }
+positioned_symbol:
+| symbol { ($1, make_position $startpos) }
 ;
 
 lookaheads:
-| loption(preceded("@", separated_nonempty_list("|", positioned_IDENT))) { $1 }
+| loption(preceded("@", separated_nonempty_list("|", positioned_symbol))) { $1 }
 ;
 
 symbol:

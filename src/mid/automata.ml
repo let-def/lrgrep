@@ -677,19 +677,42 @@ struct
       let roffset = ref 0 in
       let lookahead_constraint = match clause.Syntax.lookaheads with
         | [] -> None
-        | terminals ->
-          let sym_pattern (sym, pos) =
-            match Info.Symbol.prj (Indices.get_symbol pos (Syntax.Name sym)) with
-            | R n ->
-              failwith ("Lookahead should be a terminal, " ^
-                        Info.Nonterminal.to_string n ^ " is a nonterminal")
-            | L t ->
-              let name = Info.Terminal.to_string t in
-              match Info.Terminal.semantic_value t with
-              | None -> name
-              | Some _ -> name ^ " _"
+        | symbols ->
+          let lookahead_msg =
+            "Lookahead can either be a terminal or `first(nonterminal)'"
           in
-          Some (string_concat_map ~wrap:("(",")") "|" sym_pattern terminals)
+          let term_pattern t =
+            let name = Info.Terminal.to_string t in
+            match Info.Terminal.semantic_value t with
+            | None -> name
+            | Some _ -> name ^ " _"
+          in
+          let sym_pattern (sym, pos) =
+            match sym with
+            | Syntax.Apply ("first", [sym]) ->
+              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
+                | L t ->
+                  let t = Info.Terminal.to_string t in
+                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                            t ^ " is a terminal")
+                | R n ->
+                  Info.Nonterminal.to_g n
+                  |> Grammar.Nonterminal.first
+                  |> List.map Info.Terminal.of_g
+                  |> List.map term_pattern
+              end
+            | Syntax.Name _ ->
+              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
+              | R n ->
+                failwith (lookahead_msg ^ "; " ^
+                          Info.Nonterminal.to_string n ^ " is a nonterminal")
+              | L t -> [term_pattern t]
+              end
+            | _ ->
+              failwith lookahead_msg
+          in
+          Some (string_concat_map ~wrap:("(",")") "|" Fun.id @@
+                List.concat_map sym_pattern symbols)
       in
       print "  | %d, %s -> begin\n"
         (Index.to_int index)
