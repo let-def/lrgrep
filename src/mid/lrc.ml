@@ -29,12 +29,14 @@ module Make (I : Info.S)() =
 struct
   open I
 
-  let time =
-    let t = ref (Sys.time ()) in
-    fun msg ->
+  let time = ref (Sys.time ())
+  let time fmt =
       let t' = Sys.time () in
-      Printf.eprintf "%s in %.02fms\n" msg ((t' -. !t) *. 1000.0);
-      t := t'
+      let dt = t' -. !time in
+      time := t';
+      Printf.ksprintf (fun msg ->
+          Printf.eprintf "%s in %.02fms\n" msg (dt *. 1000.0);
+        ) fmt
 
   module LRijkstra = LRijkstraFast.Make(I)()
 
@@ -178,6 +180,8 @@ struct
 
   module Redgraph = struct
 
+    (*include IndexBuffer.Gen.Make()*)
+
     type transition =
       | Inner of node
       | Outer of {
@@ -192,6 +196,7 @@ struct
     }
 
     and node = {
+      (*index: n index;*)
       lr1: Lr1.t;
       reductions: reduction list;
       mutable accept: Terminal.set;
@@ -200,9 +205,13 @@ struct
       mutable may_fail : Terminal.set;
     }
 
+    (*let nodes = get_generator ()*)
+
     type stack =
       | Goto of Lr1.t * stack
       | Bottom of int * Lr1.set
+
+    let count = ref 0
 
     let initial, goto_transitions =
       let pop = function
@@ -219,14 +228,20 @@ struct
       in
       let rec reductions_at stack lr1 =
         let reductions = simulate_reductions (0, Goto (lr1, stack)) (Lr1.reductions lr1) in
-        {
+        (*let reservation = IndexBuffer.Gen.reserve nodes in*)
+        incr count;
+        let result = {
           lr1;
+          (*index = IndexBuffer.Gen.index reservation;*)
           accept = IndexSet.empty;
           reductions;
           partition = IndexSet.Set.empty;
           imm_fail = IndexSet.empty;
           may_fail = IndexSet.empty;
-        }
+        } in
+        (*IndexBuffer.Gen.commit nodes reservation result;*)
+        result
+
       and simulate_reductions (n, stack) = function
         | [] -> []
         | (production, lookahead) :: rest ->
@@ -250,11 +265,15 @@ struct
         let any = Transition.of_goto tr in
         let src = Transition.source any in
         let tgt = Transition.target any in
-        reductions_at (Bottom (2, IndexSet.singleton src)) tgt
+        (*reductions_at (Bottom (1, IndexSet.singleton src)) tgt*)
+        (*reductions_at (Bottom (2, IndexSet.singleton src)) tgt*)
+        reductions_at (Goto (src, Bottom (1, Lr1.predecessors src))) tgt
       in
       (initial, goto_transitions)
 
-    let () = time "Redgraph: generate nodes"
+    let () = time "Redgraph: generated %d nodes" !count
+
+    (*let nodes = IndexBuffer.Gen.freeze nodes*)
 
     let () =
       let todo = Vector.make Transition.goto IndexSet.Set.empty in
@@ -371,10 +390,272 @@ struct
       Printf.eprintf "filtered %d partitions\n" !filtered
 
     let () = time "Redgraph: filter non-failing partitions"
+
+    (* Compute direct access to outer transitions *)
+
+    type outer_transition = {
+      steps: reduction list;
+      pop: int;
+      reach: Transition.goto indexset;
+      lookahead: Terminal.set;
+    }
+
+    let compute_outer_transitions =
+      let rec visit_node path la acc node =
+        List.fold_left (visit_reduction path la) acc node.reductions
+      and visit_reduction path la acc (r : reduction) =
+        let la = Terminal.intersect la r.lookahead in
+        assert (not (IndexSet.is_empty la));
+        match r.transition with
+        | Inner node -> visit_node (r :: path) la acc node
+        | Outer {pop; reach}  ->
+          { steps = r :: path; pop; reach; lookahead = la} :: acc
+      in
+      fun node ->
+        let trs = visit_node [] Terminal.all [] node in
+        let trs = List.sort (fun t1 t2 -> Int.compare t1.pop t2.pop) trs in
+        (node, trs)
+
+    let initial_outer =
+      IndexMap.map compute_outer_transitions initial
+
+    let goto_outer =
+      Vector.map compute_outer_transitions goto_transitions
   end
 
+  module Redgraph_la (*: sig
+                       type n
+                       val n : n cardinal
+                       val initials : n indexset
+                       val next : n index -> n indexset
+                       val label : n index -> Lr1.set option
+                       val fail : n index -> Lr1.set
+                       end*) = struct
+    include IndexBuffer.Gen.Make()
+
+    type t = {
+      index: n index;
+      label: Lr1.set;
+      fail: Terminal.set;
+      mutable next: n indexset;
+    }
+
+    let nodes = get_generator ()
+
+    (* No benefits in caching imports
+       let imported = Vector.make Transition.goto IndexSet.Map.empty *)
+    let imported_parts = Vector.make Transition.goto IndexSet.Map.empty
+
+    let foo = ref 0
+    let rec import_goto goto la =
+      (*match IndexSet.Map.find_opt la (Vector.get imported goto) with
+      | Some nodes -> nodes
+        | None ->*)
+        let node = Vector.get Redgraph.goto_transitions goto in
+        let nodes =
+          IndexSet.Set.fold (fun la' acc ->
+              assert (IndexSet.disjoint la' la || IndexSet.subset la' la);
+              if not (IndexSet.quick_subset la' la) then acc else
+                IndexSet.add (import_part goto la') acc
+            ) node.partition IndexSet.empty
+        in
+       (* Vector.set imported goto
+          (IndexSet.Map.add la nodes (Vector.get imported goto));*)
+        nodes
+
+    and import_part (goto : Transition.goto index) la =
+      let parts = Vector.get imported_parts goto in
+      match IndexSet.Map.find_opt la parts with
+      | Some index -> index
+      | None ->
+        let node, transitions = Vector.get Redgraph.goto_outer goto in
+        let reservation = IndexBuffer.Gen.reserve nodes in
+        let source = Transition.source (Transition.of_goto goto) in
+        let index = IndexBuffer.Gen.index reservation in
+        let node = {
+          index;
+          label = IndexSet.singleton source;
+          next = IndexSet.empty;
+          fail = Terminal.intersect la node.imm_fail;
+        } in
+        IndexBuffer.Gen.commit nodes reservation node;
+        Vector.set imported_parts goto (IndexSet.Map.add la index parts);
+        node.next <- import_transitions la (Lr1.predecessors source) 1 transitions;
+        index
+
+    and import_transitions la lr1s n = function
+      | [] -> IndexSet.empty
+      | (tr : Redgraph.outer_transition) :: trs when n = tr.pop ->
+        let rest = import_transitions la lr1s n trs in
+        if IndexSet.disjoint la tr.lookahead
+        then rest
+        else IndexSet.union rest (indexset_bind tr.reach (fun g ->
+            let lr1 = Transition.source (Transition.of_goto g) in
+            if not (IndexSet.mem lr1 lr1s) then (
+              Printf.eprintf "expected %s to be a member of %s\n%s\n"
+                (Lr1.to_string lr1)
+                (Lr1.set_to_string lr1s)
+                ""
+                (*(Format.asprintf "%a"
+                   Grammar.Print.itemset
+                   (List.concat_map
+                      (fun lr1 ->
+                         List.map (fun (p, pos) -> (Production.to_g p, pos)) (Lr1.items lr1))
+                      (IndexSet.elements lr1s)))*)
+                  ;
+              incr foo;
+                  (*if !foo = 10 then assert false;*)
+            );
+            import_goto g la
+          ))
+      | transitions ->
+        let targets = import_transitions la (Lr1.set_predecessors lr1s) (n + 1) transitions in
+        if IndexSet.is_empty targets then
+          IndexSet.empty
+        else
+          let reservation = IndexBuffer.Gen.reserve nodes in
+          let node = {
+            index = IndexBuffer.Gen.index reservation;
+            label = Lr1.all;
+            next = targets;
+            fail = IndexSet.empty;
+          } in
+          IndexBuffer.Gen.commit nodes reservation node;
+          IndexSet.singleton node.index
+
+    let import_initial lr1 ((node : Redgraph.node), trs) =
+      let reservation = IndexBuffer.Gen.reserve nodes in
+      let next = import_transitions Terminal.all (Lr1.predecessors lr1) 1 trs in
+      let node = {
+        index = IndexBuffer.Gen.index reservation;
+        label = IndexSet.singleton lr1;
+        next;
+        fail = node.imm_fail;
+      } in
+      IndexBuffer.Gen.commit nodes reservation node;
+      node.index
+
+    let initial = IndexMap.mapi import_initial Redgraph.initial_outer
+
+    let nodes = IndexBuffer.Gen.freeze nodes
+
+    let () =
+      time "Lookahead-specialized redgraph with %d nodes" (cardinal n)
+  end
+
+  module type Failure_NFA = sig
+    type n
+    val n : n cardinal
+
+    val initials : n indexset
+    val label : n index -> Lr1.t
+    val next : n index -> n indexset
+    val lookaheads : n index -> Terminal.set option
+    (* [Some empty]    : oops, wrong approximation, this cannot fail
+       [Some nonempty] : the current suffix fail for any of these lookaheads
+       [None]          : the current suffix already failed, try again with a
+                         shorter suffix *)
+  end
+
+  module Lrc_NFA : Failure_NFA with type n = Lrc.n = struct
+    include Lrc
+    let initials = indexset_bind Lr1.idle Lrc.lrcs_of_lr1
+    let label = lr1_of_lrc
+    let next = predecessors
+    let lookaheads _ = None
+  end
+
+  (*module ENFA = struct
+    module Basic = Sum(Lrc_NFA)(Lr1)
+    module Interm = Gensym()
+
+    type state =
+      | Lrc of Lrc_NFA.n index
+      | Initial of Lr1.n index
+      | Interm of Interm.n index
+
+    (* Encoding between raw indices and algebraic representation *)
+
+    module All = Sum(Basic)(Interm)
+
+    let prj t = match All.prj t with
+      | L t ->
+        begin match Basic.prj t with
+          | L t -> Lrc t
+          | R t -> Initial t
+        end
+      | R t -> Interm t
+
+    let lrc t = All.inj_l (Basic.inj_l t)
+    let initial t = All.inj_l (Basic.inj_r t)
+    let interm t = All.inj_r t
+
+    let () =
+      let lrc_0 = Index.of_int Lrc.n 0 in
+      assert (Index.to_int (lrc lrc_0) = Index.to_int lrc_0)
+
+    let lrc_set : Lrc_NFA.n indexset -> All.n indexset =
+      IndexSet.unsafe_to_indexset
+
+    (* Define simple cases *)
+
+    let initials =
+      IndexSet.map initial (IndexMap.domain Redgraph.initial)
+
+    let label_lrc = Lrc_NFA.label
+    let label_lr1 x = x
+    let next_lrc x = lrc_set (Lrc_NFA.next x)
+
+    (* Explore the graph of "intermediate" nodes *)
+
+    let explore_initial lr1 ((node : Redgraph.node), (transitions : Redgraph.outer_transition list)) =
+      let lrc =
+        let lrcs = Lrc.lrcs_of_lr1 lr1 in
+        assert (IndexSet.is_singleton lrcs);
+        IndexSet.choose lrcs
+      in
+      let acc =
+        if not (IndexSet.is_empty node.imm_fail) then
+          next_lrc lrc
+        else
+          IndexSet.empty
+      in
+      let rec visit_transitions acc lrcs n = function
+        | [] -> acc
+        | (tr : Redgraph.outer_transition) :: rest ->
+          if n = tr.pop then
+
+          else
+            interm (Interm.fresh ())
+      in
+      visit_transitions acc (Lrc.predecessors lrc)
+    end*)
+
   (* Check that goto transitions are non-deterministic for Lrc.
-     => Yep *)
+     => Yep
+
+     This means that the target lrc is chosen by the lookahead set we are
+     reducing from, not by the lrcs of the source.
+
+     So what we can do is:
+     - use Redgraph to enumerate reductions
+     - use Lrc to enumerate stacks
+     - represent intermediate states as pairs (lrc, redgraph):
+       use lrc to filter possible reductions
+
+     Can we end up in a situation where an intermediate state cannot fail?
+     To do so, we would need to find a situation where:
+     - shifting after reduction fully succeeds for certain lr1 states and fail for others
+     - using lrc predecessors filter all lr1 states that would fail
+
+     To prevent that, we just need a function that return the exact set of failing lookaheads.
+     With a perfect traversal, this set should never be empty.
+     However, in our case, it is cheaper/simpler to assume it is not empty (that's highly likely),
+     and only compute it exactly when we think we found a failure.
+  *)
+
+
+
   (*let () =
     let nondet = ref 0 in
     Index.iter Transition.goto (fun tr ->
