@@ -184,6 +184,9 @@ let cons_option x xs =
   | None -> xs
   | Some x -> x :: xs
 
+let cons_if c x xs =
+  if c then x :: xs else xs
+
 (** Turns a index into a cmon document *)
 let cmon_index =
   (Cmon.int : int -> Cmon.t :> _ index -> Cmon.t)
