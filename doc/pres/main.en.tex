@@ -123,7 +123,7 @@ This '(' might be unmatched
       \begin{itemize}
         \item Enumerate examples to cover all error states
         \item Control reductions \only<3>{{\em ``(1 + 2''}}
-        \item Application industrielle d'envergure (CompCert)
+        \item Successfully deployed in production (CompCert)
       \end{itemize}
     \pause
     \pause
@@ -154,9 +154,99 @@ This '(' might be unmatched
   \end{itemize}
 \end{frame}
 
-\section{Integrating with Menhir \& demonstration}
+\begin{frame}[t]{Core idea}
 
-\begin{frame}{Integration to a Menhir parser}
+  \ \\ \
+
+  Characterize error situations by matching the \textbf{LR stack} using \textbf{regular expressions}.
+
+  \ \\
+
+  \pause
+  \begin{block}{Why the stack?}
+    \begin{itemize}
+      \item identify the current situation globally
+      \item interpretable: it can be seen as the prefix of a {\em sentential form}.
+    \end{itemize}
+  \end{block}
+
+  \only<3-4>{
+  $$
+  \begin{array}{rl}
+    exp ::= & NUM \\
+          | & \texttt{'(' } exp \texttt{ ')'} \\
+          | & exp \texttt{ '+' } exp \\
+  \end{array}
+  $$
+  }
+
+  \only<4>{
+  $$
+  \begin{array}{rcl}
+    ``(1 + 2) + 3 \cdot``  &\Rightarrow& exp  \texttt{ '+' } NUM\ \cdot
+  \end{array}
+  $$
+  }
+
+  \only<5->{
+    \begin{block}{Why regular expressions?}
+    \only<6>{
+      \begin{itemize}
+      \item the \textbf{stacks} themselves form a regular set
+      \item the action of \textbf{reductions} form a regular set too
+      \item lots of decidable properties: \textbf{exhaustivity}, \textbf{reachability}, \ldots
+      \end{itemize}
+    }
+    \end{block}
+  }
+\end{frame}
+
+\begin{frame}[t]{Regular expressions for LR stacks}
+
+  \ \\ \
+
+  $$
+  \begin{array}{rlll}
+    e ::=& X      & & \text{LR(1) states}\\
+    | & e_1 e_2   & & \text{Concatenation}\\
+    | & e_1 | e_2 & & \text{Disjunction}\\
+    | & e^*       & & \text{Kleene star}\\
+    | & [e\,]     & & \text{{\em Handles}}
+  \end{array}
+  $$
+
+  \ \\ \
+
+  \only<2-3>{
+  \begin{itemize}
+    \pause
+    \item LR(1) states are denoted by LR items or incoming symbols
+    \pause
+    \item $[e\,]$ denotes the set of {\em handles} that reduce, in one or more steps, to a stack suffix matching $e$
+  \end{itemize}
+  }
+
+  \only<4-6>{
+  $$
+  \begin{array}{rl}
+    clause\ = & e\ \rightarrow action  \\
+    \pause \pause \pause \pause
+           | & e\ @\ \mathcal P(T\,) \rightarrow action \\
+    \pause
+    rule\ = & clause^*
+  \end{array}
+  $$
+  }
+
+\end{frame}
+
+\section{Demonstration}
+
+\begin{frame}{Application to OCaml grammar}
+  Action!
+\end{frame}
+
+\begin{frame}{Integration with a Menhir parser}
 
   \begin{itemize}
     \item Files:
@@ -182,27 +272,6 @@ This '(' might be unmatched
       \end{itemize}
   \end{itemize}
 
-\end{frame}
-
-% \begin{frame}[fragile]{Spécification des erreurs}
-%   Le fichier \texttt{.mlyl} a la même structure qu'un fichier \texttt{ocamllex} : \\
-%   \begin{itemize}
-%     \item une ou plusieurs règles composées d'une liste de clauses
-%     \item chaque clause est un motif accompagné d'une action sémantique.
-%   \end{itemize}
-%
-%   \pause
-%
-%   \begin{block}{Exemple: clause d'une parenthèse non fermée}
-%     \begin{verbatim}
-% | lp=LPAREN; [_* / . RPAREN]
-%   { "Unclosed parenthesis at " ^ print_loc $startloc(lp) }
-%   \end{verbatim}
-%   \end{block}
-% \end{frame}
-
-\begin{frame}{Application to OCaml grammar}
-  Action!
 \end{frame}
 
 \section{Theoretical foundation and concepts behind LRgrep}
@@ -232,7 +301,7 @@ This '(' might be unmatched
   % C'est grâce à ça qu'on peut raporter au moins la position de l'erreur.
 
   \pause
-  Lets considers this set of minimal failing prefixes:
+  Lets consider this set of minimal failing prefixes:
 
   $$
   \mathcal E_L = \left\{ (u, t) \in \Sigma^*\times\Sigma\ \big|\
@@ -246,6 +315,9 @@ This '(' might be unmatched
 \end{frame}
 
 \begin{frame}[t]{Characterizing errors (3/3): regularisation}
+
+  \ \\
+
   Since the $u$ are valid prefixes, we can feed them to a parser and get a {\em stack}. We call this operation $im$ and define:
 
   $$
@@ -265,21 +337,20 @@ This '(' might be unmatched
 
   \textbf{Good news:} many properties are decidable on regular sets, we have
   many tools to work with them (such as regular expressions).
-
 \end{frame}
 
 \begin{frame}{Intuition on ``Shift-Reduce'' parsers}
 
   {\em Bottom-up} analysis using a stack:
+
   \begin{itemize}
-    \item the input is consumed left to right \only<2->{({\em push})}
+    \item the input is consumed left to right ({\em push})
     \item the derivation is built starting from the leaves,
-          that are progressively rooted \only<2->{({\em pop} leaves, {\em push} node)}
-    \item a stack is used to save the intermediate (sub-)derivations
+          that are progressively rooted ({\em pop} leaves, {\em push} node)
+    \item the stack saves the intermediate derivations
     \item the analysis ends with the root of the derivation on the stack
   \end{itemize}
 
-  \pause
   \pause
 
   Example with a minimalist grammar:
@@ -386,13 +457,13 @@ This '(' might be unmatched
     }
     \end{column}
   \end{columns}
-
 \end{frame}
 
 \begin{frame}[t]{Regular expressions for LR stacks}
+
   $$
   \begin{array}{rlll}
-    e ::=& X      & & \text{Symbol (terminal or non-terminal)}\\
+    e ::=& X      & & \text{LR(1) states}\\
     | & e_1 e_2 & & \text{Concatenation}\\
     | & e_1 | e_2 & & \text{Disjunction}\\
     | & e^*       & & \text{Kleene star}\\
@@ -400,6 +471,7 @@ This '(' might be unmatched
     \only<3->{| & [e\,]       & & \text{{\em Handles}}}
   \end{array}
   $$
+
   \pause
   \begin{minipage}{10cm}
     \vspace{1cm}
@@ -414,9 +486,11 @@ This '(' might be unmatched
     \vspace{1cm}
   \only<3->{
     \uncover<4->{
-      We add a new construct $[e\,]$ to denote a set of {\em handles}
+      The new construct $[e\,]$ to denote a set of {\em handles}
       that can reduce, in one or more steps, to a stack suffix matching $e$.
     }
+
+    \
 
     \uncover<5->{
     In our example:
@@ -459,7 +533,7 @@ This '(' might be unmatched
 \section{Conclusion}
 
 \begin{frame}{Conclusion}
-  LRgrep is a new DSL ({\em domain specific language}) to identify errors of LR parsers.
+  LRgrep is a new DSL ({\em domain specific language}) to identify error of LR parsers.
 
 \
 
@@ -478,7 +552,7 @@ This '(' might be unmatched
 
   We identified two difficulties:
 \begin{itemize}
-  \item computing the {\em exact} coverage itself
+  \item computing the coverage itself
   \item displaying the outcome to the user
 \end{itemize}
 
