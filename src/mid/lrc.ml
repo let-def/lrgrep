@@ -236,7 +236,7 @@ struct
           accept = IndexSet.empty;
           reductions;
           partition = IndexSet.Set.empty;
-          imm_fail = IndexSet.empty;
+          imm_fail = Lr1.reject lr1; (*IndexSet.empty;*)
           may_fail = IndexSet.empty;
         } in
         (*IndexBuffer.Gen.commit nodes reservation result;*)
@@ -317,13 +317,13 @@ struct
 
     let () =
       let rec normalize_node node =
-        let partition, total =
+        let partition, _total =
           IndexRefine.partition_and_total
             (IndexSet.Set.elements node.partition)
         in
         node.partition <- IndexSet.Set.of_list partition;
-        node.imm_fail <-
-          IndexSet.(diff (diff Terminal.all total) node.accept);
+        (*node.imm_fail <-
+          IndexSet.(diff (diff Terminal.all total) node.accept);*)
         node.reductions |> List.iter @@ fun red ->
         match red.transition with
         | Inner node -> normalize_node node
