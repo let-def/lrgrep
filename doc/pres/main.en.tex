@@ -222,7 +222,7 @@ This '(' might be unmatched
     \pause
     \item LR(1) states are denoted by LR items or incoming symbols
     \pause
-    \item $[e\,]$ denotes the set of {\em handles} that reduce, in one or more steps, to a stack suffix matching $e$
+    \item $[e\,]$ denotes the set of {\em handles} that reduce, in one or more steps, to a stack suffix matching $e$ \\
   \end{itemize}
   }
 
@@ -318,7 +318,7 @@ This '(' might be unmatched
 
   \ \\
 
-  Since the $u$ are valid prefixes, we can feed them to a parser and get a {\em stack}. We call this operation $im$ and define:
+  Since the $u$ are valid prefixes, we can feed them to a parser and get a {\em stack}. Noting this operation $im$, we define:
 
   $$
   \mathcal E_G = \left\{\ (im(u), t)\ \mid\ (u, t) \in \mathcal E_L\ \right\}
@@ -326,7 +326,7 @@ This '(' might be unmatched
 
   \pause
   \begin{block}{Theorem (Aho \& Ullman, 1972)}
-    The set of all \only<-2>{\em viable prefixes of the right sentential forms of a grammar}\only<3->{\textbf{stacks of an LR automaton}} is a regular language.
+    The set of all \only<-2>{{\em viable prefixes of the right sentential forms of a grammar}}\only<3->{\textbf{stacks of an LR automaton}} is a regular language.
   \end{block}
 
   \pause
@@ -336,7 +336,7 @@ This '(' might be unmatched
   Therefore $\mathcal E_G$ is a regular set!
 
   \textbf{Good news:} many properties are decidable on regular sets, we have
-  many tools to work with them (such as regular expressions).
+  lots of tools to work with them (such as regular expressions).
 \end{frame}
 
 \begin{frame}{Intuition on ``Shift-Reduce'' parsers}
@@ -361,7 +361,7 @@ This '(' might be unmatched
   \end{array}
   $$
 
-  Let's analyse the expresssion $1+2+3$.
+  Let's analyse the expression $1+2+3$.
 \end{frame}
 
 \begin{frame}[t]{Intuition on ``Shift-Reduce'' parsers}
@@ -393,7 +393,7 @@ This '(' might be unmatched
     \end{column}
 
     \begin{column}{.5\textwidth}
-    \vspace{-10pt}
+    \vspace{-30pt}
     \only<1-2>{\includegraphics[page=1,width=160pt]{dfa.en.pdf}}
     \only<3>{\includegraphics[page=2,width=160pt]{dfa.en.pdf}}
     \only<4>{\includegraphics[page=3,width=160pt]{dfa.en.pdf}}
@@ -424,6 +424,7 @@ This '(' might be unmatched
     \only<12-13>{Reduce \texttt{exp: num}}%
     \only<14-15>{Reduce \texttt{exp: exp + exp}}%
     \only<16-17>{Reduce \texttt{exp: exp + exp}}%
+
     \only<18>{Shift \texttt{\$}}%
     \only<19>{Reduce \texttt{goal: exp \$}}%
 
@@ -464,40 +465,23 @@ This '(' might be unmatched
   $$
   \begin{array}{rlll}
     e ::=& X      & & \text{LR(1) states}\\
-    | & e_1 e_2 & & \text{Concatenation}\\
+    | & e_1 e_2   & & \text{Concatenation}\\
     | & e_1 | e_2 & & \text{Disjunction}\\
     | & e^*       & & \text{Kleene star}\\
-    \only<1-2>{| & \ldots &&}
-    \only<3->{| & [e\,]       & & \text{{\em Handles}}}
+    | & [e\,]     & & \text{{\em Handles}}
   \end{array}
   $$
 
   \pause
-  \begin{minipage}{10cm}
-    \vspace{1cm}
-  \only<1-2>{
-    \uncover<2>{
-    Enough to identify specific stacks, too fine-grained in practice:
-    no way to talk about reductions.
-    }
-  }
-  \end{minipage}
-  \begin{minipage}{10cm}
-    \vspace{1cm}
-  \only<3->{
-    \uncover<4->{
-      The new construct $[e\,]$ to denote a set of {\em handles}
-      that can reduce, in one or more steps, to a stack suffix matching $e$.
-    }
+  \vspace{1cm}
+  The new construct $[e\,]$ to denote a set of {\em handles}
+  that can reduce, in one or more steps, to a stack suffix matching $e$.
 
     \
 
-    \uncover<5->{
-    In our example:
-    $[exp\,] = num\,\big|\,exp + [exp\,]$
-    }
-  }
-  \end{minipage}
+  \pause
+  In our example:
+  $[exp\,] = num\,\big|\,exp + [exp\,]$
 \end{frame}
 
 \begin{frame}{Also...}
@@ -525,7 +509,7 @@ This '(' might be unmatched
     \item then its our work to generalise from this example
   \end{itemize}
   \pause
-  \begin{block}{If you happen to use OCaml: help!}
+  \begin{block}{If you happen to use OCaml, please help.}
     Don't hesitate to report the ``interesting'' errors you encounter.
   \end{block}
 \end{frame}
