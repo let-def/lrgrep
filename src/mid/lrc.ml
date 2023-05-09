@@ -638,6 +638,94 @@ struct
       time "%d live nodes (%d dead-ends)" !live (cardinal n - !live)
   end
 
+  module Redgraph_lrc_la : sig
+    type n
+    val n : n cardinal
+    val initials : n indexset
+    val next : n index -> n indexset
+    val label : n index -> Lr1.set
+    val fail : n index -> Terminal.set
+  end = struct
+    include IndexBuffer.Gen.Make()
+
+    type t = {
+      index: n index;
+      label: Lr1.set;
+      fail: Terminal.set;
+      mutable next: n indexset;
+    }
+
+    let nodes = get_generator ()
+
+    let table = Hashtbl.create 7
+
+    let normalize lrcs la =
+      match Redgraph_la.label la with
+      | None -> lrcs
+      | Some lr1 -> IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1)
+
+    let rec import lrcs la =
+      let lrcs = normalize lrcs la in
+      if IndexSet.is_empty lrcs then
+        None
+      else
+        let key = (la, lrcs) in
+        match Hashtbl.find_opt table key with
+        | Some result -> Some result
+        | None ->
+          let label = match Redgraph_la.label la with
+            | None -> IndexSet.map Lrc.lr1_of_lrc lrcs
+            | Some lr1 -> IndexSet.singleton lr1
+          in
+          let reservation = IndexBuffer.Gen.reserve nodes in
+          let index = IndexBuffer.Gen.index reservation in
+          Hashtbl.add table key index;
+          let result = {
+            index; label; next = IndexSet.empty;
+            fail = Redgraph_la.fail la;
+          } in
+          IndexBuffer.Gen.commit nodes reservation result;
+          let lrcs = indexset_bind lrcs Lrc.predecessors in
+          let las = Redgraph_la.next la in
+          let next = IndexSet.filter_map (import lrcs) las in
+          result.next <- next;
+          Some index
+
+    let initials =
+      IndexSet.filter_map (fun la ->
+          let lrcs = Lrc.lrcs_of_lr1 (Option.get (Redgraph_la.label la)) in
+          import lrcs la
+        ) Redgraph_la.initials
+
+    let nodes = IndexBuffer.Gen.freeze nodes
+
+    let fail n = (Vector.get nodes n).fail
+    let next n = (Vector.get nodes n).next
+    let label n = (Vector.get nodes n).label
+
+    let () = time "la and lrc intersection, with %d nodes" (cardinal n)
+
+    let () =
+      let reverse = Vector.make n IndexSet.empty in
+      Vector.iter (fun t ->
+          IndexSet.iter (fun t' -> vector_set_add reverse t' t.index) t.next;
+        ) nodes;
+      let reachable = Vector.make n false in
+      let live = ref 0 in
+      let rec reach t =
+        if not (Vector.get reachable t) then (
+          incr live;
+          Vector.set reachable t true;
+          IndexSet.iter reach (Vector.get reverse t)
+        )
+      in
+      Vector.iter (fun t ->
+          if not (IndexSet.is_empty t.fail) then
+            reach t.index
+        ) nodes;
+      time "%d live nodes (%d dead-ends)" !live (cardinal n - !live)
+  end
+
   module type Failure_NFA = sig
     type n
     val n : n cardinal
