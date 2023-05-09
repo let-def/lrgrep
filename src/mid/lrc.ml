@@ -317,8 +317,8 @@ struct
 
     let () =
       let rec normalize_node node =
-        let partition, _total =
-          IndexRefine.partition_and_total
+        let partition =
+          IndexRefine.partition
             (IndexSet.Set.elements node.partition)
         in
         node.partition <- IndexSet.Set.of_list partition;

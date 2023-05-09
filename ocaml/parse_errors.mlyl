@@ -98,8 +98,8 @@ rule error_message = parse error
   { report_currified_constructor ~outer inner token }
 
 | constr_longident; [simple_expr]
-  (*@ LPAREN | LIDENT | UIDENT*)
-  @ first(expr)
+  (*@ LPAREN | LIDENT | UIDENT | INT | FLOAT*)
+  @ first(simple_expr)
   { (* Expliquer le raisonnement *)
     (* Plusieurs niveaux d'explications ? *)
     (* Message court identifiant la situation *)
