@@ -36,7 +36,7 @@ struct
         )
   end
 
-  module NFA = struct
+  module LazyNFA = struct
     type t = {
       (* State construction *)
       uid: int;
@@ -103,10 +103,27 @@ struct
       Vector.mapi (process_clause ~capture:(Capture.gensym ())) Clauses.vector
   end
 
-  module DFA = struct
+  module type STACKS = sig
+    type n
+    val n : n cardinal
+    val initials : n indexset
+    val next : n index -> n indexset
+    val label : n index -> Lr1.set
+  end
+
+  module Lr1_stacks : STACKS with type n = Lr1.n = struct
+    type n = Lr1.n
+    let n = Lr1.n
+    let initials = Lr1.idle
+    let next = Lr1.predecessors
+    let label = IndexSet.singleton
+  end
+
+  module LazyDFA(Stacks: STACKS)() =
+  struct
     open IndexBuffer
 
-    let group_make (type a) (prj : a -> NFA.t) (ts : a list) : a array =
+    let group_make (type a) (prj : a -> LazyNFA.t) (ts : a list) : a array =
       let mark = ref () in
       let last_accepted = ref `None in
       let ts = List.filter (fun a ->
@@ -134,11 +151,11 @@ struct
       Vector.iteri (fun i x -> acc := f i x !acc) x;
       !acc
 
-    let group_index_of (type n) th (t : (n, NFA.t) vector) =
+    let group_index_of (type n) th (t : (n, LazyNFA.t) vector) =
       let exception Found of n index in
       match
         Vector.iteri
-          (fun i x -> if NFA.compare x th = 0 then raise (Found i))
+          (fun i x -> if LazyNFA.compare x th = 0 then raise (Found i))
           t
       with
       | () -> raise Not_found
@@ -152,10 +169,11 @@ struct
 
     type 'n t = {
       index: n index;
-      group: ('n, NFA.t) vector;
+      group: ('n, LazyNFA.t) vector;
       transitions: (Lr1.set * 'n mapping lazy_t) list;
-      mutable visited: Lr1.set;
-      mutable scheduled: Lr1.set;
+      mutable visited_labels: Lr1.set;
+      mutable visited: Stacks.n indexset;
+      mutable scheduled: Stacks.n indexset;
     }
     and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
 
@@ -164,13 +182,13 @@ struct
     let states = State.get_generator ()
 
     module GroupMap = Map.Make(struct
-        type t = NFA.t array
-        let compare g1 g2 = array_compare NFA.compare g1 g2
+        type t = LazyNFA.t array
+        let compare g1 g2 = array_compare LazyNFA.compare g1 g2
       end)
 
     let determinize group =
       let map = ref GroupMap.empty in
-      let rec aux : type n . (n, NFA.t) vector -> n t =
+      let rec aux : type n . (n, LazyNFA.t) vector -> n t =
         fun group ->
           match GroupMap.find_opt (Vector.as_array group) !map with
           | Some (Packed t') ->
@@ -182,7 +200,7 @@ struct
             let rev_transitions =
               let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
               group_fold
-                (fun i (nfa : NFA.t) acc -> List.rev_map (make i) nfa.transitions @ acc)
+                (fun i (nfa : LazyNFA.t) acc -> List.rev_map (make i) nfa.transitions @ acc)
                 group []
             in
             let rev_partitions = IndexRefine.annotated_partition rev_transitions in
@@ -205,7 +223,9 @@ struct
             let state = {
               index = Gen.index reservation;
               group; transitions;
-              scheduled=IndexSet.empty; visited=IndexSet.empty
+              visited_labels=IndexSet.empty;
+              scheduled=IndexSet.empty;
+              visited=IndexSet.empty
             } in
             Gen.commit states reservation (Packed state);
             map := GroupMap.add (Vector.as_array group) (Packed state) !map;
@@ -215,7 +235,7 @@ struct
 
     let initial =
       let Vector.Packed group = Vector.of_array (
-          NFA.clauses
+          LazyNFA.clauses
           |> Vector.map fst
           |> Vector.to_list
           |> group_make Fun.id
@@ -242,10 +262,16 @@ struct
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
         List.iter (fun (label, target) ->
-            let label' = IndexSet.inter label todo in
-            if not (IndexSet.is_empty label') then
+            let expand_stack stack =
+              if IndexSet.disjoint (Stacks.label stack) label then
+                IndexSet.empty
+              else
+                Stacks.next stack
+            in
+            let stacks = indexset_bind todo expand_stack in
+            if not (IndexSet.is_empty stacks) then
               let lazy (Mapping (_, t')) = target in
-              schedule t'.index (Lr1.set_predecessors label')
+              schedule t'.index stacks
           ) t.transitions
       in
       let rec loop () =
@@ -256,10 +282,15 @@ struct
           List.iter update todo';
           loop ()
       in
-      schedule initial Lr1.idle;
+      schedule initial Stacks.initials;
       loop ()
 
     let states = Gen.freeze states
+
+    let () =
+      Vector.iter (fun (Packed t) ->
+          t.visited_labels <- indexset_bind t.visited Stacks.label
+        ) states
 
     let iter_transitions t f =
       List.iter (fun (label, target) ->
@@ -270,7 +301,7 @@ struct
         ) t.transitions
 
     let iter_refined_transitions t f =
-      let set = t.visited in
+      let set = t.visited_labels in
       List.iter (fun (label, target) ->
           if Lazy.is_val target then (
             let lazy mapping = target in
@@ -381,6 +412,8 @@ struct
       !max_index + 1
   end
 
+  module DFA = LazyDFA(Lr1_stacks)()
+
   let () =
     if false then
       let rstate = ref (Vector.get DFA.states DFA.initial) in
@@ -389,8 +422,8 @@ struct
         let group = state.group in
         Vector.iter (fun nfa ->
             Format.eprintf "- clause %d\n%!%a\n%!"
-              (Index.to_int nfa.NFA.clause)
-              Cmon.format (K.cmon nfa.NFA.k)
+              (Index.to_int nfa.LazyNFA.clause)
+              Cmon.format (K.cmon nfa.LazyNFA.k)
           ) group;
         Printf.eprintf "state %d\n> %!" (Index.to_int state.index);
         let line = input_line stdin in
@@ -491,9 +524,9 @@ struct
     let partial_captures =
       let acc = !partial_captures in
       Vector.fold_left begin fun acc (DFA.Packed st) ->
-        Vector.fold_left2 begin fun acc (nfa : NFA.t) regs ->
+        Vector.fold_left2 begin fun acc (nfa : LazyNFA.t) regs ->
           if nfa.accept then
-            let _, (cap, _) = Vector.get NFA.clauses nfa.clause in
+            let _, (cap, _) = Vector.get LazyNFA.clauses nfa.clause in
             IndexSet.fold begin fun var acc ->
               if IndexMap.mem var regs
               then acc
@@ -510,7 +543,7 @@ struct
     let initials f = f DFA.initial
     let finals f =
       Vector.iter (fun (DFA.Packed st) ->
-          let is_final acc nfa = acc || nfa.NFA.accept in
+          let is_final acc nfa = acc || nfa.LazyNFA.accept in
           if Vector.fold_left is_final false st.group then
             f st.index
         ) DFA.states
@@ -520,7 +553,7 @@ struct
       let acc = ref [] in
       Vector.iter (fun (DFA.Packed st) ->
           let add_final acc nfa =
-            if nfa.NFA.accept then IndexSet.add nfa.NFA.clause acc else acc
+            if nfa.LazyNFA.accept then IndexSet.add nfa.LazyNFA.clause acc else acc
           in
           let accepted = Vector.fold_left add_final IndexSet.empty st.group in
           if not (IndexSet.is_empty accepted) then
@@ -732,6 +765,6 @@ struct
       if Option.is_some lookahead_constraint then
         print "  | %d, _ -> None\n" (Index.to_int index)
     in
-    Vector.iteri output_clause NFA.clauses;
+    Vector.iteri output_clause LazyNFA.clauses;
     print "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 end
