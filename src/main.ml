@@ -131,8 +131,8 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
   let open Mid.Automata.Entry
       (Transl)
-      (*(Lrc.Lrce)*)
-      (Lrc.Lrc_NFA)
+      (Lrc.Lrce)
+      (*(Lrc.Lrc_NFA)*)
       (*(Lr1_stacks)*)
       (struct
         let parser_name = parser_name
