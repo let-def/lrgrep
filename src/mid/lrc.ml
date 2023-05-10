@@ -683,6 +683,31 @@ struct
     let lookaheads _ = None
   end
 
+  module Lrce : Failure_NFA = struct
+    include Sum(Lrc)(Redgraph_lrc_la)
+
+    let initials = IndexSet.map inj_r Redgraph_lrc_la.initials
+
+    let rednext =
+      Vector.init Redgraph_lrc_la.n
+        (fun i -> IndexSet.map inj_r (Redgraph_lrc_la.next i))
+
+    let next n =
+      match prj n with
+      | L lrc -> IndexSet.unsafe_to_indexset (Lrc.predecessors lrc)
+      | R red -> Vector.get rednext red
+
+    let label n =
+      match prj n with
+      | L lrc -> Lrc_NFA.label lrc
+      | R red -> Redgraph_lrc_la.label red
+
+    let lookaheads n =
+      match prj n with
+      | L _ -> None
+      | R red -> Some (Redgraph_lrc_la.fail red)
+  end
+
   (*module ENFA = struct
     module Basic = Sum(Lrc_NFA)(Lr1)
     module Interm = Gensym()
