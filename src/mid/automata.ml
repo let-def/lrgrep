@@ -4,12 +4,23 @@ open Front
 open Fix.Indexing
 open Regexp
 
+module type STACKS = sig
+  type lr1
+  type n
+  val n : n cardinal
+  val initials : n indexset
+  val next : n index -> n indexset
+  val label : n index -> lr1 indexset
+end
+
 module Entry
     (Transl : Transl.S)
+    (Stacks: STACKS with type lr1 := Transl.Regexp.Info.Lr1.n)
     (E : sig
        val parser_name : string
        val entry : Syntax.entry
-     end)() =
+     end)
+    () =
 struct
   open Transl
   open Regexp
@@ -103,23 +114,35 @@ struct
       Vector.mapi (process_clause ~capture:(Capture.gensym ())) Clauses.vector
   end
 
-  module type STACKS = sig
-    type n
-    val n : n cardinal
-    val initials : n indexset
-    val next : n index -> n indexset
-    val label : n index -> Lr1.set
-  end
+  module LazyDFA(Stacks: STACKS with type lr1 := Lr1.n)() : sig
+    include CARDINAL
 
-  module Lr1_stacks : STACKS with type n = Lr1.n = struct
-    type n = Lr1.n
-    let n = Lr1.n
-    let initials = Lr1.idle
-    let next = Lr1.predecessors
-    let label = IndexSet.singleton
-  end
+    type ('src, 'tgt) _mapping = ('tgt, 'src index * Capture.set) vector
 
-  module LazyDFA(Stacks: STACKS)() =
+    type 'n t = private {
+      index: n index;
+      group: ('n, LazyNFA.t) vector;
+      transitions: (Lr1.set * 'n mapping lazy_t) list;
+      mutable visited_labels: Lr1.set;
+      mutable visited: Stacks.n indexset;
+      mutable scheduled: Stacks.n indexset;
+    }
+    and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
+
+    type packed = Packed : 'n t -> packed [@@unboxed]
+
+    val determinize : ('a, LazyNFA.t) vector -> 'a t
+    val initial : n index
+    val states : (n, packed) vector
+    val iter_transitions : 'a t -> (Lr1.set -> 'a mapping -> unit) -> unit
+    val iter_refined_transitions :
+      'a t -> (Lr1.n indexset -> 'a mapping -> unit) -> unit
+    val liveness : 'm t -> ('m, Capture.set) vector
+    val empty_registers : 'a Vector.packed
+    val registers : (n, (Capture.n, int) indexmap Vector.packed) vector
+    val get_registers : 'm t -> ('m, (Capture.n, int) indexmap) vector
+    val register_count : int
+  end =
   struct
     open IndexBuffer
 
@@ -151,7 +174,7 @@ struct
       Vector.iteri (fun i x -> acc := f i x !acc) x;
       !acc
 
-    let group_index_of (type n) th (t : (n, LazyNFA.t) vector) =
+    (*let group_index_of (type n) th (t : (n, LazyNFA.t) vector) =
       let exception Found of n index in
       match
         Vector.iteri
@@ -159,7 +182,7 @@ struct
           t
       with
       | () -> raise Not_found
-      | exception (Found n) -> n
+      | exception (Found n) -> n*)
 
     module State = Gen.Make()
     type n = State.n
@@ -261,18 +284,17 @@ struct
         let todo = t.scheduled in
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
-        List.iter (fun (label, target) ->
-            let expand_stack stack =
-              if IndexSet.disjoint (Stacks.label stack) label then
-                IndexSet.empty
-              else
-                Stacks.next stack
-            in
-            let stacks = indexset_bind todo expand_stack in
-            if not (IndexSet.is_empty stacks) then
-              let lazy (Mapping (_, t')) = target in
-              schedule t'.index stacks
-          ) t.transitions
+        List.iter begin fun (label, target) ->
+          let expand_stack stack =
+            if IndexSet.disjoint (Stacks.label stack) label
+            then IndexSet.empty
+            else Stacks.next stack
+          in
+          let stacks = indexset_bind todo expand_stack in
+          if not (IndexSet.is_empty stacks) then
+            let lazy (Mapping (_, t')) = target in
+            schedule t'.index stacks
+        end t.transitions
       in
       let rec loop () =
         match !todo with
@@ -412,7 +434,7 @@ struct
       !max_index + 1
   end
 
-  module DFA = LazyDFA(Lr1_stacks)()
+  module DFA = LazyDFA(Stacks)()
 
   let () =
     if false then
