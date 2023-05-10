@@ -82,8 +82,8 @@ struct
         let classes = LRijkstra.Classes.for_lr1 lr1 in
         assert (Array.length classes > 0);
         let first = Index.of_int n !count in
-        let all = ref IndexSet.empty in
         count := !count + Array.length classes;
+        let all = ref IndexSet.empty in
         for i = Array.length classes - 1 downto 0 do
           let lrc = index_shift first i in
           all := IndexSet.add lrc !all;
@@ -139,15 +139,15 @@ struct
               let reachable = ref IndexSet.empty in
               for pre = 0 to pre_classes - 1 do
                 let index = LRijkstra.Cells.table_index ~post_classes ~pre ~post in
-                if table.(index) < max_int then (
-                  let source_lrc = Index.of_int n ((source_lrc :> int) + pre) in
-                  reachable := IndexSet.add source_lrc !reachable
-                )
+                if table.(index) < max_int then
+                  reachable := IndexSet.add (index_shift source_lrc pre) !reachable
               done;
               let reachable = !reachable in
-              Array.iter (fun index ->
-                  Vector.set predecessors (index_shift first_lrc index) reachable
-                ) coercion.forward.(post)
+              Array.iter begin fun index ->
+                let lrc_index = index_shift first_lrc index in
+                Vector.set predecessors lrc_index
+                  (IndexSet.union reachable (Vector.get predecessors lrc_index))
+              end coercion.forward.(post)
             done
           in
           List.iter process_transition (Transition.predecessors lr1)

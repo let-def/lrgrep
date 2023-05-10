@@ -112,6 +112,8 @@ module type S = sig
     val list_to_string : t list -> string
     val set_to_string : set -> string
 
+    val symbol_to_string : t -> string
+
     (** [shift_on t] is the set of lookaheads that state [t] can shift *)
     val shift_on : t -> Terminal.set
 
@@ -489,8 +491,24 @@ struct
     (** A somewhat informative string description of the Lr1 state, for debug
         purposes. *)
     let to_string lr1 =
+      string_of_index lr1 ^ ":" ^
       match incoming lr1 with
-      | Some sym -> string_of_index lr1 ^ ":" ^ Symbol.name sym
+      | Some sym -> Symbol.name sym
+      | None -> (
+          match items lr1 with
+          | [p, 0] ->
+            let p = Production.to_g p in
+            assert (Grammar.Production.kind p = `START);
+            let name = Grammar.Nonterminal.name (Grammar.Production.lhs p) in
+            let name = Bytes.of_string name in
+            Bytes.set name (Bytes.length name - 1) ':';
+            Bytes.unsafe_to_string name
+          | _ -> assert false
+        )
+
+    let symbol_to_string lr1 =
+      match incoming lr1 with
+      | Some sym -> Symbol.name sym
       | None -> (
           match items lr1 with
           | [p, 0] ->

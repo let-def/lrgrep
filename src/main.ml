@@ -113,15 +113,33 @@ module Transl = Mid.Transl.Make(Regexp)
 
 module Lrc = Mid.Lrc.Make(Info)()
 
+module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
+
+module Lr1_stacks : STACKS with type n = Info.Lr1.n =
+struct
+  type n = Info.Lr1.n
+  let n = Info.Lr1.n
+  let initials = Info.Lr1.idle
+  let next = Info.Lr1.predecessors
+  let label = IndexSet.singleton
+end
+
 let parser_name =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
 let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
-  let open Mid.Automata.Entry(Transl)(struct
-      let parser_name = parser_name
-      let entry = entry
-    end)() in
+  let open Mid.Automata.Entry
+      (Transl)
+      (*(Lrc.Lrce)*)
+      (Lrc.Lrc_NFA)
+      (*(Lr1_stacks)*)
+      (struct
+        let parser_name = parser_name
+        let entry = entry
+      end)
+      ()
+  in
   Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length DFA.states));
   Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
@@ -132,7 +150,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       | None -> ()
       | Some index ->
         Vector.set halting index
-          (IndexSet.union source.visited (Vector.get halting index))
+          (IndexSet.union source.visited_labels (Vector.get halting index))
     ) DFA.states;
   Index.rev_iter MinDFA.transitions begin fun tr ->
     let index = MinDFA.source tr in
