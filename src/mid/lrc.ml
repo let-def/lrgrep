@@ -557,12 +557,14 @@ struct
     val next : n index -> n indexset
     val label : n index -> Lr1.set
     val fail : n index -> Terminal.set
+    val lrcs : n index -> Lrc.set
   end = struct
     type 'n t = {
       index: 'n index;
       label: Lr1.set;
       fail: Terminal.set;
       mutable next: 'n indexset;
+      lrcs: Lrc.set;
     }
 
     module Full = IndexBuffer.Gen.Make()
@@ -592,7 +594,8 @@ struct
           let index = IndexBuffer.Gen.index reservation in
           Hashtbl.add table key index;
           let result = {
-            index; label; next = IndexSet.empty;
+            index; label; lrcs;
+            next = IndexSet.empty;
             fail = Redgraph_la.fail la;
           } in
           IndexBuffer.Gen.commit nodes reservation result;
@@ -644,21 +647,24 @@ struct
     let fail = Vector.make n IndexSet.empty
     let next = Vector.make n IndexSet.empty
     let label = Vector.make n IndexSet.empty
+    let lrcs = Vector.make n IndexSet.empty
 
     let () = Vector.iteri (fun full live ->
         match live with
         | None -> ()
         | Some live ->
           let node = Vector.get nodes full in
-          Vector.set fail live node.fail;
-          Vector.set next live (IndexSet.filter_map live_index node.next);
+          Vector.set fail  live node.fail;
+          Vector.set next  live (IndexSet.filter_map live_index node.next);
           Vector.set label live node.label;
+          Vector.set lrcs  live node.lrcs;
       ) live_map
 
     let initials = IndexSet.filter_map live_index full_initials
     let fail  = Vector.get fail
     let next  = Vector.get next
     let label = Vector.get label
+    let lrcs  = Vector.get lrcs
   end
 
   module type Failure_NFA = sig
@@ -690,7 +696,15 @@ struct
 
     let rednext =
       Vector.init Redgraph_lrc_la.n
-        (fun i -> IndexSet.map inj_r (Redgraph_lrc_la.next i))
+        (fun i ->
+           let base = IndexSet.map inj_r (Redgraph_lrc_la.next i) in
+           if IndexSet.is_empty (Redgraph_lrc_la.fail i) then
+             base
+           else
+             IndexSet.union base
+               (IndexSet.map inj_l
+                  (indexset_bind (Redgraph_lrc_la.lrcs i) Lrc_NFA.next))
+        )
 
     let next n =
       match prj n with
