@@ -558,16 +558,15 @@ struct
     val label : n index -> Lr1.set
     val fail : n index -> Terminal.set
   end = struct
-    include IndexBuffer.Gen.Make()
-
-    type t = {
-      index: n index;
+    type 'n t = {
+      index: 'n index;
       label: Lr1.set;
       fail: Terminal.set;
-      mutable next: n indexset;
+      mutable next: 'n indexset;
     }
 
-    let nodes = get_generator ()
+    module Full = IndexBuffer.Gen.Make()
+    let nodes = Full.get_generator ()
 
     let table = Hashtbl.create 7
 
@@ -603,7 +602,7 @@ struct
           result.next <- next;
           Some index
 
-    let initials =
+    let full_initials =
       IndexSet.filter_map (fun la ->
           let lrcs = Lrc.lrcs_of_lr1 (Option.get (Redgraph_la.label la)) in
           import lrcs la
@@ -611,23 +610,19 @@ struct
 
     let nodes = IndexBuffer.Gen.freeze nodes
 
-    let fail n = (Vector.get nodes n).fail
-    let next n = (Vector.get nodes n).next
-    let label n = (Vector.get nodes n).label
+    let () = time "la and lrc intersection, with %d nodes" (cardinal Full.n)
 
-    let () = time "la and lrc intersection, with %d nodes" (cardinal n)
+    module Live = Gensym()
 
-    let () =
-      let reverse = Vector.make n IndexSet.empty in
+    let live_map =
+      let reverse = Vector.make Full.n IndexSet.empty in
       Vector.iter (fun t ->
           IndexSet.iter (fun t' -> vector_set_add reverse t' t.index) t.next;
         ) nodes;
-      let reachable = Vector.make n false in
-      let live = ref 0 in
+      let map = Vector.make Full.n None in
       let rec reach t =
-        if not (Vector.get reachable t) then (
-          incr live;
-          Vector.set reachable t true;
+        if Option.is_none (Vector.get map t) then (
+          Vector.set map t (Some (Live.fresh ()));
           IndexSet.iter reach (Vector.get reverse t)
         )
       in
@@ -635,95 +630,35 @@ struct
           if not (IndexSet.is_empty t.fail) then
             reach t.index
         ) nodes;
-      time "%d live nodes (%d dead-ends)" !live (cardinal n - !live)
-  end
+      map
 
-  module Redgraph_lrc_la : sig
-    type n
-    val n : n cardinal
-    val initials : n indexset
-    val next : n index -> n indexset
-    val label : n index -> Lr1.set
-    val fail : n index -> Terminal.set
-  end = struct
-    include IndexBuffer.Gen.Make()
-
-    type t = {
-      index: n index;
-      label: Lr1.set;
-      fail: Terminal.set;
-      mutable next: n indexset;
-    }
-
-    let nodes = get_generator ()
-
-    let table = Hashtbl.create 7
-
-    let normalize lrcs la =
-      match Redgraph_la.label la with
-      | None -> lrcs
-      | Some lr1 -> IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1)
-
-    let rec import lrcs la =
-      let lrcs = normalize lrcs la in
-      if IndexSet.is_empty lrcs then
-        None
-      else
-        let key = (la, lrcs) in
-        match Hashtbl.find_opt table key with
-        | Some result -> Some result
-        | None ->
-          let label = match Redgraph_la.label la with
-            | None -> IndexSet.map Lrc.lr1_of_lrc lrcs
-            | Some lr1 -> IndexSet.singleton lr1
-          in
-          let reservation = IndexBuffer.Gen.reserve nodes in
-          let index = IndexBuffer.Gen.index reservation in
-          Hashtbl.add table key index;
-          let result = {
-            index; label; next = IndexSet.empty;
-            fail = Redgraph_la.fail la;
-          } in
-          IndexBuffer.Gen.commit nodes reservation result;
-          let lrcs = indexset_bind lrcs Lrc.predecessors in
-          let las = Redgraph_la.next la in
-          let next = IndexSet.filter_map (import lrcs) las in
-          result.next <- next;
-          Some index
-
-    let initials =
-      IndexSet.filter_map (fun la ->
-          let lrcs = Lrc.lrcs_of_lr1 (Option.get (Redgraph_la.label la)) in
-          import lrcs la
-        ) Redgraph_la.initials
-
-    let nodes = IndexBuffer.Gen.freeze nodes
-
-    let fail n = (Vector.get nodes n).fail
-    let next n = (Vector.get nodes n).next
-    let label n = (Vector.get nodes n).label
-
-    let () = time "la and lrc intersection, with %d nodes" (cardinal n)
+    let live_index n =
+      Vector.get live_map n
 
     let () =
-      let reverse = Vector.make n IndexSet.empty in
-      Vector.iter (fun t ->
-          IndexSet.iter (fun t' -> vector_set_add reverse t' t.index) t.next;
-        ) nodes;
-      let reachable = Vector.make n false in
-      let live = ref 0 in
-      let rec reach t =
-        if not (Vector.get reachable t) then (
-          incr live;
-          Vector.set reachable t true;
-          IndexSet.iter reach (Vector.get reverse t)
-        )
-      in
-      Vector.iter (fun t ->
-          if not (IndexSet.is_empty t.fail) then
-            reach t.index
-        ) nodes;
-      time "%d live nodes (%d dead-ends)" !live (cardinal n - !live)
+      time "%d live nodes (%d dead-ends)"
+        (cardinal Live.n) (cardinal Full.n - cardinal Live.n)
+
+    include Live
+
+    let fail = Vector.make n IndexSet.empty
+    let next = Vector.make n IndexSet.empty
+    let label = Vector.make n IndexSet.empty
+
+    let () = Vector.iteri (fun full live ->
+        match live with
+        | None -> ()
+        | Some live ->
+          let node = Vector.get nodes full in
+          Vector.set fail live node.fail;
+          Vector.set next live (IndexSet.filter_map live_index node.next);
+          Vector.set label live node.label;
+      ) live_map
+
+    let initials = IndexSet.filter_map live_index full_initials
+    let fail  = Vector.get fail
+    let next  = Vector.get next
+    let label = Vector.get label
   end
 
   module type Failure_NFA = sig
@@ -731,10 +666,10 @@ struct
     val n : n cardinal
 
     val initials : n indexset
-    val label : n index -> Lr1.t
+    val label : n index -> Lr1.set
     val next : n index -> n indexset
     val lookaheads : n index -> Terminal.set option
-    (* [Some empty]    : oops, wrong approximation, this cannot fail
+    (* [Some empty]    : the current suffix hasn't failed yet
        [Some nonempty] : the current suffix fail for any of these lookaheads
        [None]          : the current suffix already failed, try again with a
                          shorter suffix *)
@@ -743,7 +678,7 @@ struct
   module Lrc_NFA : Failure_NFA with type n = Lrc.n = struct
     include Lrc
     let initials = indexset_bind Lr1.idle Lrc.lrcs_of_lr1
-    let label = lr1_of_lrc
+    let label i = IndexSet.singleton (lr1_of_lrc i)
     let next = predecessors
     let lookaheads _ = None
   end
