@@ -147,9 +147,9 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       Vector.get DFA.states (MinDFA.represent_state index)
     in
     let registers = DFA.get_registers source in
-    let add_accepting {NFA. accept; clause; _} regs acc =
+    let add_accepting {LazyNFA. accept; clause; _} regs acc =
       if not accept then acc else
-        let _, (cap, _) = Vector.get NFA.clauses clause in
+        let _, (cap, _) = Vector.get LazyNFA.clauses clause in
         let registers =
           let add_reg cap acc = IndexMap.find_opt cap regs :: acc in
           Array.of_list (List.rev (IndexSet.fold add_reg cap []))
