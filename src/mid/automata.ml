@@ -3,6 +3,7 @@ open Misc
 open Front
 open Fix.Indexing
 open Regexp
+open Lrgrep_support
 
 module type STACKS = sig
   type lr1
@@ -20,22 +21,70 @@ module Entry
        val parser_name : string
        val entry : Syntax.entry
      end)
-    () =
+    () :
+sig
+  open Transl.Regexp.Info
+
+  module Clause : sig
+    include CARDINAL
+    type t = n index
+    val total : n indexset
+    val captures : t -> Capture.set
+  end
+
+  module BigDFA : sig
+    type n
+    val n : n cardinal
+  end
+
+  module Label : sig
+    type t = {
+      filter: Lr1.set;
+      captures: (Capture.n, Register.n index) indexmap;
+      clear: Register.set;
+      moves: Register.t Register.map;
+    }
+    val register_count : int
+    val compare : t -> t -> int
+  end
+
+  module MinDFA : sig
+    type states
+    val states : states cardinal
+    val initial : states index
+
+    type transitions
+    val transitions : transitions cardinal
+
+    val source : transitions index -> states index
+    val label : transitions index -> Label.t
+    val target : transitions index -> states index
+
+    (* Labels which are reachable (there exists stacks that could t
+       but for which the state defines no transition.
+       They should be rejected at runtime. *)
+    val unhandled : states index -> Lr1.set
+
+    val outgoing_transitions : states index -> transitions indexset
+    val matches : states index -> (Clause.t * Register.t Capture.map) list
+  end
+
+  val output_code : out_channel -> unit
+end =
 struct
   open Transl
   open Regexp
   open Info
 
-  type k = K.t
-  type label = K.label
-
-  module Clauses = struct
+  module Preclause = struct
     include Vector.Of_array(struct
         type a = Syntax.clause
         let array = Array.of_list E.entry.clauses
       end)
 
     let n = Vector.length vector
+
+    type t = n index
 
     let total =
       IndexSet.init_from_set (Vector.length vector) (fun index ->
@@ -51,10 +100,10 @@ struct
     type t = {
       (* State construction *)
       uid: int;
-      k: k;
-      transitions: (label * t lazy_t) list;
+      k: K.t;
+      transitions: (K.label * t lazy_t) list;
       accept: bool;
-      clause: Clauses.n index;
+      clause: Preclause.t;
       mutable mark: unit ref;
     }
 
@@ -111,10 +160,18 @@ struct
       (initial, (captures, !capture_def))
 
     let clauses =
-      Vector.mapi (process_clause ~capture:(Capture.gensym ())) Clauses.vector
+      Vector.mapi (process_clause ~capture:(Capture.gensym ())) Preclause.vector
   end
 
-  module LazyDFA(Stacks: STACKS with type lr1 := Lr1.n)() : sig
+  module Clause = struct
+    include Preclause
+
+    let captures clause =
+      let _, (cap, _) = Vector.get LazyNFA.clauses clause in
+      cap
+  end
+
+  module BigDFA : sig
     include CARDINAL
 
     type ('src, 'tgt) _mapping = ('tgt, 'src index * Capture.set) vector
@@ -131,16 +188,16 @@ struct
 
     type packed = Packed : 'n t -> packed [@@unboxed]
 
-    val determinize : ('a, LazyNFA.t) vector -> 'a t
+    (*val determinize : ('a, LazyNFA.t) vector -> 'a t*)
     val initial : n index
     val states : (n, packed) vector
-    val iter_transitions : 'a t -> (Lr1.set -> 'a mapping -> unit) -> unit
+    (*val iter_transitions : 'a t -> (Lr1.set -> 'a mapping -> unit) -> unit*)
     val iter_refined_transitions :
       'a t -> (Lr1.n indexset -> 'a mapping -> unit) -> unit
-    val liveness : 'm t -> ('m, Capture.set) vector
+    (*val liveness : 'm t -> ('m, Capture.set) vector
     val empty_registers : 'a Vector.packed
-    val registers : (n, (Capture.n, int) indexmap Vector.packed) vector
-    val get_registers : 'm t -> ('m, (Capture.n, int) indexmap) vector
+      val registers : (n, (Capture.n, int) indexmap Vector.packed) vector*)
+    val get_registers : 'm t -> ('m, Register.t Capture.map) vector
     val register_count : int
   end =
   struct
@@ -159,7 +216,7 @@ struct
               when assert (clause <= th.clause); th.clause = clause -> false
             | _ ->
               if th.accept then (
-                if IndexSet.mem th.clause Clauses.total
+                if IndexSet.mem th.clause Clause.total
                 then last_accepted := `Total th.clause
                 else last_accepted := `Some th.clause
               );
@@ -377,7 +434,8 @@ struct
 
     let empty_registers = Vector.Packed Vector.empty
 
-    let registers = Vector.make (Vector.length states) empty_registers
+    let registers : (n, Register.t Capture.map Vector.packed) vector =
+      Vector.make (Vector.length states) empty_registers
 
     let get_registers (type m) (st : m t) : (m, _) vector =
       let Vector.Packed regs = Vector.get registers st.index in
@@ -385,7 +443,7 @@ struct
       regs
 
     let () =
-      let allocate_successor registers allocated mapping target =
+      let allocate_successor (registers : (_, Register.t Capture.map) vector) allocated mapping target =
         let live = liveness target in
         let in_use = ref (
             Vector.fold_right
@@ -401,13 +459,13 @@ struct
           IndexSet.fold (fun cap allocated ->
               let index, in_use' = IntSet.allocate !in_use in
               in_use := in_use';
-              IndexMap.add cap index allocated
+              IndexMap.add cap (Register.of_int index) allocated
             ) to_allocate allocated
         end mapping
       in
       let init (Packed src) =
         let regs = get_registers src in
-        let allocated = Vector.map (fun x -> IndexMap.fold (fun _ -> IntSet.add) x IntSet.empty) regs in
+        let allocated = Vector.map (fun x -> IndexMap.fold (fun _ reg map -> IntSet.add (Index.to_int reg) map) x IntSet.empty) regs in
         iter_transitions src @@ fun _ (Mapping (mapping, target)) ->
         if Vector.get registers target.index == empty_registers then
           let regs' = allocate_successor regs allocated mapping target in
@@ -427,70 +485,38 @@ struct
           Vector.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
         in
         max_live := max !max_live max_live';
-        max_index := Vector.fold_right (IndexMap.fold (fun _ -> max)) regs !max_index
+        Vector.iter (IndexMap.iter (fun _ reg ->
+            max_index := max !max_index (Index.to_int reg))) regs;
       in
       Vector.iter check_state states;
       Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n" !max_live !max_index;
       !max_index + 1
   end
 
-  module DFA = LazyDFA(Stacks)()
+  module Label = struct
+    type t = {
+      filter: Lr1.set;
+      captures: (Capture.n, Register.n index) indexmap;
+      clear: Register.set;
+      moves: Register.t Register.map;
+    }
 
-  let () =
-    if false then
-      let rstate = ref (Vector.get DFA.states DFA.initial) in
-      let rec loop () =
-        let DFA.Packed state = !rstate in
-        let group = state.group in
-        Vector.iter (fun nfa ->
-            Format.eprintf "- clause %d\n%!%a\n%!"
-              (Index.to_int nfa.LazyNFA.clause)
-              Cmon.format (K.cmon nfa.LazyNFA.k)
-          ) group;
-        Printf.eprintf "state %d\n> %!" (Index.to_int state.index);
-        let line = input_line stdin in
-        let lr1 = Index.of_int Lr1.n (int_of_string line) in
-        Printf.eprintf "input: %s\n" (Lr1.to_string lr1);
-        (*let red = Vector.get Regexp.Redgraph.initial lr1 in
-          Printf.eprintf "no transition (but %d inner and %d outer reductions)\n"
-          (List.length red.inner)
-          (List.length (List.filter (fun x -> IndexSet.mem lr1 (List.hd x.Regexp.Redgraph.candidates).filter) red.outer));*)
-        let target = ref None in
-        let check_transition filter (DFA.Mapping (_, target')) =
-          if IndexSet.mem lr1 filter then
-            target := Some (DFA.Packed target')
-        in
-        DFA.iter_refined_transitions state check_transition;
-        begin match !target with
-          | None -> Printf.eprintf "no transition\n"
-          | Some target -> rstate := target
-        end;
-        loop ()
-      in
-      loop ()
+    let compare t1 t2 =
+      let c = IndexSet.compare t1.filter t2.filter in
+      if c <> 0 then c else
+        let c = IndexMap.compare compare_index t1.captures t2.captures in
+        if c <> 0 then c else
+          let c = IndexMap.compare compare_index t1.moves t2.moves in
+          if c <> 0 then c else
+            let c = IndexSet.compare t1.clear t1.clear in
+            c
+
+    let register_count = BigDFA.register_count
+  end
 
   module RunDFA = struct
-    type states = DFA.n
-    let states = DFA.n
-
-    module Label = struct
-      type t = {
-        filter: Lr1.set;
-        captures: (Capture.n, int) indexmap;
-        clear: IntSet.t;
-        moves: int IntMap.t;
-      }
-
-      let compare t1 t2 =
-        let c = IndexSet.compare t1.filter t2.filter in
-        if c <> 0 then c else
-          let c = IndexMap.compare Int.compare t1.captures t2.captures in
-          if c <> 0 then c else
-            let c = IntMap.compare Int.compare t1.moves t2.moves in
-            if c <> 0 then c else
-              let c = IntSet.compare t1.clear t1.clear in
-              c
-    end
+    type states = BigDFA.n
+    let states = BigDFA.n
 
     let partial_captures = ref IndexSet.empty
 
@@ -507,14 +533,14 @@ struct
       let all = get_generator ()
 
       let () =
-        let process_state (DFA.Packed source) =
-          let src_regs = DFA.get_registers source in
-          DFA.iter_refined_transitions source @@
-          fun filter (DFA.Mapping (mapping, target)) ->
-          let tgt_regs = DFA.get_registers target in
+        let process_state (BigDFA.Packed source) =
+          let src_regs = BigDFA.get_registers source in
+          BigDFA.iter_refined_transitions source @@
+          fun filter (BigDFA.Mapping (mapping, target)) ->
+          let tgt_regs = BigDFA.get_registers target in
           let captures = ref IndexMap.empty in
-          let moves = ref IntMap.empty in
-          let clear = ref IntSet.empty in
+          let moves = ref IndexMap.empty in
+          let clear = ref IndexSet.empty in
           let process_mapping (src_i, captured) tgt_bank =
             let src_bank = Vector.get src_regs src_i in
             IndexMap.iter (fun capture tgt_reg ->
@@ -524,10 +550,10 @@ struct
                   match IndexMap.find_opt capture src_bank with
                   | Some src_reg ->
                     if src_reg <> tgt_reg then
-                      moves := IntMap.add src_reg tgt_reg !moves
+                      moves := IndexMap.add src_reg tgt_reg !moves
                   | None ->
                     partial_captures := IndexSet.add capture !partial_captures;
-                    clear := IntSet.add tgt_reg !clear
+                    clear := IndexSet.add tgt_reg !clear
               ) tgt_bank
           in
           Vector.iter2 process_mapping mapping tgt_regs;
@@ -535,7 +561,7 @@ struct
           let label = {Label.filter; captures; moves; clear} in
           ignore (Gen.add all {source = source.index; target = target.index; label})
         in
-        Vector.iter process_state DFA.states
+        Vector.iter process_state BigDFA.states
 
       let all = Gen.freeze all
     end
@@ -545,7 +571,7 @@ struct
 
     let partial_captures =
       let acc = !partial_captures in
-      Vector.fold_left begin fun acc (DFA.Packed st) ->
+      Vector.fold_left begin fun acc (BigDFA.Packed st) ->
         Vector.fold_left2 begin fun acc (nfa : LazyNFA.t) regs ->
           if nfa.accept then
             let _, (cap, _) = Vector.get LazyNFA.clauses nfa.clause in
@@ -555,39 +581,78 @@ struct
               else IndexSet.add var acc
             end cap acc
           else acc
-        end acc st.group (DFA.get_registers st)
-      end acc DFA.states
+        end acc st.group (BigDFA.get_registers st)
+      end acc BigDFA.states
 
     let label i = (Vector.get Transition.all i).label
     let source i = (Vector.get Transition.all i).source
     let target i = (Vector.get Transition.all i).target
 
-    let initials f = f DFA.initial
+    let initials f = f BigDFA.initial
     let finals f =
-      Vector.iter (fun (DFA.Packed st) ->
+      Vector.iter (fun (BigDFA.Packed st) ->
           let is_final acc nfa = acc || nfa.LazyNFA.accept in
           if Vector.fold_left is_final false st.group then
             f st.index
-        ) DFA.states
+        ) BigDFA.states
 
     let refinements refine =
       (* Refine states by accepted actions *)
       let acc = ref [] in
-      Vector.iter (fun (DFA.Packed st) ->
+      Vector.iter (fun (BigDFA.Packed st) ->
           let add_final acc nfa =
             if nfa.LazyNFA.accept then IndexSet.add nfa.LazyNFA.clause acc else acc
           in
           let accepted = Vector.fold_left add_final IndexSet.empty st.group in
           if not (IndexSet.is_empty accepted) then
             push acc (accepted, st.index)
-        ) DFA.states;
+        ) BigDFA.states;
       Misc.group_by !acc
         ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
         ~group:(fun (_, st) sts -> st :: List.map snd sts)
       |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
   end
 
-  module MinDFA = Valmari.Minimize (RunDFA.Label) (RunDFA)
+  module MinDFA = struct
+    include Valmari.Minimize (Label) (RunDFA)
+
+    let initial = initials.(0)
+
+    let outgoing_transitions = Vector.make states IndexSet.empty
+    let unhandled = Vector.make states IndexSet.empty
+
+    let () =
+      (* Initialize with all reachable labels *)
+      Vector.iter begin fun (BigDFA.Packed source) ->
+        match transport_state source.index with
+        | None -> ()
+        | Some index ->
+          vector_set_union unhandled index source.visited_labels
+      end BigDFA.states;
+      (* Remove the ones for which transitions exist *)
+      Index.rev_iter transitions begin fun tr ->
+        let index = source tr in
+        let label = label tr in
+        let visited = Vector.get unhandled index in
+        let visited = IndexSet.diff visited label.filter in
+        Vector.set unhandled index visited;
+        vector_set_add outgoing_transitions index tr;
+      end
+
+    let outgoing_transitions = Vector.get outgoing_transitions
+    let unhandled = Vector.get unhandled
+
+    let matches state =
+      let BigDFA.Packed source =
+        Vector.get BigDFA.states (represent_state state)
+      in
+      let add_accepting {LazyNFA. accept; clause; _} regs acc =
+        if not accept then acc else
+          (clause, regs) :: acc
+      in
+      let registers = BigDFA.get_registers source in
+      Vector.fold_right2 add_accepting source.group registers []
+  end
 
   let captures_lr1 =
     let map = ref IndexMap.empty in
@@ -728,7 +793,7 @@ struct
       E.entry.name (String.concat " " E.entry.args)
       E.parser_name E.parser_name;
     let output_clause index (_nfa, (_captures, captures_def)) =
-      let clause = Vector.get Clauses.vector index in
+      let clause = Vector.get Clause.vector index in
       let roffset = ref 0 in
       let lookahead_constraint = match clause.Syntax.lookaheads with
         | [] -> None

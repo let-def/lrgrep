@@ -1,6 +1,4 @@
 open Utils
-open Misc
-
 module StringSet = Set.Make(String)
 
 (* Command-line parsing. *)
@@ -110,7 +108,6 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 module Info = Mid.Info.Make(Grammar)
 module Regexp = Mid.Regexp.Make(Info)()
 module Transl = Mid.Transl.Make(Regexp)
-
 module Lrc = Mid.Lrc.Make(Info)()
 
 module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
@@ -131,70 +128,50 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
   let open Mid.Automata.Entry
       (Transl)
-      (Lrc.Lrce)
-      (*(Lrc.Lrc_NFA)*)
-      (*(Lr1_stacks)*)
+      (*Lrc.Lrce Lrc.Lrc_NFA Lr1_stacks*)
+      (Lr1_stacks)
       (struct
         let parser_name = parser_name
         let entry = entry
       end)
       ()
   in
-  Printf.eprintf "DFA states: %d\n" (cardinal (Vector.length DFA.states));
+  Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
   Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-  let transitions = Vector.make MinDFA.states IndexSet.empty in
-  let halting = Vector.make MinDFA.states IndexSet.empty in
-  Vector.iter (fun (DFA.Packed source) ->
-      match MinDFA.transport_state source.index with
-      | None -> ()
-      | Some index ->
-        Vector.set halting index
-          (IndexSet.union source.visited_labels (Vector.get halting index))
-    ) DFA.states;
-  Index.rev_iter MinDFA.transitions begin fun tr ->
-    let index = MinDFA.source tr in
-    let label = MinDFA.label tr in
-    let visited = Vector.get halting index in
-    let visited = IndexSet.diff visited label.filter in
-    Vector.set halting index visited;
-    vector_set_add transitions index tr;
-  end;
   let get_state_for_compaction index =
-    let DFA.Packed source =
-      Vector.get DFA.states (MinDFA.represent_state index)
-    in
-    let registers = DFA.get_registers source in
-    let add_accepting {LazyNFA. accept; clause; _} regs acc =
-      if not accept then acc else
-        let _, (cap, _) = Vector.get LazyNFA.clauses clause in
-        let registers =
-          let add_reg cap acc = IndexMap.find_opt cap regs :: acc in
-          Array.of_list (List.rev (IndexSet.fold add_reg cap []))
+    let add_match (clause, regs) =
+      let cap = Clause.captures clause in
+      let registers =
+        let add_reg cap acc =
+          let reg = IndexMap.find_opt cap regs in
+          (reg : _ index option :> int option) :: acc
         in
-        (clause, registers) :: acc
+        Array.of_list (List.rev (IndexSet.fold add_reg cap []))
+      in
+      (clause, registers)
     in
     let add_transition tr acc =
-      let {RunDFA.Label. filter; captures; clear; moves} = MinDFA.label tr in
+      let {Label. filter; captures; clear; moves} = MinDFA.label tr in
       let actions = {
         Lrgrep_support.
-        move = IntMap.bindings moves;
+        move = IndexMap.bindings moves;
         store = List.map snd (IndexMap.bindings captures);
-        clear = IntSet.elements clear;
+        clear = IndexSet.elements clear;
         target = MinDFA.target tr;
       } in
       (filter, actions) :: acc
     in
+    let transitions = MinDFA.outgoing_transitions index in
     {
       Lrgrep_support.
-      accept = Vector.fold_right2 add_accepting source.group registers [];
-      halting = Vector.get halting index;
-      transitions =
-        IndexSet.fold add_transition (Vector.get transitions index) [];
+      accept = List.map add_match (MinDFA.matches index);
+      halting = MinDFA.unhandled index;
+      transitions = IndexSet.fold add_transition transitions [];
     }
   in
-  DFA.register_count,
-  Index.to_int MinDFA.initials.(0),
+  Label.register_count,
+  Index.to_int MinDFA.initial,
   let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
   Option.iter output_code oc;
   program

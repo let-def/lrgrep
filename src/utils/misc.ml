@@ -1,5 +1,7 @@
 open Fix.Indexing
 
+module Positive = Const(struct let cardinal = max_int end)
+
 let compare_ignore _ _ = 0
 
 let compare_pair fst snd (x1, y1) (x2, y2) =
@@ -110,15 +112,15 @@ let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
   IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
 
-(** [vector_set_add v i elt] adds element [elt] to [i]'th element of [v],
+(** [vector_set_add v i elt] adds element [elt] to the [i]'th set of [v],
     a vector of sets. *)
 let vector_set_add vec index value =
   Vector.set vec index (IndexSet.add value (Vector.get vec index))
 
-(** [vector_iter v f] applies [f] to all elements of vector [v],
-    in increasing order of indices *)
-let vector_iter v f =
-  Index.iter (Vector.length v) (fun i -> f (Vector.get v i ))
+(** [vector_set_union v i set] adds elements of [set] to the [i]'th set of [v],
+    a vector of sets. *)
+let vector_set_union vec index value =
+  Vector.set vec index (IndexSet.union value (Vector.get vec index))
 
 (** [tabulate_finset n f] tabulates function [f] over all indices in the
     finite set of cardinal [n] *)

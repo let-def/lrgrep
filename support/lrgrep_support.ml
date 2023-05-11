@@ -1,7 +1,16 @@
 open Utils
+open Misc
 open Fix.Indexing
 
 module RT = Lrgrep_runtime
+
+module Register = struct
+  include Positive
+  type t = n index
+  type set = n indexset
+  type 'a map = (n, 'a) indexmap
+  let of_int = Index.of_int n
+end
 
 module Sparse_packer : sig
   type 'a t
@@ -202,9 +211,9 @@ end
     - a possibly empty list of registers to save the current state to
     - a target state (index of the state in the dfa array) *)
 type 'state transition_action = {
-  move: (RT.register * RT.register) list;
-  store: RT.register list;
-  clear: RT.register list;
+  move: (Register.t * Register.t) list;
+  store: Register.t list;
+  clear: Register.t list;
   target: 'state index;
 }
 
@@ -222,19 +231,14 @@ type ('state, 'clause, 'lr1) state = {
 
 type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
 
-let compare_ints (i1, j1) (i2, j2) =
-  let c = Int.compare i1 i2 in
-  if c <> 0 then c else
-    Int.compare j1 j2
-
 let compare_transition_action t1 t2 =
   let c = Int.compare (Index.to_int t1.target) (Index.to_int t2.target) in
   if c <> 0 then c else
-    let c = List.compare compare_ints t1.move t2.move in
+    let c = List.compare (compare_pair compare_index compare_index)  t1.move t2.move in
     if c <> 0 then c else
-      let c = List.compare Int.compare t1.store t2.store in
+      let c = List.compare compare_index t1.store t2.store in
       if c <> 0 then c else
-        let c = List.compare Int.compare t1.clear t2.clear in
+        let c = List.compare compare_index t1.clear t2.clear in
         c
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
@@ -261,9 +265,9 @@ let compact (type dfa clause lr1)
     | [] -> ()
   in
   let emit_action act =
-    emit_moves act.move;
-    List.iter (fun i -> Code_emitter.emit code (Store i)) act.store;
-    List.iter (fun i -> Code_emitter.emit code (Clear i)) act.clear;
+    emit_moves (act.move : (_ index * _ index) list :> (int * int) list);
+    List.iter (fun i -> Code_emitter.emit code (Store (i : _ index :> int))) act.store;
+    List.iter (fun i -> Code_emitter.emit code (Clear (i : _ index :> int))) act.clear;
     Code_emitter.emit_yield_reloc code (Vector.get pcs act.target);
   in
   let goto_action action = (*function

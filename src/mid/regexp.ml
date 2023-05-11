@@ -3,17 +3,17 @@ open Fix.Indexing
 open Utils
 open Misc
 
-module Positive = Const(struct let cardinal = max_int end)
-
 module Capture : sig
   type n
   type t = n index
   type set = n indexset
+  type 'a map = (n, 'a) indexmap
   val gensym : unit -> unit -> n index
 end = struct
   include Positive
   type t = n index
   type set = n indexset
+  type 'a map = (n, 'a) indexmap
   let gensym () =
     let r = ref (-1) in
     fun () -> incr r; Index.of_int n !r
