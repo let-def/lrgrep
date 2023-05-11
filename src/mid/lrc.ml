@@ -143,11 +143,11 @@ struct
                   reachable := IndexSet.add (index_shift source_lrc pre) !reachable
               done;
               let reachable = !reachable in
-              Array.iter begin fun index ->
-                let lrc_index = index_shift first_lrc index in
-                Vector.set predecessors lrc_index
-                  (IndexSet.union reachable (Vector.get predecessors lrc_index))
-              end coercion.forward.(post)
+              Array.iter
+                (fun index ->
+                   vector_set_union predecessors
+                     (index_shift first_lrc index) reachable)
+                coercion.forward.(post)
             done
           in
           List.iter process_transition (Transition.predecessors lr1)

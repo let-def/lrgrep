@@ -1,5 +1,15 @@
 open Utils
+open Misc
 open Fix.Indexing
+
+module Register : sig
+  type n
+  val n : n cardinal
+  type t = n index
+  type set = n indexset
+  type 'a map = (n, 'a) indexmap
+  val of_int : int -> t
+end
 
 module RT = Lrgrep_runtime
 
@@ -54,9 +64,9 @@ end
     - a possibly empty list of registers to save the current state to
     - a target state (index of the state in the dfa array) *)
 type 'state transition_action = {
-  move: (RT.register * RT.register) list;
-  store: RT.register list;
-  clear: RT.register list;
+  move: (Register.t * Register.t) list;
+  store: Register.t list;
+  clear: Register.t list;
   target: 'state index;
 }
 
