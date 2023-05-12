@@ -129,7 +129,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Mid.Automata.Entry
       (Transl)
       (*Lrc.Lrce Lrc.Lrc_NFA Lr1_stacks*)
-      (Lr1_stacks)
+      (Lrc.Lrce)
       (struct
         let parser_name = parser_name
         let entry = entry
@@ -139,6 +139,15 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
   Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
+  let unhandled = ref 0 in
+  Index.iter MinDFA.states (fun state ->
+      if not (IndexSet.is_empty (MinDFA.unhandled state)) then
+        incr unhandled;
+    );
+  Printf.eprintf "states with unhandled transitions: %d\n%!" !unhandled;
+  (*let module Coverage =
+    Mid.Coverage.Make(Info)(MinDFA)(Lrc.Lrce)
+  in*)
   let get_state_for_compaction index =
     let add_match (clause, regs) =
       let cap = Clause.captures clause in
@@ -162,7 +171,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       } in
       (filter, actions) :: acc
     in
-    let transitions = MinDFA.outgoing_transitions index in
+    let transitions = MinDFA.outgoing index in
     {
       Lrgrep_support.
       accept = List.map add_match (MinDFA.matches index);
