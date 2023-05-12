@@ -65,7 +65,7 @@ sig
        They should be rejected at runtime. *)
     val unhandled : states index -> Lr1.set
 
-    val outgoing_transitions : states index -> transitions indexset
+    val outgoing : states index -> transitions indexset
     val matches : states index -> (Clause.t * Register.t Capture.map) list
   end
 
@@ -618,7 +618,7 @@ struct
 
     let initial = initials.(0)
 
-    let outgoing_transitions = Vector.make states IndexSet.empty
+    let outgoing = Vector.make states IndexSet.empty
     let unhandled = Vector.make states IndexSet.empty
 
     let () =
@@ -636,10 +636,10 @@ struct
         let visited = Vector.get unhandled index in
         let visited = IndexSet.diff visited label.filter in
         Vector.set unhandled index visited;
-        vector_set_add outgoing_transitions index tr;
+        vector_set_add outgoing index tr;
       end
 
-    let outgoing_transitions = Vector.get outgoing_transitions
+    let outgoing = Vector.get outgoing
     let unhandled = Vector.get unhandled
 
     let matches state =

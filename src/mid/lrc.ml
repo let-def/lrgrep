@@ -25,6 +25,24 @@ let map_from_set xs f =
   IndexSet.fold (fun x acc -> IndexMap.add x (f x) acc)
     xs IndexMap.empty
 
+module type Failure_NFA = sig
+  type lr1
+  type terminal
+  type n
+  val n : n cardinal
+
+  val initials : n indexset
+  val label : n index -> lr1 indexset
+  val next : n index -> n indexset
+  val fail : n index -> terminal indexset option
+  (* [Some empty]    : the current state doesn't fail (but the prefix or
+                       suffix may fail)
+     [Some nonempty] : the current state fails for any of these lookaheads
+     [None]          : the current suffix already failed, try again with a
+                       shorter suffix
+  *)
+end
+
 module Make (I : Info.S)() =
 struct
   open I
@@ -443,25 +461,18 @@ struct
 
     let nodes = get_generator ()
 
-    (* No benefits in caching imports
-       let imported = Vector.make Transition.goto IndexSet.Map.empty *)
     let imported_parts = Vector.make Transition.goto IndexSet.Map.empty
 
     let rec import_goto goto la =
-      (*match IndexSet.Map.find_opt la (Vector.get imported goto) with
-      | Some nodes -> nodes
-        | None ->*)
-        let node = Vector.get Redgraph.goto_transitions goto in
-        let nodes =
-          IndexSet.Set.fold (fun la' acc ->
-              assert (IndexSet.disjoint la' la || IndexSet.subset la' la);
-              if not (IndexSet.quick_subset la' la) then acc else
-                IndexSet.add (import_part goto la') acc
-            ) node.partition IndexSet.empty
-        in
-       (* Vector.set imported goto
-          (IndexSet.Map.add la nodes (Vector.get imported goto));*)
-        nodes
+      let node = Vector.get Redgraph.goto_transitions goto in
+      let nodes =
+        IndexSet.Set.fold (fun la' acc ->
+            assert (IndexSet.disjoint la' la || IndexSet.subset la' la);
+            if not (IndexSet.quick_subset la' la) then acc else
+              IndexSet.add (import_part goto la') acc
+          ) node.partition IndexSet.empty
+      in
+      nodes
 
     and import_part (goto : Transition.goto index) la =
       let parts = Vector.get imported_parts goto in
@@ -512,26 +523,18 @@ struct
           IndexSet.empty
         else
           let reservation = IndexBuffer.Gen.reserve nodes in
-          let node = {
-            index = IndexBuffer.Gen.index reservation;
-            label = None;
-            next = targets;
-            fail = IndexSet.empty;
-          } in
+          let index = IndexBuffer.Gen.index reservation in
+          let node = {index; label = None; next = targets; fail = IndexSet.empty} in
           IndexBuffer.Gen.commit nodes reservation node;
-          IndexSet.singleton node.index
+          IndexSet.singleton index
 
     let import_initial lr1 ((node : Redgraph.node), trs) =
       let reservation = IndexBuffer.Gen.reserve nodes in
       let next = import_transitions Terminal.all (Lr1.predecessors lr1) 1 trs in
-      let node = {
-        index = IndexBuffer.Gen.index reservation;
-        label = Some lr1;
-        next;
-        fail = node.imm_fail;
-      } in
+      let index = IndexBuffer.Gen.index reservation in
+      let node = {index; label = Some lr1; next; fail = node.imm_fail} in
       IndexBuffer.Gen.commit nodes reservation node;
-      node.index
+      index
 
     let initials =
       IndexMap.fold
@@ -667,26 +670,16 @@ struct
     let lrcs  = Vector.get lrcs
   end
 
-  module type Failure_NFA = sig
-    type n
-    val n : n cardinal
-
-    val initials : n indexset
-    val label : n index -> Lr1.set
-    val next : n index -> n indexset
-    val lookaheads : n index -> Terminal.set option
-    (* [Some empty]    : the current suffix hasn't failed yet
-       [Some nonempty] : the current suffix fail for any of these lookaheads
-       [None]          : the current suffix already failed, try again with a
-                         shorter suffix *)
-  end
+  module type Failure_NFA =
+    Failure_NFA with type lr1 := Lr1.n
+                 and type terminal := Terminal.n
 
   module Lrc_NFA : Failure_NFA with type n = Lrc.n = struct
     include Lrc
     let initials = indexset_bind Lr1.idle Lrc.lrcs_of_lr1
     let label i = IndexSet.singleton (lr1_of_lrc i)
     let next = predecessors
-    let lookaheads _ = None
+    let fail _ = None
   end
 
   module Lrce : Failure_NFA = struct
@@ -695,16 +688,15 @@ struct
     let initials = IndexSet.map inj_r Redgraph_lrc_la.initials
 
     let rednext =
-      Vector.init Redgraph_lrc_la.n
-        (fun i ->
-           let base = IndexSet.map inj_r (Redgraph_lrc_la.next i) in
-           if IndexSet.is_empty (Redgraph_lrc_la.fail i) then
-             base
-           else
-             IndexSet.union base
-               (IndexSet.map inj_l
-                  (indexset_bind (Redgraph_lrc_la.lrcs i) Lrc_NFA.next))
-        )
+      Vector.init Redgraph_lrc_la.n begin fun i ->
+        let base = IndexSet.map inj_r (Redgraph_lrc_la.next i) in
+        if IndexSet.is_empty (Redgraph_lrc_la.fail i) then
+          base
+        else
+          IndexSet.union base
+            (IndexSet.map inj_l
+               (indexset_bind (Redgraph_lrc_la.lrcs i) Lrc_NFA.next))
+      end
 
     let next n =
       match prj n with
@@ -716,7 +708,7 @@ struct
       | L lrc -> Lrc_NFA.label lrc
       | R red -> Redgraph_lrc_la.label red
 
-    let lookaheads n =
+    let fail n =
       match prj n with
       | L _ -> None
       | R red -> Some (Redgraph_lrc_la.fail red)
