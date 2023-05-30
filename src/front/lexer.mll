@@ -133,7 +133,7 @@ let backslash_escapes =
   ['\\' '\'' '"' 'n' 't' 'b' 'r' ' ']
 
 let lowercase = ['a'-'z' '_']
-let ident = identstart identbody*
+let ident = identstart identbody* '\''?
 let extattrident = ident ('.' ident)*
 let blank = [' ' '\009' '\012']
 
@@ -166,6 +166,8 @@ rule main = parse
     | "partial" -> PARTIAL
     | s -> IDENT s
   }
+| '\\' (ident as s) (* Workaround reserved names *)
+  { IDENT s }
 | '{' [' ' '\009']* '.' [' ' '\009']* '}' (* unreachable clause *)
   { UNREACHABLE }
 | '{'
