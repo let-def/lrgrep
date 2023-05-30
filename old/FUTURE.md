@@ -1,5 +1,3 @@
-
-
 # Future work
 
 ---
@@ -19,7 +17,7 @@ Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
 
 ## Features
 
-- [ ] Allow **matching on lookahead** tokens too
+- [x] Allow **matching on lookahead** tokens too
   This can be worked-around using partial matching with an extra argument, but we lose the benefits of coverage checks
 - [ ] Report **unused/unreachable patterns**
 
@@ -33,8 +31,11 @@ Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
 - [x] Finer-grained **typing of captures**. Right now, captures are always represented by an optional stack element.
   - We can statically tell if the capture is total or not, if total we can get rid of the option.
   - A stack element is very generic, we can often recover the type of the associated semantic value.
-- [ ] Captures sometime only care about locations... A dedicated syntax would be more convenient.
-- [ ] **Interaction between reduction and capture**. We could capture an approximate location if a capture occur within a reduction. A bit far fetched, but it could even be possible to compute the actual reduction to get the semantic value.
+- [x] Captures sometime only care about locations... A dedicated syntax would be more convenient.
+  An atom capture retrieves both location and semantic value, though it is safe to ignore it.
+  A reduction capture keeps only the location.
+  In both cases, use the dedicated `$startloc(x)` / `$endloc(x)` syntax to refer to location.
+- [x] **Interaction between reduction and capture**. We could capture an approximate location if a capture occur within a reduction. A bit far fetched, but it could even be possible to compute the actual reduction to get the semantic value.
 
 ## Correction
 
@@ -44,12 +45,13 @@ Or maybe I should ask for MenhirSdk interface to be a bit more flexible.
 
 ## Performance
 
-- [ ] More **non-determinism**, for Automaton generation and for reduction simulation
+- [x] More **non-determinism**, for Automaton generation and for reduction simulation
   - Keeping an NFA longer won't increase the performance of the generator itself, but will help with coverage analysis.
   - [x] For reduction simulation, one of the main trick to increase performance. (Already mostly NFA-based)
-  - [ ] Maybe we don't need DFA at all, runtime matching performance might be sufficient with an NFA? We can experiment if DFA size becomes problematic.
-  - [ ] Keeping an NFA will help implementing the **correct capture semantics**. (Fixed in PR#2, however I maintain that NFA will be more helpful!)
-- [ ] The automaton we produce is not optimized at the moment. Some dead branches could be cleaned up, and a minimization algorithm will help (an extension of Valmari to "partial transition functions", or some heuristics applied either on the NFA or the DFA)
+  - [x] Maybe we don't need DFA at all, runtime matching performance might be sufficient with an NFA? We can experiment if DFA size becomes problematic.
+  - [x] Keeping an NFA will help implementing the **correct capture semantics**. (Fixed in PR#2, however I maintain that NFA will be more helpful!)
+  Lrgrep-v3 implements correct capture semantics, and what I found to be the right amount of determinism for both performance and ease of implementation.
+- [x] The automaton we produce is not optimized at the moment. Some dead branches could be cleaned up, and a minimization algorithm will help (an extension of Valmari to "partial transition functions", or some heuristics applied either on the NFA or the DFA)
 
 ### Datastructures
 

@@ -44,6 +44,7 @@ Two tools are provided to help working with error messages:
 
 - the interpreter, invoked with `dune exec ocaml/interpreter.exe <input-file.ml>` , which gives detailed information about the state of the parser at the point of failure
 - coverage checks using `dune exec src/main.exe -- -coverage ocaml/parse_errors.mlyl -g ./_build/default/ocaml/parser_raw.cmly`, which will print pieces of input which are not handled by any rule
+  **coverage check** is disabled at the moment.
 
 ## Simple case, starting from an sample input
 
