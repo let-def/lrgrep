@@ -205,7 +205,25 @@ let () = (
     );*)
   let oc = Option.map open_out_bin !output_name in
 
-  oc |> Option.iter (fun oc -> output_string oc (snd lexer_definition.header));
+  oc |> Option.iter (fun oc ->
+      begin match Grammar.Grammar.parameters with
+        | [] -> ()
+        | parameters ->
+          output_string oc "module Make";
+          List.iter (Printf.fprintf oc "(%s)") parameters;
+          Printf.fprintf oc "(%s : module type of %s.Make" parser_name parser_name;
+          let extract_name name =
+            match String.index_opt name ':' with
+            | None -> name
+            | Some index -> String.sub name 0 index
+          in
+          List.iter
+            (fun param -> Printf.fprintf oc "(%s)" (extract_name param))
+            parameters;
+          output_string oc ") = struct\n";
+      end;
+      output_string oc (snd lexer_definition.header)
+    );
 
   List.iter (fun entry ->
       let program = process_entry oc entry in
@@ -215,6 +233,10 @@ let () = (
   oc |> Option.iter (fun oc ->
       output_char oc '\n';
       output_string oc (snd lexer_definition.trailer);
+      begin match Grammar.Grammar.parameters with
+        | [] -> ()
+        | _ -> output_string oc "\nend\n"
+      end;
     );
 
   Option.iter close_out oc;
