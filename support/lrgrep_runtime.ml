@@ -58,12 +58,12 @@ let program_step (t : program) (r : program_counter ref)
     Yield (get_int t ~offset:(pc + 1) 3)
   | '\x05' ->
     let arity = String.get_uint8 t (pc + 1) in
-    r := !r + 3 + arity;
+    r := !r + 4 + arity;
     let registers = Array.init arity (fun i ->
-        let x = String.get_uint8 t (pc + 3 + i) in
+        let x = String.get_uint8 t (pc + 4 + i) in
         if x = 255 then None else Some x
       ) in
-    Accept (String.get_uint8 t (pc + 2), registers)
+    Accept (String.get_uint16_be t (pc + 2), registers)
   | '\x06' ->
     r := !r + 3;
     Match (String.get_uint16_be t (pc + 1))

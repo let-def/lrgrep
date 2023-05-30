@@ -175,9 +175,11 @@ end = struct
       Buffer.add_uint16_be t.buffer (pos land 0xFFFF);
       Buffer.add_uint8 t.buffer (pos lsr 16)
     | Accept (clause, registers) ->
+      assert (Array.length registers <= 0xFF);
+      assert (clause <= 0xFFFF);
       Buffer.add_char t.buffer '\x05';
       Buffer.add_uint8 t.buffer (Array.length registers);
-      Buffer.add_uint8 t.buffer clause;
+      Buffer.add_uint16_be t.buffer clause;
       Array.iter (function
           | None -> Buffer.add_uint8 t.buffer 0xFF;
           | Some i ->
