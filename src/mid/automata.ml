@@ -489,7 +489,8 @@ struct
             max_index := max !max_index (Index.to_int reg))) regs;
       in
       Vector.iter check_state states;
-      Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n" !max_live !max_index;
+      Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n"
+        !max_live (!max_index + 1);
       !max_index + 1
   end
 

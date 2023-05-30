@@ -260,10 +260,10 @@ struct
         (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
         let re = transl ~for_reduction:true expr in
         let pattern, immediate = compile_reduce_expr re in
-        warn re.position
-          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
-          (IndexSet.cardinal immediate);
+        (*warn re.position
+            "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
+            (IndexSet.cardinal pattern) (cardinal Redgraph.state)
+            (IndexSet.cardinal immediate);*)
         let capture0, capture = match capture with
           | None -> IndexSet.empty, IndexSet.empty
           | Some name ->
