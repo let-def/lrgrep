@@ -61,6 +61,7 @@ module type S = sig
     val all : set
     val kind : t -> [`REGULAR | `START]
     val semantic_value : t -> string option
+    val nullable : t -> bool
   end
 
   module Symbol : sig
@@ -68,6 +69,7 @@ module type S = sig
                  and type r := Nonterminal.n
 
     type t = n index
+    type set = n indexset
 
     type desc =
       | T of Terminal.t
@@ -83,6 +85,8 @@ module type S = sig
 
     val name : ?mangled:bool -> t -> string
     val semantic_value : t -> string option
+
+    val all : set
   end
 
   module Production : sig
@@ -91,6 +95,7 @@ module type S = sig
     val rhs : t -> Symbol.t array
     val length : t -> int
     val kind : t -> [ `REGULAR | `START ]
+    val all : set
   end
 
   module Lr1 : sig
@@ -242,11 +247,14 @@ struct
     let kind i = Grammar.Nonterminal.kind (to_g i)
     let semantic_value i =
       Grammar.Nonterminal.typ (to_g i)
+    let nullable i =
+      Grammar.Nonterminal.nullable (to_g i)
   end
 
   module Symbol = struct
     include Sum(Terminal)(Nonterminal)
     type t = n index
+    type set = n indexset
 
     type desc =
       | T of Terminal.t
@@ -280,6 +288,8 @@ struct
     let semantic_value t = match prj t with
       | L t -> Some (Option.value (Terminal.semantic_value t) ~default:"unit")
       | R n -> Nonterminal.semantic_value n
+
+    let all = all n
   end
 
   module Production = struct
@@ -298,6 +308,8 @@ struct
     let length p = Array.length (rhs p)
 
     let kind p = Grammar.Production.kind (to_g p)
+
+    let all = all n
   end
 
   (** [Transitions] module, defined below, depends on the set of Lr1 states

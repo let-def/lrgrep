@@ -34,6 +34,11 @@ type symbol =
 
 type wild_symbol = symbol option
 
+type filter_symbol =
+  | Skip
+  | Find of wild_symbol
+  | Dot
+
 (** [regular_desc] describes the different cases of the regular expression
     syntax. *)
 
@@ -55,13 +60,7 @@ type regular_desc =
   (** [Reduce] represents the [!] operator *)
   | Concat of regular_expr list
   (** [Concat [e1; e2; ..]] is [e1; e2; ...] *)
-  | Filter of {
-      lhs: wild_symbol;
-      pre_anchored: bool;
-      prefix: wild_symbol list;
-      suffix: wild_symbol list;
-      post_anchored: bool;
-    }
+  | Filter of {lhs: wild_symbol; rhs: (filter_symbol * position) list}
 
 (** [regular_expr] adds position information to [regular_desc] for error
     reporting purposes. *)
@@ -153,6 +152,9 @@ let cmon_ocamlcode (location, code) =
 let cmon_position {line; col} =
   Cmon.(record ["line", int line; "col", int col])
 
+let cmon_positioned f =
+  Utils.Misc.cmon_pair f cmon_position
+
 let cmon_option f = function
   | None -> Cmon.constant "None"
   | Some x -> Cmon.constructor "Some" (f x)
@@ -169,6 +171,11 @@ let cmon_capture cap =
 
 let cmon_wild_symbol sym =
   cmon_option cmon_symbol sym
+
+let cmon_filter_symbol = function
+  | Skip -> Cmon.constant "Skip"
+  | Dot -> Cmon.constant "Dot"
+  | Find sym -> cmon_wild_symbol sym
 
 let cmon_quantifier_kind = function
   | Longest -> Cmon.constant "Longest"
@@ -192,13 +199,10 @@ let rec cmon_regular_term = function
       "expr", cmon_regular_expression expr;
       "policy", cmon_quantifier_kind policy;
     ]
-  | Filter {lhs; pre_anchored; prefix; suffix; post_anchored} ->
+  | Filter {lhs; rhs} ->
     Cmon.crecord "Filter" [
-      "lhs"           , cmon_wild_symbol lhs;
-      "pre_anchored"  , Cmon.bool pre_anchored;
-      "prefix"        , Cmon.list_map cmon_wild_symbol prefix;
-      "suffix"        , Cmon.list_map cmon_wild_symbol suffix;
-      "post_anchored" , Cmon.bool post_anchored;
+      "lhs", cmon_wild_symbol lhs;
+      "rhs", Cmon.list_map (cmon_positioned cmon_filter_symbol) rhs;
     ]
 
 and cmon_regular_expression re =
@@ -215,7 +219,7 @@ let cmon_clause_action = function
 let cmon_clause {pattern; lookaheads; action} =
   Cmon.record [
     "pattern", cmon_regular_expression pattern;
-    "lookaheads", Cmon.list_map (Utils.Misc.cmon_pair cmon_symbol cmon_position) lookaheads;
+    "lookaheads", Cmon.list_map (cmon_positioned cmon_symbol) lookaheads;
     "action", cmon_clause_action action;
   ]
 
