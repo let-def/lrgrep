@@ -78,12 +78,12 @@ case_action:
 | UNREACHABLE      { Unreachable }
 
 
-positioned_symbol:
-| symbol { ($1, make_position $startpos) }
+positioned(X):
+| X { ($1, make_position $startpos) }
 ;
 
 lookaheads:
-| loption(preceded("@", separated_nonempty_list("|", positioned_symbol))) { $1 }
+| loption(preceded("@", separated_nonempty_list("|", positioned(symbol)))) { $1 }
 ;
 
 symbol:
@@ -119,17 +119,15 @@ regterm:
 | regleaf "?"     { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
 ;
 
+filter_symbol:
+| "."         { Dot }
+| "..."       { Skip }
+| wild_symbol { Find $1 }
+;
+
 filter:
-| "/" ioption(terminated(symbol, ":"))
-      ioption("...") wild_symbol* "." wild_symbol* ioption("...")
-  { mk_re (Filter {
-      lhs = $2;
-      pre_anchored = Option.is_none $3;
-      prefix = $4;
-      suffix = $6;
-      post_anchored = Option.is_none $7;
-    }) $endpos
-  }
+| "/" ioption(terminated(symbol, ":")) positioned(filter_symbol)+
+  { mk_re (Filter {lhs = $2; rhs = $3}) $endpos }
 ;
 
 regseq_loop:
