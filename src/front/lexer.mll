@@ -194,13 +194,12 @@ rule main = parse
 | '?' { QUESTION }
 | '/' { SLASH }
 | '@' { AT }
-| '^' { HAT }
-| '$' { DOLLAR }
 | '(' { LPAREN }
 | ')' { RPAREN }
 | ':' { COLON }
 | ',' { COMMA }
 | ';' { SEMI }
+| "..." { ELLIPSIS }
 | '.' { DOT }
 | eof { EOF }
 | _
