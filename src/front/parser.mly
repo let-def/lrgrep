@@ -136,6 +136,7 @@ filter:
 regseq_loop:
 | regseq_loop filter      { $2 :: $1 }
 | regterm                 { [$1] }
+| filter                  { [$1] }
 | regseq_loop ";" regterm { $3 :: $1 }
 ;
 
