@@ -39,7 +39,7 @@ rule error_message = parse error
     | _ -> None
   }
 
-| LIDENT / label_declaration: mutable_flag _ . COLON @ EQUAL {
+| LIDENT / label_declaration: mutable_flag _ . COLON ... @ EQUAL {
     "Expecting ':' to declare the type of a record field, not '='"
   }
 
@@ -53,7 +53,7 @@ rule error_message = parse error
   }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
-| lp=LPAREN; [_* / . RPAREN]
+| lp=LPAREN; [_* / ... . RPAREN ...]
   { "Unclosed parenthesis at line "
     ^ str_line $startloc(lp)
     ^ ", character "
@@ -63,7 +63,7 @@ rule error_message = parse error
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
-| [_* / . LIDENT]
+| [_* / ... . LIDENT ...]
   partial { match Lexer_raw.as_keyword token with
     | None -> None
     | Some kw ->
@@ -71,12 +71,12 @@ rule error_message = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| [_*  / . UIDENT |  _* / . TYPE | _* / . REC]
+| [_*  / ... . UIDENT ... |  _* / ... . TYPE ... | _* / ... . REC ...]
   { "Expecting `type' or a module name beginning with an uppercase letter"
   }
 
 (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
-| [_* / . seq_expr] @ MODULE
+| [_* / ... . seq_expr ...] @ MODULE
   {  "`module' keyword cannot appear in an expression, \
        use `(module M)' to pack a first class-module \
        or `let module M = ... in ...' to define a local module"
@@ -89,7 +89,7 @@ rule error_message = parse error
      arrow types should be wrapped between parentheses"
   }
 
-| [_* / . IN]
+| [_* / ... . IN ...]
   { "Expecting `in'" }
 
 | outer=constr_longident; inner=constr_longident;

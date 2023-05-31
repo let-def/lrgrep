@@ -43,8 +43,7 @@ let mk_re desc pos = {desc; position = make_position pos}
        PARTIAL     "partial"
        SLASH       "/"
        AT          "@"
-       HAT         "^"
-       DOLLAR      "$"
+       ELLIPSIS    "..."
        EOF
 
 %start <Syntax.lexer_definition> lexer_definition
@@ -122,13 +121,13 @@ regterm:
 
 filter:
 | "/" ioption(terminated(symbol, ":"))
-      ioption("^") wild_symbol* "." wild_symbol* ioption("$")
+      ioption("...") wild_symbol* "." wild_symbol* ioption("...")
   { mk_re (Filter {
       lhs = $2;
-      pre_anchored = Option.is_some $3;
+      pre_anchored = Option.is_none $3;
       prefix = $4;
       suffix = $6;
-      post_anchored = Option.is_some $7;
+      post_anchored = Option.is_none $7;
     }) $endpos
   }
 ;
