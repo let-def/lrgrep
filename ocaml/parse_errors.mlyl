@@ -60,10 +60,13 @@ rule error_message = parse error
     ^ str_col $startloc(lp)
   }
 
+| [_* / ... _ . IN ...]
+  { "Expecting `in'" }
+
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
-| [_* / ... . LIDENT ...]
+| [_* / ... _ . LIDENT ...]
   partial { match Lexer_raw.as_keyword token with
     | None -> None
     | Some kw ->
@@ -71,7 +74,7 @@ rule error_message = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| [_*  / ... . UIDENT ... |  _* / ... . TYPE ... | _* / ... . REC ...]
+| [_*  / ... _ . UIDENT ... |  _* / ... _ . TYPE ... | _* / ... _ . REC ...]
   { "Expecting `type' or a module name beginning with an uppercase letter"
   }
 
@@ -88,9 +91,6 @@ rule error_message = parse error
   { "Issue #11445: in constructor arguments, \
      arrow types should be wrapped between parentheses"
   }
-
-| [_* / ... . IN ...]
-  { "Expecting `in'" }
 
 | outer=constr_longident; inner=constr_longident;
   [_ / pattern_gen: constr_longident pattern .]
