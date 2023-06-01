@@ -39,14 +39,37 @@ rule error_message = parse error
     | _ -> None
   }
 
-| LIDENT / label_declaration: mutable_flag _ . COLON ... @ EQUAL {
+(* A list of type parameters that is not followed by the path of a type constructore *)
+(* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
+| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); RPAREN /atomic_type: LPAREN _ RPAREN . ...
+  partial {
+    match List.rev typs with
+    | [] | [_] -> None
+    | typs -> Some Ast_helper.(
+      Printf.sprintf
+        "The preceding type is incomplete%s.\n\
+         It misses a type constructor after the parameters: %s.\n\
+         If you meant to write a tuple, replace the ',' by '*': %s."
+        (match Lexer_raw.as_keyword token with
+         | None -> ""
+         | Some kw -> ", " ^ kw ^ " is a keyword")
+        (Format.asprintf "%a" Pprintast.core_type 
+          (Typ.constr (Location.mknoloc (Longident.Lident "t")) typs))
+        (Format.asprintf "%a" Pprintast.core_type 
+          (Typ.tuple typs))
+    )
+  }
+
+| LIDENT / label_declaration: mutable_flag _ . COLON ... @ EQUAL
+  {
     "Expecting ':' to declare the type of a record field, not '='"
   }
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
 | [structure_item]; semi=SEMI; [let_bindings(ext)]
-  { "Might be due to the semicolon line "
+  {
+    "Might be due to the semicolon line "
     ^ str_line $startloc(semi)
     ^ ", character "
     ^ str_col $startloc(semi)
@@ -54,7 +77,8 @@ rule error_message = parse error
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | lp=LPAREN; [_* / ... . RPAREN ...]
-  { "Unclosed parenthesis at line "
+  {
+    "Unclosed parenthesis at line "
     ^ str_line $startloc(lp)
     ^ ", character "
     ^ str_col $startloc(lp)
