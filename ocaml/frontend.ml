@@ -1,64 +1,54 @@
 let usage =
-  "usage: ocaml-lrgrep <infile> <outfile>\n\
+  "Usage: ocaml-lrgrep <file>\n\
+   --------------------------\n\n\
    ocaml-lrgrep is an alternative frontend for OCaml.\n\
    It is used to prototype better syntax error messages.\n\
    \n\
-   To use it, pass `-pp ocaml-lrgrep` to ocaml compilers."
+   To use it, pass `-pp ocaml-lrgrep` to ocaml compilers.\n\
+   \n\
+   Usage for tests: ocaml-lrgrep --test <file1> <file2...>\n\
+   -------------------------------------------------------\n\n\
+   In this mode, ocaml-lrgrep will parse each file in order.\n\
+   Errors are reported on stderr and the AST is discarded.\n\
+   Output for each file is separated by lines starting with \"---\".
+   "
 
-let infile =
-  match Sys.argv with
-  | [|_; infile|] -> infile
-  | _ ->
-    prerr_endline usage;
-    exit 1
+exception Abort_parsing
 
-let () =
-  Location.input_name := infile
+let error_and_exit lexbuf msg =
+  Format.eprintf "%a\n" Location.print_report {
+    Location.
+    kind = Location.Report_error;
+    main = Location.msg ~loc:(Location.curr lexbuf) "%s" msg;
+    sub = [];
+  };
+  raise Abort_parsing
 
-let lexbuf =
-  let ic = open_in infile in
-  let lexbuf = Lexing.from_channel ~with_positions:true ic in
-  Lexing.set_filename lexbuf infile;
-  lexbuf
-
-let wrap_token_with_loc lexbuf tok =
-  (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
-
-let get_token =
-  let state = Lexer_raw.make Lexer_raw.keyword_table in
+let get_token lexstate lexbuf =
   let rec extract_token = function
     | Lexer_raw.Return tok -> tok
     | Lexer_raw.Refill k -> extract_token (k ())
     | Lexer_raw.Fail (err, loc) ->
-      Format.eprintf "%a\n%!"
-        Location.print_report (Lexer_raw.prepare_error loc err);
-      exit 1
+      Format.eprintf "%a\n%!" Location.print_report
+        (Lexer_raw.prepare_error loc err);
+      raise Abort_parsing
   in
-  fun lexbuf ->
-    let tok = extract_token (Lexer_raw.token_without_comments state lexbuf) in
-    wrap_token_with_loc lexbuf tok
+  let tok = extract_token (Lexer_raw.token_without_comments lexstate lexbuf) in
+  (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
 
-let do_parse
+let parse
     (type a)
-    (kind : a Pparse.ast_kind)
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
+    (lexbuf : Lexing.lexbuf)
+    : a
   =
+  Location.input_name := lexbuf.lex_start_p.pos_fname;
+  let lexstate = Lexer_raw.make Lexer_raw.keyword_table in
   let module I = Parser_raw.MenhirInterpreter in
   let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
-  let error_and_exit msg =
-    let loc = Location.curr lexbuf in
-    let report = {
-      Location.
-      kind = Location.Report_error;
-      main = Location.msg ~loc "%s" msg;
-      sub = [];
-    } in
-    Format.eprintf "%a\n" Location.print_report report;
-    exit 1
-  in
   let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
-      let tok' = get_token lexbuf in
+      let tok' = get_token lexstate lexbuf in
       loop env' tok' (I.offer cp tok')
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
       loop env tok (I.resume cp)
@@ -66,32 +56,75 @@ let do_parse
     | I.Rejected -> assert false
     | I.HandlingError _ ->
       match PE.run env with
-      | [] -> error_and_exit "Syntax error (no handler for it)"
+      | [] -> error_and_exit lexbuf "Syntax error (no handler for it)"
       | matches ->
         (* Printf.eprintf "Matches: %s\n"
           (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches)); *)
         let rec loop = function
-          | [] -> error_and_exit "Syntax error (partial handler did not handle the case)"
+          | [] -> error_and_exit lexbuf "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
             match Parse_errors.execute_error_message m tok with
             | None -> loop ms
-            | Some err -> error_and_exit err
+            | Some err -> error_and_exit lexbuf err
         in
         loop matches
   in
-  let start cp =
-    match cp with
-    | I.InputNeeded env ->
-      let tok = get_token lexbuf in
-      loop env tok (I.offer cp tok)
-    | _ -> assert false
-  in
-  Pparse.write_ast kind "/dev/fd/1"
-    (start (checkpoint lexbuf.lex_curr_p))
+  match checkpoint lexbuf.lex_curr_p with
+  | I.InputNeeded env as cp ->
+    let tok = get_token lexstate lexbuf in
+    loop env tok (I.offer cp tok)
+  | _ -> assert false
 
-let () =
-  let is_interface = Filename.check_suffix infile "i" in
-  if is_interface then
-    do_parse Pparse.Signature Parser_raw.Incremental.interface
-  else
-    do_parse Pparse.Structure Parser_raw.Incremental.implementation
+let pp_output kind ast =
+  Pparse.write_ast kind "/dev/fd/1" ast
+
+let open_input path =
+  let ic = open_in path in
+  let lexbuf = Lexing.from_channel ~with_positions:true ic in
+  Lexing.set_filename lexbuf path;
+  let is_interface = Filename.check_suffix path "i" in
+  ic, lexbuf, is_interface
+
+let pp_main path =
+  let ic, lexbuf, is_interface = open_input path in
+  match
+    if is_interface then
+      pp_output Pparse.Signature
+        (parse Parser_raw.Incremental.interface lexbuf)
+    else
+      pp_output Pparse.Structure
+        (parse Parser_raw.Incremental.implementation lexbuf)
+  with
+  | () -> close_in ic
+  | exception Abort_parsing ->
+    close_in ic;
+    exit 1
+
+let test_main path =
+  Printf.eprintf "--- PARSING %s\n" path;
+  let ic, lexbuf, is_interface = open_input path in
+  try
+    if is_interface then
+      ignore (parse Parser_raw.Incremental.interface lexbuf)
+    else
+      ignore (parse Parser_raw.Incremental.implementation lexbuf);
+    close_in ic;
+    Printf.eprintf "--- SUCCESS %s\n" path;
+  with Abort_parsing ->
+    close_in ic;
+    Printf.eprintf "--- FAILURE %s\n" path
+
+let main () =
+  let len = Array.length Sys.argv in
+  if len = 2 then
+    pp_main Sys.argv.(1)
+  else if len >= 2 && Sys.argv.(1) = "--test" then
+    for i = 2 to len - 1 do
+      test_main Sys.argv.(i)
+    done
+  else (
+    prerr_endline usage;
+    exit 2;
+  )
+
+let () = main ()
