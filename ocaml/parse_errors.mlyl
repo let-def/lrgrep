@@ -21,6 +21,8 @@
 
   let str_line pos = string_of_int pos.Lexing.pos_lnum
   let str_col pos = string_of_int (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
+
+  let line_and_char pos = "line " ^ str_line pos ^ ", character " ^ str_col pos
 }
 
 rule error_message = parse error
@@ -29,10 +31,7 @@ rule error_message = parse error
   partial {
     match e with
     | {pexp_desc = Pexp_ifthenelse(_, _, None); _} -> (
-      Some ("The semicolon line "
-            ^ string_of_int $startloc(e).pos_lnum
-            ^ ", character "
-            ^ string_of_int ($startloc(e).pos_cnum - $startloc(e).pos_bol)
+      Some ("The semicolon " ^ line_and_char $startloc(e)
             ^ " terminates the `if ... then ...` expression. \
             Remove it to add an else branch.")
       )
@@ -41,51 +40,37 @@ rule error_message = parse error
 
 (* A list of type parameters that is not followed by the path of a type constructore *)
 (* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
-| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); RPAREN /atomic_type: LPAREN _ RPAREN . ...
+| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); rp=RPAREN /atomic_type: LPAREN _ RPAREN . ...
   partial {
     match List.rev typs with
     | [] | [_] -> None
     | typs -> Some Ast_helper.(
       Printf.sprintf
-        "The preceding type is incomplete%s.\n\
-         It misses a type constructor after the parameters: %s.\n\
-         If you meant to write a tuple, replace the ',' by '*': %s."
-        (match Lexer_raw.as_keyword token with
-         | None -> ""
-         | Some kw -> ", " ^ kw ^ " is a keyword")
-        (Format.asprintf "%a" Pprintast.core_type 
+        "The preceding type ending %s is incomplete.\n\
+         It's missing a type constructor after the parameters, for instance: %s.\n\
+         If you meant to write a tuple, use '*': %s."
+        (line_and_char $endloc(rp))
+        (Format.asprintf "%a" Pprintast.core_type
           (Typ.constr (Location.mknoloc (Longident.Lident "t")) typs))
-        (Format.asprintf "%a" Pprintast.core_type 
+        (Format.asprintf "%a" Pprintast.core_type
           (Typ.tuple typs))
     )
   }
 
 | LIDENT / label_declaration: mutable_flag _ . COLON ... @ EQUAL
-  {
-    "Expecting ':' to declare the type of a record field, not '='"
-  }
+  { "Expecting ':' to declare the type of a record field, not '='" }
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
 | [structure_item]; semi=SEMI; [let_bindings(ext)]
-  {
-    "Might be due to the semicolon line "
-    ^ str_line $startloc(semi)
-    ^ ", character "
-    ^ str_col $startloc(semi)
-  }
+  { "Might be due to the semicolon " ^ line_and_char $startloc(semi) }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | lp=LPAREN; [_* / ... . RPAREN ...]
-  {
-    "Unclosed parenthesis at line "
-    ^ str_line $startloc(lp)
-    ^ ", character "
-    ^ str_col $startloc(lp)
-  }
+  { "Unclosed parenthesis at " ^ line_and_char $startloc(lp) }
 
-| [_* / ... _ . IN ...]
-  { "Expecting `in'" }
+| let_=LET; _*; [_* / ... _ . IN ...]
+  { "Expecting `in' to continue let-binding at " ^ line_and_char $startloc(let_) }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
