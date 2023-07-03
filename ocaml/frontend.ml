@@ -9,14 +9,17 @@ let usage =
    Usage for tests: ocaml-lrgrep --test <file1> <file2...>\n\
    -------------------------------------------------------\n\n\
    In this mode, ocaml-lrgrep will parse each file in order.\n\
-   Errors are reported on stderr and the AST is discarded.\n\
+   Errors are reported on stdout and the AST is discarded.\n\
    Output for each file is separated by lines starting with \"---\".
    "
 
 exception Abort_parsing
 
-let error_and_exit lexbuf msg =
-  Format.eprintf "%a\n" Location.print_report {
+let oprintf oc fmt =
+  Format.fprintf (Format.formatter_of_out_channel oc) fmt
+
+let error_and_exit oc lexbuf msg =
+  oprintf oc "%a%!" Location.print_report {
     Location.
     kind = Location.Report_error;
     main = Location.msg ~loc:(Location.curr lexbuf) "%s" msg;
@@ -24,12 +27,12 @@ let error_and_exit lexbuf msg =
   };
   raise Abort_parsing
 
-let get_token lexstate lexbuf =
+let get_token oc lexstate lexbuf =
   let rec extract_token = function
     | Lexer_raw.Return tok -> tok
     | Lexer_raw.Refill k -> extract_token (k ())
     | Lexer_raw.Fail (err, loc) ->
-      Format.eprintf "%a\n%!" Location.print_report
+      oprintf oc "%a\n%!" Location.print_report
         (Lexer_raw.prepare_error loc err);
       raise Abort_parsing
   in
@@ -38,6 +41,7 @@ let get_token lexstate lexbuf =
 
 let parse
     (type a)
+    oc
     (checkpoint : Lexing.position -> a Parser_raw.MenhirInterpreter.checkpoint)
     (lexbuf : Lexing.lexbuf)
     : a
@@ -48,7 +52,7 @@ let parse
   let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
   let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
-      let tok' = get_token lexstate lexbuf in
+      let tok' = get_token oc lexstate lexbuf in
       loop env' tok' (I.offer cp tok')
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
       loop env tok (I.resume cp)
@@ -56,22 +60,22 @@ let parse
     | I.Rejected -> assert false
     | I.HandlingError _ ->
       match PE.run env with
-      | [] -> error_and_exit lexbuf "Syntax error (no handler for it)"
+      | [] -> error_and_exit oc lexbuf "Syntax error (no handler for it)"
       | matches ->
         (* Printf.eprintf "Matches: %s\n"
           (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches)); *)
         let rec loop = function
-          | [] -> error_and_exit lexbuf "Syntax error (partial handler did not handle the case)"
+          | [] -> error_and_exit oc lexbuf "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
             match Parse_errors.execute_error_message m tok with
             | None -> loop ms
-            | Some err -> error_and_exit lexbuf err
+            | Some err -> error_and_exit oc lexbuf err
         in
         loop matches
   in
   match checkpoint lexbuf.lex_curr_p with
   | I.InputNeeded env as cp ->
-    let tok = get_token lexstate lexbuf in
+    let tok = get_token oc lexstate lexbuf in
     loop env tok (I.offer cp tok)
   | _ -> assert false
 
@@ -85,15 +89,16 @@ let open_input path =
   let is_interface = Filename.check_suffix path "i" in
   ic, lexbuf, is_interface
 
+let pp_parse kind entrypoint lexbuf =
+  pp_output kind (parse stderr entrypoint lexbuf)
+
 let pp_main path =
   let ic, lexbuf, is_interface = open_input path in
   match
     if is_interface then
-      pp_output Pparse.Signature
-        (parse Parser_raw.Incremental.interface lexbuf)
+      pp_parse Pparse.Signature Parser_raw.Incremental.interface lexbuf
     else
-      pp_output Pparse.Structure
-        (parse Parser_raw.Incremental.implementation lexbuf)
+      pp_parse Pparse.Structure Parser_raw.Incremental.implementation lexbuf
   with
   | () -> close_in ic
   | exception Abort_parsing ->
@@ -101,18 +106,18 @@ let pp_main path =
     exit 1
 
 let test_main path =
-  Printf.eprintf "--- PARSING %s\n" path;
+  Printf.printf "--- PARSING %s\n" path;
   let ic, lexbuf, is_interface = open_input path in
   try
     if is_interface then
-      ignore (parse Parser_raw.Incremental.interface lexbuf)
+      ignore (parse stdout Parser_raw.Incremental.interface lexbuf)
     else
-      ignore (parse Parser_raw.Incremental.implementation lexbuf);
+      ignore (parse stdout Parser_raw.Incremental.implementation lexbuf);
     close_in ic;
-    Printf.eprintf "--- SUCCESS %s\n" path;
+    Printf.printf "--- OK %s\n" path;
   with Abort_parsing ->
     close_in ic;
-    Printf.eprintf "--- FAILURE %s\n" path
+    Printf.printf "--- KO %s\n" path
 
 let main () =
   let len = Array.length Sys.argv in
@@ -120,7 +125,8 @@ let main () =
     pp_main Sys.argv.(1)
   else if len >= 2 && Sys.argv.(1) = "--test" then
     for i = 2 to len - 1 do
-      test_main Sys.argv.(i)
+      test_main Sys.argv.(i);
+      print_newline ();
     done
   else (
     prerr_endline usage;

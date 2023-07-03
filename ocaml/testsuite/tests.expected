@@ -1,0 +1,50 @@
+--- PARSING test_ko_01.ml
+File "test_ko_01.ml", line 3, characters 0-3:
+Error: Might be due to the semicolon line 1, character 9
+--- KO test_ko_01.ml
+
+--- PARSING test_ko_02.ml
+File "test_ko_02.ml", line 4, characters 0-3:
+Error: Might be due to the semicolon line 2, character 9
+--- KO test_ko_02.ml
+
+--- PARSING test_ko_03.ml
+File "test_ko_03.ml", line 7, characters 0-0:
+Error: Unclosed parenthesis at line 1, character 8
+--- KO test_ko_03.ml
+
+--- PARSING test_ko_04.ml
+File "test_ko_04.ml", line 2, characters 0-0:
+Error: Unclosed parenthesis at line 1, character 8
+--- KO test_ko_04.ml
+
+--- PARSING test_ko_05.ml
+File "test_ko_05.ml", line 2, characters 9-15:
+Error: `module' keyword cannot appear in an expression, use `(module M)' to pack a first class-module or `let module M = ... in ...' to define a local module
+--- KO test_ko_05.ml
+
+--- PARSING test_ko_06.ml
+File "test_ko_06.ml", line 5, characters 16-20:
+Error: `then' is a keyword and cannot appear in this context (try then_)
+--- KO test_ko_06.ml
+
+--- PARSING test_ko_07.ml
+File "test_ko_07.ml", line 2, characters 53-56:
+Error: Syntax error (no handler for it)
+--- KO test_ko_07.ml
+
+--- PARSING test_ko_08.ml
+File "test_ko_08.ml", line 4, characters 20-22:
+Error: Issue #11445: in constructor arguments, arrow types should be wrapped between parentheses
+--- KO test_ko_08.ml
+
+--- PARSING test_ko_09.ml
+File "test_ko_09.ml", line 6, characters 0-3:
+Error: The preceding type ending line 5, character 27 is incomplete.
+It's missing a type constructor after the parameters, for instance: (string, string) t.
+If you meant to write a tuple, use '*': (string * string).
+--- KO test_ko_09.ml
+
+--- PARSING test_ok.ml
+--- OK test_ok.ml
+
