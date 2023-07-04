@@ -60,12 +60,14 @@ let parse
     | I.Rejected -> assert false
     | I.HandlingError _ ->
       match PE.run env with
-      | [] -> error_and_exit oc lexbuf "Syntax error (no handler for it)"
+      | [] -> error_and_exit oc lexbuf
+                "Syntax error (no handler for it)"
       | matches ->
-        (* Printf.eprintf "Matches: %s\n"
-          (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches)); *)
+        Printf.eprintf "Matches: %s\n"
+          (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches));
         let rec loop = function
-          | [] -> error_and_exit oc lexbuf "Syntax error (partial handler did not handle the case)"
+          | [] -> error_and_exit oc lexbuf
+                    "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
             match Parse_errors.execute_error_message m tok with
             | None -> loop ms
