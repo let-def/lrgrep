@@ -635,7 +635,7 @@ let merloc startpos ?endpos x =
 
 %}
 
-%on_error_reduce
+(*%on_error_reduce
   alias_type
   and_let_binding
   atomic_type
@@ -791,7 +791,7 @@ let merloc startpos ?endpos x =
   val_extra_ident
   value
   value_description
-  with_constraint
+  with_constraint*)
 
 
 %[@printer.header
