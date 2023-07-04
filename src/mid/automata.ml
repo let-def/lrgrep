@@ -106,6 +106,11 @@ sig
   module MinDFA : sig
     type states
     val states : states cardinal
+  end
+
+  module OutDFA : sig
+    type states
+    val states : states cardinal
     val initial : states index
 
     type transitions
@@ -669,10 +674,17 @@ struct
       |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
   end
 
-  module MinDFA = struct
-    include Valmari.Minimize (Label) (RunDFA)
+  module MinDFA = Valmari.Minimize (Label) (RunDFA)
 
-    let initial = initials.(0)
+  module OutDFA = struct
+
+    (*include MinDFA
+      let initial = initials.(0)*)
+
+    include RunDFA
+    let initial = BigDFA.initial
+    let transport_state state = Some state
+    let represent_state state = state
 
     let outgoing = Vector.make states IndexSet.empty
     let unhandled = Vector.make states IndexSet.empty
@@ -712,8 +724,8 @@ struct
 
   let captures_lr1 =
     let map = ref IndexMap.empty in
-    Index.iter MinDFA.transitions (fun tr ->
-        let label = MinDFA.label tr in
+    Index.iter OutDFA.transitions (fun tr ->
+        let label = OutDFA.label tr in
         let map' = IndexMap.map (fun _ -> label.filter) label.captures in
         map := IndexMap.union (fun _ a b -> Some (IndexSet.union a b)) !map map'
       );
