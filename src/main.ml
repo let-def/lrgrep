@@ -203,39 +203,54 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
     );*)
-  let oc = Option.map open_out_bin !output_name in
-
-  oc |> Option.iter (fun oc ->
+  let oc, out = match !output_name with
+    | None -> (None, None)
+    | Some filename ->
+      let oc = open_out_bin filename in
+      let out =
+        Mid.Automata.Printer.create
+          ~filename:(Filename.basename filename)
+          (output_string oc)
+      in
+      (Some oc, Some out)
+  in
+  let print_ocaml_code out (loc, code) =
+    Mid.Automata.Printer.print out ~loc code
+  in
+  out |> Option.iter (fun out ->
       begin match Grammar.Grammar.parameters with
         | [] -> ()
         | parameters ->
-          output_string oc "module Make";
-          List.iter (Printf.fprintf oc "(%s)") parameters;
-          Printf.fprintf oc "(%s : module type of %s.Make" parser_name parser_name;
+          Mid.Automata.Printer.print out "module Make";
+          List.iter (Mid.Automata.Printer.fmt out "(%s)") parameters;
+          Mid.Automata.Printer.fmt out
+            "(%s : module type of %s.Make" parser_name parser_name;
           let extract_name name =
             match String.index_opt name ':' with
             | None -> name
             | Some index -> String.sub name 0 index
           in
           List.iter
-            (fun param -> Printf.fprintf oc "(%s)" (extract_name param))
+            (fun param ->
+               Mid.Automata.Printer.fmt out "(%s)"
+                 (extract_name param))
             parameters;
-          output_string oc ") = struct\n";
+          Mid.Automata.Printer.print out ") = struct\n";
       end;
-      output_string oc (snd lexer_definition.header)
+      print_ocaml_code out lexer_definition.header
     );
 
   List.iter (fun entry ->
-      let program = process_entry oc entry in
+      let program = process_entry out entry in
       Option.iter (fun oc -> output_table oc entry program) oc
     ) lexer_definition.entrypoints;
 
-  oc |> Option.iter (fun oc ->
-      output_char oc '\n';
-      output_string oc (snd lexer_definition.trailer);
+  out |> Option.iter (fun out ->
+      Mid.Automata.Printer.print out "\n";
+      print_ocaml_code out lexer_definition.trailer;
       begin match Grammar.Grammar.parameters with
         | [] -> ()
-        | _ -> output_string oc "\nend\n"
+        | _ -> Mid.Automata.Printer.print out "\nend\n"
       end;
     );
 
