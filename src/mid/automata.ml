@@ -40,11 +40,11 @@ end = struct
       t.last_is_nl <- str.[last] = '\n';
       t.output str
 
-  let create ~filename ?(line=0) output =
+  let create ~filename ?(line=1) output =
     {filename; line; output; reloc = false; last_is_nl = true}
 
   let print_loc_dir t filename line =
-    output t (Printf.sprintf "# %d %S\n" line filename)
+    output t (Printf.sprintf "# %d %S\n" (line + 1) filename)
 
   let print_loc t (loc : Syntax.location) =
     print_loc_dir t loc.loc_file loc.start_line;
@@ -792,7 +792,7 @@ struct
       Printer.fmt out
         "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
         \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->"
+        \      | Some (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
         name name name offset
         (if is_optional then "(None, None, None)" else "assert false")
         E.parser_name
@@ -806,13 +806,13 @@ struct
             List.map symbol_matcher (IndexSet.elements symbols)
           in
           Printer.fmt out
-            "      let x = match %s.MenhirInterpreter.incoming_symbol st with\n\
-            \        | %s -> (x : %s) \n\
-            \        | _ -> assert false\n\
-            \      in\n"
+            "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n\
+            \          | %s -> (x : %s) \n\
+            \          | _ -> assert false\n\
+            \        in\n"
             E.parser_name (String.concat " | " matchers) typ
       end;
-      Printer.fmt out "      (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
+      Printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
       Printer.fmt out "    in\n";
       Printer.fmt out "    let _ = %s in\n" name
     | Start_loc ->
@@ -885,7 +885,7 @@ struct
                 List.concat_map sym_pattern symbols)
       in
       Printer.fmt out
-        "  | %d, %s -> begin\n"
+        "  | %d, %s ->\n"
         (Index.to_int index)
         (Option.value lookahead_constraint ~default:"_");
       IndexMap.iter (bind_capture out ~roffset) captures_def;
@@ -893,13 +893,14 @@ struct
         | Unreachable ->
           Printer.print out "    failwith \"Should be unreachable\"\n"
         | Partial (loc, str) ->
-          Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str)
+          Printer.print out "    (\n";
+          Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
+          Printer.print out "    )\n"
         | Total (loc, str) ->
           Printer.print out "    Some (\n";
           Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
           Printer.print out "    )\n"
       end;
-      Printer.print out "    end\n";
       if Option.is_some lookahead_constraint then
         Printer.fmt out "  | %d, _ -> None\n" (Index.to_int index)
     in
