@@ -12,6 +12,11 @@ module Register = struct
   let of_int = Index.of_int n
 end
 
+let add_uint24_be b i =
+  assert (0 <= i && i <= 0xFFFFFF);
+  Buffer.add_uint16_be b (i land 0xFFFF);
+  Buffer.add_uint8 b (i lsr 16)
+
 module Sparse_packer : sig
   type 'a t
   val make : unit -> 'a t
@@ -21,9 +26,11 @@ module Sparse_packer : sig
 end = struct
   let set_int table ~offset ~value = function
     | 1 -> Bytes.set_uint8 table offset value
-    | 2 -> Bytes.set_uint16_be table offset value
-    | 3 -> Bytes.set_uint16_be table offset (value land 0xFFFF);
-           Bytes.set_uint8 table (offset + 2) (value lsr 16)
+    | 2 ->
+      Bytes.set_uint16_be table offset value
+    | 3 ->
+      Bytes.set_uint16_be table offset (value land 0xFFFF);
+      Bytes.set_uint8 table (offset + 2) (value lsr 16)
     | 4 -> Bytes.set_int32_be table offset (Int32.of_int value)
     | _ -> assert false
 
@@ -129,6 +136,7 @@ end = struct
         set_int repr ~offset ~value:k k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
+    Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
     Printf.eprintf "key size: %d\nvalue size: %d\ntable size:%d\n" k_size v_size (Array.length table);
     Bytes.unsafe_to_string repr
 end
@@ -188,8 +196,8 @@ end = struct
         ) registers
     | Match index ->
       Buffer.add_char t.buffer '\x06';
-      assert (index <= 0xFFFF);
-      Buffer.add_uint16_be t.buffer index
+      assert (index <= 0xFFFFFF);
+      add_uint24_be t.buffer index
     | Halt ->
       Buffer.add_char t.buffer '\x07'
 

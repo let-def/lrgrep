@@ -40,6 +40,9 @@ let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   else
     None
 
+let get_uint24_be str i =
+  (String.get_uint16_be str i) lor (String.get_uint8 str (i + 2) lsl 16)
+
 let program_step (t : program) (r : program_counter ref)
   : program_instruction =
   let pc = !r in
@@ -65,8 +68,8 @@ let program_step (t : program) (r : program_counter ref)
       ) in
     Accept (String.get_uint16_be t (pc + 2), registers)
   | '\x06' ->
-    r := !r + 3;
-    Match (String.get_uint16_be t (pc + 1))
+    r := !r + 4;
+    Match (get_uint24_be t (pc + 1))
   | '\x07' ->
     r := !r + 1;
     Halt
