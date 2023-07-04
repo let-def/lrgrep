@@ -137,16 +137,17 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       ()
   in
   Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
-  Printf.eprintf "Minimized DFA states: %d\n" (cardinal MinDFA.states);
+  Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
+  Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
   let unhandled = ref 0 in
-  Index.iter MinDFA.states (fun state ->
-      if not (IndexSet.is_empty (MinDFA.unhandled state)) then
+  Index.iter OutDFA.states (fun state ->
+      if not (IndexSet.is_empty (OutDFA.unhandled state)) then
         incr unhandled;
     );
   Printf.eprintf "states with unhandled transitions: %d\n%!" !unhandled;
   (*let module Coverage =
-    Mid.Coverage.Make(Info)(MinDFA)(Lrc.Lrce)
+    Mid.Coverage.Make(Info)(OutDFA)(Lrc.Lrce)
   in*)
   let get_state_for_compaction index =
     let add_match (clause, regs) =
@@ -161,27 +162,27 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       (clause, registers)
     in
     let add_transition tr acc =
-      let {Label. filter; captures; clear; moves} = MinDFA.label tr in
+      let {Label. filter; captures; clear; moves} = OutDFA.label tr in
       let actions = {
         Lrgrep_support.
         move = IndexMap.bindings moves;
         store = List.map snd (IndexMap.bindings captures);
         clear = IndexSet.elements clear;
-        target = MinDFA.target tr;
+        target = OutDFA.target tr;
       } in
       (filter, actions) :: acc
     in
-    let transitions = MinDFA.outgoing index in
+    let transitions = OutDFA.outgoing index in
     {
       Lrgrep_support.
-      accept = List.map add_match (MinDFA.matches index);
-      halting = MinDFA.unhandled index;
+      accept = List.map add_match (OutDFA.matches index);
+      halting = OutDFA.unhandled index;
       transitions = IndexSet.fold add_transition transitions [];
     }
   in
   Label.register_count,
-  Index.to_int MinDFA.initial,
-  let program = Lrgrep_support.compact MinDFA.states get_state_for_compaction in
+  Index.to_int OutDFA.initial,
+  let program = Lrgrep_support.compact OutDFA.states get_state_for_compaction in
   Option.iter output_code oc;
   program
 )
