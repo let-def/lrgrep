@@ -129,19 +129,26 @@ end = struct
   (* Main loop, split the sets *)
   let () =
     let block_set = ref 1 in
-    let cord_set = ref 0 in
-    while !cord_set < Partition.set_count cords do
-      Partition.iter_elements cords !cord_set
-        (fun transition -> Partition.mark blocks (In.source transition));
-      Partition.split blocks;
+    let refine_cords () =
       while !block_set < Partition.set_count blocks do
         Partition.iter_elements blocks !block_set (fun state ->
             transitions_targeting state (Partition.mark cords)
           );
         Partition.split cords;
         incr block_set;
-      done;
+      done
+    in
+    let cord_set = ref 0 in
+    let refine_blocks () =
+      Partition.iter_elements cords !cord_set
+        (fun transition -> Partition.mark blocks (In.source transition));
+      Partition.split blocks;
       incr cord_set;
+    in
+    refine_cords ();
+    while !cord_set < Partition.set_count cords do
+      refine_cords ();
+      refine_blocks ();
     done
 
   module States = Const(struct let cardinal = Partition.set_count blocks end)
