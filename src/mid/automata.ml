@@ -831,20 +831,22 @@ struct
       Printer.fmt out
         "    let _startloc_%s_ = match __registers.(%d) with\n\
         \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (_, _, p, _)) -> p\n\
-        \    in"
+        \      | Some (%s.MenhirInterpreter.Element (_, _, p, _)) -> %sp\n\
+        \    in\n"
         name offset
         none
         E.parser_name
+        (if is_optional then "Some " else "")
     | End_loc ->
       Printer.fmt out
         "    let _endloc_%s_ = match __registers.(%d) with\n\
         \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (_, _, _, p)) -> p\n\
-        \    in"
+        \      | Some (%s.MenhirInterpreter.Element (_, _, _, p)) -> %sp\n\
+        \    in\n"
         name offset
         none
         E.parser_name
+        (if is_optional then "Some " else "")
 
   let output_code out =
     Printer.fmt out
