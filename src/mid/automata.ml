@@ -678,13 +678,13 @@ struct
 
   module OutDFA = struct
 
-    (*include MinDFA
-      let initial = initials.(0)*)
+    include MinDFA
+      let initial = initials.(0)
 
-    include RunDFA
+    (*include RunDFA
     let initial = BigDFA.initial
     let transport_state state = Some state
-    let represent_state state = state
+    let represent_state state = state*)
 
     let outgoing = Vector.make states IndexSet.empty
     let unhandled = Vector.make states IndexSet.empty
