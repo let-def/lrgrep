@@ -40,11 +40,12 @@ end = struct
 
   type 'a t = {
     mutable table: 'a cell array;
+    mutable free: int list;
   }
 
   type 'a vector = (RT.lr1 * 'a) list
 
-  let make () = { table = Array.make 16 Unused }
+  let make () = { table = Array.make 16 Unused; free = [1] }
 
   let cell_unused packer index =
     assert (index >= 0);
@@ -76,16 +77,22 @@ end = struct
     )
 
   let add_vector packer cells =
-    let rec loop index = function
-      | [] -> index
+    let rec start rev_free free =
+      match free with
+      | [] -> assert false
+      | [i] -> loop rev_free [i + 1] i cells
+      | i :: is -> loop rev_free is i cells
+    and loop rev_free free index = function
+      | [] -> List.rev_append rev_free free, index
       | (k, _) :: cells' ->
-        if cell_unused packer (index + k) then
-          loop index cells'
-        else
-          loop (index + 1) cells
+        if cell_unused packer (index + k)
+        then loop rev_free free index cells'
+        else start (index :: rev_free) free
     in
-    let index = loop 0 cells in
-    List.iter (fun (k, v) -> set_cell packer (index + k) (Used (k, v))) cells;
+    let free, index = start [] packer.free in
+    packer.free <- free;
+    List.iter (fun (k, v) ->
+        set_cell packer (index + k) (Used (k, v))) cells;
     index
 
   let int_size i =
@@ -133,7 +140,7 @@ end = struct
       match cell with
       | Unused -> set_int repr ~offset ~value:0 k_size
       | Used (k, v) ->
-        set_int repr ~offset ~value:k k_size;
+        set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
@@ -319,6 +326,17 @@ let compact (type dfa clause lr1)
     in
     assert (!pc = -1);
     pc := Code_emitter.position code;
+    (*if index = initial then (
+      Printf.eprintf "halt pc: %d\n" !halt_pc;
+      Printf.eprintf "default target: %s\n"
+        (match default with
+         | None -> "Halt"
+         | Some act -> string_of_index act.target);
+      Printf.eprintf "other transitions:\n";
+      List.iter (fun (lr1s, target) ->
+          Printf.eprintf "  %s -> %d\n" (string_of_indexset lr1s) !target)
+        other_transitions
+      );*)
     List.iter
       (fun (clause, registers) ->
          Code_emitter.emit code (Accept (Index.to_int clause, registers)))
@@ -332,10 +350,8 @@ let compact (type dfa clause lr1)
       | [] -> ()
       | cells ->
         cell_count := !cell_count + List.length cells;
-        let i =
-          Sparse_packer.add_vector packer
-            (cells : (lr1 index * _) list :> (RT.lr1 * _) list)
-        in
+        let cells = (cells : (lr1 index * _) list :> (RT.lr1 * _) list) in
+        let i = Sparse_packer.add_vector packer cells in
         Code_emitter.emit code (Match i);
     end;
     begin match default with
