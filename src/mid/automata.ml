@@ -208,11 +208,17 @@ struct
       aux
 
     let process_clause ~capture index (def : Syntax.clause) =
+      let capture_tbl = Hashtbl.create 7 in
       let capture_def = ref IndexMap.empty in
       let capture kind name =
-        let index = capture () in
-        capture_def := IndexMap.add index (kind, name) !capture_def;
-        index
+        let key = (kind, name) in
+        match Hashtbl.find_opt capture_tbl key with
+        | Some index -> index
+        | None ->
+          let index = capture () in
+          Hashtbl.add capture_tbl key index;
+          capture_def := IndexMap.add index key !capture_def;
+          index
       in
       let captures, re =
         Transl.transl ~capture ~for_reduction:false def.pattern
