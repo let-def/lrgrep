@@ -107,14 +107,6 @@ end = struct
     In.finals (Partition.mark blocks);
     Partition.split blocks
 
-  (* Split explicitely refined states *)
-  let () =
-    let refine f =
-        f ~add:(Partition.mark blocks);
-        Partition.split blocks
-    in
-    In.refinements refine
-
   (* Transition partition *)
   let cords =
     let partition t1 t2 = Label.compare (In.label t1) (In.label t2) in
@@ -130,10 +122,12 @@ end = struct
   let () =
     let block_set = ref 1 in
     let cord_set = ref 0 in
-    while !cord_set < Partition.set_count cords do
+    let refine_blocks () =
       Partition.iter_elements cords !cord_set
         (fun transition -> Partition.mark blocks (In.source transition));
       Partition.split blocks;
+    in
+    let refine_cords () =
       while !block_set < Partition.set_count blocks do
         Partition.iter_elements blocks !block_set (fun state ->
             transitions_targeting state (Partition.mark cords)
@@ -141,8 +135,23 @@ end = struct
         Partition.split cords;
         incr block_set;
       done;
-      incr cord_set;
-    done
+    in
+    let stabilize () =
+      while !cord_set < Partition.set_count cords do
+        refine_blocks ();
+        refine_cords ();
+        incr cord_set;
+      done;
+    in
+    stabilize ();
+    (* Finally, split explicitely refined states *)
+    let refine_explicit f =
+      f ~add:(Partition.mark blocks);
+      Partition.split blocks;
+      refine_cords ();
+      stabilize ();
+    in
+    In.refinements refine_explicit
 
   module States = Const(struct let cardinal = Partition.set_count blocks end)
   type states = States.n
