@@ -95,7 +95,7 @@ sig
   module Label : sig
     type t = {
       filter: Lr1.set;
-      captures: (Capture.n, Register.n index) indexmap;
+      captures: (Capture.t * Register.t) list;
       clear: Register.set;
       moves: Register.t Register.map;
     }
@@ -261,9 +261,6 @@ struct
     (*val iter_transitions : 'a t -> (Lr1.set -> 'a mapping -> unit) -> unit*)
     val iter_refined_transitions :
       'a t -> (Lr1.n indexset -> 'a mapping -> unit) -> unit
-    (*val liveness : 'm t -> ('m, Capture.set) vector
-    val empty_registers : 'a Vector.packed
-      val registers : (n, (Capture.n, int) indexmap Vector.packed) vector*)
     val get_registers : 'm t -> ('m, Register.t Capture.map) vector
     val register_count : int
   end =
@@ -562,7 +559,7 @@ struct
   module Label = struct
     type t = {
       filter: Lr1.set;
-      captures: (Capture.n, Register.n index) indexmap;
+      captures: (Capture.t * Register.t) list;
       clear: Register.set;
       moves: Register.t Register.map;
     }
@@ -570,7 +567,11 @@ struct
     let compare t1 t2 =
       let c = IndexSet.compare t1.filter t2.filter in
       if c <> 0 then c else
-        let c = IndexMap.compare compare_index t1.captures t2.captures in
+        let c =
+          List.compare
+            (compare_pair compare_index compare_index)
+            t1.captures t2.captures
+        in
         if c <> 0 then c else
           let c = IndexMap.compare compare_index t1.moves t2.moves in
           if c <> 0 then c else
@@ -604,14 +605,14 @@ struct
           BigDFA.iter_refined_transitions source @@
           fun filter (BigDFA.Mapping (mapping, target)) ->
           let tgt_regs = BigDFA.get_registers target in
-          let captures = ref IndexMap.empty in
+          let captures = ref [] in
           let moves = ref IndexMap.empty in
           let clear = ref IndexSet.empty in
           let process_mapping (src_i, captured) tgt_bank =
             let src_bank = Vector.get src_regs src_i in
             IndexMap.iter (fun capture tgt_reg ->
                 if IndexSet.mem capture captured then
-                  captures := IndexMap.add capture tgt_reg !captures
+                  push captures (capture, tgt_reg)
                 else
                   match IndexMap.find_opt capture src_bank with
                   | Some src_reg ->
@@ -742,8 +743,12 @@ struct
     let map = ref IndexMap.empty in
     Index.iter OutDFA.transitions (fun tr ->
         let label = OutDFA.label tr in
-        let map' = IndexMap.map (fun _ -> label.filter) label.captures in
-        map := IndexMap.union (fun _ a b -> Some (IndexSet.union a b)) !map map'
+        map := List.fold_left (fun map (cap, _reg) ->
+            IndexMap.update cap (function
+                | None -> Some label.filter
+                | Some set' -> Some (IndexSet.union set' label.filter)
+              ) map
+          ) !map label.captures
       );
     !map
 

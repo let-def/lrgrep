@@ -166,7 +166,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       let actions = {
         Lrgrep_support.
         move = IndexMap.bindings moves;
-        store = List.map snd (IndexMap.bindings captures);
+        store = List.map snd captures;
         clear = IndexSet.elements clear;
         target = OutDFA.target tr;
       } in
