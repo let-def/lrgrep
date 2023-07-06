@@ -93,6 +93,31 @@ end
 module Interpreter (PE : Parse_errors) (P : Parser) =
 struct
 
+  let debug = false
+
+  let eprintf = Printf.eprintf
+
+  let print_regs bank regs =
+    Printf.sprintf "[%s]"
+      (String.concat ", "
+         (List.map (function
+              | None -> "None"
+              | Some i -> "%" ^ string_of_int i ^ " = " ^ match bank.(i) with
+                | None -> "None"
+                | Some _ -> "Some _"
+            ) (Array.to_list regs)))
+
+  let interpret_last bank candidate pc =
+    match program_step PE.program (ref pc) with
+    | Accept (clause, registers) ->
+      if debug then eprintf "Accept (%d,%s) (bottom)\n" clause (print_regs bank registers);
+      let may_get = function
+        | None -> None
+        | Some i -> bank.(i)
+      in
+      candidate := (clause, Array.map may_get registers) :: !candidate
+    | _ -> ()
+
   let interpret bank env candidate (pc : program_counter) =
     let pc = ref pc in
     let rec loop () =
@@ -143,11 +168,9 @@ struct
       match interpret bank env candidate pc with
       | None -> ()
       | Some pc' ->
-        let env = match P.pop env with
-          | None -> env
-          | Some env -> env
-        in
-        loop env pc'
+        match P.pop env with
+        | None -> interpret_last bank candidate pc'
+        | Some env -> loop env pc'
     in
     loop env PE.initial;
     let rec uniq k v = function
