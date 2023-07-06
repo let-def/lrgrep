@@ -439,5 +439,6 @@ let rec allocate result = function
 
 let allocate qs =
   let result = ref 0 in
-  let qs = allocate result qs in
-  !result, qs
+  let qs' = allocate result !qs in
+  qs := qs';
+  !result

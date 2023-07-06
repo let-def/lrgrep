@@ -517,9 +517,7 @@ struct
           let live = Vector.get live j in
           let to_allocate = IndexSet.diff live (IndexMap.domain allocated) in
           IndexSet.fold (fun cap allocated ->
-              let index, in_use' = IntSet.allocate !in_use in
-              in_use := in_use';
-              IndexMap.add cap (Register.of_int index) allocated
+              IndexMap.add cap (Register.of_int (IntSet.allocate in_use)) allocated
             ) to_allocate allocated
         end mapping
       in
