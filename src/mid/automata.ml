@@ -126,7 +126,8 @@ sig
     val unhandled : states index -> Lr1.set
 
     val outgoing : states index -> transitions indexset
-    val matches : states index -> (Clause.t * Register.t Capture.map) list
+    val matching : states index -> (Clause.t * Register.t Capture.map) list
+    val not_matching : states index -> (Clause.t * Register.t Capture.map) list
   end
 
   val output_code : Printer.t -> unit
@@ -708,12 +709,23 @@ struct
     let outgoing = Vector.get outgoing
     let unhandled = Vector.get unhandled
 
-    let matches state =
+    let matching state =
       let BigDFA.Packed source =
         Vector.get BigDFA.states (represent_state state)
       in
       let add_accepting {LazyNFA. accept; clause; _} regs acc =
         if not accept then acc else
+          (clause, regs) :: acc
+      in
+      let registers = BigDFA.get_registers source in
+      Vector.fold_right2 add_accepting source.group registers []
+
+    let not_matching state =
+      let BigDFA.Packed source =
+        Vector.get BigDFA.states (represent_state state)
+      in
+      let add_accepting {LazyNFA. accept; clause; _} regs acc =
+        if accept then acc else
           (clause, regs) :: acc
       in
       let registers = BigDFA.get_registers source in
