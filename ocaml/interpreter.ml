@@ -8,6 +8,7 @@ let opt_parse_intf = ref false
 let opt_stack_items = ref false
 let opt_no_reductions = ref false
 let opt_no_reductions_items = ref false
+let opt_dump_states = ref false
 
 let usage =
   Printf.sprintf
@@ -42,6 +43,8 @@ let specs = [
   " Print version and exit";
   "-vnum",  Arg.Unit print_version_num,
   " Print version number and exit";
+  "-dump-states", Arg.Set opt_dump_states,
+  " Print state numbers for debugging purpose";
 ]
 
 let () = Arg.parse specs (fun name -> opt_infile := Some name) usage
@@ -221,7 +224,12 @@ let process_result lexbuf = function
           List.iter print_endline (print_items state);
         );
         print_string "\x1b[0m";
-      ) stack
+      ) stack;
+    if !opt_dump_states then
+      Printf.printf "states = %s\n"
+        (String.concat ","
+           (List.map (fun (idx, _) -> string_of_int (idx : _ index :> int))
+              stack))
 
 let () =
   match !opt_infile with
