@@ -69,8 +69,10 @@ rule error_message = parse error
 | lp=LPAREN; [_* / ... . RPAREN ...]
   { "Unclosed parenthesis at " ^ line_and_char $startloc(lp) }
 
-| let_=LET; _*; [_* / ... _ . IN ...]
-  { "Expecting `in' to continue let-binding at " ^ line_and_char $startloc(let_) }
+| pos=[_* / LET ... . IN ...]
+| pos=[_* / let_bindings(ext) ... . IN ...]
+| pos=[_* / let_bindings(no_ext) ... . IN ...]
+  { "Expecting `in' to continue let-binding at " ^ line_and_char $startloc(pos) }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
