@@ -86,7 +86,7 @@ module type Parser = sig
   type 'a env
   type element
   val current_state_number : 'a env -> int
-  val top : 'a env -> element option
+  val really_top : 'a env -> element
   val pop : 'a env -> 'a env option
 end
 
@@ -98,7 +98,7 @@ struct
     let rec loop () =
       match program_step PE.program pc with
       | Store reg ->
-        bank.(reg) <- P.top env;
+        bank.(reg) <- Some (P.really_top env);
         loop ()
       | Move (r1, r2) ->
         (*prerr_endline "Store";*)
