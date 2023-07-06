@@ -234,7 +234,7 @@ module Vector = struct
 
   let fold_right2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
     let acc = ref acc in
-    for i = 0 to Array.length a - 1 do
+    for i = Array.length a - 1 downto 0 do
       acc := f a.(i) b.(i) !acc
     done;
     !acc
