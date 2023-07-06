@@ -175,7 +175,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
     let transitions = OutDFA.outgoing index in
     {
       Lrgrep_support.
-      accept = List.map add_match (OutDFA.matches index);
+      accept = List.map add_match (OutDFA.matching index);
       halting = OutDFA.unhandled index;
       transitions = IndexSet.fold add_transition transitions [];
     }
