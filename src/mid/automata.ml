@@ -406,15 +406,17 @@ struct
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
         List.iter begin fun (label, target) ->
+          let really_empty = ref true in
           let expand_stack stack =
             if IndexSet.disjoint (Stacks.label stack) label
             then IndexSet.empty
-            else Stacks.next stack
+            else (really_empty := false; Stacks.next stack)
           in
           let stacks = indexset_bind todo expand_stack in
-          if not (IndexSet.is_empty stacks) then
+          if not !really_empty then
             let lazy (Mapping (_, t')) = target in
-            schedule t'.index stacks
+            if not (IndexSet.is_empty stacks) then
+              schedule t'.index stacks
         end t.transitions
       in
       let rec loop () =
