@@ -3,11 +3,12 @@ module StringSet = Set.Make(String)
 
 (* Command-line parsing. *)
 
-let source_name = ref None
-let output_name = ref None
-let grammar_file = ref None
-let check_coverage = ref false
-let verbose = ref false
+let opt_source_name = ref None
+let opt_output_name = ref None
+let opt_grammar_file = ref None
+let opt_check_coverage = ref false
+let opt_verbose = ref false
+let opt_debug_stack = ref []
 
 let escape_and_align_left fmt =
   Printf.ksprintf (fun str ->
@@ -45,30 +46,38 @@ let warn {Front.Syntax. line; col} fmt =
 let eprintf = Printf.eprintf
 
 let specs = [
-  "-o", Arg.String (fun x -> output_name := Some x),
+  "-o", Arg.String (fun x -> opt_output_name := Some x),
   " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
-  "-g", Arg.String (fun x -> grammar_file := Some x),
+  "-g", Arg.String (fun x -> opt_grammar_file := Some x),
   " <file.cmly>  Path of the Menhir compiled grammar to analyse (*.cmly)";
-  "-v", Arg.Set verbose,
+  "-v", Arg.Set opt_verbose,
   " Increase output verbosity";
   "-version", Arg.Unit print_version_string,
   " Print version and exit";
   "-vnum", Arg.Unit print_version_num,
   " Print version number and exit";
-  "-coverage", Arg.Set check_coverage,
+  "-coverage", Arg.Set opt_check_coverage,
   " Check error coverage";
+  "-debug-stack", Arg.String (fun stack ->
+      opt_debug_stack :=
+        List.map
+          (fun state -> int_of_string (String.trim state))
+          (String.split_on_char ',' stack)
+    ),
+  " For debugging purposes. Simulate action of the automaton on a stack,\n\
+  \ specified as a comma separated list of state numbers (top comes first)"
 ]
 
-let () = Arg.parse specs (fun name -> source_name := Some name) usage
+let () = Arg.parse specs (fun name -> opt_source_name := Some name) usage
 
-let source_file = match !source_name with
+let source_file = match !opt_source_name with
   | None ->
     Format.eprintf "No source provided, stopping now.\n";
     Arg.usage specs usage;
     exit 1
   | Some name -> name
 
-let grammar_file = match !grammar_file with
+let grammar_file = match !opt_grammar_file with
   | Some filename -> filename
   | None ->
     Format.eprintf "No grammar provided (-g), stopping now.\n";
@@ -184,6 +193,64 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Index.to_int OutDFA.initial,
   let program = Lrgrep_support.compact OutDFA.states get_state_for_compaction in
   Option.iter output_code oc;
+  if !opt_debug_stack <> [] then (
+    let rec process st stack =
+      Printf.eprintf "state %d\n" (Index.to_int st);
+      List.iteri (fun i (clause, captures) ->
+          Printf.eprintf "- MATCH: thread %d recognized clause %d"
+            i (Index.to_int clause);
+          List.iter (fun (cap, reg) ->
+              Printf.eprintf ", var%d in %%%d" (Index.to_int cap) (Index.to_int reg))
+            (IndexMap.bindings captures);
+          Printf.eprintf "\n";
+        ) (OutDFA.matching st);
+      List.iteri (fun i (clause, captures) ->
+          Printf.eprintf "- thread %d is recognizing clause %d"
+            i (Index.to_int clause);
+          List.iter (fun (cap, reg) ->
+              Printf.eprintf ", var%d in %%%d" (Index.to_int cap) (Index.to_int reg))
+            (IndexMap.bindings captures);
+          Printf.eprintf "\n";
+        ) (OutDFA.not_matching st);
+      match stack with
+      | [] ->
+        Printf.eprintf "done\n";
+      | lr1 :: lr1s ->
+        Printf.eprintf "consume lr1 state %d\n" lr1;
+        let lr1 = Index.of_int Info.Lr1.n lr1 in
+        let check_transition tr acc =
+          let label = OutDFA.label tr in
+          if not (IndexSet.mem lr1 label.filter)
+          then acc
+          else match acc with
+            | None -> Some tr
+            | Some _ -> failwith "non-deterministic transition"
+        in
+        match IndexSet.fold check_transition (OutDFA.outgoing st) None with
+        | None ->
+          if IndexSet.mem lr1 (OutDFA.unhandled st) then
+            Printf.eprintf "halt (*no transition*)\n"
+          else
+            Printf.eprintf "error: no transition, stopping there. Stack is invalid or an internal error happened.\n"
+        | Some tr ->
+          let {Label. captures; clear; moves; _} = OutDFA.label tr in
+          IndexMap.iter (fun src tgt ->
+              Printf.eprintf
+                "move %%%d -> %%%d\n"
+                (Index.to_int src) (Index.to_int tgt)
+            ) moves;
+          List.iter (fun (cap, reg) ->
+              Printf.eprintf "store %%%d (*variable %d*)\n"
+                (Index.to_int reg) (Index.to_int cap)
+            ) captures;
+          IndexSet.iter (fun reg ->
+              Printf.eprintf "clear %%%d\n" (Index.to_int reg)
+            ) clear;
+          Printf.eprintf "\n";
+          process (OutDFA.target tr) lr1s;
+    in
+    process OutDFA.initial !opt_debug_stack
+  );
   program
 )
 
@@ -204,7 +271,7 @@ let () = (
     Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
     Format.eprintf "%a\n%!" Cmon.format doc;
     );*)
-  let oc, out = match !output_name with
+  let oc, out = match !opt_output_name with
     | None -> (None, None)
     | Some filename ->
       let oc = open_out_bin filename in
