@@ -196,22 +196,14 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   if !opt_debug_stack <> [] then (
     let rec process st stack =
       Printf.eprintf "state %d\n" (Index.to_int st);
-      List.iteri (fun i (clause, captures) ->
-          Printf.eprintf "- MATCH: thread %d recognized clause %d"
-            i (Index.to_int clause);
+      List.iteri (fun i (accept, clause, captures) ->
+          Printf.eprintf "- thread %d recognizes%s clause %d"
+            i (if accept then " and ACCEPTS" else "") (Index.to_int clause);
           List.iter (fun (cap, reg) ->
               Printf.eprintf ", var%d in %%%d" (Index.to_int cap) (Index.to_int reg))
             (IndexMap.bindings captures);
           Printf.eprintf "\n";
-        ) (OutDFA.matching st);
-      List.iteri (fun i (clause, captures) ->
-          Printf.eprintf "- thread %d is recognizing clause %d"
-            i (Index.to_int clause);
-          List.iter (fun (cap, reg) ->
-              Printf.eprintf ", var%d in %%%d" (Index.to_int cap) (Index.to_int reg))
-            (IndexMap.bindings captures);
-          Printf.eprintf "\n";
-        ) (OutDFA.not_matching st);
+        ) (OutDFA.threads st);
       match stack with
       | [] ->
         Printf.eprintf "done\n";
