@@ -511,14 +511,14 @@ struct
             "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
             (IndexSet.cardinal pattern) (cardinal Redgraph.state)
             (IndexSet.cardinal immediate);*)
-        let capture0, capture = match capture with
+        let capture, capture_end = match capture with
           | None -> IndexSet.empty, IndexSet.empty
           | Some name ->
-            let capture0 = mk_capture Start_loc name in
-            let capture = mk_capture End_loc name in
-            (capture0, capture)
+            let capture_start = mk_capture Start_loc name in
+            let capture_end = mk_capture End_loc name in
+            (capture_start, capture_end)
         in
-        let r = RE.Reduce (capture0, {capture; pattern; policy}) in
+        let r = RE.Reduce (capture_end, {capture; pattern; policy}) in
         if IndexSet.is_empty immediate then
           r
         else if immediate == Lr1.all then
