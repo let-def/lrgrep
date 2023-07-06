@@ -469,24 +469,24 @@ struct
 
     let () =
       let todo = ref [] in
-      let process (Packed ti) =
-        let live_i = liveness ti in
-        let process_transition _label (Mapping (mapping, tj)) =
+      let process (Packed src) =
+        let live_src = liveness src in
+        let process_transition _label (Mapping (mapping, tgt)) =
           let changed = ref false in
-          let live_j = liveness tj in
-          let process_mapping j (i, captures) =
-            let live = IndexSet.union (Vector.get live_i i) captures in
-            let live' = Vector.get live_j j in
+          let live_tgt = liveness tgt in
+          let process_mapping tgt_j (src_i, captures) =
+            let live = IndexSet.union (Vector.get live_src src_i) captures in
+            let live' = Vector.get live_tgt tgt_j in
             if not (IndexSet.equal live live') then (
-              Vector.set live_j j live;
+              Vector.set live_tgt tgt_j live;
               changed := true;
             )
           in
           Vector.iteri process_mapping mapping;
           if !changed then
-            push todo (Packed tj)
+            push todo (Packed tgt)
         in
-        iter_transitions ti process_transition
+        iter_transitions src process_transition
       in
       Vector.iter process states;
       let rec loop () =
