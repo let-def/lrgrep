@@ -130,6 +130,7 @@ end = struct
           Used (k, v)
       end
     in
+    incr max_k;
     let k_size = int_size !max_k in
     let v_size = int_size !max_v in
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
