@@ -63,8 +63,9 @@ let parse
       | [] -> error_and_exit oc lexbuf
                 "Syntax error (no handler for it)"
       | matches ->
-        Printf.eprintf "Matches: %s\n"
-          (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches));
+        if false then
+          Printf.eprintf "Matches: %s\n"
+            (String.concat ", " (List.map (fun (x, _) -> string_of_int x) matches));
         let rec loop = function
           | [] -> error_and_exit oc lexbuf
                     "Syntax error (partial handler did not handle the case)"
