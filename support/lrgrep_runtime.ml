@@ -123,20 +123,22 @@ struct
     let rec loop () =
       match program_step PE.program pc with
       | Store reg ->
+        if debug then eprintf "Store %d\n" reg;
         bank.(reg) <- Some (P.really_top env);
         loop ()
       | Move (r1, r2) ->
-        (*prerr_endline "Store";*)
+        if debug then eprintf "Move %d -> %d\n" r1 r2;
         bank.(r2) <- bank.(r1);
         loop ()
       | Clear r1 ->
+        if debug then eprintf "Clear %d\n" r1;
         bank.(r1) <- None;
         loop ()
       | Yield pc' ->
-        (*prerr_endline "Yield";*)
+        if debug then prerr_endline "Yield";
         Some pc'
       | Accept (clause, registers) ->
-        (*prerr_endline "Accept";*)
+        if debug then eprintf "Accept (%d,%s)\n" clause (print_regs bank registers);
         let may_get = function
           | None -> None
           | Some i -> bank.(i)
@@ -144,19 +146,17 @@ struct
         candidate := (clause, Array.map may_get registers) :: !candidate;
         loop ()
       | Match index ->
-        (*prerr_endline "Match";*)
-        begin
-          match sparse_lookup PE.table index (P.current_state_number env) with
+        let state = P.current_state_number env in
+        let () = match sparse_lookup PE.table index state with
           | Some pc' ->
-            (*prerr_endline "Match success";*)
+            if debug then Printf.eprintf "Match %d %d: success\n" index state;
             pc := pc'
           | None ->
-            (*prerr_endline "Match failure";*)
-            ()
-        end;
+            if debug then Printf.eprintf "Match %d %d: failure\n" index state
+        in
         loop ()
       | Halt ->
-        (*prerr_endline "Halt";*)
+        if debug then prerr_endline "Halt";
         None
     in
     loop ()
