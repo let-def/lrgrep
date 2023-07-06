@@ -506,13 +506,28 @@ struct
       let Refl = assert_equal_cardinal (Vector.length regs) (Vector.length st.group) in
       regs
 
+    (* Naive allocator *)
+    (*let () =
+      let inflate_set (f : 'n index -> 'a) (set : 'n indexset) : ('n, 'a) indexmap =
+        IndexSet.fold (fun i map -> IndexMap.add i (f i) map) set IndexMap.empty
+      in
+      let init (Packed state) =
+        let in_use = ref IntSet.empty in
+        let alloc caps = inflate_set (fun _ -> Register.of_int (IntSet.allocate in_use)) caps in
+        Vector.set registers state.index
+          (Vector.Packed (Vector.map alloc (liveness state)))
+      in
+      Vector.iter init states*)
+
+    (* Smarter allocator (minimizing moves) *)
     let () =
       let allocate_successor (registers : (_, Register.t Capture.map) vector) allocated mapping target =
         let live = liveness target in
         let in_use = ref (
             Vector.fold_right
-              (fun (ii, _) set -> IntSet.union (Vector.get allocated ii) set)
-              mapping IntSet.empty
+              (fun (ii, _) set -> IndexSet.union (Vector.get allocated ii) set)
+              mapping IndexSet.empty
+            : Register.set :> IntSet.t
           )
         in
         (* Allocate fresh registers *)
@@ -527,7 +542,7 @@ struct
       in
       let init (Packed src) =
         let regs = get_registers src in
-        let allocated = Vector.map (fun x -> IndexMap.fold (fun _ reg map -> IntSet.add (Index.to_int reg) map) x IntSet.empty) regs in
+        let allocated = Vector.map (fun x -> IndexMap.fold (fun _ reg map -> IndexSet.add reg map) x IndexSet.empty) regs in
         iter_transitions src @@ fun _ (Mapping (mapping, target)) ->
         if Vector.get registers target.index == empty_registers then
           let regs' = allocate_successor regs allocated mapping target in
