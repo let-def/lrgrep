@@ -630,30 +630,29 @@ struct
       !matched
 
     let derive k =
-      let rec reduce_outer ks matching next label reduction lookahead = function
-        | step :: transitions when live_redstep reduction step ->
-          let visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
-            match label_filter label candidate.filter with
-            | Some label
-              when reduce_target reduction candidate.target
-                  ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
-                  ~on_outer:(reduce_outer ks matching next label) ->
-              matching := IndexSet.union label.filter !matching
-            | _ -> ()
-          in
-          List.iter visit_candidate step.candidates;
-          begin match transitions with
-            | step' :: _ when live_redstep reduction step' ->
-              push ks
-                (label, Some (Reducing {reduction; transitions; lookahead; next}));
-            | _ -> ()
-          end
-        | _ -> ()
-      in
       let reduce_outer next label reduction lookahead transitions =
         let ks = ref [] in
         let matching = ref IndexSet.empty in
-        reduce_outer ks matching next label reduction lookahead transitions;
+        let rec visit_transitions label reduction lookahead = function
+          | step :: transitions when live_redstep reduction step ->
+            List.iter visit_candidate step.candidates;
+            begin match transitions with
+              | step' :: _ when live_redstep reduction step' ->
+                let reducing = Reducing {reduction; transitions; lookahead; next} in
+                push ks (label, Some reducing)
+              | _ -> ()
+            end
+          | _ -> ()
+        and visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
+          match label_filter label candidate.filter with
+          | Some label
+            when reduce_target reduction candidate.target
+                ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
+                ~on_outer:(visit_transitions label) ->
+            matching := IndexSet.union label.filter !matching
+          | _ -> ()
+        in
+        visit_transitions label reduction lookahead transitions;
         let matching =
           if not_empty !matching then
             Some {label with filter = !matching}
@@ -673,12 +672,13 @@ struct
         | Reducing {reduction; transitions; lookahead; next} ->
           let l', ks' = reduce_outer next label reduction lookahead transitions in
           match l', reduction.policy with
-          | None, _ -> ks := List.rev_append ks' !ks
+          | None, _ ->
+            ks := ks' @ !ks
           | Some label, Longest ->
             ks := ks' @ !ks;
-            process_k label next
+            process_k (label_capture label reduction.capture) next
           | Some label, Shortest ->
-            process_k label next;
+            process_k (label_capture label reduction.capture) next;
             ks := ks' @ !ks
 
       and process_re label self next = function
@@ -692,15 +692,13 @@ struct
         | Alt es ->
           List.iter (fun e -> process_k label (More (e, next))) es
 
-        | Star (r, qk) ->
-          begin match qk with
-            | Shortest ->
-              process_k label next;
-              process_k label (More (r, self));
-            | Longest ->
-              process_k label (More (r, self));
-              process_k label next;
-          end
+        | Star (r, Shortest) ->
+          process_k label next;
+          process_k label (More (r, self))
+
+        | Star (r, Longest) ->
+          process_k label (More (r, self));
+          process_k label next
 
         | Seq es ->
           process_k label (List.fold_right (fun e k -> More (e, k)) es next)
@@ -727,6 +725,7 @@ struct
                 reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
               ) label.filter
           in
+          let label = label_capture label r.capture in
           begin match r.RE.policy with
             | Shortest ->
               if not_empty matching then
