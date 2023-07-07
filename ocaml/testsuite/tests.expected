@@ -30,7 +30,7 @@ Error: `then' is a keyword and cannot appear in this context (try then_)
 
 --- PARSING test_ko_07.ml
 File "test_ko_07.ml", line 2, characters 53-56:
-Error: Syntax error (no handler for it)
+Error: Expecting `in' to continue let-binding at line 2, character 40
 --- KO test_ko_07.ml
 
 --- PARSING test_ko_08.ml
