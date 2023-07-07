@@ -1,1 +1,1 @@
-class lident : object method lident : {foo|bar|foo} initializer
+class lident : object method lident : {%foo|bar|} initializer

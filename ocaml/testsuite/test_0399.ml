@@ -1,1 +1,1 @@
-( MODULE {foo|bar|foo} : WITH
+( MODULE {%foo|bar|} : WITH

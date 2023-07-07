@@ -1,1 +1,1 @@
-exception false of {foo|bar|foo} while
+exception false of {%foo|bar|} while

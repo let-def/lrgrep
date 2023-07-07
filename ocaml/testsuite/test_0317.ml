@@ -1,1 +1,1 @@
-let lident : ' lident . {foo|bar|foo} = with
+let lident : ' lident . {%foo|bar|} = with

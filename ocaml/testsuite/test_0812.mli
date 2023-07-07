@@ -1,1 +1,1 @@
-include {foo|bar|foo} with type lident = private with
+include {%foo|bar|} with type lident = private with

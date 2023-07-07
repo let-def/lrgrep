@@ -1,1 +1,1 @@
-include {foo|bar|foo} with module type UIDENT := {foo|bar|foo} while
+include {%foo|bar|} with module type UIDENT := {%foo|bar|} while

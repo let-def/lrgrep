@@ -1,1 +1,1 @@
-for {foo|bar|foo} while
+for {%foo|bar|} while

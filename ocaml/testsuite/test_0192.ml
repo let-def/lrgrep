@@ -1,1 +1,1 @@
-fun ?label: ( false : {foo|bar|foo} with
+fun ?label: ( false : {%foo|bar|} with

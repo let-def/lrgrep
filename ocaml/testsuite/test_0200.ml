@@ -1,1 +1,1 @@
-fun ? ( lident : {foo|bar|foo} with
+fun ? ( lident : {%foo|bar|} with

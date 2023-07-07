@@ -1,1 +1,1 @@
-object inherit fun false -> {foo|bar|foo} with
+object inherit fun false -> {%foo|bar|} with

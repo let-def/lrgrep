@@ -1,1 +1,1 @@
-[@@@ and : {foo|bar|foo} with
+[@@@ and : {%foo|bar|} with

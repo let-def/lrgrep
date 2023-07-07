@@ -1,1 +1,1 @@
-exception false : { lident : {foo|bar|foo} >
+exception false : { lident : {%foo|bar|} >

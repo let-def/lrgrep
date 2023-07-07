@@ -1,1 +1,1 @@
-include {foo|bar|foo} with type lident := with
+include {%foo|bar|} with type lident := with

@@ -1,1 +1,1 @@
-class lident : {foo|bar|foo} val
+class lident : {%foo|bar|} val

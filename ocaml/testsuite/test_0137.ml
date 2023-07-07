@@ -1,1 +1,1 @@
-external lident : {foo|bar|foo} = "string" with
+external lident : {%foo|bar|} = "string" with

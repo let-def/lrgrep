@@ -1,1 +1,1 @@
-exception false : { lident : {foo|bar|foo} ; [@ and ] while
+exception false : { lident : {%foo|bar|} ; [@ and ] while

@@ -1,1 +1,1 @@
-type lident = {foo|bar|foo} = private { with
+type lident = {%foo|bar|} = private { with

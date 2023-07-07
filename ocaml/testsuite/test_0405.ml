@@ -1,1 +1,1 @@
-( UIDENT : {foo|bar|foo} }
+( UIDENT : {%foo|bar|} }

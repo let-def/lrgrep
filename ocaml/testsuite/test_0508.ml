@@ -1,1 +1,1 @@
-object ( false : {foo|bar|foo} with
+object ( false : {%foo|bar|} with

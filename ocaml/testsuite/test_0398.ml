@@ -1,1 +1,1 @@
-( MODULE {foo|bar|foo} : {foo|bar|foo} WHILE
+( MODULE {%foo|bar|} : {%foo|bar|} WHILE

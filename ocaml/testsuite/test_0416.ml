@@ -1,1 +1,1 @@
-module rec UIDENT = {foo|bar|foo} and [@ and ] while
+module rec UIDENT = {%foo|bar|} and [@ and ] while

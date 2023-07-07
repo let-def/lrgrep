@@ -1,1 +1,1 @@
-let lident : {foo|bar|foo} }
+let lident : {%foo|bar|} }

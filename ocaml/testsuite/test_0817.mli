@@ -1,1 +1,1 @@
-include {foo|bar|foo} with type with
+include {%foo|bar|} with type with

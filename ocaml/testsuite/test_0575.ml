@@ -1,1 +1,1 @@
-open {foo|bar|foo} with
+open {%foo|bar|} with

@@ -1,1 +1,1 @@
-include functor ( ) -> {foo|bar|foo} while
+include functor ( ) -> {%foo|bar|} while

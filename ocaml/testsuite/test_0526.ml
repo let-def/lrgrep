@@ -1,1 +1,1 @@
-object method lident : ' lident . {foo|bar|foo} with
+object method lident : ' lident . {%foo|bar|} with

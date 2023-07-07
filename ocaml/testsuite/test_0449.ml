@@ -1,1 +1,1 @@
-object constraint {foo|bar|foo} = {foo|bar|foo} with
+object constraint {%foo|bar|} = {%foo|bar|} with

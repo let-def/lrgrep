@@ -1,1 +1,1 @@
-class lident : object constraint {foo|bar|foo} = {foo|bar|foo} initializer
+class lident : object constraint {%foo|bar|} = {%foo|bar|} initializer

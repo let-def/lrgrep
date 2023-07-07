@@ -1,1 +1,1 @@
-object inherit [ {foo|bar|foo} ] with
+object inherit [ {%foo|bar|} ] with

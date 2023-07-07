@@ -1,1 +1,1 @@
-{ lident : {foo|bar|foo} :> {foo|bar|foo} with
+{ lident : {%foo|bar|} :> {%foo|bar|} with

@@ -1,1 +1,1 @@
-exception false : {foo|bar|foo} * with
+exception false : {%foo|bar|} * with

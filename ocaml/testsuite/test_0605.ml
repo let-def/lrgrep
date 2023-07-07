@@ -1,1 +1,1 @@
-type lident constraint {foo|bar|foo} = with
+type lident constraint {%foo|bar|} = with

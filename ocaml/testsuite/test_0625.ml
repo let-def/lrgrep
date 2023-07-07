@@ -1,1 +1,1 @@
-type lident = {foo|bar|foo} with
+type lident = {%foo|bar|} with

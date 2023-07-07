@@ -1,1 +1,1 @@
-object val virtual lident : {foo|bar|foo} with
+object val virtual lident : {%foo|bar|} with

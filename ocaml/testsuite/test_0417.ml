@@ -1,1 +1,1 @@
-module rec UIDENT = {foo|bar|foo} and UIDENT = {foo|bar|foo} in
+module rec UIDENT = {%foo|bar|} and UIDENT = {%foo|bar|} in

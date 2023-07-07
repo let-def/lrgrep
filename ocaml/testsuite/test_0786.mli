@@ -1,1 +1,1 @@
-include ( {foo|bar|foo} while
+include ( {%foo|bar|} while

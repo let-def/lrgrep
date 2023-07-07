@@ -1,1 +1,1 @@
-{ lident : {foo|bar|foo} )
+{ lident : {%foo|bar|} )

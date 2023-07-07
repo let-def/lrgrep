@@ -1,1 +1,1 @@
-fun false : {foo|bar|foo} -> with
+fun false : {%foo|bar|} -> with

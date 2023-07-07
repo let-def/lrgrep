@@ -1,1 +1,1 @@
-let open ! {foo|bar|foo} in with
+let open ! {%foo|bar|} in with

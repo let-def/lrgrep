@@ -1,1 +1,1 @@
-include ( val UIDENT : {foo|bar|foo} :> with
+include ( val UIDENT : {%foo|bar|} :> with
