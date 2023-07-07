@@ -1,0 +1,1 @@
+object initializer [@ and ] virtual
