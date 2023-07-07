@@ -1,1 +1,1 @@
-module rec UIDENT : {foo|bar|foo} and with
+module rec UIDENT : {%foo|bar|} and with

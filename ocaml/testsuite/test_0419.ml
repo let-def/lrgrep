@@ -1,1 +1,1 @@
-module rec UIDENT = {foo|bar|foo} and UIDENT with
+module rec UIDENT = {%foo|bar|} and UIDENT with

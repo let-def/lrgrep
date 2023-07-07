@@ -1,1 +1,1 @@
-object method lident : {foo|bar|foo} val
+object method lident : {%foo|bar|} val

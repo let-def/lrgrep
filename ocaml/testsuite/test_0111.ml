@@ -1,1 +1,1 @@
-exception false : { lident : {foo|bar|foo} ; with
+exception false : { lident : {%foo|bar|} ; with

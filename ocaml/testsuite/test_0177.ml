@@ -1,1 +1,1 @@
-fun false : {foo|bar|foo} while
+fun false : {%foo|bar|} while

@@ -1,1 +1,1 @@
-[@@@ and ? {foo|bar|foo} while
+[@@@ and ? {%foo|bar|} while

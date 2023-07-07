@@ -1,1 +1,1 @@
-exception false : {foo|bar|foo} * {foo|bar|foo} val
+exception false : {%foo|bar|} * {%foo|bar|} val

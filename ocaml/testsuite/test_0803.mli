@@ -1,1 +1,1 @@
-include {foo|bar|foo} with module UIDENT := UIDENT and with
+include {%foo|bar|} with module UIDENT := UIDENT and with

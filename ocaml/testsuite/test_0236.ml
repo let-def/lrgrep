@@ -1,1 +1,1 @@
-include ( val UIDENT : {foo|bar|foo} :> {foo|bar|foo} while
+include ( val UIDENT : {%foo|bar|} :> {%foo|bar|} while

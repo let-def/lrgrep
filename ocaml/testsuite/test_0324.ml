@@ -1,1 +1,1 @@
-let lident : type lident . {foo|bar|foo} with
+let lident : type lident . {%foo|bar|} with

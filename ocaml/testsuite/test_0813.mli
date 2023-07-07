@@ -1,1 +1,1 @@
-include {foo|bar|foo} with type lident = {foo|bar|foo} ,
+include {%foo|bar|} with type lident = {%foo|bar|} ,

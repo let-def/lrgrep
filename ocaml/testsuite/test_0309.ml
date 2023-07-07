@@ -1,1 +1,1 @@
-let false : {foo|bar|foo} with
+let false : {%foo|bar|} with

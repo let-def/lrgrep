@@ -1,1 +1,1 @@
-let* lident , {foo|bar|foo} while
+let* lident , {%foo|bar|} while

@@ -1,1 +1,1 @@
-type nonrec lident += false : {foo|bar|foo} constraint
+type nonrec lident += false : {%foo|bar|} constraint

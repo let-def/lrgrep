@@ -1,1 +1,1 @@
-module rec UIDENT : {foo|bar|foo} while
+module rec UIDENT : {%foo|bar|} while

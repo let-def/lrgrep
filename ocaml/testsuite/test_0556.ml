@@ -1,1 +1,1 @@
-object val lident : {foo|bar|foo} = with
+object val lident : {%foo|bar|} = with

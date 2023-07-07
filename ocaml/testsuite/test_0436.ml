@@ -1,1 +1,1 @@
-module UIDENT = {foo|bar|foo} with
+module UIDENT = {%foo|bar|} with

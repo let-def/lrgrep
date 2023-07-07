@@ -1,1 +1,1 @@
-class lident : object ( {foo|bar|foo} ) with
+class lident : object ( {%foo|bar|} ) with

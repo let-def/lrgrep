@@ -1,1 +1,1 @@
-exception false : {foo|bar|foo} constraint
+exception false : {%foo|bar|} constraint

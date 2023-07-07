@@ -1,1 +1,1 @@
-class lident : {foo|bar|foo} and virtual with
+class lident : {%foo|bar|} and virtual with

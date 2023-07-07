@@ -1,1 +1,1 @@
-fun ?label: ( {foo|bar|foo} while
+fun ?label: ( {%foo|bar|} while

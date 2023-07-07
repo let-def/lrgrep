@@ -1,1 +1,1 @@
-object inherit let open UIDENT in {foo|bar|foo} with
+object inherit let open UIDENT in {%foo|bar|} with

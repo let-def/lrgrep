@@ -1,1 +1,1 @@
-let {foo|bar|foo} while
+let {%foo|bar|} while

@@ -1,1 +1,1 @@
-class lident : {foo|bar|foo} and [@ and ] while
+class lident : {%foo|bar|} and [@ and ] while

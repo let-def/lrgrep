@@ -1,1 +1,1 @@
-class lident : ?label: {foo|bar|foo} with
+class lident : ?label: {%foo|bar|} with

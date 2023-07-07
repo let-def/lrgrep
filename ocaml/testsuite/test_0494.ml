@@ -1,1 +1,1 @@
-object inherit ( lident : {foo|bar|foo} val
+object inherit ( lident : {%foo|bar|} val

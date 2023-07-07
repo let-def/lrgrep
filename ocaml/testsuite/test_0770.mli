@@ -1,1 +1,1 @@
-class lident : {foo|bar|foo} [@@ and ] method
+class lident : {%foo|bar|} [@@ and ] method

@@ -1,1 +1,1 @@
-function {foo|bar|foo} while
+function {%foo|bar|} while

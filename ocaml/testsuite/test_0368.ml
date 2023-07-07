@@ -1,1 +1,1 @@
-let* lident false : {foo|bar|foo} }
+let* lident false : {%foo|bar|} }

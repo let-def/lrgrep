@@ -1,1 +1,1 @@
-type lident = | false : {foo|bar|foo} in
+type lident = | false : {%foo|bar|} in

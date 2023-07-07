@@ -1,1 +1,1 @@
-let* false {foo|bar|foo} while
+let* false {%foo|bar|} while

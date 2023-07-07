@@ -1,1 +1,1 @@
-val lident : {foo|bar|foo} with
+val lident : {%foo|bar|} with

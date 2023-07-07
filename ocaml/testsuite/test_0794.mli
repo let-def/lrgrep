@@ -1,1 +1,1 @@
-include {foo|bar|foo} -> {foo|bar|foo} while
+include {%foo|bar|} -> {%foo|bar|} while

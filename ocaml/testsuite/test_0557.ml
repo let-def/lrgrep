@@ -1,1 +1,1 @@
-object val lident : {foo|bar|foo} }
+object val lident : {%foo|bar|} }

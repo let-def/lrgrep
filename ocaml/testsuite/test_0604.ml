@@ -1,1 +1,1 @@
-type lident constraint {foo|bar|foo} = {foo|bar|foo} ,
+type lident constraint {%foo|bar|} = {%foo|bar|} ,

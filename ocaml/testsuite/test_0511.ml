@@ -1,1 +1,1 @@
-object ( {foo|bar|foo} while
+object ( {%foo|bar|} while

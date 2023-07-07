@@ -1,1 +1,1 @@
-let module UIDENT = {foo|bar|foo} in with
+let module UIDENT = {%foo|bar|} in with

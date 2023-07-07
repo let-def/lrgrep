@@ -1,1 +1,1 @@
-include module type of {foo|bar|foo} in
+include module type of {%foo|bar|} in
