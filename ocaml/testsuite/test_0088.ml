@@ -1,0 +1,1 @@
+class type [ _ ] with

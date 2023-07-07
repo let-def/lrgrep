@@ -1,0 +1,1 @@
+class type virtual with

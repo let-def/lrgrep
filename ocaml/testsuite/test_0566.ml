@@ -1,0 +1,1 @@
+object val virtual with
