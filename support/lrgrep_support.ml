@@ -145,7 +145,9 @@ end = struct
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
-    Printf.eprintf "key size: %d\nvalue size: %d\ntable size:%d\n" k_size v_size (Array.length table);
+    Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
+    Printf.eprintf "table size: %d\nrepr size: %d\n"
+      (Array.length table) (Bytes.length repr);
     Bytes.unsafe_to_string repr
 end
 
@@ -222,6 +224,7 @@ end = struct
         Bytes.set_uint16_be buf pos (!reloc land 0xFFFF);
         Bytes.set_uint8 buf (pos + 2) (!reloc lsr 16);
       ) t.reloc;
+    Printf.eprintf "bytecode size: %d\n" (Bytes.length buf);
     Bytes.unsafe_to_string buf
 end
 
