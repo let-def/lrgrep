@@ -301,46 +301,40 @@ let compact (type dfa clause lr1)
   let transition_count = ref 0 in
   let transition_dom = ref 0 in
   let cell_count = ref 0 in
-  let process_state index pc =
-    let {accept; halting; transitions} = get_state index in
-    let default, other_transitions =
-      let _, most_frequent_action =
-        List.fold_left (fun (count, _ as default) (dom, action) ->
-            let count' = IndexSet.cardinal dom in
-            incr transition_count;
-            transition_dom := !transition_dom + count';
-            if count' > count
-            then (count', Some action)
-            else default
-          ) (IndexSet.cardinal halting, None) transitions
-      in
-      let prepare_transition (dom, action) =
-        match most_frequent_action with
-        | Some action' when same_action action action' -> None
-        | _ -> Some (dom, goto_action action)
-      in
-      let other = List.filter_map prepare_transition transitions in
-      let other =
-        if Option.is_some most_frequent_action &&
-           IndexSet.cardinal halting > 0
-        then (halting, halt_pc) :: other
-        else other
-      in
-      (most_frequent_action, other)
+  let prepare_state index pc =
+    let {halting; transitions; accept} = get_state index in
+    let _, most_frequent_action =
+      List.fold_left (fun (count, _ as default) (dom, action) ->
+          let count' = IndexSet.cardinal dom in
+          incr transition_count;
+          transition_dom := !transition_dom + count';
+          if count' > count
+          then (count', Some action)
+          else default
+        ) (IndexSet.cardinal halting, None) transitions
     in
+    let prepare_transition (dom, action) =
+      match most_frequent_action with
+      | Some action' when same_action action action' -> None
+      | _ -> Some (dom, goto_action action)
+    in
+    let other = List.filter_map prepare_transition transitions in
+    let other =
+      if Option.is_some most_frequent_action &&
+         IndexSet.cardinal halting > 0
+      then (halting, halt_pc) :: other
+      else other
+    in
+    let cardinal =
+      List.fold_left
+        (fun acc (set, _) -> IndexSet.cardinal set + acc)
+        0 other
+    in
+    (cardinal, pc, accept, most_frequent_action, other)
+  in
+  let process_state (_cardinal, pc, accept, default, other_transitions) =
     assert (!pc = -1);
     pc := Code_emitter.position code;
-    (*if index = initial then (
-      Printf.eprintf "halt pc: %d\n" !halt_pc;
-      Printf.eprintf "default target: %s\n"
-        (match default with
-         | None -> "Halt"
-         | Some act -> string_of_index act.target);
-      Printf.eprintf "other transitions:\n";
-      List.iter (fun (lr1s, target) ->
-          Printf.eprintf "  %s -> %d\n" (string_of_indexset lr1s) !target)
-        other_transitions
-      );*)
     List.iter
       (fun (clause, registers) ->
          Code_emitter.emit code (Accept (Index.to_int clause, registers)))
@@ -363,7 +357,10 @@ let compact (type dfa clause lr1)
       | Some default -> emit_action default
     end
   in
-  Vector.iteri process_state pcs;
+  let preparation = Vector.as_array (Vector.mapi prepare_state pcs) in
+  Array.sort (fun (c1, _, _, _, _) (c2, _, _, _, _) -> Int.compare c2 c1)
+    preparation;
+  Array.iter process_state preparation;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
   let code = Code_emitter.link code in
