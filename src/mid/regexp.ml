@@ -44,11 +44,16 @@ module type REDGRAPH = sig
     outer: outer_transitions;
   }
 
-  type stack = Lr1.t * Lr1.t list
+  type config = {
+    top: Lr1.t;
+    rest: Lr1.t list;
+    lookahead: Terminal.set;
+  }
 
   val initial : (Lr1.n, transitions) vector
 
-  val get_stack : state index -> stack
+  val get_config : state index -> config
+  val get_stack : state index -> Lr1.t list
   val get_transitions : state index -> transitions
 
   val reachable : state index -> state indexset
@@ -139,7 +144,6 @@ module type S = sig
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
-          lookahead: Terminal.set;
           transitions: Redgraph.outer_transitions;
           next: t;
         }
@@ -173,13 +177,33 @@ struct
 
   module Redgraph : REDGRAPH with module Info := Info =
   struct
+    let rec group_reductions depth
+      : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
+      function
+      | [] -> []
+      | (prod, la) :: rest when depth = Production.length prod ->
+        let lhs = Production.lhs prod in
+        begin match group_reductions depth rest with
+          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
+            ((lhs, IndexSet.union la la') :: other) :: tl
+          | [] -> [[lhs, la]]
+          | other :: tl ->
+            ((lhs, la) :: other) :: tl
+        end
+      | otherwise ->
+        [] :: group_reductions (depth + 1) otherwise
+
     open IndexBuffer
 
     module State = Gen.Make()
     type state = State.n
     let state = State.n
 
-    type stack = Lr1.t * Lr1.t list
+    type config = {
+      top: Lr1.t;
+      rest: Lr1.t list;
+      lookahead: Terminal.set;
+    }
 
     type 'a goto_candidate = {
       target: state index;
@@ -199,60 +223,57 @@ struct
       outer: outer_transitions;
     }
 
-    let rec group_reductions depth
-      : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
-      function
-      | [] -> []
-      | (prod, la) :: rest when depth = Production.length prod ->
-        let lhs = Production.lhs prod in
-        begin match group_reductions depth rest with
-          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
-            ((lhs, IndexSet.union la la') :: other) :: tl
-          | [] -> [[lhs, la]]
-          | other :: tl ->
-            ((lhs, la) :: other) :: tl
-        end
-      | otherwise ->
-        [] :: group_reductions (depth + 1) otherwise
-
     let states = State.get_generator ()
 
     let nodes = Hashtbl.create 7
 
-    let rec visit_stack stack =
-      match Hashtbl.find_opt nodes stack with
+    let reductions =
+      Vector.init Lr1.n (fun lr1 -> lr1 |> Lr1.reductions |> group_reductions 0)
+
+    let rec visit_config config =
+      match Hashtbl.find_opt nodes config with
       | Some state -> state
       | None ->
         let reservation = Gen.reserve states in
         let index = Gen.index reservation in
-        Hashtbl.add nodes stack index;
-        Gen.commit states reservation (stack, visit_transitions stack);
+        Hashtbl.add nodes config index;
+        Gen.commit states reservation (config, visit_transitions config);
         index
 
-    and visit_transitions (top, _ as stack) =
-      Lr1.reductions top
-      |> group_reductions 0
-      |> visit_inner stack
+    and visit_transitions config =
+      visit_inner config (Vector.get reductions config.top)
 
-    and visit_inner (top, rest) = function
+    and visit_inner config = function
       | [] -> ([], [])
       | gotos :: next ->
-        let (inner, outer) = match rest with
-          | top' :: rest' -> visit_inner (top', rest') next
-          | [] -> ([], visit_outer (IndexSet.singleton top) next)
+        let (inner, outer) = match config.rest with
+          | top :: rest ->
+            visit_inner {config with top; rest} next
+          | [] ->
+            ([], visit_outer config.lookahead (IndexSet.singleton config.top) next)
         in
         let process_goto (lhs, lookahead) =
-          let target_lhs = Transition.find_goto_target top lhs in
-          let target = visit_stack (target_lhs, top :: rest) in
-          {target; lookahead; filter=()}
+          let target_lhs = Transition.find_goto_target config.top lhs in
+          let lookahead = Terminal.intersect lookahead config.lookahead in
+          if IndexSet.is_empty lookahead then
+            None
+          else
+            let target =
+              visit_config {
+                top = target_lhs;
+                rest = config.top :: config.rest;
+                lookahead;
+              }
+            in
+            Some {target; lookahead; filter=()}
         in
-        (List.map process_goto gotos :: inner, outer)
+        (List.filter_map process_goto gotos :: inner, outer)
 
-    and visit_outer successors = function
+    and visit_outer lookahead successors = function
       | [] -> []
       | gotos :: next ->
         let lr1_states = Lr1.set_predecessors successors in
-        let next = visit_outer lr1_states next in
+        let next = visit_outer lookahead lr1_states next in
         let process_goto acc (lhs, lookahead) =
           let process_target source acc =
             let target_lhs = Transition.find_goto_target source lhs in
@@ -260,7 +281,12 @@ struct
                 | Some (sources, target) ->
                   Some (IndexSet.add source sources, target)
                 | None ->
-                  Some (IndexSet.singleton source, visit_stack (target_lhs, []))
+                  let config = {
+                    top = target_lhs;
+                    rest = [];
+                    lookahead;
+                  } in
+                  Some (IndexSet.singleton source, visit_config config)
               ) acc
           in
           let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
@@ -271,7 +297,14 @@ struct
         gotos :: next
 
     let initial =
-      Vector.init Lr1.n (fun lr1 -> visit_transitions (lr1, []))
+      Vector.init Lr1.n (fun lr1 ->
+          let config = {
+            top = lr1;
+            rest = [];
+            lookahead = Terminal.all;
+          } in
+          visit_transitions config
+        )
 
     let states = Gen.freeze states
 
@@ -341,225 +374,16 @@ struct
     let reachable = Vector.get reachable
 
     let get_def = Vector.get states
-    let get_stack st = fst (get_def st)
+    let get_config st = fst (get_def st)
     let get_transitions st = snd (get_def st)
+    let get_stack st =
+      let config = get_config st in
+      config.top :: config.rest
 
     let to_string state =
-      let top, rest = get_stack state in
+      let {top; rest; _} = get_config state in
       let states = List.rev (top :: rest) in
       string_concat_map " " Lr1.to_string states
-  end
-
-  module Redgraph_la =
-  struct
-    let rec group_reductions depth
-      : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
-      function
-      | [] -> []
-      | (prod, la) :: rest when depth = Production.length prod ->
-        let lhs = Production.lhs prod in
-        begin match group_reductions depth rest with
-          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
-            ((lhs, IndexSet.union la la') :: other) :: tl
-          | [] -> [[lhs, la]]
-          | other :: tl ->
-            ((lhs, la) :: other) :: tl
-        end
-      | otherwise ->
-        [] :: group_reductions (depth + 1) otherwise
-
-    open IndexBuffer
-
-    module State = Gen.Make()
-    type state = State.n
-    let state = State.n
-
-    type configuration = {
-      top: Lr1.t;
-      rest: Lr1.t list;
-      lookahead: Terminal.set;
-    }
-
-    type 'a goto_candidate = {
-      target: state index;
-      lookahead: Terminal.set;
-      filter: 'a;
-    }
-
-    (*type 'a reduction_step = {
-      reachable: state indexset;
-      candidates: 'a goto_candidate list;
-    }
-
-    type inner_transitions = unit reduction_step list
-    type outer_transitions = Lr1.set reduction_step list
-    type transitions = {
-      inner: inner_transitions;
-      outer: outer_transitions;
-      }*)
-
-    let states = State.get_generator ()
-
-    let nodes = Hashtbl.create 7
-
-    let reductions =
-      Vector.init Lr1.n (fun lr1 -> lr1 |> Lr1.reductions |> group_reductions 0)
-
-    let rec visit_config config =
-      match Hashtbl.find_opt nodes config with
-      | Some state -> state
-      | None ->
-        let reservation = Gen.reserve states in
-        let index = Gen.index reservation in
-        Hashtbl.add nodes config index;
-        Gen.commit states reservation (config, visit_transitions config);
-        index
-
-    and visit_transitions config =
-      visit_inner config (Vector.get reductions config.top)
-
-    and visit_inner config = function
-      | [] -> ([], [])
-      | gotos :: next ->
-        let (inner, outer) = match config.rest with
-          | top :: rest ->
-            visit_inner {config with top; rest} next
-          | [] ->
-            ([], visit_outer config.lookahead (IndexSet.singleton config.top) next)
-        in
-        let process_goto (lhs, lookahead) =
-          let target_lhs = Transition.find_goto_target config.top lhs in
-          let lookahead = Terminal.intersect lookahead config.lookahead in
-          let target =
-            visit_config {
-              top = target_lhs;
-              rest = config.top :: config.rest;
-              lookahead;
-            }
-          in
-          {target; lookahead; filter=()}
-        in
-        (List.map process_goto gotos :: inner, outer)
-
-    and visit_outer lookahead successors = function
-      | [] -> []
-      | gotos :: next ->
-        let lr1_states = Lr1.set_predecessors successors in
-        let next = visit_outer lookahead lr1_states next in
-        let process_goto acc (lhs, lookahead) =
-          let process_target source acc =
-            let target_lhs = Transition.find_goto_target source lhs in
-            IndexMap.update target_lhs (function
-                | Some (sources, target) ->
-                  Some (IndexSet.add source sources, target)
-                | None ->
-                  let config = {
-                    top = target_lhs;
-                    rest = [];
-                    lookahead;
-                  } in
-                  Some (IndexSet.singleton source, visit_config config)
-              ) acc
-          in
-          let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
-          let add_target _ (filter, target) acc = {filter; target; lookahead} :: acc in
-          IndexMap.fold add_target by_target acc
-        in
-        let gotos = List.fold_left process_goto [] gotos in
-        gotos :: next
-
-    let initial =
-      Vector.init Lr1.n (fun lr1 ->
-          let config = {
-            top = lr1;
-            rest = [];
-            lookahead = Terminal.all;
-          } in
-          visit_transitions config
-        )
-
-    let states = Gen.freeze states
-
-    let () =
-      Printf.eprintf "redgraph with lookahead: %d states (vs %d states)\n%!"
-        (cardinal state) (cardinal Redgraph.state)
-
-
-    let () = ignore (initial, states)
-
-    (*let reachable =
-          let reachable =
-            states |> Vector.mapi begin fun self (_stack, (inner, outer)) ->
-              let add_target acc step = IndexSet.add step.target acc in
-              let acc = IndexSet.singleton self in
-              let acc = List.fold_left (List.fold_left add_target) acc inner in
-              let acc = List.fold_left (List.fold_left add_target) acc outer in
-              acc
-            end
-          in
-          let preds = Vector.make state IndexSet.empty in
-          Vector.iteri (fun source reachable ->
-              IndexSet.iter (fun target ->
-                  if target <> source then
-                    vector_set_add preds target source
-                ) reachable
-            ) reachable;
-          let todo = ref [] in
-          let update reach' state =
-            let reach = Vector.get reachable state in
-            if not (IndexSet.subset reach' reach) then (
-              Vector.set reachable state (IndexSet.union reach reach');
-              push todo state
-            )
-          in
-          let process state =
-            let reach = Vector.get reachable state in
-            IndexSet.iter (update reach) (Vector.get preds state)
-          in
-          Index.iter state process;
-          let rec loop () =
-            match !todo with
-            | [] -> ()
-            | some ->
-              todo := [];
-              List.iter process some;
-              loop ()
-          in
-          loop ();
-          reachable
-
-        let make_reduction_step (inner, outer) =
-          let rec process_steps = function
-            | [] -> []
-            | step :: steps ->
-              let steps = process_steps steps in
-              let acc = match steps with
-                | [] -> IndexSet.empty
-                | x :: _ -> x.reachable
-              in
-              let reachable =
-                List.fold_left (fun acc candidate ->
-                    IndexSet.union acc
-                      (Vector.get reachable candidate.target))
-                  acc step
-              in
-              {reachable; candidates=step} :: steps
-          in
-          {inner = process_steps inner; outer = process_steps outer}
-
-        let states = Vector.map (fun (stack, steps) -> (stack, make_reduction_step steps)) states
-
-        let initial = Vector.map make_reduction_step initial
-        let reachable = Vector.get reachable
-
-        let get_def = Vector.get states
-        let get_stack st = fst (get_def st)
-        let get_transitions st = snd (get_def st)
-
-        let to_string state =
-          let top, rest = get_stack state in
-          let states = List.rev (top :: rest) in
-          string_concat_map " " Lr1.to_string states*)
   end
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
@@ -649,7 +473,6 @@ struct
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
-          lookahead: Terminal.set;
           transitions: Redgraph.outer_transitions;
           next: t;
         }
@@ -689,9 +512,7 @@ struct
           if c <> 0 then c else
             let c = list_compare compare_reduction_step r1.transitions r2.transitions in
             if c <> 0 then c else
-              let c = IndexSet.compare r1.lookahead r2.lookahead in
-              if c <> 0 then c else
-                compare r1.next r2.next
+              compare r1.next r2.next
         | Done, (More _ | Reducing _) -> -1
         | (More _ | Reducing _), Done -> +1
         | More _, Reducing _ -> -1
@@ -746,10 +567,9 @@ struct
         Cmon.constant "Done"
       | More (re, next) ->
         Cmon.construct "More" [RE.cmon re; cmon next]
-      | Reducing {reduction; lookahead; transitions; next} ->
+      | Reducing {reduction; transitions; next} ->
         Cmon.crecord "Reducing" [
           "reduction"   , RE.cmon_reduction reduction;
-          "lookahead"   , cmon_set_cardinal (*cmon_indexset*) lookahead;
           "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
           "next"        , cmon next;
         ]
@@ -779,20 +599,16 @@ struct
     let live_redstate (red : RE.reduction) (state : Redgraph.state index) =
       intersecting red.pattern (Redgraph.reachable state)
 
-    let rec reduce_target ~on_outer r ~lookahead target =
-      not_empty lookahead && (
-        (live_redstate r target &&
-         reduce_transitions ~on_outer r ~lookahead
-           (Redgraph.get_transitions target))
-        || IndexSet.mem target r.pattern
-      )
+    let rec reduce_target ~on_outer r target =
+      (live_redstate r target &&
+       reduce_transitions ~on_outer r
+         (Redgraph.get_transitions target))
+      || IndexSet.mem target r.pattern
 
-    and reduce_transitions ~on_outer r ~lookahead {Redgraph. inner; outer} =
-      assert (not_empty lookahead);
+    and reduce_transitions ~on_outer r {Redgraph. inner; outer} =
       let matched = ref false in
       let visit_candidate (c : unit Redgraph.goto_candidate) =
         if reduce_target ~on_outer r c.target
-            ~lookahead:(Terminal.intersect lookahead c.lookahead)
         then matched := true
       in
       let rec loop = function
@@ -803,19 +619,19 @@ struct
       in
       loop inner;
       if outer <> [] then
-        on_outer r lookahead outer;
+        on_outer r outer;
       !matched
 
     let derive k =
-      let reduce_outer next label reduction lookahead transitions =
+      let reduce_outer next label reduction transitions =
         let ks = ref [] in
         let matching = ref IndexSet.empty in
-        let rec visit_transitions label reduction lookahead = function
+        let rec visit_transitions label reduction = function
           | step :: transitions when live_redstep reduction step ->
             List.iter visit_candidate step.candidates;
             begin match transitions with
               | step' :: _ when live_redstep reduction step' ->
-                let reducing = Reducing {reduction; transitions; lookahead; next} in
+                let reducing = Reducing {reduction; transitions; next} in
                 push ks (label, Some reducing)
               | _ -> ()
             end
@@ -824,12 +640,11 @@ struct
           match label_filter label candidate.filter with
           | Some label
             when reduce_target reduction candidate.target
-                ~lookahead:(Terminal.intersect lookahead candidate.lookahead)
                 ~on_outer:(visit_transitions label) ->
             matching := IndexSet.union label.filter !matching
           | _ -> ()
         in
-        visit_transitions label reduction lookahead transitions;
+        visit_transitions label reduction transitions;
         let matching =
           if not_empty !matching then
             Some {label with filter = !matching}
@@ -846,8 +661,8 @@ struct
         | More (re, next) as self ->
           process_re label self next re.desc
 
-        | Reducing {reduction; transitions; lookahead; next} ->
-          let l', ks' = reduce_outer next label reduction lookahead transitions in
+        | Reducing {reduction; transitions; next} ->
+          let l', ks' = reduce_outer next label reduction transitions in
           match l', reduction.policy with
           | None, _ ->
             ks := ks' @ !ks
@@ -892,14 +707,14 @@ struct
           let matching =
             IndexSet.filter (fun lr1 ->
                 let steps = Vector.get Redgraph.initial lr1 in
-                let on_outer reduction lookahead = function
+                let on_outer reduction = function
                   | (step :: _) as transitions when live_redstep reduction step ->
                     let label = {label with filter = IndexSet.singleton lr1} in
-                    let next = Reducing {reduction; lookahead; transitions; next} in
+                    let next = Reducing {reduction; transitions; next} in
                     push ks' (label, Some next)
                   | _ -> ()
                 in
-                reduce_transitions ~on_outer r ~lookahead:Terminal.all steps
+                reduce_transitions ~on_outer r steps
               ) label.filter
           in
           let label = label_capture label r.capture in
