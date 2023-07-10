@@ -435,8 +435,7 @@ struct
         visit_trie node' xs
     in
     Index.iter Redgraph.state (fun state ->
-        let top, rest = Redgraph.get_stack state in
-        let node = visit_trie root (top :: rest) in
+        let node = visit_trie root (Redgraph.get_stack state) in
         node.reached <- IndexSet.add state node.reached
       );
     root

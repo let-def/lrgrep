@@ -167,9 +167,9 @@ and display_candidate : type a . Info.Terminal.set -> int -> _ -> a RR.goto_cand
       else acc
     in
     let acc = display_steps la (n + 1) acc inner in
-    let top, _ = RR.get_stack target in
+    let config = RR.get_config target in
     Printf.printf "\x1b[1;33m\t\t%s↱ %s\n"
-      (String.make n ' ') (Option.get (print_lr1 top));
+      (String.make n ' ') (Option.get (print_lr1 config.top));
     acc
 
 let process_result lexbuf = function
