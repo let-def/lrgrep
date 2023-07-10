@@ -177,10 +177,12 @@ struct
 
     let default_mark = ref ()
 
+    module KMap = Map.Make(Regexp.K)
+
     let make clause =
-      let nfa = ref Regexp.KMap.empty in
+      let nfa = ref KMap.empty in
       let rec aux k =
-        match Regexp.KMap.find_opt k !nfa with
+        match KMap.find_opt k !nfa with
         | Some t -> t
         | None ->
           let accept = ref false in
@@ -201,7 +203,7 @@ struct
           let uid = uid () in
           let accept = !accept in
           let t = {uid; k; transitions; accept; clause; mark=default_mark} in
-          nfa := Regexp.KMap.add k t !nfa;
+          nfa := KMap.add k t !nfa;
           t
       and accepting = lazy (aux K.Done)
       in

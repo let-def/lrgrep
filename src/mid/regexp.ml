@@ -167,7 +167,6 @@ module type S = sig
     *)
     val derive : t -> (label * t option) list
   end
-  module KMap : Map.S with type key = K.t
 end
 
 module Make (Info : Info.S)() : S with module Info = Info =
@@ -736,6 +735,4 @@ struct
       process_k label k;
       List.rev !ks
   end
-
-  module KMap = Map.Make(K)
 end
