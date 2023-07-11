@@ -47,7 +47,7 @@ module Make (I : Info.S)() =
 struct
   open I
 
-  let time = Stopwatch.create ()
+  let time = Stopwatch.enter Stopwatch.main "Lrc.Make"
 
   module LRijkstra = LRijkstraFast.Make(I)()
 
@@ -194,8 +194,6 @@ struct
   module Redgraph = struct
     let time = Stopwatch.enter time "Computing Redgraph"
 
-    (*include IndexBuffer.Gen.Make()*)
-
     type transition =
       | Inner of node
       | Outer of {
@@ -218,8 +216,6 @@ struct
       mutable imm_fail : Terminal.set;
       mutable may_fail : Terminal.set;
     }
-
-    (*let nodes = get_generator ()*)
 
     type stack =
       | Goto of Lr1.t * stack
@@ -279,15 +275,11 @@ struct
         let any = Transition.of_goto tr in
         let src = Transition.source any in
         let tgt = Transition.target any in
-        (*reductions_at (Bottom (1, IndexSet.singleton src)) tgt*)
-        (*reductions_at (Bottom (2, IndexSet.singleton src)) tgt*)
         reductions_at (Goto (src, Bottom (1, Lr1.predecessors src))) tgt
       in
       (initial, goto_transitions)
 
     let () = Stopwatch.step time "Generated %d nodes" !count
-
-    (*let nodes = IndexBuffer.Gen.freeze nodes*)
 
     let () =
       let todo = Vector.make Transition.goto IndexSet.Set.empty in
@@ -712,5 +704,6 @@ struct
       | R red -> Some (Redgraph_lrc_la.fail red)
   end
 
+  let () = Stopwatch.leave time
 
 end

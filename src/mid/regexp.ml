@@ -176,6 +176,8 @@ struct
 
   module Redgraph : REDGRAPH with module Info := Info =
   struct
+    let time = Stopwatch.enter Stopwatch.main "Regexp.Make.Redgraph"
+
     let rec group_reductions depth
       : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
       function
@@ -383,6 +385,8 @@ struct
       let {top; rest; _} = get_config state in
       let states = List.rev (top :: rest) in
       string_concat_map " " Lr1.to_string states
+
+    let () = Stopwatch.leave time
   end
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
