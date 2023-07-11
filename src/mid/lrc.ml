@@ -47,18 +47,11 @@ module Make (I : Info.S)() =
 struct
   open I
 
-  let time = ref (Sys.time ())
-  let time fmt =
-      let t' = Sys.time () in
-      let dt = t' -. !time in
-      time := t';
-      Printf.ksprintf (fun msg ->
-          Printf.eprintf "%s in %.02fms\n" msg (dt *. 1000.0);
-        ) fmt
+  let time = Stopwatch.create ()
 
   module LRijkstra = LRijkstraFast.Make(I)()
 
-  let () = time "LRijkstra"
+  let () = Stopwatch.step time "Computed LRijkstra"
 
   module Lrc : sig
     include Info.INDEXED
@@ -74,6 +67,7 @@ struct
     val decompose : n index -> Lr1.t * Terminal.set
   end =
   struct
+    let time = Stopwatch.enter time "Computing Lrc"
 
     let n =
       let count lr1 = Array.length (LRijkstra.Classes.for_lr1 lr1) in
@@ -125,9 +119,10 @@ struct
 
     let lookahead lrc = snd (decompose lrc)
 
+    let () = Stopwatch.step time "Computed LRC set"
+
     let predecessors =
       let predecessors = Vector.make n IndexSet.empty in
-      let t0 = Sys.time () in
       let process lr1 =
         let first_lrc = first_lrc_of_lr1 lr1 in
         match Lr1.incoming lr1 with
@@ -171,9 +166,9 @@ struct
           List.iter process_transition (Transition.predecessors lr1)
       in
       Index.iter Lr1.n process;
-      Printf.eprintf "computed Lrc predecessors in %.02fms\n"
-        ((Sys.time () -. t0) *. 1000.0);
       Vector.get predecessors
+
+    let () = Stopwatch.step time "Computed predecessors"
 
     let predecessors_by_lr1 =
       tabulate_finset n @@ fun lrc ->
@@ -192,11 +187,12 @@ struct
           (predecessors_by_lr1 lrc)
           acc
       end lrcs IndexMap.empty
+
+    let () = Stopwatch.leave time
   end
 
-  let () = time "lrc"
-
   module Redgraph = struct
+    let time = Stopwatch.enter time "Computing Redgraph"
 
     (*include IndexBuffer.Gen.Make()*)
 
@@ -289,7 +285,7 @@ struct
       in
       (initial, goto_transitions)
 
-    let () = time "Redgraph: generated %d nodes" !count
+    let () = Stopwatch.step time "Generated %d nodes" !count
 
     (*let nodes = IndexBuffer.Gen.freeze nodes*)
 
@@ -331,7 +327,7 @@ struct
           ) todo_dom'
       done
 
-    let () = time "Redgraph: partition lookaheads"
+    let () = Stopwatch.step time "Propagated lookaheads"
 
     let () =
       let rec normalize_node node =
@@ -349,6 +345,8 @@ struct
       in
       IndexMap.iter (fun _ node -> normalize_node node) initial;
       Vector.iter normalize_node goto_transitions
+
+    let () = Stopwatch.step time "Partitioned lookaheads"
 
     let failures =
       let rec failures node =
@@ -405,9 +403,7 @@ struct
       in
       IndexMap.iter (fun _ node -> filter_tree node) initial;
       Vector.iter filter_tree goto_transitions;
-      Printf.eprintf "filtered %d partitions\n" !filtered
-
-    let () = time "Redgraph: filter non-failing partitions"
+      Stopwatch.step time "Filtered %d non-failing partitions" !filtered
 
     (* Compute direct access to outer transitions *)
 
@@ -439,6 +435,8 @@ struct
 
     let goto_outer =
       Vector.map compute_outer_transitions goto_transitions
+
+    let () = Stopwatch.leave time
   end
 
   module Redgraph_la : sig
@@ -550,7 +548,7 @@ struct
     let label n = (Vector.get nodes n).label
 
     let () =
-      time "Lookahead-specialized redgraph with %d nodes" (cardinal n)
+      Stopwatch.step time "Lookahead-specialized redgraph with %d nodes" (cardinal n)
   end
 
   module Redgraph_lrc_la : sig
@@ -616,7 +614,7 @@ struct
 
     let nodes = IndexBuffer.Gen.freeze nodes
 
-    let () = time "la and lrc intersection, with %d nodes" (cardinal Full.n)
+    let () = Stopwatch.step time "la and lrc intersection, with %d nodes" (cardinal Full.n)
 
     module Live = Gensym()
 
@@ -642,7 +640,7 @@ struct
       Vector.get live_map n
 
     let () =
-      time "%d live nodes (%d dead-ends)"
+      Stopwatch.step time "%d live nodes (%d dead-ends)"
         (cardinal Live.n) (cardinal Full.n - cardinal Live.n)
 
     include Live
