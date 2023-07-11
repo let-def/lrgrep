@@ -47,3 +47,5 @@ let leave t =
   Printf.eprintf "(total: %.02fms)\n"
     ((time' -. t.start) *. 1000.0);
   t.time.value <- time'
+
+let main = create ()
