@@ -706,4 +706,176 @@ struct
 
   let () = Stopwatch.leave time
 
+  module Redgraph2(Redgraph: Regexp.REDGRAPH with module Info := I)() = struct
+
+    let time = Stopwatch.enter Stopwatch.main "Lrc Redgraph new"
+
+    open IndexBuffer
+
+    module State = Gen.Make()
+    type state = State.n
+    let state = State.n
+
+    type config = {
+      redgraph: Redgraph.state index;
+      lrcs: Lrc.set;
+    }
+
+    type transitions = {
+      inner: state indexset;
+      outer: state indexset list;
+    }
+
+    let states = State.get_generator ()
+
+    let nodes = Hashtbl.create 7
+
+    let rec visit_transitions lrcs {Redgraph.inner; outer} =
+      let inner =
+        List.fold_left (fun acc {Redgraph.candidates; _} ->
+            List.fold_left
+              (fun acc {Redgraph.target; lookahead=_; filter=()} ->
+                 IndexSet.add (visit_config {redgraph=target; lrcs}) acc)
+              acc candidates
+          ) IndexSet.empty inner
+      in
+      let outer = match outer with
+        | first :: rest -> visit_outer lrcs first rest
+        | [] -> []
+      in
+      {inner; outer}
+
+    and visit_config config =
+      match Hashtbl.find_opt nodes config with
+      | Some state -> state
+      | None ->
+        let reservation = Gen.reserve states in
+        let index = Gen.index reservation in
+        Hashtbl.add nodes config index;
+        let transitions = Redgraph.get_transitions config.redgraph in
+        Gen.commit states reservation
+          (config, visit_transitions config.lrcs transitions);
+        index
+
+    and visit_outer lrcs {Redgraph.candidates; _} rest =
+      let visit_candidate {Redgraph.target; lookahead=_; filter=lr1s} =
+        let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
+        let lrcs = indexset_bind lr1s compatible_lrc in
+        if IndexSet.is_empty lrcs
+        then None
+        else Some (visit_config {lrcs; redgraph=target})
+      in
+      let candidates =
+        IndexSet.of_list (List.filter_map visit_candidate candidates)
+      in
+      match rest with
+      | [] -> [candidates]
+      | next :: rest ->
+        candidates :: visit_outer (indexset_bind lrcs Lrc.predecessors) next rest
+
+    let initial =
+      let process lrc =
+        visit_transitions
+          (Lrc.predecessors lrc)
+          (Vector.get Redgraph.initial (Lrc.lr1_of_lrc lrc))
+      in
+      IndexMap.inflate process Lrc.idle
+
+    let states = Gen.freeze states
+
+    let () = Stopwatch.step time "generated nodes: %d" (cardinal state)
+
+    let iter_targets {inner; outer} f =
+      IndexSet.iter f inner;
+      List.iter (IndexSet.iter f) outer
+
+    let fold_targets f {inner; outer} acc =
+      let acc = IndexSet.fold f inner acc in
+      List.fold_left
+        (fun acc step -> IndexSet.fold f step acc)
+        acc outer
+
+    let reverse_deps =
+      let vec = Vector.make (Vector.length states) IndexSet.empty in
+      Vector.iteri (fun source (_config, transitions) ->
+          let register target = vector_set_add vec target source in
+          iter_targets transitions register
+        ) states;
+      vec
+
+    let () = Stopwatch.step time "computed reverse dependencies"
+
+    let fail = Vector.map (fun (config, _) ->
+        Lr1.reject (Redgraph.get_config config.redgraph).top
+      ) states
+
+    let indirect_fails index =
+      let _, transitions = Vector.get states index in
+      match
+      fold_targets (fun target acc ->
+          let config, _ = Vector.get states target in
+          let lookahead = (Redgraph.get_config config.redgraph).lookahead in
+          let fail = Vector.get fail target in
+          match acc with
+          | None -> Some fail
+          | Some fail' -> Some (Terminal.intersect
+                                  (IndexSet.union fail
+                                     (IndexSet.diff Terminal.all lookahead))
+                                  fail')
+        ) transitions None
+      with
+      | None -> IndexSet.empty
+      | Some x -> x
+
+    let () =
+      let todo = ref [] in
+      let update index =
+        let fail0 = Vector.get fail index in
+        let fails = IndexSet.union fail0 (indirect_fails index) in
+        if not (IndexSet.equal fail0 fails) then (
+          push todo index;
+          Vector.set fail index fails
+        )
+      in
+      Index.iter state update;
+      let rec loop () =
+        match !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter update todo';
+          loop ()
+      in
+      loop ()
+
+    let () =
+      let immediate = ref 0 in
+      let propagated = ref 0 in
+      Vector.iter2 (fun (config, _) fail' ->
+          let fail = Lr1.reject (Redgraph.get_config config.redgraph).top in
+          let cfail = IndexSet.cardinal fail in
+          let cfail' = IndexSet.cardinal fail' in
+          immediate := !immediate + cfail;
+          propagated := !propagated + cfail' - cfail;
+        ) states fail;
+      Stopwatch.step time
+        "computed guaranteed failures (%d immediates, %d propagated)"
+        !immediate !propagated
+
+    let () =
+      let get_lookahead config =
+        (Redgraph.get_config config.redgraph).lookahead
+      in
+      Vector.iter (fun (config, transitions) ->
+          let la = get_lookahead config in
+          iter_targets transitions (fun target ->
+              let la' = get_lookahead (fst (Vector.get states target)) in
+              assert (IndexSet.subset la' la);
+            )
+        ) states
+
+    let () = Stopwatch.leave time
+
+  end
+
 end

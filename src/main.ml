@@ -118,6 +118,7 @@ module Info = Mid.Info.Make(Grammar)
 module Regexp = Mid.Regexp.Make(Info)()
 module Transl = Mid.Transl.Make(Regexp)
 module Lrc = Mid.Lrc.Make(Info)()
+module Tmp = Lrc.Redgraph2(Regexp.Redgraph)()
 
 module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
 
