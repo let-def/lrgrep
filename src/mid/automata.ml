@@ -476,7 +476,7 @@ struct
           )
         ) t.transitions
 
-    type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) _mapping -> 'tgt rev_mapping
+    (*type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) _mapping -> 'tgt rev_mapping
     type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
 
     let reverse_transitions =
@@ -543,7 +543,7 @@ struct
       in
       loop ()
 
-    let () = Stopwatch.step time "Computed reachability"
+    let () = Stopwatch.step time "Computed reachability"*)
 
     let liveness =
       let reserve (Packed t) =
@@ -564,9 +564,9 @@ struct
         let process_transition _label (Mapping (mapping, tgt)) =
           let changed = ref false in
           let live_tgt = liveness tgt in
-          let reachable = Vector.get reachable tgt.index in
+          (*let reachable = Vector.get reachable tgt.index in*)
           let process_mapping tgt_j (src_i, captures) =
-            if IntSet.mem (tgt_j : _ index :> int) reachable then
+            (*if IntSet.mem (tgt_j : _ index :> int) reachable then*)
               let live = IndexSet.union (Vector.get live_src src_i) captures in
               let live' = Vector.get live_tgt tgt_j in
               if not (IndexSet.equal live live') then (
