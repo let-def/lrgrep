@@ -595,6 +595,12 @@ struct
       else
         None
 
+    let label_union l1 l2 = {
+      filter = IndexSet.union l1.filter l2.filter;
+      captures = IndexSet.union l1.captures l2.captures;
+    }
+
+
     let label_capture label vars =
       if not_empty vars then
         {label with captures = IndexSet.union label.captures vars}
@@ -631,6 +637,18 @@ struct
       !matched
 
     let derive k =
+      let accept r label = match !r with
+        | (label', None) :: r' ->
+          r := (label_union label' label, None) :: r'
+        | r' ->
+          r := (label, None) :: r'
+      in
+      let continue r label next = match !r with
+        | (label', (Some next' as k)) :: r'  when next' == next ->
+          r := (label_union label' label, k) :: r'
+        | r' ->
+          r := (label, Some next) :: r'
+      in
       let reduce_outer next label reduction transitions =
         let ks = ref [] in
         let matching = ref IndexSet.empty in
@@ -664,7 +682,7 @@ struct
       let ks = ref [] in
       let rec process_k label = function
         | Done ->
-          push ks (label, None)
+          accept ks label
 
         | More (re, next) as self ->
           process_re label self next re.desc
@@ -686,7 +704,7 @@ struct
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              push ks (label_capture label var, Some next)
+              continue ks (label_capture label var) next
           end
 
         | Alt es ->
@@ -718,8 +736,7 @@ struct
                 let on_outer reduction = function
                   | (step :: _) as transitions when live_redstep reduction step ->
                     let label = {label with filter = IndexSet.singleton lr1} in
-                    let next = Reducing {reduction; transitions; next} in
-                    push ks' (label, Some next)
+                    continue ks' label (Reducing {reduction; transitions; next})
                   | _ -> ()
                 in
                 reduce_transitions ~on_outer r steps
