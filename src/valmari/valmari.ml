@@ -59,11 +59,13 @@ let discard_unreachable
     );
   Partition.discard_unmarked blocks
 
-module Minimize
-    (Label : Map.OrderedType)
-    (In: INPUT with type label := Label.t) :
+module Do_minimize (In: INPUT) (P : sig
+    val blocks : In.states Partition.t
+    val cords : In.transitions Partition.t
+    val transitions_targeting : In.states index -> (In.transitions index -> unit) -> unit
+  end):
 sig
-  include DFA with type label = Label.t
+  include DFA with type label = In.label
 
   val initials : states index array
   val finals : states index array
@@ -78,47 +80,7 @@ sig
   val represent_transition :
     transitions index -> In.transitions index
 end = struct
-
-  let () =
-    if cardinal In.transitions = 0 then
-      invalid_arg "Valmari: degenerate input, no transition"
-
-  (* State partition *)
-  let blocks = Partition.create In.states
-
-  (* Remove states unreachable from initial state *)
-  let () =
-    In.initials (Partition.mark blocks);
-    let transitions_source =
-      index_transitions In.states In.transitions In.source in
-    discard_unreachable blocks transitions_source In.target
-
-  (* Index the set of transitions targeting a state *)
-  let transitions_targeting =
-    index_transitions In.states In.transitions In.target
-
-  (* Remove states which cannot reach any final state *)
-  let () =
-    In.finals (Partition.mark blocks);
-    discard_unreachable blocks transitions_targeting In.source
-
-  (* Split final states *)
-  let () =
-    In.finals (Partition.mark blocks);
-    Partition.split blocks
-
-  (* Split explicitely refined states *)
-  let () =
-    let refine f =
-        f ~add:(Partition.mark blocks);
-        Partition.split blocks
-    in
-    In.refinements refine
-
-  (* Transition partition *)
-  let cords =
-    let partition t1 t2 = Label.compare (In.label t1) (In.label t2) in
-    Partition.create In.transitions ~partition
+  open P
 
   let () =
     Partition.discard cords (fun t ->
@@ -176,7 +138,7 @@ end = struct
   type transitions = Transitions.n
   let transitions = Vector.length Transitions.vector
 
-  type label = Label.t
+  type label = In.label
 
   let transport_state_unsafe =
     let table =
@@ -194,7 +156,7 @@ end = struct
   let represent_transition transition =
     (Vector.get Transitions.vector transition)
 
-  let label transition : Label.t =
+  let label transition : label =
     In.label (represent_transition transition)
 
   let source transition =
@@ -229,5 +191,139 @@ end = struct
         Vector.set table trin (Some tr);
       ) Transitions.vector;
     Vector.get table
-
 end
+
+module Minimize
+    (Label : Map.OrderedType)
+    (In: INPUT with type label := Label.t) :
+sig
+  include DFA with type label = Label.t
+
+  val initials : states index array
+  val finals : states index array
+
+  val transport_state :
+    In.states index -> states index option
+  val transport_transition :
+    In.transitions index -> transitions index option
+
+  val represent_state :
+    states index -> In.states index
+  val represent_transition :
+    transitions index -> In.transitions index
+end = Do_minimize
+    (struct include In type label = Label.t end)
+    (struct
+      let () =
+        if cardinal In.transitions = 0 then
+          invalid_arg "Valmari: degenerate input, no transition"
+
+      (* State partition *)
+      let blocks = Partition.create In.states
+
+      (* Remove states unreachable from initial state *)
+      let () =
+        In.initials (Partition.mark blocks);
+        let transitions_source =
+          index_transitions In.states In.transitions In.source in
+        discard_unreachable blocks transitions_source In.target
+
+      (* Index the set of transitions targeting a state *)
+      let transitions_targeting =
+        index_transitions In.states In.transitions In.target
+
+      (* Remove states which cannot reach any final state *)
+      let () =
+        In.finals (Partition.mark blocks);
+        discard_unreachable blocks transitions_targeting In.source
+
+      (* Split final states *)
+      let () =
+        In.finals (Partition.mark blocks);
+        Partition.split blocks
+
+      (* Split explicitely refined states *)
+      let () =
+        let refine f =
+          f ~add:(Partition.mark blocks);
+          Partition.split blocks
+        in
+        In.refinements refine
+
+      (* Transition partition *)
+      let cords =
+        let partition t1 t2 = Label.compare (In.label t1) (In.label t2) in
+        Partition.create In.transitions ~partition
+    end
+    )
+
+module Minimize_with_custom_decomposition
+    (In: sig
+       include INPUT
+       val decomposition : ((add:(transitions index -> unit) -> unit) -> unit) -> unit
+     end) :
+sig
+  include DFA with type label = In.label
+
+  val initials : states index array
+  val finals : states index array
+
+  val transport_state :
+    In.states index -> states index option
+  val transport_transition :
+    In.transitions index -> transitions index option
+
+  val represent_state :
+    states index -> In.states index
+  val represent_transition :
+    transitions index -> In.transitions index
+end = Do_minimize
+    (In)
+    (struct
+      let () =
+        if cardinal In.transitions = 0 then
+          invalid_arg "Valmari: degenerate input, no transition"
+
+      (* State partition *)
+      let blocks = Partition.create In.states
+
+      (* Remove states unreachable from initial state *)
+      let () =
+        In.initials (Partition.mark blocks);
+        let transitions_source =
+          index_transitions In.states In.transitions In.source in
+        discard_unreachable blocks transitions_source In.target
+
+      (* Index the set of transitions targeting a state *)
+      let transitions_targeting =
+        index_transitions In.states In.transitions In.target
+
+      (* Remove states which cannot reach any final state *)
+      let () =
+        In.finals (Partition.mark blocks);
+        discard_unreachable blocks transitions_targeting In.source
+
+      (* Split final states *)
+      let () =
+        In.finals (Partition.mark blocks);
+        Partition.split blocks
+
+      (* Split explicitely refined states *)
+      let () =
+        let refine f =
+          f ~add:(Partition.mark blocks);
+          Partition.split blocks
+        in
+        In.refinements refine
+
+      (* Transition partition *)
+      let cords = Partition.create In.transitions
+
+      let () =
+        let refine f =
+          f ~add:(Partition.mark cords);
+          Partition.split cords
+        in
+        In.decomposition refine
+    end
+    )
