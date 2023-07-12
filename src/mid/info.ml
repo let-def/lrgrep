@@ -224,6 +224,8 @@ let all n =
 
 module Make(Grammar : GRAMMAR) : S with module Grammar = Grammar =
 struct
+  let time = Stopwatch.enter Stopwatch.main "Info.Make"
+
   module Grammar = Grammar
 
   module Terminal = struct
@@ -316,6 +318,7 @@ struct
       but [Lr1] module depends on [Transitions].
       So [Lr1I] is defined first and is the raw set of Lr1 states. *)
   module Lr1I = Indexed(Grammar.Lr1)
+
 
   (* Transitions are represented as finite sets with auxiliary functions
      to get the predecessors, successors and labels. *)
@@ -449,7 +452,10 @@ struct
 
     let find_goto_target source nt =
       target (of_goto (find_goto source nt))
+
+    let () = Stopwatch.step time "Transition"
   end
+
 
   module Lr1 = struct
     include Lr1I
@@ -578,5 +584,9 @@ struct
       if a == all then b
       else if b == all then a
       else IndexSet.inter a b
+
+    let () = Stopwatch.step time "Lr1"
   end
+
+  let () = Stopwatch.leave time
 end

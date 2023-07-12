@@ -137,6 +137,8 @@ struct
   open Regexp
   open Info
 
+  let time = Stopwatch.enter Stopwatch.main "Processing entry %s" E.entry.name
+
   module Preclause = struct
     include Vector.Of_array(struct
         type a = Syntax.clause
@@ -230,6 +232,8 @@ struct
 
     let clauses =
       Vector.mapi (process_clause ~capture:(Capture.gensym ())) Preclause.vector
+
+    let () = Stopwatch.step time "LazyNFA"
   end
 
   module Clause = struct
@@ -252,6 +256,7 @@ struct
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
+      mutable relaxations: int;
     }
     and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
 
@@ -268,6 +273,8 @@ struct
   end =
   struct
     open IndexBuffer
+
+    let time = Stopwatch.enter time "BigDFA"
 
     let group_make (type a) (prj : a -> LazyNFA.t) (ts : a list) : a array =
       let mark = ref () in
@@ -320,6 +327,7 @@ struct
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
+      mutable relaxations: int;
     }
     and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
 
@@ -371,13 +379,16 @@ struct
               group; transitions;
               visited_labels=IndexSet.empty;
               scheduled=IndexSet.empty;
-              visited=IndexSet.empty
+              visited=IndexSet.empty;
+              relaxations=0;
             } in
             Gen.commit states reservation (Packed state);
             map := GroupMap.add (Vector.as_array group) (Packed state) !map;
             state
       in
       aux group
+
+    let () = Stopwatch.step time "Prepared determinization"
 
     let initial =
       let Vector.Packed group = Vector.of_array (
@@ -389,8 +400,16 @@ struct
       in
       (determinize group).index
 
+    let () = Stopwatch.step time "Processed initial states"
+
+    let () =
+      prerr_endline "Start sampling and press enter";
+      flush_all ();
+      ignore (input_line stdin)
+
     let () =
       let todo = ref [] in
+      let max_rel = ref 0 in
       let schedule i set =
         let Packed t as packed = Gen.get states i in
         if not (IndexSet.subset set t.visited) then (
@@ -404,6 +423,9 @@ struct
         )
       in
       let update (Packed t) =
+        t.relaxations <- t.relaxations + 1;
+        if t.relaxations > !max_rel then
+          max_rel := t.relaxations;
         let todo = t.scheduled in
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
@@ -430,9 +452,17 @@ struct
           loop ()
       in
       schedule initial Stacks.initials;
-      loop ()
+      loop ();
+      Stopwatch.step time "Found fixed point (max iteration: %d)" !max_rel
 
     let states = Gen.freeze states
+
+    let () =
+      prerr_endline "Stop sampling and press enter";
+      flush_all ();
+      ignore (input_line stdin)
+
+    let () = Stopwatch.step time "Determinized DFA"
 
     let () =
       Vector.iter (fun (Packed t) ->
@@ -499,6 +529,8 @@ struct
           loop ()
       in
       loop ()
+
+    let () = Stopwatch.step time "Computed liveness"
 
     let empty_registers = Vector.Packed Vector.empty
 
@@ -570,9 +602,12 @@ struct
             max_index := max !max_index (Index.to_int reg))) regs;
       in
       Vector.iter check_state states;
-      Printf.eprintf "register allocation:\nmax live registers: %d\nregister count: %d\n"
+      Stopwatch.step time
+        "register allocation, max live registers: %d, register count: %d\n"
         !max_live (!max_index + 1);
       !max_index + 1
+
+    let () = Stopwatch.leave time
   end
 
   module Label = struct
@@ -697,9 +732,12 @@ struct
         ~compare:(fun (a1, _) (a2, _) -> IndexSet.compare a1 a2)
         ~group:(fun (_, st) sts -> st :: List.map snd sts)
       |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
+
+    let () = Stopwatch.step time "RunDFA"
   end
 
   module MinDFA = Valmari.Minimize (Label) (RunDFA)
+  let () = Stopwatch.step time "MinDFA"
 
   module OutDFA = struct
 
@@ -755,6 +793,8 @@ struct
       in
       let registers = BigDFA.get_registers source in
       Vector.fold_right2 add_accepting source.group registers []
+
+    let () = Stopwatch.step time "OutDFA"
   end
 
   let captures_lr1 =
@@ -959,4 +999,6 @@ struct
     in
     Vector.iteri output_clause LazyNFA.clauses;
     Printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
+
+  let () = Stopwatch.leave time
 end

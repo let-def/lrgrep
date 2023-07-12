@@ -113,7 +113,12 @@ let lexer_definition =
   Front.Lexer.ic := None;
   result
 
+let () = Stopwatch.step Stopwatch.main "Beginning"
+
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
+
+let () = Stopwatch.step Stopwatch.main "Loaded grammar"
+
 module Info = Mid.Info.Make(Grammar)
 module Regexp = Mid.Regexp.Make(Info)()
 module Transl = Mid.Transl.Make(Regexp)
@@ -146,6 +151,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       end)
       ()
   in
+  let time = Stopwatch.enter Stopwatch.main "Generating code for entry %s" entry.name in
   Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
   Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
@@ -190,9 +196,8 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       transitions = IndexSet.fold add_transition transitions [];
     }
   in
-  Label.register_count,
-  Index.to_int OutDFA.initial,
   let program = Lrgrep_support.compact OutDFA.states get_state_for_compaction in
+  Stopwatch.step time "Compacted program";
   Option.iter output_code oc;
   if !opt_debug_stack <> [] then (
     let rec process st stack =
@@ -244,7 +249,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
     in
     process OutDFA.initial !opt_debug_stack
   );
-  program
+  (Label.register_count, Index.to_int OutDFA.initial, program)
 )
 
 
