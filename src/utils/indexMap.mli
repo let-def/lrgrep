@@ -288,3 +288,7 @@ val of_seq : ('n index * 'a) Seq.t -> ('n, 'a) t
     @since 4.07 *)
 
 val domain : ('n, _) t -> 'n IndexSet.t
+
+val inflate : ('n index -> 'a) -> 'n IndexSet.t -> ('n, 'a) t
+
+val filter_inflate : ('n index -> 'a option) -> 'n IndexSet.t -> ('n, 'a) t
