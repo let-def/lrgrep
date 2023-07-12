@@ -398,11 +398,6 @@ struct
     let () = Stopwatch.step time "Processed initial states"
 
     let () =
-      prerr_endline "Start sampling and press enter";
-      flush_all ();
-      ignore (input_line stdin)
-
-    let () =
       let todo = ref [] in
       let schedule i set =
         let Packed t as packed = Gen.get states i in
@@ -446,11 +441,6 @@ struct
       loop ()
 
     let states = Gen.freeze states
-
-    (*let () =
-      prerr_endline "Stop sampling and press enter";
-      flush_all ();
-      ignore (input_line stdin)*)
 
     let () = Stopwatch.step time "Determinized DFA (%d states)" (cardinal n)
 
