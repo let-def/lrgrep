@@ -178,22 +178,6 @@ struct
   struct
     let time = Stopwatch.enter Stopwatch.main "Regexp.Make.Redgraph"
 
-    let rec group_reductions depth
-      : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
-      function
-      | [] -> []
-      | (prod, la) :: rest when depth = Production.length prod ->
-        let lhs = Production.lhs prod in
-        begin match group_reductions depth rest with
-          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
-            ((lhs, IndexSet.union la la') :: other) :: tl
-          | [] -> [[lhs, la]]
-          | other :: tl ->
-            ((lhs, la) :: other) :: tl
-        end
-      | otherwise ->
-        [] :: group_reductions (depth + 1) otherwise
-
     open IndexBuffer
 
     module State = Gen.Make()
@@ -224,12 +208,28 @@ struct
       outer: outer_transitions;
     }
 
+    let reductions =
+      let rec group depth
+        : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
+        function
+        | [] -> []
+        | (prod, la) :: rest when depth = Production.length prod ->
+          let lhs = Production.lhs prod in
+          begin match group depth rest with
+            | ((lhs', la') :: other) :: tl when lhs = lhs' ->
+              ((lhs, IndexSet.union la la') :: other) :: tl
+            | [] -> [[lhs, la]]
+            | other :: tl ->
+              ((lhs, la) :: other) :: tl
+          end
+        | otherwise ->
+          [] :: group (depth + 1) otherwise
+      in
+      Vector.init Lr1.n (fun lr1 -> group 0 (Lr1.reductions lr1))
+
     let states = State.get_generator ()
 
     let nodes = Hashtbl.create 7
-
-    let reductions =
-      Vector.init Lr1.n (fun lr1 -> lr1 |> Lr1.reductions |> group_reductions 0)
 
     let rec visit_config config =
       match Hashtbl.find_opt nodes config with
@@ -386,7 +386,9 @@ struct
       let states = List.rev (top :: rest) in
       string_concat_map " " Lr1.to_string states
 
-    let () = Stopwatch.leave time
+    let () =
+      Stopwatch.step time "Redgraph has %d nodes" (cardinal state);
+      Stopwatch.leave time
   end
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
