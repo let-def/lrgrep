@@ -476,6 +476,75 @@ struct
           )
         ) t.transitions
 
+    type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) _mapping -> 'tgt rev_mapping
+    type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
+
+    let reverse_transitions =
+      let table = Vector.make n (Rev_packed []) in
+      Vector.iter (fun (Packed src) ->
+          iter_transitions src (fun _ (Mapping (mapping, tgt)) ->
+              match Vector.get table tgt.index with
+              | Rev_packed [] ->
+                Vector.set table tgt.index (Rev_packed [Rev_mapping (src, mapping)])
+              | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
+                let Refl = assert_equal_cardinal
+                    (Vector.length mapping) (Vector.length mapping0)
+                in
+                Vector.set table tgt.index (Rev_packed (Rev_mapping (src, mapping) :: xs))
+            )
+        ) states;
+      table
+
+    let iter_reverse_transitions (type n) (t : n t) (f : n rev_mapping -> unit) =
+      match Vector.get reverse_transitions t.index with
+      | Rev_packed [] -> ()
+      | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
+        let Refl = assert_equal_cardinal
+            (Vector.length mapping0) (Vector.length t.group)
+        in
+        List.iter f xs
+
+    let reachable =
+      Vector.map (fun (Packed tgt) ->
+          (IndexSet.init_from_set
+             (Vector.length tgt.group)
+             (fun i -> (Vector.get tgt.group i).accept)
+           :> IntSet.t)
+        ) states
+
+    let () =
+      let todo = ref [] in
+      let process (Packed tgt) =
+        let reach = Vector.get reachable tgt.index in
+        iter_reverse_transitions tgt (fun (Rev_mapping (src, mapping)) ->
+            let mapping = Vector.as_array mapping in
+            let changed = ref false in
+            IntSet.iter (fun i ->
+                let j, _ = mapping.(i) in
+                let reach' = Vector.get reachable src.index in
+                let reach'' = IntSet.add (j :> int) reach' in
+                if not (IntSet.equal reach' reach'') then (
+                  Vector.set reachable src.index reach'';
+                  changed := true;
+                )
+              ) reach;
+            if !changed then
+              push todo (Packed src)
+          )
+      in
+      Vector.iter process states;
+      let rec loop () =
+        match !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter process todo';
+          loop ()
+      in
+      loop ()
+
+    let () = Stopwatch.step time "Computed reachability"
+
     let liveness =
       let reserve (Packed t) =
         Vector.Packed (Vector.make (Vector.length t.group) IndexSet.empty) in
@@ -495,13 +564,15 @@ struct
         let process_transition _label (Mapping (mapping, tgt)) =
           let changed = ref false in
           let live_tgt = liveness tgt in
+          let reachable = Vector.get reachable tgt.index in
           let process_mapping tgt_j (src_i, captures) =
-            let live = IndexSet.union (Vector.get live_src src_i) captures in
-            let live' = Vector.get live_tgt tgt_j in
-            if not (IndexSet.equal live live') then (
-              Vector.set live_tgt tgt_j live;
-              changed := true;
-            )
+            if IntSet.mem (tgt_j : _ index :> int) reachable then
+              let live = IndexSet.union (Vector.get live_src src_i) captures in
+              let live' = Vector.get live_tgt tgt_j in
+              if not (IndexSet.equal live live') then (
+                Vector.set live_tgt tgt_j live;
+                changed := true;
+              )
           in
           Vector.iteri process_mapping mapping;
           if !changed then
