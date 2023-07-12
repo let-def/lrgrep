@@ -256,7 +256,6 @@ struct
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
-      mutable relaxations: int;
     }
     and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
 
@@ -327,7 +326,6 @@ struct
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
-      mutable relaxations: int;
     }
     and 'src mapping = Mapping : ('src, 'tgt) _mapping * 'tgt t -> 'src mapping
 
@@ -380,15 +378,12 @@ struct
               visited_labels=IndexSet.empty;
               scheduled=IndexSet.empty;
               visited=IndexSet.empty;
-              relaxations=0;
             } in
             Gen.commit states reservation (Packed state);
             map := GroupMap.add (Vector.as_array group) (Packed state) !map;
             state
       in
       aux group
-
-    let () = Stopwatch.step time "Prepared determinization"
 
     let initial =
       let Vector.Packed group = Vector.of_array (
@@ -409,7 +404,6 @@ struct
 
     let () =
       let todo = ref [] in
-      let max_rel = ref 0 in
       let schedule i set =
         let Packed t as packed = Gen.get states i in
         if not (IndexSet.subset set t.visited) then (
@@ -423,9 +417,6 @@ struct
         )
       in
       let update (Packed t) =
-        t.relaxations <- t.relaxations + 1;
-        if t.relaxations > !max_rel then
-          max_rel := t.relaxations;
         let todo = t.scheduled in
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
@@ -452,17 +443,16 @@ struct
           loop ()
       in
       schedule initial Stacks.initials;
-      loop ();
-      Stopwatch.step time "Found fixed point (max iteration: %d)" !max_rel
+      loop ()
 
     let states = Gen.freeze states
 
-    let () =
+    (*let () =
       prerr_endline "Stop sampling and press enter";
       flush_all ();
-      ignore (input_line stdin)
+      ignore (input_line stdin)*)
 
-    let () = Stopwatch.step time "Determinized DFA"
+    let () = Stopwatch.step time "Determinized DFA (%d states)" (cardinal n)
 
     let () =
       Vector.iter (fun (Packed t) ->
