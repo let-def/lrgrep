@@ -85,6 +85,9 @@ let remove i s =
   in
   remove s
 
+external _ml_ctz : (int [@untagged]) -> (int [@untagged]) = "ml_ctz" "ml_ctz_untagged" [@@noalloc]
+
+
 let rec fold f s accu =
   match s with
   | N ->
@@ -93,13 +96,19 @@ let rec fold f s accu =
     loop f qs base ss accu
 
 and loop f qs i ss accu =
-  if ss = 0 then
-    fold f qs accu
-  else
+  let ss = ref ss in
+  let accu = ref accu in
+  while !ss <> 0 do
+    let j = _ml_ctz !ss in
+    accu := f (i + j) !accu;
+    ss := !ss land lnot (1 lsl j);
+  done;
+  fold f qs !accu
+
     (* One could in principle check whether [ss land 0x3] is zero and if
        so move to [i + 2] and [ss lsr 2], and similarly for various sizes.
        In practice, this does not seem to make a measurable difference. *)
-    loop f qs (i + 1) (ss lsr 1) (if ss land 1 = 1 then f i accu else accu)
+    (*loop f qs (i + 1) (ss lsr 1) (if ss land 1 = 1 then f i accu else accu)*)
 
 let map f t =
   fold (fun x xs -> add (f x) xs) t empty

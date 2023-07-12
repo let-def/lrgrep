@@ -1,3 +1,4 @@
 (library
  (name utils)
+ (foreign_stubs (language c) (names intSet_stubs))
  (libraries cmon fix))
