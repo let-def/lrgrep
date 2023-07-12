@@ -604,7 +604,7 @@ struct
       regs
 
     (* Naive allocator *)
-    (*let () =
+    let () =
       let inflate_set (f : 'n index -> 'a) (set : 'n indexset) : ('n, 'a) indexmap =
         IndexSet.fold (fun i map -> IndexMap.add i (f i) map) set IndexMap.empty
       in
@@ -614,10 +614,11 @@ struct
         Vector.set registers state.index
           (Vector.Packed (Vector.map alloc (liveness state)))
       in
-      Vector.iter init states*)
+      Vector.iter init states
 
-    (* Smarter allocator (minimizing moves) *)
-    let () =
+    (* Smarter allocator ... Actually performs really badly,
+       the registers attribution make the DFA minimizable and the table less compressible *)
+    (*let () =
       let allocate_successor (registers : (_, Register.t Capture.map) vector) allocated mapping target =
         let live = liveness target in
         let in_use = ref (
@@ -648,7 +649,7 @@ struct
       Vector.set registers initial
         (let Packed t = Vector.get states initial in
          Packed (Vector.make (Vector.length t.group) IndexMap.empty));
-      Vector.iter init states
+      Vector.iter init states*)
 
     let register_count =
       let max_live = ref 0 in
