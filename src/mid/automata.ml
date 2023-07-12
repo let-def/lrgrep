@@ -705,6 +705,7 @@ struct
         end acc st.group (BigDFA.get_registers st)
       end acc BigDFA.states
 
+    type [@ocaml.warning "-34"] label = Label.t
     let label i = (Vector.get Transition.all i).label
     let source i = (Vector.get Transition.all i).source
     let target i = (Vector.get Transition.all i).target
@@ -733,10 +734,38 @@ struct
         ~group:(fun (_, st) sts -> st :: List.map snd sts)
       |> List.iter (fun group -> refine (fun ~add -> List.iter add group))
 
+
+    let [@ocaml.warning "-32"] decomposition refine =
+      let acc = ref [] in
+      let actions = ref [] in
+      Index.iter transitions (fun tr ->
+          let label = label tr in
+          push acc (label.filter, tr);
+          if label.captures <> [] ||
+             not (IndexSet.is_empty label.clear) ||
+             not (IndexMap.is_empty label.moves) then
+            push actions ({label with filter = IndexSet.empty}, tr);
+        );
+      IndexRefine.iter_decomposition !acc
+        (fun _set iter -> refine (fun ~add -> iter add));
+      let actions = List.sort (fun (l1, _) (l2, _) -> Label.compare l1 l2) !actions in
+      let rec group_actions l ks = function
+        | (l', k) :: rest when Label.compare l l' = 0 ->
+          group_actions l (k :: ks) rest
+        | rest ->
+          refine (fun ~add -> List.iter add ks);
+          start rest
+      and start = function
+        | [] -> ()
+        | (l, k) :: rest -> group_actions l [k] rest
+      in
+      start actions
+
     let () = Stopwatch.step time "RunDFA"
   end
 
   module MinDFA = Valmari.Minimize (Label) (RunDFA)
+  (*module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)*)
   let () = Stopwatch.step time "MinDFA"
 
   module OutDFA = struct

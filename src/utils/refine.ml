@@ -13,12 +13,13 @@ module type S = sig
   val annotated_partition : ('a t * 'b) list -> ('a t * 'b list) list
   val partition_and_total : 'a t list -> 'a t list * 'a t
   val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
+  val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
-  type 'a leftist =
+  type ('a, 'b) leftist =
     | Leaf
-    | Node of 'a leftist * 'a Set.t * IntSet.t * 'a leftist * int
+    | Node of ('a, 'b) leftist * 'a Set.t * 'b * ('a, 'b) leftist * int
 
   let singleton k v = Node (Leaf, k, v, Leaf, 1)
   let rank = function Leaf -> 0 | Node (_,_,_,_,r) -> r
@@ -37,9 +38,9 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
 
   let heap_insert k v t = merge (singleton k v) t
 
-  type 'a pop =
-    | Head of 'a Set.t * IntSet.t * 'a Set.t * IntSet.t * 'a leftist
-    | Tail of 'a Set.t * IntSet.t
+  type ('a, 'b) pop =
+    | Head of 'a Set.t * 'b * 'a Set.t * 'b * ('a, 'b) leftist
+    | Tail of 'a Set.t * 'b
     | Done
 
   let heap_pop2 = function
@@ -144,4 +145,40 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       IntSet.fold (fun i acc -> annotations.(i) :: acc) key []
     in
     (List.map (fun (set, key) -> set, annotate key) union, total)
+
+  type 'a join_tree =
+    | Leaf of 'a
+    | Join of 'a join_tree * 'a join_tree
+
+  let rec iter_join_tree t f = match t with
+    | Leaf x -> f x
+    | Join (l, r) ->
+      iter_join_tree l f;
+      iter_join_tree r f
+
+  let iter_decomposition (xs : ('a Set.t * 'b) list) (f : 'a Set.t -> _ -> unit) : unit =
+    let heap = List.fold_left (fun h (s,a) -> heap_insert s (Leaf a) h) Leaf xs in
+    let rec aux heap =
+      match heap_pop2 heap with
+      | Head (s1, k1, s2, k2, heap) ->
+        let sp, s1 = Set.extract_unique_prefix s1 s2 in
+        let sc, (s1, s2) = Set.extract_shared_prefix s1 s2 in
+        if not (Set.is_empty sp) then
+          f sp (iter_join_tree k1);
+        let heap =
+          if not (Set.is_empty sc)
+          then heap_insert sc (Join (k1, k2)) heap
+          else heap
+        in
+        let heap =
+          if not (Set.is_empty s1) then heap_insert s1 k1 heap else heap
+        in
+        let heap =
+          if not (Set.is_empty s2) then heap_insert s2 k2 heap else heap
+        in
+        aux heap
+      | Tail (k, v) -> f k (iter_join_tree v)
+      | Done -> ()
+    in
+    aux heap
 end

@@ -71,3 +71,21 @@ sig
   val represent_state : states index -> In.states index
   val represent_transition : transitions index -> In.transitions index
 end
+
+module Minimize_with_custom_decomposition
+    (In: sig
+       include INPUT
+       val decomposition : ((add:(transitions index -> unit) -> unit) -> unit) -> unit
+     end) :
+sig
+  include DFA with type label = In.label
+
+  val initials : states index array
+  val finals : states index array
+
+  val transport_state : In.states index -> states index option
+  val transport_transition : In.transitions index -> transitions index option
+
+  val represent_state : states index -> In.states index
+  val represent_transition : transitions index -> In.transitions index
+end

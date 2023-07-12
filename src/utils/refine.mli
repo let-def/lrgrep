@@ -86,6 +86,8 @@ module type S = sig
      all sets in the list [xs]. *)
 
   val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
+
+  val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t
