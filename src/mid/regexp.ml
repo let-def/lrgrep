@@ -275,24 +275,27 @@ struct
       | gotos :: next ->
         let lr1_states = Lr1.set_predecessors successors in
         let next = visit_outer lookahead lr1_states next in
-        let process_goto acc (lhs, lookahead) =
-          let process_target source acc =
-            let target_lhs = Transition.find_goto_target source lhs in
-            IndexMap.update target_lhs (function
-                | Some (sources, target) ->
-                  Some (IndexSet.add source sources, target)
-                | None ->
-                  let config = {
-                    top = target_lhs;
-                    rest = [];
-                    lookahead;
-                  } in
-                  Some (IndexSet.singleton source, visit_config config)
-              ) acc
-          in
-          let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
-          let add_target _ (filter, target) acc = {filter; target; lookahead} :: acc in
-          IndexMap.fold add_target by_target acc
+        let process_goto acc (lhs, lookahead') =
+          let lookahead = Terminal.intersect lookahead lookahead' in
+          if IndexSet.is_empty lookahead then acc
+          else
+            let process_target source acc =
+              let target_lhs = Transition.find_goto_target source lhs in
+              IndexMap.update target_lhs (function
+                  | Some (sources, target) ->
+                    Some (IndexSet.add source sources, target)
+                  | None ->
+                    let config = {
+                      top = target_lhs;
+                      rest = [];
+                      lookahead;
+                    } in
+                    Some (IndexSet.singleton source, visit_config config)
+                ) acc
+            in
+            let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
+            let add_target _ (filter, target) acc = {filter; target; lookahead} :: acc in
+            IndexMap.fold add_target by_target acc
         in
         let gotos = List.fold_left process_goto [] gotos in
         gotos :: next
