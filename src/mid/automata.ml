@@ -283,7 +283,7 @@ struct
           (th.mark != mark) && (
             th.mark <- mark;
             match !last_accepted with
-            | `Total clause -> assert (clause <= th.clause); false
+            (*| `Total clause -> assert (clause <= th.clause); false*)
             | `Some clause
               when assert (clause <= th.clause); th.clause = clause -> false
             | _ ->
