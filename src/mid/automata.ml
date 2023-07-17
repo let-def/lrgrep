@@ -253,6 +253,7 @@ struct
       index: n index;
       group: ('n, LazyNFA.t) vector;
       transitions: (Lr1.set * 'n mapping lazy_t) list;
+      accept: Clause.t option;
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
@@ -277,21 +278,17 @@ struct
 
     let group_make (type a) (prj : a -> LazyNFA.t) (ts : a list) : a array =
       let mark = ref () in
-      let last_accepted = ref `None in
+      let last_accepted = ref None in
       let ts = List.filter (fun a ->
           let th = prj a in
           (th.mark != mark) && (
             th.mark <- mark;
             match !last_accepted with
-            (*| `Total clause -> assert (clause <= th.clause); false*)
-            | `Some clause
+            | Some clause
               when assert (clause <= th.clause); th.clause = clause -> false
             | _ ->
-              if th.accept then (
-                if IndexSet.mem th.clause Clause.total
-                then last_accepted := `Total th.clause
-                else last_accepted := `Some th.clause
-              );
+              if th.accept && not (IndexSet.mem th.clause Clause.total) then
+                last_accepted := Some th.clause;
               true
           )
         ) ts
@@ -323,6 +320,7 @@ struct
       index: n index;
       group: ('n, LazyNFA.t) vector;
       transitions: (Lr1.set * 'n mapping lazy_t) list;
+      accept: Clause.t option;
       mutable visited_labels: Lr1.set;
       mutable visited: Stacks.n indexset;
       mutable scheduled: Stacks.n indexset;
@@ -349,10 +347,14 @@ struct
             in
             t'
           | None ->
+            let accept = ref None in
             let rev_transitions =
               let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
               group_fold
-                (fun i (nfa : LazyNFA.t) acc -> List.rev_map (make i) nfa.transitions @ acc)
+                (fun i (nfa : LazyNFA.t) acc ->
+                   if nfa.accept && IndexSet.mem nfa.clause Clause.total then
+                     accept := Some nfa.clause;
+                   List.rev_map (make i) nfa.transitions @ acc)
                 group []
             in
             let rev_partitions = IndexRefine.annotated_partition rev_transitions in
@@ -374,10 +376,11 @@ struct
             let reservation = Gen.reserve states in
             let state = {
               index = Gen.index reservation;
+              accept = !accept;
               group; transitions;
-              visited_labels=IndexSet.empty;
-              scheduled=IndexSet.empty;
-              visited=IndexSet.empty;
+              visited_labels = IndexSet.empty;
+              scheduled      = IndexSet.empty;
+              visited        = IndexSet.empty;
             } in
             Gen.commit states reservation (Packed state);
             map := GroupMap.add (Vector.as_array group) (Packed state) !map;
@@ -398,20 +401,28 @@ struct
     let () = Stopwatch.step time "Processed initial states"
 
     let () =
+      let accepting = Vector.make Clause.n [] in
       let todo = ref [] in
-      let schedule i set =
+      let min_clause t = (Vector.as_array t.group).(0).clause in
+      let schedule bound i set =
         let Packed t as packed = Gen.get states i in
-        if not (IndexSet.subset set t.visited) then (
+        if min_clause t <= bound then (
           let set = IndexSet.diff set t.visited in
-          if IndexSet.is_empty t.scheduled then (
-            push todo packed;
-            t.scheduled <- set
-          ) else (
-            t.scheduled <- IndexSet.union t.scheduled set
+          if not (IndexSet.is_empty set) then (
+            if IndexSet.is_empty t.scheduled then (
+              begin match t.accept with
+                | Some c when c < bound ->
+                  Vector.set_cons accepting c packed
+                | Some _ | None -> push todo packed
+              end;
+              t.scheduled <- set
+            ) else (
+              t.scheduled <- IndexSet.union t.scheduled set
+            )
           )
         )
       in
-      let update (Packed t) =
+      let update bound (Packed t) =
         let todo = t.scheduled in
         t.visited <- IndexSet.union t.visited todo;
         t.scheduled <- IndexSet.empty;
@@ -426,19 +437,25 @@ struct
           if not !really_empty then
             let lazy (Mapping (_, t')) = target in
             if not (IndexSet.is_empty stacks) then
-              schedule t'.index stacks
+              schedule bound t'.index stacks
         end t.transitions
       in
-      let rec loop () =
+      let rec loop bound =
         match !todo with
+        | [] when Index.to_int bound > 0 ->
+          let bound = Index.of_int Clause.n (Index.to_int bound - 1) in
+          todo := Vector.get accepting bound;
+          Vector.set accepting bound [];
+          loop bound
         | [] -> ()
         | todo' ->
           todo := [];
-          List.iter update todo';
-          loop ()
+          List.iter (update bound) todo';
+          loop bound
       in
-      schedule initial Stacks.initials;
-      loop ()
+      let bound = Index.of_int Clause.n (cardinal Clause.n - 1) in
+      schedule bound initial Stacks.initials;
+      loop bound
 
     let states = Gen.freeze states
 
