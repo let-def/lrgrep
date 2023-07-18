@@ -278,19 +278,12 @@ struct
 
     let group_make (type a) (prj : a -> LazyNFA.t) (ts : a list) : a array =
       let mark = ref () in
-      let last_accepted = ref None in
       let ts = List.filter (fun a ->
           let th = prj a in
-          (th.mark != mark) && (
+          if th.mark != mark then (
             th.mark <- mark;
-            match !last_accepted with
-            | Some clause
-              when assert (clause <= th.clause); th.clause = clause -> false
-            | _ ->
-              if th.accept && not (IndexSet.mem th.clause Clause.total) then
-                last_accepted := Some th.clause;
-              true
-          )
+            true
+          ) else false
         ) ts
       in
       Array.of_list ts
@@ -479,7 +472,9 @@ struct
       List.iter (fun (label, target) ->
           if Lazy.is_val target then (
             let lazy mapping = target in
-            f (IndexSet.inter set label) mapping
+            let set = IndexSet.inter set label in
+            if not (IndexSet.is_empty set) then
+              f set mapping
           )
         ) t.transitions
 
