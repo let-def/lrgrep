@@ -478,7 +478,7 @@ struct
           )
         ) t.transitions
 
-    type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) _mapping -> 'tgt rev_mapping
+    (*type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) _mapping -> 'tgt rev_mapping
     type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
 
     let reverse_transitions =
@@ -497,16 +497,16 @@ struct
         ) states;
       table
 
-    let reverse_transitions (type n) (t : n t) : n rev_mapping list =
+    let iter_reverse_transitions (type n) (t : n t) (f : n rev_mapping -> unit) =
       match Vector.get reverse_transitions t.index with
-      | Rev_packed [] -> []
+      | Rev_packed [] -> ()
       | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
         let Refl = assert_equal_cardinal
             (Vector.length mapping0) (Vector.length t.group)
         in
-        xs
+        List.iter f xs
 
-    (*let reachable =
+    let reachable =
       Vector.map (fun (Packed tgt) ->
           (IndexSet.init_from_set
              (Vector.length tgt.group)
@@ -546,79 +546,6 @@ struct
       loop ()
 
     let () = Stopwatch.step time "Computed reachability"*)
-
-    module Flow = struct
-      type condition_node =
-        | Reject
-        | Accept
-        | Var
-
-      let graph =
-        let on_merge ~repr x =
-          match Congre.get_tag x with
-          | Reject | Accept as x ->
-            Congre.set_tag repr x
-          | Var -> ()
-        in
-        Congre.make ~on_merge ()
-
-      let accept = Congre.fresh graph Accept
-      let _reject = Congre.fresh graph Reject
-
-      let fresh () =
-        let x = Congre.fresh graph Var in
-        Congre.assume_application x x ~equal:x;
-        x
-
-      let threads_control =
-        Vector.map (fun (Packed t) -> Vector.as_array (Vector.map (fun _ -> fresh ()) t.group)) states
-
-      let threads_control (type n) (t : n t) : (n, condition_node Congre.node) vector =
-        Vector.cast_array (Vector.length t.group) (Vector.get threads_control t.index)
-
-      (* Accept initial nodes *)
-      let () =
-        let Packed t = Vector.get states initial in
-        Vector.iter
-          (fun node -> Congre.assume_equal node accept)
-          (threads_control t)
-
-      (* Propagate control flow *)
-
-      let () =
-        Vector.iter (fun (Packed tgt) ->
-            let control = threads_control tgt in
-            match reverse_transitions tgt with
-            | [] -> ()
-            | [Rev_mapping (src, mapping)] ->
-              let src_control = threads_control src in
-              Vector.iter2 (fun var (src_i, _) ->
-                  Congre.assume_equal var (Vector.get src_control src_i)
-                ) control mapping
-            | Rev_mapping (src0, mapping0) :: rest ->
-              let control0 = threads_control src0 in
-              Vector.iteri (fun tgt_i var ->
-                  let src0_i, _ = Vector.get mapping0 tgt_i in
-                  let var0 = Vector.get control0 src0_i in
-                  let phi =
-                    List.fold_left (fun phi (Rev_mapping (srcj, mappingj)) ->
-                        let srcj_i, _ = Vector.get mappingj tgt_i in
-                        let varj = Vector.get (threads_control srcj) srcj_i in
-                        match Congre.find_app phi varj with
-                        | Some phi' -> phi'
-                        | None ->
-                          let phi' = fresh () in
-                          Congre.assume_application phi varj ~equal:phi';
-                          phi'
-                      ) var0 rest
-                  in
-                  Congre.assume_equal phi var;
-                ) control
-          ) states
-
-      let () =
-        Stopwatch.step time "Congruence closure of control flow"
-    end
 
     let liveness =
       let reserve (Packed t) =
@@ -680,9 +607,12 @@ struct
 
     (* Naive allocator *)
     let () =
+      let inflate_set (f : 'n index -> 'a) (set : 'n indexset) : ('n, 'a) indexmap =
+        IndexSet.fold (fun i map -> IndexMap.add i (f i) map) set IndexMap.empty
+      in
       let init (Packed state) =
         let in_use = ref IntSet.empty in
-        let alloc caps = IndexMap.inflate (fun _ -> Register.of_int (IntSet.allocate in_use)) caps in
+        let alloc caps = inflate_set (fun _ -> Register.of_int (IntSet.allocate in_use)) caps in
         Vector.set registers state.index
           (Vector.Packed (Vector.map alloc (liveness state)))
       in
