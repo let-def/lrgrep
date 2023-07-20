@@ -239,6 +239,11 @@ module Vector = struct
     done;
     !acc
 
+  let rev_iteri (type n) f (Vector a : (n, _) t) =
+    for i = Array.length a - 1 downto 0 do
+      f i a.(i)
+    done
+
   let as_array (type n) (Vector a : (n, _) t) = a
 
   let to_list (type n) (Vector a : (n, _) t) = Array.to_list a

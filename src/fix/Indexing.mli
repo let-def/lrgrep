@@ -228,6 +228,8 @@ module Vector : sig
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
   val iter2 : ('a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit
 
+  val rev_iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
+
   val fold_left : ('a -> 'b -> 'a) -> 'a -> (_, 'b) t -> 'a
   val fold_right : ('b -> 'a -> 'a) -> (_, 'b) t -> 'a -> 'a
 
