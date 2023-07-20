@@ -13,6 +13,8 @@ type clause = int
 (** Registers are also named by small integers. *)
 type register = int
 
+type priority = int
+
 (* Representation of the automaton as sparse tables and bytecoded programs *)
 
 (** A sparse table stores many partial mapping from [0..k-1] to [0..v-1]
@@ -57,12 +59,15 @@ type program_instruction =
     (** Jump and consume input:
         [Yield pc] stops the current interpretation to consume one state of the
         input stack. After consuming, execution should resume at [pc]. *)
-  | Accept of clause * register option array
-    (** When reaching [Accept (clause, captures)], the matcher found that clause
-        number [clause] is matching. Add it to the set of matching candidates and
-        resume execution. [captures] defines the variables captured in the
-        clause definition: [None] if it is unbound, [Some reg] if it is bound to
-        the value stored in register [reg].
+  | Accept of clause * priority * register option array
+    (** When reaching [Accept (clause, priority, captures)], the matcher found
+        that clause number [clause] is matching at priority level [priority].
+        Add it to the set of matching candidates. If [clause] already match,
+        replace the match if [priority] is less than or equal to the previous
+        level. Resume execution.
+        [captures] defines the variables captured in the clause definition:
+        [None] if it is unbound, [Some reg] if it is bound to the value stored
+        in register [reg].
     *)
   | Match of sparse_index
     (** [Match sidx] lookup the sparse table for a cell matching the state
@@ -70,6 +75,10 @@ type program_instruction =
         If the lookup is successful, it returns the [pc] should jump to.
         If unsuccesful, execution continue on next instruction.
     *)
+  | Priority of clause * priority * priority
+    (** [Priority (clause, p1, p2)] remaps the priority of a previous match.
+      If [clause] matched at priority [p1], it should now be considered a match
+      at priority [p2].*)
   | Halt
     (** Program is finished, there will be no more matches. *)
 

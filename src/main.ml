@@ -166,7 +166,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
     Mid.Coverage.Make(Info)(OutDFA)(Lrc.Lrce)
   in*)
   let get_state_for_compaction index =
-    let add_match (clause, regs) =
+    let add_match (clause, priority, regs) =
       let cap = Clause.captures clause in
       let registers =
         let add_reg cap acc =
@@ -175,16 +175,17 @@ let process_entry oc (entry : Front.Syntax.entry) = (
         in
         Array.of_list (List.rev (IndexSet.fold add_reg cap []))
       in
-      (clause, registers)
+      (clause, priority, registers)
     in
     let add_transition tr acc =
-      let {Label. filter; captures; clear; moves} = OutDFA.label tr in
+      let {Label. filter; captures; clear; moves; priority} = OutDFA.label tr in
       let actions = {
         Lrgrep_support.
         move = IndexMap.bindings moves;
         store = List.map snd captures;
         clear = IndexSet.elements clear;
         target = OutDFA.target tr;
+        priority;
       } in
       (filter, actions) :: acc
     in

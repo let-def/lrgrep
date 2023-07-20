@@ -192,12 +192,13 @@ end = struct
       Buffer.add_char t.buffer '\x04';
       Buffer.add_uint16_be t.buffer (pos land 0xFFFF);
       Buffer.add_uint8 t.buffer (pos lsr 16)
-    | Accept (clause, registers) ->
+    | Accept (clause, priority, registers) ->
       assert (Array.length registers <= 0xFF);
       assert (clause <= 0xFFFF);
       Buffer.add_char t.buffer '\x05';
-      Buffer.add_uint8 t.buffer (Array.length registers);
       Buffer.add_uint16_be t.buffer clause;
+      Buffer.add_uint8 t.buffer priority;
+      Buffer.add_uint8 t.buffer (Array.length registers);
       Array.iter (function
           | None -> Buffer.add_uint8 t.buffer 0xFF;
           | Some i ->
@@ -208,6 +209,12 @@ end = struct
       Buffer.add_char t.buffer '\x06';
       assert (index <= 0xFFFFFF);
       add_uint24_be t.buffer index
+    | Priority (clause, p1, p2) ->
+      Buffer.add_char t.buffer '\x08';
+      assert (clause <= 0xFFFF);
+      Buffer.add_uint16_be t.buffer clause;
+      Buffer.add_uint8 t.buffer p1;
+      Buffer.add_uint8 t.buffer p2
     | Halt ->
       Buffer.add_char t.buffer '\x07'
 
@@ -230,23 +237,25 @@ end
 
 (** The action of a transition is pair of:
     - a possibly empty list of registers to save the current state to
+    - a possibly empty list of priority mappings for matching clauses
     - a target state (index of the state in the dfa array) *)
-type 'state transition_action = {
+type ('clause, 'state) transition_action = {
   move: (Register.t * Register.t) list;
   store: Register.t list;
   clear: Register.t list;
+  priority: ('clause index * RT.priority * RT.priority) list;
   target: 'state index;
 }
 
 type ('state, 'clause, 'lr1) state = {
-  accept: ('clause index * RT.register option array) list;
+  accept: ('clause index * RT.priority * RT.register option array) list;
   (** a clause to accept in this state. *)
 
   halting: 'lr1 IndexSet.t;
   (** The set of labels that should cause matching to halt (this can be seen as
       a transition to a "virtual" sink state). *)
 
-  transitions: ('lr1 IndexSet.t * 'state transition_action) list;
+  transitions: ('lr1 IndexSet.t * ('clause, 'state) transition_action) list;
   (** Transitions for this state, as a list of labels and actions. *)
 }
 
@@ -285,11 +294,14 @@ let compact (type dfa clause lr1)
         emit_moves rest
     | [] -> ()
   in
-  let emit_action act =
-    emit_moves (act.move : (_ index * _ index) list :> (int * int) list);
-    List.iter (fun i -> Code_emitter.emit code (Store (i : _ index :> int))) act.store;
-    List.iter (fun i -> Code_emitter.emit code (Clear (i : _ index :> int))) act.clear;
-    Code_emitter.emit_yield_reloc code (Vector.get pcs act.target);
+  let emit_action {move; store; clear; priority; target} =
+    emit_moves (move : (_ index * _ index) list :> (int * int) list);
+    List.iter (fun i -> Code_emitter.emit code (Store (i : _ index :> int))) store;
+    List.iter (fun i -> Code_emitter.emit code (Clear (i : _ index :> int))) clear;
+    List.iter (fun (c, i, j) ->
+        Code_emitter.emit code (Priority ((c : _ index :> int), i, j))
+      ) priority;
+    Code_emitter.emit_yield_reloc code (Vector.get pcs target);
   in
   let goto_action action = (*function
     | ([], target) -> pcs.(target)
@@ -336,8 +348,8 @@ let compact (type dfa clause lr1)
     assert (!pc = -1);
     pc := Code_emitter.position code;
     List.iter
-      (fun (clause, registers) ->
-         Code_emitter.emit code (Accept (Index.to_int clause, registers)))
+      (fun (clause, priority, registers) ->
+         Code_emitter.emit code (Accept (Index.to_int clause, priority, registers)))
       accept;
     begin match
         List.concat_map

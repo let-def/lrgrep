@@ -10,13 +10,16 @@ type sparse_index = int
 type program = string
 type program_counter = int
 
+type priority = int
+
 type program_instruction =
   | Store of register
   | Move of register * register
   | Clear of register
   | Yield of program_counter
-  | Accept of clause * register option array
+  | Accept of clause * priority * register option array
   | Match of sparse_index
+  | Priority of clause * priority * priority
   | Halt
 
 let get_int table ~offset = function
@@ -60,19 +63,26 @@ let program_step (t : program) (r : program_counter ref)
     r := !r + 4;
     Yield (get_int t ~offset:(pc + 1) 3)
   | '\x05' ->
-    let arity = String.get_uint8 t (pc + 1) in
-    r := !r + 4 + arity;
+    let clause = String.get_uint16_be t (pc + 1) in
+    let priority = String.get_uint8 t (pc + 3) in
+    let arity = String.get_uint8 t (pc + 4) in
     let registers = Array.init arity (fun i ->
-        let x = String.get_uint8 t (pc + 4 + i) in
+        let x = String.get_uint8 t (pc + 5 + i) in
         if x = 255 then None else Some x
       ) in
-    Accept (String.get_uint16_be t (pc + 2), registers)
+    r := !r + 5 + arity;
+    Accept (clause, priority, registers)
   | '\x06' ->
     r := !r + 4;
     Match (get_uint24_be t (pc + 1))
   | '\x07' ->
     r := !r + 1;
     Halt
+  | '\x08' ->
+    r := !r + 5;
+    Priority (String.get_uint16_be t (pc + 1),
+              String.get_uint8 t (pc + 3),
+              String.get_uint8 t (pc + 4))
   | _ -> assert false
 
 module type Parse_errors = sig
@@ -107,18 +117,54 @@ struct
                 | Some _ -> "Some _"
             ) (Array.to_list regs)))
 
-  let interpret_last bank candidate pc =
+
+  let add_candidate candidates ~clause ~priority registers bank =
+    let may_get = function
+      | None -> None
+      | Some i -> bank.(i)
+    in
+    let mk () =
+      let arguments = Array.map may_get registers in
+      (clause, priority, arguments)
+    in
+    let rec loop = function
+      | [] -> [mk ()]
+      | ((clause', priority', _) :: xs) as xxs when clause = clause' ->
+        if priority <= priority'
+        then mk () :: xs
+        else xxs
+      | ((clause', _, _) :: _) as xxs when clause' > clause ->
+        mk () :: xxs
+      | x :: xs ->
+        x :: loop xs
+    in
+    candidates := loop !candidates
+
+  let remap_candidate candidates ~(clause : clause) p1 p2 =
+    let rec loop = function
+      | (clause', p1', args) :: rest
+        when clause' = clause && p1 = p1' ->
+        (clause', p2, args) :: rest
+      | ((clause', _, _) as x) :: xs when clause' < clause ->
+        x :: loop xs
+      | _ -> raise Not_found
+    in
+    match loop !candidates with
+    | exception Not_found ->
+      if debug then Printf.eprintf "Remap skipped\n";
+      ()
+    | candidates' ->
+      if debug then Printf.eprintf "Remap applied\n";
+      candidates := candidates'
+
+  let interpret_last bank candidates pc =
     match program_step PE.program (ref pc) with
-    | Accept (clause, registers) ->
+    | Accept (clause, priority, registers) ->
       if debug then eprintf "Accept (%d,%s) (bottom)\n" clause (print_regs bank registers);
-      let may_get = function
-        | None -> None
-        | Some i -> bank.(i)
-      in
-      candidate := (clause, Array.map may_get registers) :: !candidate
+      add_candidate candidates ~clause ~priority registers bank
     | _ -> ()
 
-  let interpret bank env candidate (pc : program_counter) =
+  let interpret bank env candidates (pc : program_counter) =
     let pc = ref pc in
     let rec loop () =
       match program_step PE.program pc with
@@ -137,13 +183,10 @@ struct
       | Yield pc' ->
         if debug then prerr_endline "Yield";
         Some pc'
-      | Accept (clause, registers) ->
-        if debug then eprintf "Accept (%d,%s)\n" clause (print_regs bank registers);
-        let may_get = function
-          | None -> None
-          | Some i -> bank.(i)
-        in
-        candidate := (clause, Array.map may_get registers) :: !candidate;
+      | Accept (clause, priority, registers) ->
+        if debug then eprintf "Accept (%d,%d,%s)\n"
+            clause priority (print_regs bank registers);
+        add_candidate candidates ~clause ~priority registers bank;
         loop ()
       | Match index ->
         let state = P.current_state_number env in
@@ -158,33 +201,25 @@ struct
       | Halt ->
         if debug then prerr_endline "Halt";
         None
+      | Priority (clause, p1, p2) ->
+        if debug then Printf.eprintf
+            "Priority: clause %d remapped %d -> %d\n" clause p1 p2;
+        remap_candidate candidates ~clause p1 p2;
+        loop ()
     in
     loop ()
 
   let run env =
     let bank = Array.make PE.registers None in
-    let candidate = ref [] in
+    let candidates = ref [] in
     let rec loop env pc =
-      match interpret bank env candidate pc with
+      match interpret bank env candidates pc with
       | None -> ()
       | Some pc' ->
         match P.pop env with
-        | None -> interpret_last bank candidate pc'
+        | None -> interpret_last bank candidates pc'
         | Some env -> loop env pc'
     in
     loop env PE.initial;
-    let rec uniq k v = function
-      | [] -> [k, v]
-      | (k', v') :: rest ->
-        if Int.equal k k' then
-          uniq k v rest
-        else
-          (k, v) :: uniq k' v' rest
-    in
-    match
-      List.stable_sort (fun (a,_) (b,_) -> Int.compare a b)
-        !candidate
-    with
-    | (k, v) :: rest -> uniq k v rest
-    | [] -> []
+    List.map (fun (k,_,v) -> (k, v)) !candidates
 end
