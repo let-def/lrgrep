@@ -1147,7 +1147,7 @@ struct
           | _ :: _ -> f index
         ) BigDFA.accepts
 
-    let refinements refine =
+    let [@ocaml.warning "-32"] refinements refine =
       (* Refine states by accepted actions *)
       let table = Hashtbl.create 7 in
       Vector.rev_iteri (fun index accepts ->
@@ -1191,8 +1191,9 @@ struct
     let () = Stopwatch.step time "RunDFA"
   end
 
-  module MinDFA = Valmari.Minimize (Label) (RunDFA)
-  (*module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)*)
+  (*module MinDFA = Valmari.Minimize (Label) (RunDFA)*)
+  module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)
+
   let () = Stopwatch.step time "MinDFA"
 
   module OutDFA = struct
