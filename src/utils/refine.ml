@@ -1,6 +1,7 @@
 module type DECOMPOSABLE = sig
   type 'a t
   val is_empty : 'a t -> bool
+  val compare : 'a t -> 'a t -> int
   val compare_minimum : 'a t -> 'a t -> int
   val sorted_union : 'a t list -> 'a t
   val extract_unique_prefix : 'a t -> 'a t -> 'a t * 'a t
@@ -14,6 +15,7 @@ module type S = sig
   val partition_and_total : 'a t list -> 'a t list * 'a t
   val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
   val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
+  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> (int * 'b) list -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
@@ -26,19 +28,31 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
 
   let rec merge t1 t2 = match t1,t2 with
     | Leaf, t | t, Leaf -> t
-    | Node (l, k1, v1, r, _), Node (_, k2, _, _, _) ->
+    | Node (l1, k1, v1, r1, _), Node (l2, k2, v2, r2, _) ->
       if Set.compare_minimum k1 k2 > 0 then
-        merge t2 t1 (* switch merge if necessary *)
+        merge_lt l2 k2 v2 r2 t1
       else
-        let merged = merge r t2 in (* always merge with right *)
-        let rank_left = rank l and rank_right = rank merged in
-        if rank_left >= rank_right
-        then Node (l, k1, v1, merged, rank_right+1)
-        else Node (merged, k1, v1, l, rank_left+1) (* left becomes right due to being shorter *)
+        merge_lt l1 k1 v1 r1 t2
+
+  and merge_lt l k v r t2 =
+    let merged = merge r t2 in (* always merge with right *)
+    let rank_left = rank l and rank_right = rank merged in
+    if rank_left >= rank_right
+    then Node (l, k, v, merged, rank_right+1)
+    else Node (merged, k, v, l, rank_left+1) (* left becomes right due to being shorter *)
 
   let heap_insert k v t = merge (singleton k v) t
 
-  type ('a, 'b) pop =
+  (*type ('a, 'b) heap_pop1 =
+    | Pop1 of 'a Set.t * 'b * ('a, 'b) leftist
+    | Done1
+
+  let heap_pop1 = function
+    | Leaf -> Done1
+    | Node (l, k, v, r, _) ->
+      Pop1 (k, v, merge l r)*)
+
+  type ('a, 'b) pop2 =
     | Head of 'a Set.t * 'b * 'a Set.t * 'b * ('a, 'b) leftist
     | Tail of 'a Set.t * 'b
     | Done
@@ -179,6 +193,60 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
         aux heap
       | Tail (k, v) -> f k (iter_join_tree v)
       | Done -> ()
+    in
+    aux heap
+
+  let rec merge_uniq compare xxs yys =
+    match xxs, yys with
+    | [], l | l, [] -> l
+    | x :: xs, y :: ys ->
+      let c = compare x y in
+      if c = 0 then
+        x :: merge_uniq compare xs ys
+      else if c < 0 then
+        x :: merge_uniq compare xs yys
+      else
+        y :: merge_uniq compare xxs ys
+
+  let iter_merged_decomposition (xs : ('a Set.t * 'b) list) (f : 'a Set.t -> (int * 'b) list -> unit) : unit =
+    let heap =
+      let count = ref 0 in
+      List.fold_left (fun h (s,a) ->
+          let result = heap_insert s [!count, a] h in
+          incr count;
+          result
+        ) Leaf xs
+    in
+    let cmp (i1, _) (i2, _) =
+      Int.compare i1 i2
+    in
+    let rec aux heap =
+      match heap_pop2 heap with
+      | Head (s1, k1, s2, k2, heap) ->
+        process s1 k1 s2 k2 heap
+      | Tail (k, v) -> f k v
+      | Done -> ()
+
+    and process s1 k1 s2 k2 = function
+      | Node (l, s3, k3, r, _) when Set.compare s2 s3 = 0 ->
+        process s1 k1 s2 (merge_uniq compare k2 k3) (merge l r)
+      | heap ->
+        let sp, s1 = Set.extract_unique_prefix s1 s2 in
+        let sc, (s1, s2) = Set.extract_shared_prefix s1 s2 in
+        if not (Set.is_empty sp) then
+          f sp k1;
+        let heap =
+          if not (Set.is_empty sc)
+          then heap_insert sc (merge_uniq cmp k1 k2) heap
+          else heap
+        in
+        let heap =
+          if not (Set.is_empty s1) then heap_insert s1 k1 heap else heap
+        in
+        let heap =
+          if not (Set.is_empty s2) then heap_insert s2 k2 heap else heap
+        in
+        aux heap
     in
     aux heap
 end

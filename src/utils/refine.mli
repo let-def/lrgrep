@@ -16,6 +16,9 @@ module type DECOMPOSABLE = sig
   val is_empty : 'a t -> bool
   (** [is_empty s] determines whether the set [s] is empty. *)
 
+  val compare : 'a t -> 'a t -> int
+  (** Total ordering. *)
+
   val compare_minimum : 'a t -> 'a t -> int
   (** [compare_minimum s1 s2] compares the nonempty sets [s1] and [s2]
       based on their minimum elements. *)
@@ -88,6 +91,8 @@ module type S = sig
   val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
 
   val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
+
+  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> (int * 'b) list -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t
