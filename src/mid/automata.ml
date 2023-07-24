@@ -428,10 +428,9 @@ struct
                    List.rev_map (make i) nfa.transitions @ acc)
                 group []
             in
-            let rev_partitions = IndexRefine.annotated_partition rev_transitions in
-            let process_class (label, rev_targets) =
+            let process_class label rev_targets =
               label, lazy (
-                let prepare_target (index, captures, lazy nfa) =
+                let prepare_target (_, (index, captures, lazy nfa)) =
                   nfa, (index, captures)
                 in
                 let Packed result =
@@ -443,7 +442,10 @@ struct
                 Fwd_mapping ((Vector.map snd result), aux (Vector.map fst result))
               )
             in
-            let raw_transitions = List.map process_class rev_partitions in
+            let raw_transitions = ref [] in
+            IndexRefine.iter_merged_decomposition rev_transitions
+              (fun label targets -> push raw_transitions (process_class label targets));
+            let raw_transitions = !raw_transitions in
             let reservation = Gen.reserve states in
             let state = {
               index = Gen.index reservation;
