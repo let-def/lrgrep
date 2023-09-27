@@ -312,7 +312,7 @@ This '(' might be unmatched
   \qquad where $\text{viable}(u) = \exists v \in \Sigma^*,\ u.v \in L$
   \pause
   \\ \ \\
-  In this set of pairs $(u,t)$, $u$ is a valid prefix and $t$ is a terminal that will cause the analysis to fail.
+will cause the analysis to fail.
 \end{frame}
 
 \begin{frame}[t]{Characterizing errors (3/3): regularisation}
@@ -324,7 +324,6 @@ This '(' might be unmatched
   $$
   \mathcal E_G = \left\{\ (im(u), t)\ \mid\ (u, t) \in \mathcal E_L\ \right\}
   $$
-
   \pause
   \begin{block}{Theorem (Aho \& Ullman, 1972)}
     The set of all \only<-2>{{\em viable prefixes of the right sentential forms of a grammar}}\only<3->{\textbf{stacks of an LR automaton}} is a regular language.
@@ -532,7 +531,7 @@ This '(' might be unmatched
 
 \begin{frame}{Future work}
 
-  The main feature that is missing is a tool to test coverage of a grammar:
+ The main feature that is missing is a tool to test coverage of a grammar:
   which grammatical constructs have no associated errors, which rules are unreachable.
 
   We identified two difficulties:
