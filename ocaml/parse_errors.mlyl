@@ -127,6 +127,14 @@ rule error_message = parse error
   @ UNDERSCORE | LIDENT | UIDENT | LPAREN
   { report_currified_constructor inner token }
 
+| / . atomic_type @ LBRACKETATAT
+  { "[@@ ...] attribute should be placed after a type (note that it attaches to the item, not to the type)" }
+
+| / . atomic_type @ LBRACKETAT
+  { "[@ ...] attribute should be placed after a type" }
+
+(* TODO: there are many more attribute cases to handle *)
+
 (**)
 
 (* implementation: OBJECT METHOD BANG LIDENT COLON TYPE LIDENT DOT QUOTED_STRING_EXPR EQUAL WITH *)
