@@ -65,6 +65,10 @@ rule error_message = parse error
 | [structure_item]; semi=SEMI; [let_bindings(ext)]
   { "Might be due to the semicolon " ^ line_and_char $startloc(semi) }
 
+| item=structure_item; [let_bindings(ext)] @ IN
+  { "A 'let ... in' is not allowed immediately after a module definition. \n\
+    This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endloc(item) }
+
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | lp=LPAREN; [_* / ... . RPAREN ...]
   { "Unclosed parenthesis at " ^ line_and_char $startloc(lp) }
