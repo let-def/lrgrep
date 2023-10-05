@@ -35,8 +35,8 @@ module type Failure_NFA = sig
   val label : n index -> lr1 indexset
   val next : n index -> n indexset
   val fail : n index -> terminal indexset option
-  (* [Some empty]    : the current state doesn't fail (but the prefix or
-                       suffix may fail)
+  (* [Some empty]    : the current state doesn't fail (but a prefix may have
+                       already failed and there exists a suffix that will fail)
      [Some nonempty] : the current state fails for any of these lookaheads
      [None]          : the current suffix already failed, try again with a
                        shorter suffix
