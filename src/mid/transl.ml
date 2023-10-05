@@ -480,7 +480,7 @@ struct
     let rec transl ~for_reduction re =
       RE.make re.position @@
       match re.desc with
-      | Atom (capture, symbol) ->
+      | Atom (capture, symbol, mark) ->
         if for_reduction && Option.is_some capture then
           error re.position "Captures are not allowed inside reductions";
         let set = match symbol with
@@ -495,12 +495,12 @@ struct
           | None -> IndexSet.empty
           | Some name -> mk_capture Value name
         in
-        RE.Set (set, cap)
+        RE.Set (set, cap, Usage.singleton mark)
       | Alternative res ->
         RE.Alt (List.map (transl ~for_reduction) res)
       | Repetition {expr; policy} ->
         RE.Star (transl ~for_reduction expr, policy)
-      | Reduce {capture; policy; expr} ->
+      | Reduce {capture; policy; expr; mark} ->
         if for_reduction then
           error re.position "Reductions cannot be nested";
         (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
@@ -517,7 +517,8 @@ struct
             let capture_end = mk_capture End_loc name in
             (capture_start, capture_end)
         in
-        let r = RE.Reduce (capture_end, {capture; pattern; policy}) in
+        let usage = Usage.singleton mark in
+        let r = RE.Reduce (capture_end, {capture; pattern; policy; usage}) in
         if IndexSet.is_empty immediate then
           r
         else if immediate == Lr1.all then

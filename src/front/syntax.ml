@@ -1,3 +1,5 @@
+open Utils
+
 (** {1 The shallow abstract syntax} *)
 
 (** A location represents a range of characters from the input file.
@@ -43,7 +45,7 @@ type filter_symbol =
     syntax. *)
 
 type regular_desc =
-  | Atom of string option * wild_symbol
+  | Atom of string option * wild_symbol * Usage.mark
   | Alternative of regular_expr list
   (** A disjunction of multiple expressions.
       [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
@@ -54,6 +56,7 @@ type regular_desc =
   (** [Repetition e] represents [e*] *)
   | Reduce of {
       capture: string option;
+      mark: Usage.mark;
       expr: regular_expr;
       policy: quantifier_kind;
     }
@@ -181,9 +184,11 @@ let cmon_quantifier_kind = function
   | Longest -> Cmon.constant "Longest"
   | Shortest -> Cmon.constant "Shortest"
 
+let cmon_usage_mark _ = Cmon.constant "<Usage.mark>"
+
 let rec cmon_regular_term = function
-  | Atom (cap, sym) ->
-    Cmon.construct "Atom" [cmon_capture cap; cmon_wild_symbol sym]
+  | Atom (cap, sym, mark) ->
+    Cmon.construct "Atom" [cmon_capture cap; cmon_wild_symbol sym; cmon_usage_mark mark]
   | Alternative res ->
     Cmon.constructor "Alternative" (Cmon.list_map cmon_regular_expression res)
   | Concat res ->
@@ -193,9 +198,10 @@ let rec cmon_regular_term = function
       "expr", cmon_regular_expression expr;
       "policy", cmon_quantifier_kind policy;
     ]
-  | Reduce {capture; policy; expr} ->
+  | Reduce {capture; mark; policy; expr} ->
     Cmon.crecord "Reduce" [
       "capture", cmon_capture capture;
+      "mark", cmon_usage_mark mark;
       "expr", cmon_regular_expression expr;
       "policy", cmon_quantifier_kind policy;
     ]

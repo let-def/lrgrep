@@ -75,6 +75,7 @@ module type RE = sig
   type reduction = {
     pattern: redstate indexset;
     capture: Capture.set;
+    usage: Usage.set;
     policy: Syntax.quantifier_kind;
   }
 
@@ -92,7 +93,7 @@ module type RE = sig
 
   (** The different constructors of regular expressions*)
   and desc =
-    | Set of Lr1.set * Capture.set
+    | Set of Lr1.set * Capture.set * Usage.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of t list
@@ -133,6 +134,7 @@ module type S = sig
     type label = {
       filter: Lr1.set;
       captures: Capture.set;
+      usage: Usage.set;
     }
 
     val is_immediate_label : label -> bool
@@ -407,6 +409,7 @@ struct
     type reduction = {
       pattern: Redgraph.state indexset;
       capture: Capture.set;
+      usage: Usage.set;
       policy: Syntax.quantifier_kind;
     }
 
@@ -422,7 +425,7 @@ struct
       position : Syntax.position;
     }
     and desc =
-      | Set of Lr1.set * Capture.set
+      | Set of Lr1.set * Capture.set * Usage.set
       | Alt of t list
       | Seq of t list
       | Star of t * Syntax.quantifier_kind
@@ -434,20 +437,24 @@ struct
     let compare t1 t2 =
       Int.compare t1.uid t2.uid
 
-    let cmon_reduction {capture; pattern; policy} =
+    let cmon_usage_set _ = Cmon.constant "<Usage.set>"
+
+    let cmon_reduction {capture; pattern; usage; policy} =
       Cmon.record [
         "capture", cmon_indexset capture;
         "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
+        "usage", cmon_usage_set usage;
         "policy", Syntax.cmon_quantifier_kind policy;
       ]
 
     let cmon t =
       let rec aux t =
         match t.desc with
-        | Set (lr1s, var) ->
+        | Set (lr1s, var, usage) ->
           Cmon.construct "Set" [
             cmon_set_cardinal lr1s;
             cmon_indexset var;
+            cmon_usage_set usage;
           ]
         | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
         | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
@@ -464,9 +471,10 @@ struct
     type label = {
       filter: Lr1.set;
       captures: Capture.set;
+      usage: Usage.set;
     }
 
-    let is_immediate_label {filter; captures} =
+    let is_immediate_label {filter; captures; usage=_} =
       IndexSet.equal filter Lr1.all &&
       IndexSet.is_empty captures
 
@@ -598,12 +606,14 @@ struct
     let label_union l1 l2 = {
       filter = IndexSet.union l1.filter l2.filter;
       captures = IndexSet.union l1.captures l2.captures;
+      usage = Usage.join l1.usage l2.usage;
     }
 
 
-    let label_capture label vars =
+    let label_capture label vars usage =
       if not_empty vars then
-        {label with captures = IndexSet.union label.captures vars}
+        {label with captures = IndexSet.union label.captures vars;
+                    usage = Usage.join label.usage usage}
       else
         label
 
@@ -694,17 +704,17 @@ struct
             ks := ks' @ !ks
           | Some label, Longest ->
             ks := ks' @ !ks;
-            process_k (label_capture label reduction.capture) next
+            process_k (label_capture label reduction.capture reduction.usage) next
           | Some label, Shortest ->
-            process_k (label_capture label reduction.capture) next;
+            process_k (label_capture label reduction.capture reduction.usage) next;
             ks := ks' @ !ks
 
       and process_re label self next = function
-        | Set (s, var) ->
+        | Set (s, var, usage) ->
           begin match label_filter label s with
             | None -> ()
             | Some label ->
-              continue ks (label_capture label var) next
+              continue ks (label_capture label var usage) next
           end
 
         | Alt es ->
@@ -728,7 +738,7 @@ struct
           end
 
         | Reduce (cap, r) ->
-          let label = label_capture label cap in
+          let label = label_capture label cap Usage.empty in
           let ks' = ref [] in
           let matching =
             IndexSet.filter (fun lr1 ->
@@ -742,7 +752,7 @@ struct
                 reduce_transitions ~on_outer r steps
               ) label.filter
           in
-          let label = label_capture label r.capture in
+          let label = label_capture label r.capture r.usage in
           begin match r.RE.policy with
             | Shortest ->
               if not_empty matching then
@@ -757,6 +767,7 @@ struct
       let label = {
         filter = Lr1.all;
         captures = IndexSet.empty;
+        usage = Usage.empty;
       } in
       process_k label k;
       List.rev !ks
