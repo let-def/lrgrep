@@ -302,7 +302,7 @@ struct
   module BigDFA : sig
     include CARDINAL
 
-    type ('src, 'tgt) mapping = ('tgt, 'src index * Capture.set) vector
+    type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
 
     type 'n t = private {
       index: n index;
@@ -373,7 +373,7 @@ struct
     type n = State.n
     let n = State.n
 
-    type ('src, 'tgt) mapping = ('tgt, 'src index * Capture.set) vector
+    type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
 
     type 'n t = {
       index: n index;
@@ -420,7 +420,9 @@ struct
           | None ->
             let accept = ref None in
             let rev_transitions =
-              let make i ({K. filter; captures}, t) = (filter, (i, captures, t)) in
+              let make i ({K. filter; captures; usage}, t) =
+                (filter, (i, (captures, usage), t))
+              in
               group_fold
                 (fun i (nfa : LazyNFA.t) acc ->
                    if nfa.accept && IndexSet.mem nfa.clause Clause.total then
@@ -560,13 +562,14 @@ struct
     let iter_transitions t f =
       List.iter f t.transitions
 
-    (*type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) mapping -> 'tgt rev_mapping
+    type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) mapping -> 'tgt rev_mapping
     type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
 
     let reverse_transitions =
       let table = Vector.make n (Rev_packed []) in
       Vector.iter (fun (Packed src) ->
-          iter_transitions src (fun _ (Fwd_mapping (mapping, tgt)) ->
+          iter_transitions src (fun tr ->
+              let Fwd_mapping (mapping, tgt) = tr.mapping in
               match Vector.get table tgt.index with
               | Rev_packed [] ->
                 Vector.set table tgt.index (Rev_packed [Rev_mapping (src, mapping)])
@@ -627,8 +630,49 @@ struct
       in
       loop ()
 
-    let () = Stopwatch.step time "Computed reachability"*)
+    let () = Stopwatch.step time "Computed reachability"
 
+    let () =
+      let process (Packed tgt) =
+        let reach = Vector.get reachable tgt.index in
+        iter_reverse_transitions tgt (fun (Rev_mapping (_, mapping)) ->
+            let mapping = Vector.as_array mapping in
+            IntSet.iter (fun i ->
+                let _, (_, usage) = mapping.(i) in
+                Usage.mark_used usage
+              ) reach;
+          )
+      in
+      Vector.iter process states
+
+    let () =
+      let iter_re f (re : Syntax.regular_expr) =
+        match re.desc with
+        | Atom _ -> ()
+        | Filter _ -> ()
+        | Repetition {expr; policy = _} ->
+          f expr
+        | Reduce {capture = _; mark = _; expr; policy = _} ->
+          f expr
+        | Alternative res ->
+          List.iter f res
+        | Concat res ->
+          List.iter f res
+      in
+      let rec check (re : Syntax.regular_expr) =
+        match re.desc with
+        | Atom (_, _, mark) | Reduce {mark; _} ->
+          if Usage.is_unused mark then (
+            Printf.eprintf "Warning: expression line %d, column %d is unreachable\n"
+              re.position.line re.position.col
+          )
+        | _ -> iter_re check re
+      in
+      Vector.iter
+        (fun (clause : Syntax.clause) -> check clause.pattern)
+        Preclause.vector
+
+    let () = Stopwatch.step time "Dead-code analysis"
 
     let () =
       let count = ref 0 in
@@ -927,7 +971,7 @@ struct
           let changed = ref false in
           let live_tgt = liveness tgt in
           (*let reachable = Vector.get reachable tgt.index in*)
-          let process_mapping tgt_j (src_i, captures) =
+          let process_mapping tgt_j (src_i, (captures, _usage)) =
             (*if IntSet.mem (tgt_j : _ index :> int) reachable then*)
               let live = IndexSet.union (Vector.get live_src src_i) captures in
               let live' = Vector.get live_tgt tgt_j in
@@ -1087,9 +1131,9 @@ struct
           let captures = ref [] in
           let moves = ref IndexMap.empty in
           let clear = ref IndexSet.empty in
-          let process_mapping (src_i, captured) tgt_bank =
+          let process_mapping (src_i, (captured, _usage)) tgt_bank =
             let src_bank = Vector.get src_regs src_i in
-            IndexMap.iter (fun capture tgt_reg ->
+            let process_tgt_reg capture tgt_reg =
                 if IndexSet.mem capture captured then
                   push captures (capture, tgt_reg)
                 else
@@ -1100,7 +1144,8 @@ struct
                   | None ->
                     partial_captures := IndexSet.add capture !partial_captures;
                     clear := IndexSet.add tgt_reg !clear
-              ) tgt_bank
+            in
+            IndexMap.iter process_tgt_reg tgt_bank
           in
           Vector.iter2 process_mapping mapping tgt_regs;
           let captures = !captures and moves = !moves and clear = !clear in

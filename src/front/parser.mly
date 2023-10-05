@@ -102,13 +102,14 @@ wild_symbol:
 
 regleaf:
 | "(" regexp ")" { $2 }
-| capture wild_symbol { mk_re (Atom ($1, $2)) $endpos }
+| capture wild_symbol { mk_re (Atom ($1, $2, Utils.Usage.new_mark ())) $endpos }
 | capture "[" regexp "]"
-  { let policy, expr = match $3.desc with
-        | Reduce {capture=None; policy=Shortest; expr} -> Longest, expr
-        | _ -> Shortest, $3
+  { let mark, policy, expr = match $3.desc with
+        | Reduce {capture=None; mark; policy=Shortest; expr} ->
+           (mark, Longest, expr)
+        | _ -> (Utils.Usage.new_mark (), Shortest, $3)
     in
-    mk_re (Reduce {capture=$1; expr; policy}) $endpos
+    mk_re (Reduce {capture=$1; mark; expr; policy}) $endpos
   }
 ;
 
