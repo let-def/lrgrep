@@ -609,9 +609,8 @@ struct
       usage = Usage.join l1.usage l2.usage;
     }
 
-
     let label_capture label vars usage =
-      if not_empty vars then
+      if not_empty vars || not (Usage.is_empty usage) then
         {label with captures = IndexSet.union label.captures vars;
                     usage = Usage.join label.usage usage}
       else
