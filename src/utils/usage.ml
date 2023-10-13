@@ -15,6 +15,10 @@ type set =
 
 let empty = Empty
 
+let is_empty = function
+  | Empty -> true
+  | _ -> false
+
 let singleton mark = Leaf mark
 
 let join s1 s2 =
@@ -27,9 +31,8 @@ let join s1 s2 =
 let rec mark_used = function
   | Empty -> ()
   | Leaf m -> m.used <- true
+  | Join j when j.used -> ()
   | Join j ->
-    if not j.used then (
-      j.used <- true;
-      mark_used j.s1;
-      mark_used j.s2;
-    )
+    j.used <- true;
+    mark_used j.s1;
+    mark_used j.s2
