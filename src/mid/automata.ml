@@ -643,6 +643,16 @@ struct
       Vector.iter process states
 
     let () =
+      let reachable_clauses =
+        let clauses = ref IndexSet.empty in
+        let Packed t = Vector.get states initial in
+        IntSet.iter (fun i ->
+            let i = Index.of_int (Vector.length t.group) i in
+            let thread = Vector.get t.group i in
+            clauses := IndexSet.add thread.clause !clauses;
+          ) (Vector.get reachable initial);
+        !clauses
+      in
       let iter_re f (re : Syntax.regular_expr) =
         match re.desc with
         | Atom _ -> ()
@@ -665,8 +675,15 @@ struct
           )
         | _ -> iter_re check re
       in
-      Vector.iter
-        (fun (clause : Syntax.clause) -> check clause.pattern)
+      Vector.iteri
+        (fun index (clause : Syntax.clause) ->
+           if IndexSet.mem index reachable_clauses then
+             check clause.pattern
+           else
+            Printf.eprintf "Warning: clause line %d, column %d is unreachable\n"
+              clause.pattern.position.line
+              clause.pattern.position.col
+        )
         Preclause.vector
 
     let () = Stopwatch.step time "Dead-code analysis"
