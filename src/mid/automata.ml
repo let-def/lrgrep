@@ -316,7 +316,6 @@ struct
       mutable splits: 'n indexset;
       mutable new_splits: 'n indexset;
       mutable chain: ('n index * Order_chain.element) list;
-      mutable chain_processed: bool;
     }
 
     and 'src fwd_mapping = Fwd_mapping : ('src, 'tgt) mapping * 'tgt t -> 'src fwd_mapping
@@ -387,7 +386,6 @@ struct
       mutable splits: 'n indexset;
       mutable new_splits: 'n indexset;
       mutable chain: ('n index * Order_chain.element) list;
-      mutable chain_processed: bool;
     }
 
     and 'src fwd_mapping = Fwd_mapping : ('src, 'tgt) mapping * 'tgt t -> 'src fwd_mapping
@@ -460,7 +458,6 @@ struct
               splits         = IndexSet.empty;
               new_splits     = IndexSet.empty;
               chain          = [];
-              chain_processed = false;
             } in
             Gen.commit states reservation (Packed state);
             map := GroupMap.add (Vector.as_array group) (Packed state) !map;
@@ -769,6 +766,7 @@ struct
         loop clause [x] [] xs
 
     let () =
+      let chain_processed = Vector.make n false in
       let root = Order_chain.root chain in
       let Packed initial = Vector.get states initial in
       initial.chain <- (
@@ -785,14 +783,14 @@ struct
         in
         fresh_chain initial (Index.of_int Clause.n 0) root (IndexSet.elements initial.splits);
       );
-      initial.chain_processed <- true;
+      Vector.set chain_processed initial.index true;
       let direct_transitions = ref 0 in
       let shared_transitions = ref 0 in
       let trivial_pairing = ref 0 in
       let nontrivial_pairing = ref 0 in
       let transitions_with_pairing = ref 0 in
       let process_direct_transition src mapping tgt =
-        assert (not tgt.chain_processed);
+        assert (not (Vector.get chain_processed tgt.index));
         incr direct_transitions;
         let rec extract_clause clause acc = function
           | (n, _) as x :: xs when (Vector.get src.group n).clause = clause ->
@@ -836,12 +834,12 @@ struct
           | ms -> process_splits rest ms
         in
         tgt.chain <- process_splits src.chain (IndexSet.elements tgt.splits);
-        tgt.chain_processed <- true
+        Vector.set chain_processed tgt.index true;
       in
       let process_shared_transition src mapping tgt =
         incr shared_transitions;
-        assert src.chain_processed;
-        assert tgt.chain_processed;
+        assert (Vector.get chain_processed src.index);
+        assert (Vector.get chain_processed tgt.index);
         let src_chain = group_by_clause src src.chain in
         let tgt_chain = group_by_clause tgt tgt.chain in
         let rec find_element i element = function
@@ -884,9 +882,9 @@ struct
         process_next src_chain tgt_chain
       in
       let rec visit (Packed src) =
-        assert src.chain_processed;
+        assert (Vector.get chain_processed src.index);
         List.iter (fun ({mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
-            if not tgt.chain_processed then (
+            if not (Vector.get chain_processed tgt.index) then (
               process_direct_transition src mapping tgt;
               visit (Packed tgt)
             ) else
