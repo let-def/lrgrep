@@ -191,6 +191,80 @@ struct
     let () = Stopwatch.leave time
   end
 
+  (* module MLrc (*: sig
+    include Info.INDEXED
+
+    val idle : set
+    val lr1_of_lrc : t -> Lr1.t
+    val lrcs_of_lr1 : Lr1.t -> set
+    val first_lrc_of_lr1 : Lr1.t -> t
+    val predecessors : t -> set
+    val lookahead : n index -> Terminal.set
+    val decompose : n index -> Lr1.t * Terminal.set
+                end*) : sig end = struct
+
+    let time = Stopwatch.enter time "Minimizing Lrc"
+
+    module DFA = struct
+      type states = Lrc.n
+      let states = Lrc.n
+
+      module Transitions = Vector.Of_array(struct
+          type a = Lrc.n index * Lrc.n index
+          let array =
+            let count = ref 0 in
+            Index.iter Lrc.n
+              (fun lrc -> count := !count + IndexSet.cardinal (Lrc.predecessors lrc));
+            let array = Array.make !count (Index.of_int Lrc.n 0, Index.of_int Lrc.n 0) in
+            let index = ref 0 in
+            Index.iter Lrc.n
+              (fun src ->
+                 IndexSet.iter (fun tgt ->
+                     array.(!index) <- (src, tgt);
+                     incr index;
+                   ) (Lrc.predecessors src)
+              );
+            array
+        end)
+
+      type transitions = Transitions.n
+      let transitions = Vector.length Transitions.vector
+
+      let label tr =
+        let _, tgt = Vector.get Transitions.vector tr in
+        let lr1, _ = Lrc.decompose tgt in
+        lr1
+
+      let source tr = fst (Vector.get Transitions.vector tr)
+
+      let target tr = snd (Vector.get Transitions.vector tr)
+
+      let initials f =
+        IndexSet.iter f Lrc.idle
+
+      let finals f =
+        Index.iter Lrc.n (fun lrc ->
+            let lr1, _ = Lrc.decompose lrc in
+            match Lr1.incoming lr1 with
+            | None -> f lrc
+            | Some _ -> ()
+          )
+
+      let refinements _ = ()
+    end
+
+    module MDFA = Valmari.Minimize(struct
+        type t = Lr1.t
+        let compare = compare_index
+      end)(DFA)
+
+    let () =
+      Stopwatch.step time "Minimized Lrc from %d states to %d\n"
+        (cardinal Lrc.n) (cardinal MDFA.states);
+      Stopwatch.leave time
+
+  end *)
+
   module Redgraph = struct
     let time = Stopwatch.enter time "Computing Redgraph"
 
