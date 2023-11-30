@@ -167,7 +167,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   in*)
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
-      let cap = Clause.captures clause in
+      let cap = captures clause in
       let registers =
         let add_reg cap acc =
           let reg = IndexMap.find_opt cap regs in

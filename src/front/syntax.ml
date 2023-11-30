@@ -79,10 +79,14 @@ type clause_action =
                               return [None] to continue matching *)
   | Unreachable           (** [... { . }] the pattern should never match *)
 
+type pattern = {
+  expr: regular_expr; (** the pattern *)
+  lookaheads: (symbol * position) list; (** restrict matching to these lookahead terminals, or [] for all terminals *)
+}
+
 (** A clause is a pair of a pattern and an action, representing one rule *)
 type clause = {
-  pattern: regular_expr; (** the pattern *)
-  lookaheads: (symbol * position) list; (** restrict matching to these lookahead terminals, or [] for all terminals *)
+  patterns: pattern list;
   action: clause_action; (** the semantic action *)
 }
 
@@ -222,10 +226,15 @@ let cmon_clause_action = function
   | Total code -> Cmon.constructor "Total" (cmon_ocamlcode code)
   | Partial code -> Cmon.constructor "Partial" (cmon_ocamlcode code)
 
-let cmon_clause {pattern; lookaheads; action} =
+let cmon_pattern {expr; lookaheads} =
   Cmon.record [
-    "pattern", cmon_regular_expression pattern;
+    "expr", cmon_regular_expression expr;
     "lookaheads", Cmon.list_map (cmon_positioned cmon_symbol) lookaheads;
+  ]
+
+let cmon_clause {patterns; action} =
+  Cmon.record [
+    "patterns", Cmon.list_map cmon_pattern patterns;
     "action", cmon_clause_action action;
   ]
 
