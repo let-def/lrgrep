@@ -114,11 +114,10 @@ rule error_message = parse error
 
 | outer=constr_longident; inner=constr_longident;
   [_ / pattern_gen: constr_longident pattern .]
-  @ UNDERSCORE | LIDENT | UIDENT | LPAREN
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
   { report_currified_constructor ~outer inner token }
 
 | constr_longident; [simple_expr]
-  (*@ LPAREN | LIDENT | UIDENT | INT | FLOAT*)
   @ first(simple_expr)
   { (* Expliquer le raisonnement *)
     (* Plusieurs niveaux d'explications ? *)
@@ -129,7 +128,7 @@ rule error_message = parse error
 
 | inner=constr_longident;
   [_* / pattern_gen: constr_longident pattern .]
-  @ UNDERSCORE | LIDENT | UIDENT | LPAREN
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
   { report_currified_constructor inner token }
 
 | / . atomic_type @ LBRACKETATAT

@@ -71,7 +71,7 @@ definition:
 case_patterns:
 | regexp { [{expr=$1; lookaheads=[]}] }
 | regexp lookaheads { [{ expr=$1; lookaheads=$2 }] }
-(*| regexp lookaheads case_patterns { { expr=$1; lookaheads=$2 } :: $3 }*)
+| regexp lookaheads "|" case_patterns { { expr=$1; lookaheads=$2 } :: $4 }
 ;
 
 case:
@@ -89,7 +89,7 @@ positioned(X):
 ;
 
 lookaheads:
-| preceded("@", separated_nonempty_list("|", positioned(symbol))) { $1 }
+| preceded("@", separated_nonempty_list(",", positioned(symbol))) { $1 }
 ;
 
 symbol:
