@@ -65,6 +65,11 @@ rule error_message = parse error
 | [structure_item]; semi=SEMI; [let_bindings(ext)]
   { "Might be due to the semicolon " ^ line_and_char $startloc(semi) }
 
+| loc=_ / expr : ... . expr; [let_bindings(ext)]
+  { "Expecting 'in' after let binding(s) in an expression. \n\
+     This might be due to the unterminated expression at " ^
+     line_and_char $endloc(loc) }
+
 | item=structure_item; [let_bindings(ext)] @ IN
   { "A 'let ... in' is not allowed immediately after a module definition. \n\
     This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endloc(item) }
