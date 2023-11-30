@@ -137,9 +137,9 @@ sig
   module Clause : sig
     include CARDINAL
     type t = n index
-    val total : n indexset
-    val captures : t -> Capture.set
   end
+
+  val captures : Clause.t -> Capture.set
 
   module BigDFA : sig
     type n
@@ -194,24 +194,56 @@ struct
 
   let time = Stopwatch.enter Stopwatch.main "Processing entry %s" E.entry.name
 
-  module Preclause = struct
-    include Vector.Of_array(struct
-        type a = Syntax.clause
-        let array = Array.of_list E.entry.clauses
-      end)
+  module Clause = struct
+    module Actions = Const(struct let cardinal = List.length E.entry.clauses end)
 
-    let n = Vector.length vector
+    type actions = Actions.n
+
+    type desc = {
+      action: actions index;
+      pattern: Syntax.pattern;
+      total: bool;
+    }
+
+    include Vector.Of_array(struct
+        type a = desc
+        let array = Array.of_list (
+            E.entry.clauses
+            |> List.mapi (fun index clause ->
+                clause.Syntax.patterns
+                |> List.map (fun pattern ->
+                    {
+                      action = Index.of_int Actions.n index;
+                      pattern;
+                      total = match clause.Syntax.action with
+                        | Syntax.Unreachable -> true
+                        | Syntax.Total _ -> pattern.lookaheads = []
+                        | Syntax.Partial _ -> false
+                    }
+                  )
+              ) 
+            |> List.flatten
+          )
+      end)
 
     type t = n index
 
-    let total =
-      IndexSet.init_from_set (Vector.length vector) (fun index ->
-          let clause = Vector.get vector index in
-          match clause.action with
-          | Syntax.Unreachable -> true
-          | Syntax.Total _ -> clause.lookaheads = []
-          | Syntax.Partial _ -> false
-        )
+    let n = Vector.length vector
+
+    let get = Vector.get vector
+
+    let actions =
+      let index = ref 0 in
+      let list =
+        List.map (fun clause ->
+            let count = List.length clause.Syntax.patterns in
+            let first = Index.of_int n !index in
+            index := !index + count;
+            let last = Index.of_int n (!index - 1) in
+            clause, IndexSet.init_interval first last
+          ) E.entry.clauses
+      in
+      Vector.cast_array Actions.n (Array.of_list list)
   end
 
   module LazyNFA = struct
@@ -221,7 +253,7 @@ struct
       k: K.t;
       transitions: (K.label * t lazy_t) list;
       accept: bool;
-      clause: Preclause.t;
+      clause: Clause.t;
       mutable mark: unit ref;
     }
 
@@ -266,7 +298,17 @@ struct
       in
       aux
 
-    let process_clause ~capture index (def : Syntax.clause) =
+    let captures = Vector.make Clause.n IndexSet.empty
+
+    let process_clause ~capture (i : Clause.t) =
+      let captures', re =
+        Transl.transl ~capture ~for_reduction:false 
+          (Vector.get Clause.vector i).pattern.expr
+      in
+      Vector.set captures i captures';
+      make i Regexp.K.(More (re, Done))
+
+    let process_action ~capture (_source, clauses) =
       let capture_tbl = Hashtbl.create 7 in
       let capture_def = ref IndexMap.empty in
       let capture kind name =
@@ -279,25 +321,18 @@ struct
           capture_def := IndexMap.add index key !capture_def;
           index
       in
-      let captures, re =
-        Transl.transl ~capture ~for_reduction:false def.pattern
-      in
-      let initial = make index Regexp.K.(More (re, Done)) in
-      (initial, (captures, !capture_def))
+      let clauses = List.map (process_clause ~capture) (IndexSet.elements clauses) in
+      !capture_def, clauses
 
-    let clauses =
-      Vector.mapi (process_clause ~capture:(Capture.gensym ())) Preclause.vector
+    let actions =
+      let capture = Capture.gensym () in
+      Vector.map (process_action ~capture) Clause.actions 
 
     let () = Stopwatch.step time "LazyNFA"
+
   end
 
-  module Clause = struct
-    include Preclause
-
-    let captures clause =
-      let _, (cap, _) = Vector.get LazyNFA.clauses clause in
-      cap
-  end
+  let captures clause = Vector.get LazyNFA.captures clause
 
   module BigDFA : sig
     include CARDINAL
@@ -423,7 +458,7 @@ struct
               in
               group_fold
                 (fun i (nfa : LazyNFA.t) acc ->
-                   if nfa.accept && IndexSet.mem nfa.clause Clause.total then
+                   if nfa.accept && (Clause.get nfa.clause).total then
                      accept := Some nfa.clause;
                    List.rev_map (make i) nfa.transitions @ acc)
                 group []
@@ -467,9 +502,9 @@ struct
 
     let initial =
       let Vector.Packed group = Vector.of_array (
-          LazyNFA.clauses
-          |> Vector.map fst
-          |> Vector.to_list
+          LazyNFA.actions
+          |> Vector.to_list 
+          |> List.concat_map snd
           |> group_make Fun.id
         )
       in
@@ -675,16 +710,15 @@ struct
           )
         | _ -> iter_re check re
       in
-      Vector.iteri
-        (fun index (clause : Syntax.clause) ->
+      Vector.iteri (fun index (clause : Clause.desc) ->
+          let expr = clause.pattern.expr in
            if IndexSet.mem index reachable_clauses then
-             check clause.pattern
+             check expr
            else
             Printf.eprintf "Warning: clause line %d, column %d is unreachable\n"
-              clause.pattern.position.line
-              clause.pattern.position.col
+              expr.position.line expr.position.col
         )
-        Preclause.vector
+        Clause.vector
 
     let () = Stopwatch.step time "Dead-code analysis"
 
@@ -1186,7 +1220,7 @@ struct
       Vector.fold_left begin fun acc (BigDFA.Packed st) ->
         Vector.fold_left2 begin fun acc (nfa : LazyNFA.t) regs ->
           if nfa.accept then
-            let _, (cap, _) = Vector.get LazyNFA.clauses nfa.clause in
+            let cap = Vector.get LazyNFA.captures nfa.clause in
             IndexSet.fold begin fun var acc ->
               if IndexMap.mem var regs
               then acc
@@ -1462,6 +1496,46 @@ struct
         E.parser_name
         (if is_optional then "Some " else "")
 
+  let lookahead_constraint pattern = 
+    match pattern.Syntax.lookaheads with
+    | [] -> None
+    | symbols ->
+      let lookahead_msg =
+        "Lookahead can either be a terminal or `first(nonterminal)'"
+      in
+      let term_pattern t =
+        let name = Info.Terminal.to_string t in
+        match Info.Terminal.semantic_value t with
+        | None -> name
+        | Some _ -> name ^ " _"
+      in
+      let sym_pattern (sym, pos) =
+        match sym with
+        | Syntax.Apply ("first", [sym]) ->
+          begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
+            | L t ->
+              let t = Info.Terminal.to_string t in
+              failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                        t ^ " is a terminal")
+            | R n ->
+              Info.Nonterminal.to_g n
+              |> Grammar.Nonterminal.first
+              |> List.map Info.Terminal.of_g
+              |> List.map term_pattern
+          end
+        | Syntax.Name _ ->
+          begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
+            | R n ->
+              failwith (lookahead_msg ^ "; " ^
+                        Info.Nonterminal.to_string n ^ " is a nonterminal")
+            | L t -> [term_pattern t]
+          end
+        | _ ->
+          failwith lookahead_msg
+      in
+      Some (string_concat_map ~wrap:("(",")") "|" Fun.id @@
+            List.concat_map sym_pattern symbols)
+  
   let output_code out =
     Printer.fmt out
       "let execute_%s %s\n
@@ -1470,54 +1544,19 @@ struct
       \  : _ option = match __clause, token with\n"
       E.entry.name (String.concat " " E.entry.args)
       E.parser_name E.parser_name;
-    let output_clause index (_nfa, (_captures, captures_def)) =
-      let clause = Vector.get Clause.vector index in
-      let roffset = ref 0 in
-      let lookahead_constraint = match clause.Syntax.lookaheads with
-        | [] -> None
-        | symbols ->
-          let lookahead_msg =
-            "Lookahead can either be a terminal or `first(nonterminal)'"
-          in
-          let term_pattern t =
-            let name = Info.Terminal.to_string t in
-            match Info.Terminal.semantic_value t with
-            | None -> name
-            | Some _ -> name ^ " _"
-          in
-          let sym_pattern (sym, pos) =
-            match sym with
-            | Syntax.Apply ("first", [sym]) ->
-              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
-                | L t ->
-                  let t = Info.Terminal.to_string t in
-                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                            t ^ " is a terminal")
-                | R n ->
-                  Info.Nonterminal.to_g n
-                  |> Grammar.Nonterminal.first
-                  |> List.map Info.Terminal.of_g
-                  |> List.map term_pattern
-              end
-            | Syntax.Name _ ->
-              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
-              | R n ->
-                failwith (lookahead_msg ^ "; " ^
-                          Info.Nonterminal.to_string n ^ " is a nonterminal")
-              | L t -> [term_pattern t]
-              end
-            | _ ->
-              failwith lookahead_msg
-          in
-          Some (string_concat_map ~wrap:("(",")") "|" Fun.id @@
-                List.concat_map sym_pattern symbols)
-      in
-      Printer.fmt out
-        "  | %d, %s ->\n"
-        (Index.to_int index)
-        (Option.value lookahead_constraint ~default:"_");
-      IndexMap.iter (bind_capture out ~roffset) captures_def;
-      begin match clause.Syntax.action with
+    let output_action (source, clauses) (captures, _states) =
+      Printer.fmt out " ";
+      IndexSet.iter (fun index ->
+          let clause = Vector.get Clause.vector index in
+          Printer.fmt out
+            " | %d, %s"
+            (Index.to_int index)
+            (Option.value (lookahead_constraint clause.pattern) 
+               ~default:"_");
+        ) clauses;
+      Printer.fmt out " ->\n";
+      IndexMap.iter (bind_capture out ~roffset:(ref 0)) captures;
+      begin match source.Syntax.action with
         | Unreachable ->
           Printer.print out "    failwith \"Should be unreachable\"\n"
         | Partial (loc, str) ->
@@ -1529,10 +1568,16 @@ struct
           Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
           Printer.print out "    )\n"
       end;
-      if Option.is_some lookahead_constraint then
-        Printer.fmt out "  | %d, _ -> None\n" (Index.to_int index)
+      let constrained = 
+        IndexSet.filter 
+          (fun clause -> (Clause.get clause).pattern.lookaheads <> [])
+          clauses
+      in
+      if not (IndexSet.is_empty constrained) then
+        Printer.fmt out "  | (%s), _ -> None\n" 
+          (string_concat_map "|" string_of_index (IndexSet.elements constrained))
     in
-    Vector.iteri output_clause LazyNFA.clauses;
+    Vector.iter2 output_action Clause.actions LazyNFA.actions;
     Printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
   let () = Stopwatch.leave time

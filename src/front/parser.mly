@@ -68,8 +68,14 @@ definition:
   { {startsymbols; error; name; args; clauses} }
 ;
 
+case_patterns:
+| regexp { [{expr=$1; lookaheads=[]}] }
+| regexp lookaheads { [{ expr=$1; lookaheads=$2 }] }
+(*| regexp lookaheads case_patterns { { expr=$1; lookaheads=$2 } :: $3 }*)
+;
+
 case:
-| regexp lookaheads case_action { {pattern=$1; lookaheads=$2; action=$3} }
+| case_patterns case_action { {patterns=$1; action=$2} }
 ;
 
 case_action:
@@ -83,7 +89,7 @@ positioned(X):
 ;
 
 lookaheads:
-| loption(preceded("@", separated_nonempty_list("|", positioned(symbol)))) { $1 }
+| preceded("@", separated_nonempty_list("|", positioned(symbol))) { $1 }
 ;
 
 symbol:
