@@ -120,10 +120,13 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 let () = Stopwatch.step Stopwatch.main "Loaded grammar"
 
 module Info = Mid.Info.Make(Grammar)
-module Regexp = Mid.Regexp.Make(Info)()
+module Redgraph = Mid.Viable_reductions.Make(Info)()
+module Regexp = Mid.Regexp.Make(Info)(Redgraph)
 module Transl = Mid.Transl.Make(Regexp)
 module Lrc = Mid.Lrc.Make(Info)()
-module Tmp = Lrc.Redgraph2(Regexp.Redgraph)()
+
+(* FIXME: Faster implementation of Lrc Redgraph, use that later
+ * module Tmp = Lrc.Redgraph2(Regexp.Redgraph)() *)
 
 module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
 
