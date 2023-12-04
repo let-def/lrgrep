@@ -129,6 +129,7 @@ struct
   let () = Stopwatch.leave time
 end
 
+(* FIXME: TODO: The minimization code has a bug when reaching an initial state. (limit condition) *)
 module Minimize(Info : Info.S)(Lrc : S with module Info := Info) : S with module Info := Info =
 struct
   open Info
@@ -171,11 +172,11 @@ struct
       IndexSet.iter f Lrc.idle
 
     let finals f =
-      Index.iter Lrc.n (fun lrc ->
-        match Lr1.incoming (Lrc.lr1_of_lrc lrc) with
-        | None -> f lrc
-        | Some _ -> ()
-      )
+      Index.iter Lr1.n
+        (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | None -> IndexSet.iter f (Lrc.lrcs_of_lr1 lr1)
+          | Some _ -> ())
 
     let refinements _ = ()
   end
@@ -193,7 +194,10 @@ struct
   type 'a map = (n, 'a) indexmap
 
   let idle =
-    IndexSet.filter_map MDFA.transport_state Lrc.idle
+    let set = ref IndexSet.empty in
+    Array.iter (fun t -> set := IndexSet.add t !set) MDFA.initials;
+    !set
+    (*IndexSet.filter_map MDFA.transport_state Lrc.idle*)
 
   let lr1_of_lrc =
     tabulate_finset n
