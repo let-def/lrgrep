@@ -26,7 +26,7 @@ struct
 
   let time = Stopwatch.enter Stopwatch.main "Lrc.Make"
 
-  module LRijkstra = LRijkstraFast.Make(I)()
+  module Reachability = Reachability.Make(I)()
 
   let () = Stopwatch.step time "Computed LRijkstra"
 
@@ -47,7 +47,7 @@ struct
     let time = Stopwatch.enter time "Computing Lrc"
 
     let n =
-      let count lr1 = Array.length (LRijkstra.Classes.for_lr1 lr1) in
+      let count lr1 = Array.length (Reachability.Classes.for_lr1 lr1) in
       let sum = ref 0 in
       Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
       !sum
@@ -68,7 +68,7 @@ struct
       let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0) in
       let count = ref 0 in
       let init_lr1 lr1 =
-        let classes = LRijkstra.Classes.for_lr1 lr1 in
+        let classes = Reachability.Classes.for_lr1 lr1 in
         assert (Array.length classes > 0);
         let first = Index.of_int n !count in
         count := !count + Array.length classes;
@@ -91,7 +91,7 @@ struct
     let decompose lrc =
       let lr1 = lr1_of_lrc lrc in
       let lrc0 = first_lrc_of_lr1 lr1 in
-      let lookaheads = LRijkstra.Classes.for_lr1 lr1 in
+      let lookaheads = Reachability.Classes.for_lr1 lr1 in
       (lr1, lookaheads.(index_delta lrc lrc0))
 
     let lookahead lrc = snd (decompose lrc)
@@ -109,26 +109,27 @@ struct
           List.fold_left (fun acc tr ->
               let src = Transition.source tr in
               let lrc_first = first_lrc_of_lr1 src in
-              let count = Array.length (LRijkstra.Classes.for_lr1 src) in
+              let count = Array.length (Reachability.Classes.for_lr1 src) in
               let lrc_last = index_shift lrc_first (count - 1) in
               IndexSet.union acc (IndexSet.init_interval lrc_first lrc_last)
             ) IndexSet.empty (Transition.predecessors lr1)
         | Some _ ->
           let process_transition tr =
             let source_lrc = first_lrc_of_lr1 (Transition.source tr) in
-            let node = LRijkstra.Tree.leaf tr in
-            let table = Vector.get LRijkstra.Cells.table node in
-            let pre_classes = LRijkstra.Classes.pre_transition tr in
-            let post_classes = LRijkstra.Classes.post_transition tr in
+            let node = Reachability.Tree.leaf tr in
+            let table = Vector.get Reachability.Cells.table node in
+            let pre_classes = Reachability.Classes.pre_transition tr in
+            let post_classes = Reachability.Classes.post_transition tr in
             let coercion =
-              LRijkstra.Coercion.infix post_classes (LRijkstra.Classes.for_lr1 lr1)
+              Reachability.Coercion.infix post_classes
+                (Reachability.Classes.for_lr1 lr1)
             in
             let pre_classes = Array.length pre_classes in
             let post_classes = Array.length post_classes in
             for post = 0 to post_classes - 1 do
               let reachable = ref IndexSet.empty in
               for pre = 0 to pre_classes - 1 do
-                let index = LRijkstra.Cells.table_index ~post_classes ~pre ~post in
+                let index = Reachability.Cells.table_index ~post_classes ~pre ~post in
                 if table.(index) < max_int then
                   reachable := IndexSet.add (index_shift source_lrc pre) !reachable
               done;
