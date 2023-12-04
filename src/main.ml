@@ -120,10 +120,12 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 let () = Stopwatch.step Stopwatch.main "Loaded grammar"
 
 module Info = Mid.Info.Make(Grammar)
-module Redgraph = Mid.Viable_reductions.Make(Info)()
-module Regexp = Mid.Regexp.Make(Info)(Redgraph)
+module Viable = Mid.Viable_reductions.Make(Info)()
+module Regexp = Mid.Regexp.Make(Info)(Viable)
 module Transl = Mid.Transl.Make(Regexp)
-module Lrc = Mid.Lrc.Make(Info)()
+module Reachability = Mid.Reachability.Make(Info)()
+module Lrc = Mid.Lrc.Make(Info)(Reachability)
+module Reachable = Mid.Reachable_reductions.Make(Info)(Lrc)()
 
 (* FIXME: Faster implementation of Lrc Redgraph, use that later
  * module Tmp = Lrc.Redgraph2(Regexp.Redgraph)() *)
@@ -147,7 +149,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Mid.Automata.Entry
       (Transl)
       (*Lrc.Lrce Lrc.Lrc_NFA Lr1_stacks*)
-      (Lrc.Lrce)
+      (Reachable.Lrce)
       (struct
         let parser_name = parser_name
         let entry = entry
