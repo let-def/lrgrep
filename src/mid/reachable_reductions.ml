@@ -551,11 +551,46 @@ module Make2
     (I : Info.S)
     (Redgraph: Viable_reductions.S with module Info := I)
     (Lrc: Lrc.S with module Info := I)
-    () =
+    () :
+sig
+  open I
+  type state
+  val state : state cardinal
+
+  type config = { redgraph : Redgraph.state index; lrcs : Lrc.set; }
+  type transitions = {
+    inner : state indexset;
+    outer : state indexset list;
+  }
+
+  val initial : transitions Lrc.map
+  val states : (state, config * transitions) vector
+  val iter_targets : transitions -> (state index -> unit) -> unit
+  val fold_targets : (state index -> 'a -> 'a) -> transitions -> 'a -> 'a
+  val reverse_deps : (state, state indexset) vector
+  val fail : (state, Terminal.set) vector
+  val indirect_fails : state index -> Terminal.set
+end =
 struct
   open I
   let time = Stopwatch.enter Stopwatch.main "Lrc Redgraph new"
 
+  let () = 
+    let open Redgraph in
+    let iter_cands f step =
+      List.iter (fun {target; lookahead; _} -> f target lookahead) step.candidates
+    in
+    let visit_state f st =
+      let {inner; outer} = Redgraph.get_transitions st in
+      List.iter (iter_cands f) inner;
+      List.iter (iter_cands f) outer
+    in
+    Index.iter Redgraph.state (visit_state (fun target la -> 
+        visit_state 
+          (fun _ la' -> assert (IndexSet.subset la' la))
+          target
+      ))
+      
   module State = IndexBuffer.Gen.Make()
   type state = State.n
   let state = State.n
@@ -577,11 +612,11 @@ struct
   let rec visit_transitions lrcs {Redgraph.inner; outer} =
     let inner =
       List.fold_left (fun acc {Redgraph.candidates; _} ->
-        List.fold_left
-          (fun acc {Redgraph.target; lookahead=_; filter=()} ->
-            IndexSet.add (visit_config {redgraph=target; lrcs}) acc)
-          acc candidates
-      ) IndexSet.empty inner
+          List.fold_left
+            (fun acc {Redgraph.target; lookahead=_; filter=()} ->
+               IndexSet.add (visit_config {redgraph=target; lrcs}) acc)
+            acc candidates
+        ) IndexSet.empty inner
     in
     let outer = match outer with
       | first :: rest -> visit_outer lrcs first rest
@@ -642,31 +677,31 @@ struct
   let reverse_deps =
     let vec = Vector.make (Vector.length states) IndexSet.empty in
     Vector.iteri (fun source (_config, transitions) ->
-      let register target = vector_set_add vec target source in
-      iter_targets transitions register
-    ) states;
+        let register target = vector_set_add vec target source in
+        iter_targets transitions register
+      ) states;
     vec
 
   let () = Stopwatch.step time "computed reverse dependencies"
 
   let fail = Vector.map (fun (config, _) ->
-    Lr1.reject (Redgraph.get_config config.redgraph).top
-  ) states
+      Lr1.reject (Redgraph.get_config config.redgraph).top
+    ) states
 
   let indirect_fails index =
     let _, transitions = Vector.get states index in
     match
-    fold_targets (fun target acc ->
-      let config, _ = Vector.get states target in
-      let lookahead = (Redgraph.get_config config.redgraph).lookahead in
-      let fail = Vector.get fail target in
-      match acc with
-      | None -> Some fail
-      | Some fail' -> Some (Terminal.intersect
-        (IndexSet.union fail
-          (IndexSet.diff Terminal.all lookahead))
-        fail')
-    ) transitions None
+      fold_targets (fun target acc ->
+          let config, _ = Vector.get states target in
+          let lookahead = (Redgraph.get_config config.redgraph).lookahead in
+          let fail = Vector.get fail target in
+          match acc with
+          | None -> Some fail
+          | Some fail' -> Some (Terminal.intersect
+                                  (IndexSet.union fail
+                                     (IndexSet.diff Terminal.all lookahead))
+                                  fail')
+        ) transitions None
     with
     | None -> IndexSet.empty
     | Some x -> x
@@ -696,12 +731,12 @@ struct
     let immediate = ref 0 in
     let propagated = ref 0 in
     Vector.iter2 (fun (config, _) fail' ->
-      let fail = Lr1.reject (Redgraph.get_config config.redgraph).top in
-      let cfail = IndexSet.cardinal fail in
-      let cfail' = IndexSet.cardinal fail' in
-      immediate := !immediate + cfail;
-      propagated := !propagated + cfail' - cfail;
-    ) states fail;
+        let fail = Lr1.reject (Redgraph.get_config config.redgraph).top in
+        let cfail = IndexSet.cardinal fail in
+        let cfail' = IndexSet.cardinal fail' in
+        immediate := !immediate + cfail;
+        propagated := !propagated + cfail' - cfail;
+      ) states fail;
     Stopwatch.step time
       "computed guaranteed failures (%d immediates, %d propagated)"
       !immediate !propagated
@@ -711,10 +746,10 @@ struct
       (Redgraph.get_config config.redgraph).lookahead
     in
     Vector.iter (fun (config, transitions) ->
-      let la = get_lookahead config in
-      iter_targets transitions (fun target ->
-        let la' = get_lookahead (fst (Vector.get states target)) in
-        assert (IndexSet.subset la' la);
+        let la = get_lookahead config in
+        iter_targets transitions (fun target ->
+            let la' = get_lookahead (fst (Vector.get states target)) in
+            assert (IndexSet.subset la' la);
       )
     ) states
 
