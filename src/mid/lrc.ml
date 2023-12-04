@@ -12,13 +12,15 @@ module type S = sig
   val lrcs_of_lr1 : Lr1.t -> set
   val first_lrc_of_lr1 : Lr1.t -> t
   val predecessors : t -> set
-  val predecessors_by_lr1 : t -> set Lr1.map
-  val set_predecessors_by_lr1 : set -> set Lr1.map
-  val lookahead : n index -> Terminal.set
-  val decompose : n index -> Lr1.t * Terminal.set
 end
 
-module Make (I : Info.S)(Reachability : Reachability.S with module Info := I) : S with module Info := I =
+module Make
+    (I : Info.S)
+    (Reachability : Reachability.S with module Info := I) :
+sig
+  include S with module Info := I
+  val lookahead : n index -> I.Terminal.set
+end =
 struct
   open I
 
@@ -66,13 +68,11 @@ struct
 
   let idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
 
-  let decompose lrc =
+  let lookahead lrc =
     let lr1 = lr1_of_lrc lrc in
     let lrc0 = first_lrc_of_lr1 lr1 in
     let lookaheads = Reachability.Classes.for_lr1 lr1 in
-    (lr1, lookaheads.(index_delta lrc lrc0))
-
-  let lookahead lrc = snd (decompose lrc)
+    lookaheads.(index_delta lrc lrc0)
 
   let () = Stopwatch.step time "Computed LRC set"
 
@@ -126,41 +126,12 @@ struct
 
   let () = Stopwatch.step time "Computed predecessors"
 
-  let predecessors_by_lr1 =
-    tabulate_finset n @@ fun lrc ->
-    let all = predecessors lrc in
-    IndexSet.fold begin fun lr1 acc ->
-      let preds = IndexSet.inter (lrcs_of_lr1 lr1) all in
-      if IndexSet.is_empty preds
-      then acc
-      else IndexMap.add lr1 preds acc
-      end (Lr1.predecessors (lr1_of_lrc lrc)) IndexMap.empty
-
-  let set_predecessors_by_lr1 lrcs =
-    IndexSet.fold begin fun lrc acc ->
-      IndexMap.union
-        (fun _ s1 s2 -> Some (IndexSet.union s1 s2))
-        (predecessors_by_lr1 lrc)
-        acc
-      end lrcs IndexMap.empty
-
   let () = Stopwatch.leave time
 end
 
-module Minimize(I : Info.S)(Lrc : S with module Info := I) : sig
-  (*open I*)
-  (*include Info.INDEXED
-
-  val idle : set
-  val lr1_of_lrc : t -> Lr1.t
-  val lrcs_of_lr1 : Lr1.t -> set
-  val first_lrc_of_lr1 : Lr1.t -> t
-  val predecessors : t -> set
-  val lookahead : n index -> Terminal.set
-  val decompose : n index -> Lr1.t * Terminal.set*)
-end =
+module Minimize(Info : Info.S)(Lrc : S with module Info := Info) : S with module Info := Info =
 struct
-  open I
+  open Info
   let time = Stopwatch.enter Stopwatch.main "Minimizing Lrc"
 
   module DFA = struct
@@ -189,9 +160,8 @@ struct
     let transitions = Vector.length Transitions.vector
 
     let label tr =
-      let _, tgt = Vector.get Transitions.vector tr in
-      let lr1, _ = Lrc.decompose tgt in
-      lr1
+      let src, _ = Vector.get Transitions.vector tr in
+      Lrc.lr1_of_lrc src
 
     let source tr = fst (Vector.get Transitions.vector tr)
 
@@ -202,8 +172,7 @@ struct
 
     let finals f =
       Index.iter Lrc.n (fun lrc ->
-        let lr1, _ = Lrc.decompose lrc in
-        match Lr1.incoming lr1 with
+        match Lr1.incoming (Lrc.lr1_of_lrc lrc) with
         | None -> f lrc
         | Some _ -> ()
       )
@@ -216,8 +185,37 @@ struct
     let compare = compare_index
   end)(DFA)
 
+  type n = MDFA.states
+  let n = MDFA.states
+
+  type t = n index
+  type set = n indexset
+  type 'a map = (n, 'a) indexmap
+
+  let idle =
+    IndexSet.filter_map MDFA.transport_state Lrc.idle
+
+  let lr1_of_lrc =
+    tabulate_finset n
+      (fun t -> Lrc.lr1_of_lrc (MDFA.represent_state t))
+
+  let lrcs_of_lr1 =
+    let table = Vector.make Lr1.n IndexSet.empty in
+    Index.iter n
+      (fun lrc -> vector_set_add table (lr1_of_lrc lrc) lrc);
+    Vector.get table
+
+  let first_lrc_of_lr1 lr1 =
+    Option.get (IndexSet.minimum (lrcs_of_lr1 lr1))
+
+  let predecessors =
+    let table = Vector.make n IndexSet.empty in
+    Index.iter MDFA.transitions
+      (fun tr -> vector_set_add table (MDFA.source tr) (MDFA.target tr));
+    Vector.get table
+
   let () =
-    Stopwatch.step time "Minimized Lrc from %d states to %d\n"
+    Stopwatch.step time "Minimized Lrc from %d states to %d"
       (cardinal Lrc.n) (cardinal MDFA.states);
     Stopwatch.leave time
 end
