@@ -124,7 +124,7 @@ module Viable = Mid.Viable_reductions.Make(Info)()
 module Regexp = Mid.Regexp.Make(Info)(Viable)
 module Transl = Mid.Transl.Make(Regexp)
 module Reachability = Mid.Reachability.Make(Info)()
-module Lrc = Mid.Lrc.Make(Info)(Reachability)
+module Lrc = Mid.Lrc.Minimize(Info)(Mid.Lrc.Make(Info)(Reachability))
 module Reachable = Mid.Reachable_reductions.Make(Info)(Lrc)()
 
 (* FIXME: Faster implementation of Lrc Redgraph, use that later
