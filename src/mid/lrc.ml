@@ -2,29 +2,6 @@ open Utils
 open Misc
 open Fix.Indexing
 
-(** {1 Miscellaneous definitions} *)
-
-(** Lazy list *)
-type 'a lazy_list =
-  | LNil
-  | LCons of 'a * 'a lazy_list lazy_t
-
-let rec lazy_list_to_seq = function
-  | LNil -> Seq.Nil
-  | LCons (x, xs) ->
-    Seq.Cons (x, fun () -> lazy_list_to_seq (Lazy.force xs))
-
-(** Lazy stream (infinite list) *)
-type 'a lazy_stream = Scons of 'a * 'a lazy_stream lazy_t
-
-let rec stream_nth (Scons (v, vs)) = function
-  | 0 -> v
-  | n -> stream_nth (Lazy.force vs) (n - 1)
-
-let map_from_set xs f =
-  IndexSet.fold (fun x acc -> IndexMap.add x (f x) acc)
-    xs IndexMap.empty
-
 module type Failure_NFA = sig
   type lr1
   type terminal
@@ -342,8 +319,9 @@ struct
           {production; lookahead; transition} :: result
       in
       let initial =
-        map_from_set Lr1.idle (fun lr1 ->
-            reductions_at (Bottom (1, Lr1.predecessors lr1)) lr1)
+        IndexMap.inflate
+          (fun lr1 -> reductions_at (Bottom (1, Lr1.predecessors lr1)) lr1)
+          Lr1.idle
       and goto_transitions =
         Vector.init Transition.goto @@ fun tr ->
         let any = Transition.of_goto tr in
@@ -780,7 +758,7 @@ struct
 
   let () = Stopwatch.leave time
 
-  module Redgraph2(Redgraph: Regexp.REDGRAPH with module Info := I)() = struct
+  module Redgraph2(Redgraph: Viable_reductions.S with module Info := I)() = struct
 
     let time = Stopwatch.enter Stopwatch.main "Lrc Redgraph new"
 

@@ -60,7 +60,8 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename
 let () = Sys.remove grammar_filename
 
 module Info = Mid.Info.Make(Grammar)
-module Regexp = Mid.Regexp.Make(Info)()
+module Viable = Mid.Viable_reductions.Make(Info)()
+module Regexp = Mid.Regexp.Make(Info)(Viable)
 
 let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
     let sprintf = Printf.sprintf in
