@@ -221,7 +221,7 @@ struct
                         | Syntax.Partial _ -> false
                     }
                   )
-              ) 
+              )
             |> List.flatten
           )
       end)
@@ -302,7 +302,7 @@ struct
 
     let process_clause ~capture (i : Clause.t) =
       let captures', re =
-        Transl.transl ~capture ~for_reduction:false 
+        Transl.transl ~capture ~for_reduction:false
           (Vector.get Clause.vector i).pattern.expr
       in
       Vector.set captures i captures';
@@ -326,7 +326,7 @@ struct
 
     let actions =
       let capture = Capture.gensym () in
-      Vector.map (process_action ~capture) Clause.actions 
+      Vector.map (process_action ~capture) Clause.actions
 
     let () = Stopwatch.step time "LazyNFA"
 
@@ -503,7 +503,7 @@ struct
     let initial =
       let Vector.Packed group = Vector.of_array (
           LazyNFA.actions
-          |> Vector.to_list 
+          |> Vector.to_list
           |> List.concat_map snd
           |> group_make Fun.id
         )
@@ -1496,7 +1496,7 @@ struct
         E.parser_name
         (if is_optional then "Some " else "")
 
-  let lookahead_constraint pattern = 
+  let lookahead_constraint pattern =
     match pattern.Syntax.lookaheads with
     | [] -> None
     | symbols ->
@@ -1535,7 +1535,7 @@ struct
       in
       Some (string_concat_map ~wrap:("(",")") "|" Fun.id @@
             List.concat_map sym_pattern symbols)
-  
+
   let output_code out =
     Printer.fmt out
       "let execute_%s %s\n
@@ -1551,7 +1551,7 @@ struct
           Printer.fmt out
             " | %d, %s"
             (Index.to_int index)
-            (Option.value (lookahead_constraint clause.pattern) 
+            (Option.value (lookahead_constraint clause.pattern)
                ~default:"_");
         ) clauses;
       Printer.fmt out " ->\n";
@@ -1568,13 +1568,13 @@ struct
           Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
           Printer.print out "    )\n"
       end;
-      let constrained = 
-        IndexSet.filter 
+      let constrained =
+        IndexSet.filter
           (fun clause -> (Clause.get clause).pattern.lookaheads <> [])
           clauses
       in
       if not (IndexSet.is_empty constrained) then
-        Printer.fmt out "  | (%s), _ -> None\n" 
+        Printer.fmt out "  | (%s), _ -> None\n"
           (string_concat_map "|" string_of_index (IndexSet.elements constrained))
     in
     Vector.iter2 output_action Clause.actions LazyNFA.actions;

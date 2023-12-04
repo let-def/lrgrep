@@ -130,7 +130,7 @@ end
 
 module Make
     (Info : Info.S)
-    (Redgraph : Viable_reductions.S with module Info := Info) 
+    (Redgraph : Viable_reductions.S with module Info := Info)
   : S with module Info = Info =
 struct
   module Info = Info

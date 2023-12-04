@@ -44,7 +44,7 @@ module type S = sig
   val to_string : state index -> string
 end
 
-module Make(Info : Info.S)() : S with module Info := Info = 
+module Make(Info : Info.S)() : S with module Info := Info =
 struct
   open Info
 
