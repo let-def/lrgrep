@@ -48,7 +48,7 @@ module Make(Info : Info.S)() : S with module Info := Info =
 struct
   open Info
 
-  let time = Stopwatch.enter Stopwatch.main "Regexp.Make.Redgraph"
+  let time = Stopwatch.enter Stopwatch.main "Viable_reductions.Make"
 
   module State = IndexBuffer.Gen.Make()
   type state = State.n
@@ -260,6 +260,6 @@ struct
     string_concat_map " " Lr1.to_string states
 
   let () =
-    Stopwatch.step time "Redgraph has %d nodes" (cardinal state);
+    Stopwatch.step time "Viable reductions graph has %d nodes" (cardinal state);
     Stopwatch.leave time
 end
