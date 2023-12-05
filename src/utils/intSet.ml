@@ -112,6 +112,25 @@ let filter_map f t =
 let iter f s =
   fold (fun x () -> f x) s ()
 
+let rec rev_iter f = function
+  | N -> ()
+  | C (base, ss, qs) ->
+    rev_iter f qs;
+    for i = word_size downto 0 do
+      if ss land (1 lsl i) <> 0 then
+        f (base + i)
+    done
+
+let rec fold_right f acc = function
+  | N -> acc
+  | C (base, ss, qs) ->
+    let acc = ref (fold_right f acc qs) in
+    for i = word_size downto 0 do
+      if ss land (1 lsl i) <> 0 then
+        acc := f !acc (base + i)
+    done;
+    !acc
+
 let exists f t =
   let exception Found in
   match fold (fun elt () -> if f elt then raise Found) t () with
