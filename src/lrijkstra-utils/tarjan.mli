@@ -78,3 +78,18 @@ end) : sig
   val rev_map: (node -> node list -> 'a) -> 'a list
 
 end
+
+open Fix.Indexing
+
+module IndexedSCC (G : sig
+    type n
+    val n : n cardinal
+    val successors : (n index -> unit) -> n index -> unit
+  end) :
+sig
+  type n
+  val n : n cardinal
+  (*val representatives : (n, G.n index) vector*)
+  val nodes : (n, G.n Utils.IndexSet.t) vector
+  val component : (G.n, n index) vector
+end

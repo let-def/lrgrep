@@ -246,3 +246,42 @@ end) = struct
     !accu
 
 end
+
+open Fix.Indexing
+
+module IndexedSCC (G : sig
+  include CARDINAL
+  val successors : (n index -> unit) -> n index -> unit
+end) = struct
+  module SCC = Run (struct
+    type node = G.n index
+    let n = cardinal G.n
+    let index n = (n : _ index :> int)
+    let successors = G.successors
+    let iter f = Index.iter G.n f
+  end)
+
+  module Repr = Vector.Of_array(struct
+      type a = G.n index
+      let array = SCC.representatives
+    end)
+
+  type n = Repr.n
+  let n = Vector.length Repr.vector
+
+  let representatives = Repr.vector
+
+  let nodes = Vector.map
+      (fun node -> Utils.IndexSet.of_list (SCC.scc node))
+      representatives
+
+  let component = Vector.make' G.n (fun () -> Index.of_int n 0)
+
+  let () =
+    Vector.iteri (fun scc nodes' ->
+        Utils.IndexSet.iter
+          (fun node -> Vector.set component node scc)
+          nodes'
+      ) nodes
+end
+
