@@ -127,6 +127,50 @@ let vector_set_union vec index value =
 let tabulate_finset n f =
   Vector.get (Vector.init n f)
 
+let relation_reverse rel =
+  let rev = Vector.make (Vector.length rel) IndexSet.empty in
+  Vector.rev_iteri (fun src tgts ->
+      IndexSet.iter (fun tgt -> vector_set_add rev tgt src) tgts
+    ) rel;
+  rev
+
+let fixpoint  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vector)
+    ~(propagate : 'n index -> 'a -> 'n index -> 'a -> 'a)
+  =
+  let n = Vector.length values in
+  let marks = IndexMarks.make n in
+  let update i =
+    let value = Vector.get values i in
+    IndexSet.iter (fun j ->
+        let value' = Vector.get values j in
+        let value'' = propagate i value j value' in
+        if value' != value'' then (
+          Vector.set values j value'';
+          IndexMarks.mark marks j
+        )
+      ) (Vector.get relation i)
+  in
+  Index.iter n update;
+  while not (IndexMarks.is_empty marks) do
+    let todo = IndexMarks.marked marks in
+    IndexMarks.clear marks;
+    IndexSet.iter update todo
+  done
+
+let close_relation ?reverse rel =
+  let rev = match reverse with
+    | Some rev -> rev
+    | None -> relation_reverse rel
+  in
+  fixpoint rev rel
+    ~propagate:(fun _ v _ v' -> IndexSet.union v v')
+
+let relation_closure ?reverse rel =
+  let rel = Vector.copy rel in
+  close_relation ?reverse rel;
+  rel
+
+
 (** Equality on indices *)
 let equal_index =
   (Int.equal : int -> int -> bool :> 'a index -> 'a index -> bool)

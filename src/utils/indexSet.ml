@@ -6,6 +6,7 @@ module FSet (X : Index.Unsafe.T) = struct
                        and type 'a element = 'a X.t
 
     val unsafe_to_indexset : 'a t -> 'b t
+    val unsafe_of_intset : IntSet.t -> 'a t
   end
 end
 
@@ -20,6 +21,7 @@ struct
   include (IntSet : SetSig.S0 with type element := _element and type t := _t)
 
   let unsafe_to_indexset x = x
+  let unsafe_of_intset x = x
 end
 
 module IndexSet = Index.Unsafe.Coerce(FSet)(FIntSet)

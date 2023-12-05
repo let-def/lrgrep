@@ -88,6 +88,8 @@ module type S1 = sig
 
   val iter: ('a element -> unit) -> 'a t -> unit
 
+  val rev_iter: ('a element -> unit) -> 'a t -> unit
+
   (* [fold f s seed] invokes [f x accu], in turn, for each element [x]
      of the set [s]. Elements are presented to [f] in increasing
      order. The initial value of [accu] is [seed]; then, at each new
@@ -98,6 +100,8 @@ module type S1 = sig
      $([f]\,x_n\,\ldots\,([f]\,x_2\,([f]\,x_1\,[seed]))\ldots)$. *)
 
   val fold: ('a element -> 'b -> 'b) -> 'a t -> 'b -> 'b
+
+  val fold_right: ('a -> 'b element -> 'a) -> 'a -> 'b t -> 'a
 
   val map: ('a element -> 'b element) -> 'a t -> 'b t
 
