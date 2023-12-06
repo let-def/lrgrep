@@ -281,3 +281,21 @@ let list_foralli f l =
     | x :: xs -> (f i x) && (loop (i + 1) xs)
   in
   loop 0 l
+
+let rec list_rev_iter f = function
+  | x1 :: x2 :: x3 :: x4 :: xs ->
+    list_rev_iter f xs;
+    f x4;
+    f x3;
+    f x2;
+    f x1
+  | [x1; x2; x3] ->
+    f x3;
+    f x2;
+    f x1
+  | [x1; x2] ->
+    f x2;
+    f x1
+  | [x1] ->
+    f x1
+  | [] -> ()

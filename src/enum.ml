@@ -105,7 +105,7 @@ module BFS_Reduction_coverage = struct
   let root =
     let tree = Vector.make Reachable.state sentinel in
     let visited st = Vector.get tree st != sentinel in
-    let enter parent st acc =
+    let enter parent acc (st, _) =
       if visited st then 
         acc
       else (
@@ -116,7 +116,8 @@ module BFS_Reduction_coverage = struct
     let visit acc st =
       let node = Vector.get tree st in
       assert (node != sentinel);
-      IndexSet.fold (enter node) (Vector.get Reachable.successors st) acc
+      let _, transitions = Vector.get Reachable.states st in
+      Reachable.fold_targets (enter node) acc transitions
     in
     let rec loop = function
       | [] -> ()
@@ -126,7 +127,7 @@ module BFS_Reduction_coverage = struct
     let bfs =
       IndexMap.map (fun tr -> 
           let node = { next = [] } in
-          acc := Reachable.fold_targets (enter node) tr !acc;
+          acc := Reachable.fold_targets (enter node) !acc tr;
           node
         ) Reachable.initial
     in
@@ -140,11 +141,12 @@ module DFS_Reduction_coverage = struct
   let root =
     let tree = Vector.make Reachable.state sentinel in
     let visited st = Vector.get tree st != sentinel in
-    let rec enter parent st =
+    let rec enter parent (st, _) =
       if not (visited st) then (
         let node = add_node parent st in
         Vector.set tree st node;
-        IndexSet.iter (enter node) (Vector.get Reachable.successors st)
+        let _, tr = Vector.get Reachable.states st in
+        Reachable.iter_targets tr (enter node) 
       )
     in
     IndexMap.map (fun tr -> 

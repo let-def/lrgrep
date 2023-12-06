@@ -561,9 +561,12 @@ sig
   val state : state cardinal
 
   type config = { source : Viable.state index; lrcs : Lrc.set; }
+
+  type target = state index * Reduction.t
+
   type transitions = {
-    inner : state indexset;
-    outer : state indexset list;
+    inner: target list;
+    outer: target list list;
   }
 
   val initial : transitions Lrc.map
@@ -572,10 +575,10 @@ sig
   val successors : (state, state indexset) vector
   val predecessors : (state, state indexset) vector
 
-  val iter_targets : transitions -> (state index -> unit) -> unit
-  val rev_iter_targets : transitions -> (state index -> unit) -> unit
-  val fold_targets : (state index -> 'a -> 'a) -> transitions -> 'a -> 'a
-  val rev_fold_targets : ('a -> state index -> 'a) -> 'a -> transitions -> 'a
+  val iter_targets : transitions -> (target -> unit) -> unit
+  val rev_iter_targets : transitions -> (target -> unit) -> unit
+  val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
+  val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 
   val immediate_reject : state index -> Terminal.set
   val potential_reject : state index -> Terminal.set
@@ -612,13 +615,11 @@ struct
     lrcs: Lrc.set;
   }
 
-  (*type transitions = {
-    inner: (state index * Production.set) list;
-    outer: (state index * Production.set) list list;
-  }*)
+  type target = state index * Reduction.t
+
   type transitions = {
-    inner : state indexset;
-    outer : state indexset list;
+    inner: target list;
+    outer: target list list;
   }
 
   let states = State.get_generator ()
@@ -629,11 +630,11 @@ struct
     let inner =
       List.fold_left (fun acc {Viable.candidates; _} ->
         List.fold_left
-          (fun acc {Viable.target; lookahead=_; filter=(); reduction=_} ->
+          (fun acc {Viable.target; lookahead=_; filter=(); reduction} ->
             let state = visit_config {source=target; lrcs} in
-            IndexSet.add state acc)
+            (state, reduction) :: acc)
           acc candidates
-      ) IndexSet.empty inner
+      ) [] inner
     in
     let outer = match outer with
       | first :: rest -> visit_outer lrcs first rest
@@ -654,14 +655,15 @@ struct
       index
 
   and visit_outer lrcs {Viable.candidates; _} rest =
-    let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction=_} =
+    let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
       let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
       let lrcs = indexset_bind lr1s compatible_lrc in
-      if IndexSet.is_empty lrcs then None else
-        let state = visit_config {lrcs; source=target} in
-        Some state
+      if IndexSet.is_empty lrcs then 
+        None 
+      else
+        Some (visit_config {lrcs; source=target}, reduction)
     in
-    let candidates = IndexSet.of_list (List.filter_map visit_candidate candidates) in
+    let candidates = List.filter_map visit_candidate candidates in
     match rest with
     | [] -> [candidates]
     | next :: rest ->
@@ -680,30 +682,28 @@ struct
   let () = Stopwatch.step time "Nodes: %d" (cardinal state)
 
   let iter_targets {inner; outer} f =
-    IndexSet.iter f inner;
-    List.iter (IndexSet.iter f) outer
+    List.iter f inner;
+    List.iter (List.iter f) outer
 
   let rev_iter_targets {inner; outer} f =
-    IndexSet.rev_iter f inner;
-    List.iter (IndexSet.rev_iter f) (List.rev outer)
+    list_rev_iter f inner;
+    list_rev_iter (list_rev_iter f) outer
 
-  let fold_targets f {inner; outer} acc =
-    let acc = IndexSet.fold f inner acc in
-    List.fold_left
-      (fun acc step -> IndexSet.fold f step acc)
-      acc outer
+  let fold_targets f acc {inner; outer} =
+    let acc = List.fold_left f acc inner in
+    let acc = List.fold_left (List.fold_left f) acc outer in
+    acc
 
-  let rev_fold_targets f acc {inner; outer} =
-    let acc = IndexSet.fold_right f acc inner in
-    List.fold_right
-      (fun set acc -> IndexSet.fold_right f acc set)
-      outer acc
+  let rev_fold_targets f {inner; outer} acc =
+    let acc = List.fold_right f inner acc in
+    let acc = List.fold_right (List.fold_right f) outer acc in
+    acc
 
   let successors =
     Vector.map (fun (_config, transitions) ->
-        rev_fold_targets
-          (fun acc st -> IndexSet.add st acc)
-          IndexSet.empty transitions
+        rev_fold_targets 
+          (fun (st, _) acc -> IndexSet.add st acc)
+          transitions IndexSet.empty 
       ) states
 
   let predecessors =
