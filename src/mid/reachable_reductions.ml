@@ -573,7 +573,7 @@ sig
   val rev_fold_targets : ('a -> state index -> 'a) -> 'a -> transitions -> 'a
 
   val immediate_fails : state index -> Terminal.set
-  val indirect_fails : state index -> Terminal.set
+  val potential_fails : state index -> Terminal.set
 end =
 struct
   open I
@@ -708,14 +708,11 @@ struct
     let viable = Viable.get_config config.source in
     Lr1.reject viable.top
 
-  let indirect_fails =
-    Vector.init state immediate_fails
-
-  let () =
-    let propagate _src fail1 _tgt fail2 =
-      IndexSet.union fail1 fail2
-    in
-    Misc.fixpoint predecessors indirect_fails ~propagate
+  let potential_fails =
+    let table = Vector.init state immediate_fails in
+    let propagate _src fail1 _tgt fail2 = IndexSet.union fail1 fail2 in
+    Misc.fixpoint predecessors table ~propagate;
+    table
 
   (* Active lookahead restricted failures -- meaningless
     let immediate_fails = Vector.map (fun (config, _) ->
@@ -754,14 +751,14 @@ struct
 
   *)
 
-  let indirect_fails = Vector.get indirect_fails
+  let potential_fails = Vector.get potential_fails
 
   let () =
     let immediate = ref 0 in
     let propagated = ref 0 in
     Index.iter state (fun st ->
         let cfail = IndexSet.cardinal (immediate_fails st) in
-        let cfail' = IndexSet.cardinal (indirect_fails st) in
+        let cfail' = IndexSet.cardinal (potential_fails st) in
         immediate := !immediate + cfail;
         propagated := !propagated + cfail' - cfail;
       );
