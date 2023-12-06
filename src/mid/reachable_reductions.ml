@@ -555,7 +555,7 @@ sig
   type state
   val state : state cardinal
 
-  type config = { redgraph : Viable.state index; lrcs : Lrc.set; }
+  type config = { source : Viable.state index; lrcs : Lrc.set; }
   type transitions = {
     inner : state indexset;
     outer : state indexset list;
@@ -563,10 +563,16 @@ sig
 
   val initial : transitions Lrc.map
   val states : (state, config * transitions) vector
+
+  val successors : (state, state indexset) vector
+  val predecessors : (state, state indexset) vector
+
   val iter_targets : transitions -> (state index -> unit) -> unit
+  val rev_iter_targets : transitions -> (state index -> unit) -> unit
   val fold_targets : (state index -> 'a -> 'a) -> transitions -> 'a -> 'a
-  val reverse_deps : (state, state indexset) vector
-  val fail : (state, Terminal.set) vector
+  val rev_fold_targets : ('a -> state index -> 'a) -> 'a -> transitions -> 'a
+
+  val immediate_fails : state index -> Terminal.set
   val indirect_fails : state index -> Terminal.set
 end =
 struct
@@ -597,7 +603,7 @@ struct
   let state = State.n
 
   type config = {
-    redgraph: Viable.state index;
+    source: Viable.state index;
     lrcs: Lrc.set;
   }
 
@@ -615,7 +621,7 @@ struct
       List.fold_left (fun acc {Viable.candidates; _} ->
           List.fold_left
             (fun acc {Viable.target; lookahead=_; filter=()} ->
-               IndexSet.add (visit_config {redgraph=target; lrcs}) acc)
+               IndexSet.add (visit_config {source=target; lrcs}) acc)
             acc candidates
         ) IndexSet.empty inner
     in
@@ -632,7 +638,7 @@ struct
       let reservation = IndexBuffer.Gen.reserve states in
       let index = IndexBuffer.Gen.index reservation in
       Hashtbl.add nodes config index;
-      let transitions = Viable.get_transitions config.redgraph in
+      let transitions = Viable.get_transitions config.source in
       IndexBuffer.Gen.commit states reservation
         (config, visit_transitions config.lrcs transitions);
       index
@@ -643,7 +649,7 @@ struct
       let lrcs = indexset_bind lr1s compatible_lrc in
       if IndexSet.is_empty lrcs
       then None
-      else Some (visit_config {lrcs; redgraph=target})
+      else Some (visit_config {lrcs; source=target})
     in
     let candidates =
       IndexSet.of_list (List.filter_map visit_candidate candidates)
@@ -669,82 +675,104 @@ struct
     IndexSet.iter f inner;
     List.iter (IndexSet.iter f) outer
 
+  let rev_iter_targets {inner; outer} f =
+    IndexSet.rev_iter f inner;
+    List.iter (IndexSet.rev_iter f) (List.rev outer)
+
   let fold_targets f {inner; outer} acc =
     let acc = IndexSet.fold f inner acc in
     List.fold_left
       (fun acc step -> IndexSet.fold f step acc)
       acc outer
 
-  let reverse_deps =
-    let vec = Vector.make (Vector.length states) IndexSet.empty in
-    Vector.iteri (fun source (_config, transitions) ->
-        let register target = vector_set_add vec target source in
-        iter_targets transitions register
-      ) states;
-    vec
+  let rev_fold_targets f acc {inner; outer} =
+    let acc = IndexSet.fold_right f acc inner in
+    List.fold_right
+      (fun set acc -> IndexSet.fold_right f acc set)
+      outer acc
 
-  let () = Stopwatch.step time "Computed reverse dependencies"
+  let successors =
+    Vector.map (fun (_config, transitions) ->
+        rev_fold_targets
+          (fun acc st -> IndexSet.add st acc)
+          IndexSet.empty transitions
+      ) states
 
-  let fail = Vector.map (fun (config, _) ->
-      Lr1.reject (Viable.get_config config.redgraph).top
-    ) states
+  let predecessors =
+    Misc.relation_reverse successors
 
-  let indirect_fails index =
-    let _, transitions = Vector.get states index in
-    match
-      fold_targets (fun target acc ->
-          let config, _ = Vector.get states target in
-          let lookahead = (Viable.get_config config.redgraph).lookahead in
-          let fail = Vector.get fail target in
-          match acc with
-          | None -> Some fail
-          | Some fail' -> Some (Terminal.intersect
-                                  (IndexSet.union fail
-                                     (IndexSet.diff Terminal.all lookahead))
-                                  fail')
-        ) transitions None
-    with
-    | None -> IndexSet.empty
-    | Some x -> x
+  (* Full failures computation *)
+
+  let immediate_fails st =
+    let config, _ = Vector.get states st in
+    let viable = Viable.get_config config.source in
+    Lr1.reject viable.top
+
+  let indirect_fails =
+    Vector.init state immediate_fails
 
   let () =
-    let todo = ref [] in
-    let update index =
-      let fail0 = Vector.get fail index in
-      let fails = IndexSet.union fail0 (indirect_fails index) in
-      if not (IndexSet.equal fail0 fails) then (
-        push todo index;
-        Vector.set fail index fails
-      )
+    let propagate _src fail1 _tgt fail2 =
+      IndexSet.union fail1 fail2
     in
-    Index.iter state update;
-    let rec loop () =
-      match !todo with
-      | [] -> ()
-      | todo' ->
-        todo := [];
-        List.iter update todo';
-        loop ()
-    in
-    loop ()
+    Misc.fixpoint predecessors indirect_fails ~propagate
+
+  (* Active lookahead restricted failures -- meaningless
+    let immediate_fails = Vector.map (fun (config, _) ->
+        let viable = Viable.get_config config.source in
+        Terminal.intersect viable.lookahead (Lr1.reject viable.top)
+      ) states
+
+    let indirect_fails = Vector.copy immediate_fails
+
+    let update_indirect_fails index =
+      let _, transitions = Vector.get states index in
+      fold_targets (fun target acc ->
+          IndexSet.union acc (Vector.get indirect_fails target)
+        ) transitions (Vector.get indirect_fails index)
+
+    let () =
+      let todo = ref [] in
+      let update index =
+        let fail0 = Vector.get indirect_fails index in
+        let fail = IndexSet.union (update_indirect_fails index) fail0 in
+        if not (IndexSet.equal fail0 fail) then (
+          push todo index;
+          Vector.set indirect_fails index fail
+        )
+      in
+      Index.iter state update;
+      let rec loop () =
+        match !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter update todo';
+          loop ()
+      in
+      loop ()
+
+  *)
+
+  let indirect_fails = Vector.get indirect_fails
 
   let () =
     let immediate = ref 0 in
     let propagated = ref 0 in
-    Vector.iter2 (fun (config, _) fail' ->
-        let fail = Lr1.reject (Viable.get_config config.redgraph).top in
-        let cfail = IndexSet.cardinal fail in
-        let cfail' = IndexSet.cardinal fail' in
+    Index.iter state (fun st ->
+        let cfail = IndexSet.cardinal (immediate_fails st) in
+        let cfail' = IndexSet.cardinal (indirect_fails st) in
         immediate := !immediate + cfail;
         propagated := !propagated + cfail' - cfail;
-      ) states fail;
+      );
     Stopwatch.step time
       "Guaranteed failures (%d immediates, %d propagated)"
       !immediate !propagated
 
+  (* Check decreasing lookaheads invariant
   let () =
     let get_lookahead config =
-      (Viable.get_config config.redgraph).lookahead
+      (Viable.get_config config.source).lookahead
     in
     Vector.iter (fun (config, transitions) ->
         let la = get_lookahead config in
@@ -752,7 +780,7 @@ struct
             let la' = get_lookahead (fst (Vector.get states target)) in
             assert (IndexSet.subset la' la);
       )
-    ) states
+    ) states*)
 
   let () = Stopwatch.leave time
 
