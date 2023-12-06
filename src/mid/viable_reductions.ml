@@ -184,43 +184,16 @@ struct
 
   let reachable =
     let reachable =
-      states |> Vector.mapi begin fun self (_stack, (inner, outer)) ->
-        let add_target acc step = IndexSet.add step.target acc in
-        let acc = IndexSet.singleton self in
-        let acc = List.fold_left (List.fold_left add_target) acc inner in
-        let acc = List.fold_left (List.fold_left add_target) acc outer in
-        acc
-        end
+      let add_target acc step = IndexSet.add step.target acc in
+      let add_targets acc l =
+        List.fold_left (List.fold_left add_target) acc l
+      in
+      Vector.mapi
+        (fun self (_stack, (inner, outer)) ->
+          add_targets (add_targets (IndexSet.singleton self) inner) outer)
+        states
     in
-    let preds = Vector.make state IndexSet.empty in
-    Vector.iteri (fun source reachable ->
-      IndexSet.iter (fun target ->
-        if target <> source then
-          vector_set_add preds target source
-      ) reachable
-    ) reachable;
-    let todo = ref [] in
-    let update reach' state =
-      let reach = Vector.get reachable state in
-      if not (IndexSet.subset reach' reach) then (
-        Vector.set reachable state (IndexSet.union reach reach');
-        push todo state
-      )
-    in
-    let process state =
-      let reach = Vector.get reachable state in
-      IndexSet.iter (update reach) (Vector.get preds state)
-    in
-    Index.iter state process;
-    let rec loop () =
-      match !todo with
-      | [] -> ()
-      | some ->
-        todo := [];
-        List.iter process some;
-        loop ()
-    in
-    loop ();
+    close_relation reachable;
     reachable
 
   let make_reduction_step (inner, outer) =
