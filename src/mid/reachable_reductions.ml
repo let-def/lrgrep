@@ -577,8 +577,8 @@ sig
   val fold_targets : (state index -> 'a -> 'a) -> transitions -> 'a -> 'a
   val rev_fold_targets : ('a -> state index -> 'a) -> 'a -> transitions -> 'a
 
-  val immediate_fails : state index -> Terminal.set
-  val potential_fails : state index -> Terminal.set
+  val immediate_reject : state index -> Terminal.set
+  val potential_reject : state index -> Terminal.set
 end =
 struct
   open I
@@ -709,9 +709,9 @@ struct
   let predecessors =
     Misc.relation_reverse successors
 
-  (* Full failures computation *)
+  (* Full rejection computation *)
 
-  let immediate_fails st =
+  let immediate_reject st =
     let config, _ = Vector.get states st in
     let viable = Viable.get_config config.source in
     Lr1.reject viable.top
@@ -721,77 +721,40 @@ struct
     let viable = Viable.get_config config.source in
     Lr1.shift_on viable.top
 
-  let potential_fails =
-    let table = Vector.init state immediate_fails in
-    let propagate _src fail1 tgt fail2 =
-      IndexSet.union (IndexSet.diff fail1 (immediate_shift tgt)) fail2
+  let potential_reject =
+    let table = Vector.init state immediate_reject in
+    let propagate _src rej1 tgt rej2 =
+      IndexSet.union (IndexSet.diff rej1 (immediate_shift tgt)) rej2
     in
     Misc.fixpoint predecessors table ~propagate;
     table
 
-  let eventual_fails =
-    let table = Vector.copy potential_fails in
-    let propagate _src fail1 _tgt fail2 = IndexSet.inter fail1 fail2 in
+  let eventual_reject =
+    let table = Vector.copy potential_reject in
+    let propagate _src rej1 _tgt rej2 = IndexSet.inter rej1 rej2 in
     Misc.fixpoint predecessors table ~propagate;
     table
 
-  let potential_fails = Vector.get potential_fails
-  let eventual_fails = Vector.get eventual_fails
-
-  (* Active lookahead restricted failures -- meaningless
-    let immediate_fails = Vector.map (fun (config, _) ->
-        let viable = Viable.get_config config.source in
-        Terminal.intersect viable.lookahead (Lr1.reject viable.top)
-      ) states
-
-    let indirect_fails = Vector.copy immediate_fails
-
-    let update_indirect_fails index =
-      let _, transitions = Vector.get states index in
-      fold_targets (fun target acc ->
-          IndexSet.union acc (Vector.get indirect_fails target)
-        ) transitions (Vector.get indirect_fails index)
-
-    let () =
-      let todo = ref [] in
-      let update index =
-        let fail0 = Vector.get indirect_fails index in
-        let fail = IndexSet.union (update_indirect_fails index) fail0 in
-        if not (IndexSet.equal fail0 fail) then (
-          push todo index;
-          Vector.set indirect_fails index fail
-        )
-      in
-      Index.iter state update;
-      let rec loop () =
-        match !todo with
-        | [] -> ()
-        | todo' ->
-          todo := [];
-          List.iter update todo';
-          loop ()
-      in
-      loop ()
-
-  *)
+  let potential_reject = Vector.get potential_reject
+  let eventual_reject = Vector.get eventual_reject
 
   let () =
     let immediate = ref 0 in
     let potential = ref 0 in
     let eventual = ref 0 in
     Index.iter state (fun st ->
-        let ifail = immediate_fails st in
-        let pfail = potential_fails st in
-        let efail = IndexSet.diff (eventual_fails st) ifail in
-        let ifail = IndexSet.cardinal ifail in
-        let pfail = IndexSet.cardinal pfail in
-        let efail = IndexSet.cardinal efail in
-        immediate := !immediate + ifail;
-        eventual  := !eventual  + efail;
-        potential := !potential + pfail - ifail - efail;
+        let ireject = immediate_reject st in
+        let preject = potential_reject st in
+        let ereject = IndexSet.diff (eventual_reject st) ireject in
+        let ireject = IndexSet.cardinal ireject in
+        let preject = IndexSet.cardinal preject in
+        let ereject = IndexSet.cardinal ereject in
+        immediate := !immediate + ireject;
+        eventual  := !eventual  + ereject;
+        potential := !potential + preject - ireject - ereject;
       );
     Stopwatch.step time
-      "Guaranteed failures (%d immediates, +%d eventual, +%d potential)"
+      "Guaranteed rejections (%d immediates, +%d eventual, +%d potential)"
       !immediate !eventual !potential
 
   (* Check decreasing lookaheads invariant
