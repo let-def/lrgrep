@@ -230,6 +230,8 @@ let rec inter s1 s2 =
       let qs = inter qs1 qs2 in
       if ss = 0
       then qs
+      else if ss = ss2 && qs == qs2
+      then s2
       else if ss = ss1 && qs == qs1
       then s1
       else C (addr1, ss, qs)
