@@ -74,9 +74,9 @@ struct
         (m, pop_n stack (m - n))
       in
       let rec reductions_at stack lr1 =
-        let reductions = 
+        let reductions =
           simulate_reductions (0, Goto (lr1, stack))
-            (IndexSet.elements (Reduction.from_lr1 lr1)) 
+            (IndexSet.elements (Reduction.from_lr1 lr1))
         in
         (*let reservation = IndexBuffer.Gen.reserve nodes in*)
         incr count;
@@ -657,7 +657,7 @@ struct
     let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction=_} =
       let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
       let lrcs = indexset_bind lr1s compatible_lrc in
-      if IndexSet.is_empty lrcs then None else 
+      if IndexSet.is_empty lrcs then None else
         let state = visit_config {lrcs; source=target} in
         Some state
     in
@@ -716,11 +716,27 @@ struct
     let viable = Viable.get_config config.source in
     Lr1.reject viable.top
 
+  let immediate_shift st =
+    let config, _ = Vector.get states st in
+    let viable = Viable.get_config config.source in
+    Lr1.shift_on viable.top
+
   let potential_fails =
     let table = Vector.init state immediate_fails in
-    let propagate _src fail1 _tgt fail2 = IndexSet.union fail1 fail2 in
+    let propagate _src fail1 tgt fail2 =
+      IndexSet.union (IndexSet.diff fail1 (immediate_shift tgt)) fail2
+    in
     Misc.fixpoint predecessors table ~propagate;
     table
+
+  let eventual_fails =
+    let table = Vector.copy potential_fails in
+    let propagate _src fail1 _tgt fail2 = IndexSet.inter fail1 fail2 in
+    Misc.fixpoint predecessors table ~propagate;
+    table
+
+  let potential_fails = Vector.get potential_fails
+  let eventual_fails = Vector.get eventual_fails
 
   (* Active lookahead restricted failures -- meaningless
     let immediate_fails = Vector.map (fun (config, _) ->
@@ -759,20 +775,24 @@ struct
 
   *)
 
-  let potential_fails = Vector.get potential_fails
-
   let () =
     let immediate = ref 0 in
-    let propagated = ref 0 in
+    let potential = ref 0 in
+    let eventual = ref 0 in
     Index.iter state (fun st ->
-        let cfail = IndexSet.cardinal (immediate_fails st) in
-        let cfail' = IndexSet.cardinal (potential_fails st) in
-        immediate := !immediate + cfail;
-        propagated := !propagated + cfail' - cfail;
+        let ifail = immediate_fails st in
+        let pfail = potential_fails st in
+        let efail = IndexSet.diff (eventual_fails st) ifail in
+        let ifail = IndexSet.cardinal ifail in
+        let pfail = IndexSet.cardinal pfail in
+        let efail = IndexSet.cardinal efail in
+        immediate := !immediate + ifail;
+        eventual  := !eventual  + efail;
+        potential := !potential + pfail - ifail - efail;
       );
     Stopwatch.step time
-      "Guaranteed failures (%d immediates, %d propagated)"
-      !immediate !propagated
+      "Guaranteed failures (%d immediates, +%d eventual, +%d potential)"
+      !immediate !eventual !potential
 
   (* Check decreasing lookaheads invariant
   let () =
