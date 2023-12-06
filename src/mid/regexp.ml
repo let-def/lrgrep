@@ -276,7 +276,9 @@ struct
         | More _, Reducing _ -> -1
         | Reducing _, More _ -> +1
 
-    let cmon_candidate ?lookahead:lookahead' ~filter:cmon_filter {Redgraph. target; lookahead; filter} =
+    let cmon_candidate ?lookahead:lookahead' ~filter:cmon_filter
+      {Redgraph. target; lookahead; filter; reduction=_}
+      =
       Cmon.record [
         "target"  , cmon_index target;
         "lookahead" , (

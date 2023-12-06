@@ -39,7 +39,7 @@ struct
         }
 
     and reduction = {
-      production: Production.t;
+      reduction: Reduction.t;
       lookahead: Terminal.set;
       transition: transition;
     }
@@ -74,7 +74,10 @@ struct
         (m, pop_n stack (m - n))
       in
       let rec reductions_at stack lr1 =
-        let reductions = simulate_reductions (0, Goto (lr1, stack)) (Lr1.reductions lr1) in
+        let reductions = 
+          simulate_reductions (0, Goto (lr1, stack))
+            (IndexSet.elements (Reduction.from_lr1 lr1)) 
+        in
         (*let reservation = IndexBuffer.Gen.reserve nodes in*)
         incr count;
         let result = {
@@ -91,18 +94,20 @@ struct
 
       and simulate_reductions (n, stack) = function
         | [] -> []
-        | (production, lookahead) :: rest ->
-          let (n, stack) = pop_to (n, stack) production in
+        | red :: rest ->
+          let prod = Reduction.production red in
+          let lookahead = Reduction.lookaheads red in
+          let (n, stack) = pop_to (n, stack) prod in
           let result = simulate_reductions (n, stack) rest in
           let transition =
-            let lhs = Production.lhs production in
+            let lhs = Production.lhs prod in
             match stack with
             | Bottom (pop, lr1s) ->
               Outer {pop; reach = IndexSet.map (fun lr1 -> Transition.find_goto lr1 lhs) lr1s}
             | Goto (lr1, _) ->
               Inner (reductions_at stack (Transition.find_goto_target lr1 lhs))
           in
-          {production; lookahead; transition} :: result
+          {reduction=red; lookahead; transition} :: result
       in
       let initial =
         IndexMap.inflate
@@ -607,9 +612,13 @@ struct
     lrcs: Lrc.set;
   }
 
+  (*type transitions = {
+    inner: (state index * Production.set) list;
+    outer: (state index * Production.set) list list;
+  }*)
   type transitions = {
-    inner: state indexset;
-    outer: state indexset list;
+    inner : state indexset;
+    outer : state indexset list;
   }
 
   let states = State.get_generator ()
@@ -619,11 +628,12 @@ struct
   let rec visit_transitions lrcs {Viable.inner; outer} =
     let inner =
       List.fold_left (fun acc {Viable.candidates; _} ->
-          List.fold_left
-            (fun acc {Viable.target; lookahead=_; filter=()} ->
-               IndexSet.add (visit_config {source=target; lrcs}) acc)
-            acc candidates
-        ) IndexSet.empty inner
+        List.fold_left
+          (fun acc {Viable.target; lookahead=_; filter=(); reduction=_} ->
+            let state = visit_config {source=target; lrcs} in
+            IndexSet.add state acc)
+          acc candidates
+      ) IndexSet.empty inner
     in
     let outer = match outer with
       | first :: rest -> visit_outer lrcs first rest
@@ -644,16 +654,14 @@ struct
       index
 
   and visit_outer lrcs {Viable.candidates; _} rest =
-    let visit_candidate {Viable.target; lookahead=_; filter=lr1s} =
+    let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction=_} =
       let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
       let lrcs = indexset_bind lr1s compatible_lrc in
-      if IndexSet.is_empty lrcs
-      then None
-      else Some (visit_config {lrcs; source=target})
+      if IndexSet.is_empty lrcs then None else 
+        let state = visit_config {lrcs; source=target} in
+        Some state
     in
-    let candidates =
-      IndexSet.of_list (List.filter_map visit_candidate candidates)
-    in
+    let candidates = IndexSet.of_list (List.filter_map visit_candidate candidates) in
     match rest with
     | [] -> [candidates]
     | next :: rest ->

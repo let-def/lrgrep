@@ -156,7 +156,7 @@ let rec display_steps la n acc = function
     display_steps la (n - 1) acc rest
 
 and display_candidate : type a . Info.Terminal.set -> int -> _ -> a RR.goto_candidate -> _ =
-  fun la n acc {RR. target; lookahead; filter=_} ->
+  fun la n acc {RR. target; lookahead; filter=_; reduction=_} ->
   let la = IndexSet.inter la lookahead in
   if IndexSet.is_empty la then
     acc

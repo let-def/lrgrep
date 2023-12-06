@@ -13,6 +13,7 @@ module type S = sig
     target: state index;
     lookahead: Terminal.set;
     filter: 'a;
+    reduction: Reduction.t;
   }
 
   type 'a reduction_step = {
@@ -64,6 +65,7 @@ struct
     target: state index;
     lookahead: Terminal.set;
     filter: 'a;
+    reduction: Reduction.t;
   }
 
   type 'a reduction_step = {
@@ -80,22 +82,20 @@ struct
 
   let reductions =
     let rec group depth
-      : (Production.t * Terminal.set) list -> (Nonterminal.t * Terminal.set) list list =
+      : Reduction.t list -> Reduction.set list =
       function
       | [] -> []
-      | (prod, la) :: rest when depth = Production.length prod ->
-        let lhs = Production.lhs prod in
+      | red :: rest when depth = Production.length (Reduction.production red) ->
         begin match group depth rest with
-          | ((lhs', la') :: other) :: tl when lhs = lhs' ->
-            ((lhs, IndexSet.union la la') :: other) :: tl
-          | [] -> [[lhs, la]]
-          | other :: tl ->
-            ((lhs, la) :: other) :: tl
+          | [] -> [IndexSet.singleton red]
+          | reds :: tail ->
+            IndexSet.add red reds :: tail
           end
       | otherwise ->
-        [] :: group (depth + 1) otherwise
+        IndexSet.empty :: group (depth + 1) otherwise
     in
-    Vector.init Lr1.n (fun lr1 -> group 0 (Lr1.reductions lr1))
+    Vector.init Lr1.n
+      (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
   let states = State.get_generator ()
 
@@ -123,32 +123,31 @@ struct
         | [] ->
           ([], visit_outer config.lookahead (IndexSet.singleton config.top) next)
       in
-      let process_goto (lhs, lookahead) =
-        let target_lhs = Transition.find_goto_target config.top lhs in
-        let lookahead = Terminal.intersect lookahead config.lookahead in
+      let process_goto red =
+        let prod = Reduction.production red in
+        let top = Transition.find_goto_target config.top (Production.lhs prod) in
+        let lookahead = Terminal.intersect (Reduction.lookaheads red) config.lookahead in
         if IndexSet.is_empty lookahead then
           None
         else
-          let target =
-            visit_config {
-              top = target_lhs;
-              rest = config.top :: config.rest;
-              lookahead;
-            }
-          in
-          Some {target; lookahead; filter=()}
+          let rest = config.top :: config.rest in
+          let target = visit_config {top; rest; lookahead} in
+          Some {target; lookahead; filter=(); reduction=red}
       in
-      (List.filter_map process_goto gotos :: inner, outer)
+      (List.filter_map process_goto (IndexSet.elements gotos) :: inner, outer)
 
   and visit_outer lookahead successors = function
     | [] -> []
     | gotos :: next ->
       let lr1_states = Lr1.set_predecessors successors in
       let next = visit_outer lookahead lr1_states next in
-      let process_goto acc (lhs, lookahead') =
-        let lookahead = Terminal.intersect lookahead lookahead' in
+      let process_goto red acc =
+        let lookahead =
+          Terminal.intersect lookahead (Reduction.lookaheads red)
+        in
         if IndexSet.is_empty lookahead then acc
         else
+          let lhs = Production.lhs (Reduction.production red) in
           let process_target source acc =
             let target_lhs = Transition.find_goto_target source lhs in
             IndexMap.update target_lhs (function
@@ -164,10 +163,12 @@ struct
             ) acc
           in
           let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
-          let add_target _ (filter, target) acc = {filter; target; lookahead} :: acc in
+          let add_target _ (filter, target) acc =
+            {filter; target; lookahead; reduction=red} :: acc
+          in
           IndexMap.fold add_target by_target acc
       in
-      let gotos = List.fold_left process_goto [] gotos in
+      let gotos = IndexSet.fold process_goto gotos [] in
       gotos :: next
 
   let initial =
