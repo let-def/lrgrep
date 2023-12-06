@@ -105,11 +105,6 @@ module type S = sig
     val incoming : t -> Symbol.t option
     val items : t -> (Production.t * int) list
 
-    (* All reductions that can be initated from state [t],  in increasing size and
-       with the lookahead set that trigger them. *)
-
-    val reductions : t -> (Production.t * Terminal.set) list
-
     (* Printing functions, for debug purposes.
        Not nice for the end-user (FIXME). *)
 
@@ -196,6 +191,16 @@ module type S = sig
     (* [predecessors s] returns all the transitions [tr] such that
        [target tr = s] *)
     val predecessors : Lr1.t -> any index list
+  end
+
+  module Reduction : sig
+    include INDEXED
+
+    val state: t -> Lr1.t
+    val production: t -> Production.t
+    val lookaheads: t -> Terminal.set
+
+    val from_lr1: Lr1.t -> set
   end
 end
 
@@ -316,9 +321,8 @@ struct
 
   (** [Transitions] module, defined below, depends on the set of Lr1 states
       but [Lr1] module depends on [Transitions].
-      So [Lr1I] is defined first and is the raw set of Lr1 states. *)
-  module Lr1I = Indexed(Grammar.Lr1)
-
+      So [Prelr1] is defined first and is the raw set of Lr1 states. *)
+  module Prelr1 = Indexed(Grammar.Lr1)
 
   (* Transitions are represented as finite sets with auxiliary functions
      to get the predecessors, successors and labels. *)
@@ -369,8 +373,8 @@ struct
        and then populate them by iterating over all transitions.
     *)
 
-    let sources = Vector.make' any (fun () -> Index.of_int Lr1I.n 0)
-    let targets = Vector.make' any (fun () -> Index.of_int Lr1I.n 0)
+    let sources = Vector.make' any (fun () -> Index.of_int Prelr1.n 0)
+    let targets = Vector.make' any (fun () -> Index.of_int Prelr1.n 0)
 
     let t_symbols = Vector.make' shift (fun () -> Index.of_int Terminal.n 0)
     let nt_symbols = Vector.make' goto (fun () -> Index.of_int Nonterminal.n 0)
@@ -400,7 +404,7 @@ struct
     (* A vector to store the predecessors of an lr1 state.
        We cannot compute them directly, we discover them by exploring the
        successor relation below. *)
-    let predecessors = Vector.make Lr1I.n []
+    let predecessors = Vector.make Prelr1.n []
 
     let successors =
       (* We populate all the data structures allocated above, i.e.
@@ -409,9 +413,9 @@ struct
          nt_table, by iterating over all successors. *)
       let next_goto = Index.enumerate goto in
       let next_shift = Index.enumerate shift in
-      Vector.init Lr1I.n begin fun source ->
+      Vector.init Prelr1.n begin fun source ->
         List.fold_left begin fun acc (sym, target) ->
-          let target = Lr1I.of_g target in
+          let target = Prelr1.of_g target in
           let index = match sym with
             | Grammar.T t ->
               let t = Terminal.of_g t in
@@ -430,7 +434,7 @@ struct
           Vector.set targets index target;
           Vector.set_cons predecessors target index;
           index :: acc
-        end [] (Grammar.Lr1.transitions (Lr1I.to_g source))
+        end [] (Grammar.Lr1.transitions (Prelr1.to_g source))
       end
 
     let successors lr1 = Vector.get successors lr1
@@ -458,7 +462,7 @@ struct
 
 
   module Lr1 = struct
-    include Lr1I
+    include Prelr1
     let all = all n
 
     let to_lr0 lr1 = Grammar.Lr1.lr0 (to_g lr1)
@@ -476,35 +480,6 @@ struct
       List.map
         (fun (p,pos) -> (Production.of_g p, pos))
         (Grammar.Lr0.items (to_lr0 lr1))
-
-    (** A more convenient presentation of reductions than the one from Cmly.
-        Each reduction is exposed as a pair of a Production.t and the lookahead
-        set.
-        Start productions are not included. *)
-    let reductions =
-      let prepare_red (t, ps) = (t, List.hd ps) in
-      let import_red reds =
-        reds
-        |> List.map prepare_red
-        |> List.filter_map (fun (t, p) ->
-            let p = Production.of_g p in
-            match Production.kind p with
-            | `START -> None
-            | `REGULAR -> Some (p, Terminal.of_g t)
-          )
-        |> Misc.group_by
-          ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
-          ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
-        |> List.sort (fun (p1,_) (p2,_) ->
-            let l1 = Array.length (Production.rhs p1) in
-            let l2 = Array.length (Production.rhs p2) in
-            let c = Int.compare l1 l2 in
-            if c <> 0 then c else
-              compare_index (Production.lhs p1) (Production.lhs p2)
-          )
-      in
-      let import_lr1 lr1 = import_red (Grammar.Lr1.reductions (to_g lr1)) in
-      Vector.get (Vector.init n import_lr1)
 
     (** A somewhat informative string description of the Lr1 state, for debug
         purposes. *)
@@ -586,6 +561,69 @@ struct
       else IndexSet.inter a b
 
     let () = Stopwatch.step time "Lr1"
+  end
+
+  (** A more convenient presentation of reductions than the one from Cmly.
+      Reductions are represented as a distinct set. For a reduction, one can
+      query the production, the lookaheads and the state it starts from.
+      Conversely, one can go from a state to its reductions.
+      Start productions are ignored. *)
+  module Reduction = struct
+    let n = ref 0
+    let raw =
+      let prepare_red (t, ps) = (t, List.hd ps) in
+      let import_red reds =
+        reds
+        |> List.map prepare_red
+        |> List.filter_map (fun (t, p) ->
+            let p = Production.of_g p in
+            match Production.kind p with
+            | `START -> None
+            | `REGULAR -> Some (p, Terminal.of_g t)
+          )
+        |> Misc.group_by
+          ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
+          ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
+        |> List.sort (fun (p1,_) (p2,_) ->
+            let l1 = Array.length (Production.rhs p1) in
+            let l2 = Array.length (Production.rhs p2) in
+            let c = Int.compare l1 l2 in
+            if c <> 0 then c else
+              compare_index (Production.lhs p1) (Production.lhs p2)
+          )
+      in
+      let import_lr1 lr1 =
+        let reds = import_red (Grammar.Lr1.reductions (Lr1.to_g lr1)) in
+        n := !n + List.length reds;
+        reds
+      in
+      Vector.init Lr1.n import_lr1 
+
+    include Const(struct let cardinal = !n end)
+
+    type t = n index
+    type set = n indexset
+    type 'a map = (n, 'a) indexmap
+
+    let state = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
+    let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
+    let lookaheads = Vector.make n IndexSet.empty
+    let from_lr1 = 
+      let enum = Index.enumerate n in
+      Vector.mapi (fun lr1 reds ->
+          List.fold_left (fun set (prod, la) ->
+              let i = enum () in
+              Vector.set state i lr1;
+              Vector.set production i prod;
+              Vector.set lookaheads i la;
+              IndexSet.add i set
+            ) IndexSet.empty reds
+        ) raw
+
+    let state = Vector.get state
+    let production = Vector.get production
+    let lookaheads = Vector.get lookaheads
+    let from_lr1 = Vector.get from_lr1
   end
 
   let () = Stopwatch.leave time
