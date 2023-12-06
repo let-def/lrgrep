@@ -79,14 +79,6 @@ module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Mid.Lrc.Make(Inf
 
 open Fix.Indexing
 
-let reach_forward =
-  Vector.map (fun (_config, transitions) ->
-      let targets = ref IndexSet.empty in
-      Reachable.rev_iter_targets transitions 
-        (fun st -> targets := IndexSet.add st !targets);
-      !targets
-    ) Reachable.states
-
 type tree = {
   mutable next: (Reachable.state index * tree) list;
 }
@@ -98,17 +90,21 @@ let add_node root state =
   root.next <- (state, node) :: root.next;
   node
 
-let rec count acc = function
-  | { next = [] } -> acc + 1
-  | { next } -> List.fold_left count_transitions acc next
+let rec count depth (sum, steps as acc) = function
+  | { next = [] } -> (sum + 1, steps + depth)
+  | { next } -> List.fold_left (count_transitions (depth + 1)) acc next
 
-and count_transitions acc (_, node) =
-  count acc node
+and count_transitions depth acc (_, node) =
+  count depth acc node
 
-module Reduction_coverage = struct
-  let bfs =
+let measure node =
+  let count, steps = IndexMap.fold (fun _ node acc -> count 1 acc node) node (0, 0) in
+  Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
+
+module BFS_Reduction_coverage = struct
+  let root =
     let tree = Vector.make Reachable.state sentinel in
-    let visited st = Vector.get tree st == sentinel in
+    let visited st = Vector.get tree st != sentinel in
     let enter parent st acc =
       if visited st then 
         acc
@@ -120,7 +116,7 @@ module Reduction_coverage = struct
     let visit acc st =
       let node = Vector.get tree st in
       assert (node != sentinel);
-      IndexSet.fold (enter node) (Vector.get reach_forward st) acc
+      IndexSet.fold (enter node) (Vector.get Reachable.successors st) acc
     in
     let rec loop = function
       | [] -> ()
@@ -137,10 +133,48 @@ module Reduction_coverage = struct
     loop !acc;
     bfs
 
-  let () = 
-    Printf.eprintf "Reduction coverage with %d sentences\n"
-      (IndexMap.fold (fun _ node acc -> count acc node) bfs 0)
+  let () = Printf.eprintf "BFS Reduction coverage: %s\n" (measure root)
 end
+
+module DFS_Reduction_coverage = struct
+  let root =
+    let tree = Vector.make Reachable.state sentinel in
+    let visited st = Vector.get tree st != sentinel in
+    let rec enter parent st =
+      if not (visited st) then (
+        let node = add_node parent st in
+        Vector.set tree st node;
+        IndexSet.iter (enter node) (Vector.get Reachable.successors st)
+      )
+    in
+    IndexMap.map (fun tr -> 
+      let node = { next = [] } in
+      Reachable.iter_targets tr (enter node);
+      node
+    ) Reachable.initial
+
+  let () = Printf.eprintf "DFS Reduction coverage: %s\n" (measure root)
+end
+
+(*module DFS_Lookahead_coverage = struct
+  let root =
+    let tree = Vector.init Reachable.state Reachable.potential_reject in
+    let visited st = Vector.get tree st != sentinel in
+    let rec enter parent st =
+      if not (visited st) then (
+        let node = add_node parent st in
+        Vector.set tree st node;
+        IndexSet.iter (enter node) (Vector.get Reachable.successors st)
+      )
+    in
+    IndexMap.map (fun tr -> 
+      let node = { next = [] } in
+      Reachable.iter_targets tr (enter node);
+      node
+    ) Reachable.initial
+
+  let () = Printf.eprintf "DFS Reduction coverage: %s\n" (measure root)
+end*)
 
 (*module Lookahead_coverage = struct
   let bfs =
