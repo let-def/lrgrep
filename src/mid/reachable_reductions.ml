@@ -580,8 +580,11 @@ sig
   val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
   val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 
+  val unreachable_lookaheads : state index -> Terminal.set
+  val immediate_accept : state index -> Terminal.set
   val immediate_reject : state index -> Terminal.set
-  val potential_reject : state index -> Terminal.set
+  val potential_reject_after : state index -> Terminal.set
+  val potential_reject_before : state index -> Terminal.set
 end =
 struct
   open I
@@ -658,8 +661,8 @@ struct
     let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
       let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
       let lrcs = indexset_bind lr1s compatible_lrc in
-      if IndexSet.is_empty lrcs then 
-        None 
+      if IndexSet.is_empty lrcs then
+        None
       else
         Some (visit_config {lrcs; source=target}, reduction)
     in
@@ -701,42 +704,67 @@ struct
 
   let successors =
     Vector.map (fun (_config, transitions) ->
-        rev_fold_targets 
+        rev_fold_targets
           (fun (st, _) acc -> IndexSet.add st acc)
-          transitions IndexSet.empty 
+          transitions IndexSet.empty
       ) states
 
   let predecessors =
     Misc.relation_reverse successors
-
-  (* Full rejection computation *)
 
   let immediate_reject st =
     let config, _ = Vector.get states st in
     let viable = Viable.get_config config.source in
     Lr1.reject viable.top
 
-  let immediate_shift st =
+  let immediate_accept st =
     let config, _ = Vector.get states st in
     let viable = Viable.get_config config.source in
     Lr1.shift_on viable.top
 
-  let potential_reject =
+
+  let unreachable_lookaheads =
+    let table = Vector.make state Terminal.all in
+    IndexMap.iter
+      (fun lrc transitions ->
+         let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
+         iter_targets transitions (fun (st, _red) ->
+             let set = Terminal.intersect unreachable (Vector.get table st) in
+             Vector.set table st set)
+      ) initial;
+    fixpoint successors table
+      ~propagate:(fun _src set1 tgt set2 ->
+          let set1 = IndexSet.union set1 (immediate_accept tgt) in
+          Terminal.intersect set1 set2);
+    Vector.get table
+
+  let potential_reject_before =
+    let table = Vector.init state (fun st ->
+        IndexSet.diff
+          (immediate_reject st)
+          (unreachable_lookaheads st)
+    ) in
+    let propagate _src rej1 _tgt rej2 =
+      IndexSet.union rej1 rej2
+    in
+    Misc.fixpoint successors table ~propagate;
+    Vector.get table
+
+  let potential_reject_after =
     let table = Vector.init state immediate_reject in
     let propagate _src rej1 tgt rej2 =
-      IndexSet.union (IndexSet.diff rej1 (immediate_shift tgt)) rej2
+      IndexSet.union (IndexSet.diff rej1 (unreachable_lookaheads tgt)) rej2
     in
     Misc.fixpoint predecessors table ~propagate;
     table
 
   let eventual_reject =
-    let table = Vector.copy potential_reject in
+    let table = Vector.copy potential_reject_after in
     let propagate _src rej1 _tgt rej2 = IndexSet.inter rej1 rej2 in
     Misc.fixpoint predecessors table ~propagate;
-    table
+    Vector.get table
 
-  let potential_reject = Vector.get potential_reject
-  let eventual_reject = Vector.get eventual_reject
+  let potential_reject_after = Vector.get potential_reject_after
 
   let () =
     let immediate = ref 0 in
@@ -744,7 +772,7 @@ struct
     let eventual = ref 0 in
     Index.iter state (fun st ->
         let ireject = immediate_reject st in
-        let preject = potential_reject st in
+        let preject = potential_reject_after st in
         let ereject = IndexSet.diff (eventual_reject st) ireject in
         let ireject = IndexSet.cardinal ireject in
         let preject = IndexSet.cardinal preject in
