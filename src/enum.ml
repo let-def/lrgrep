@@ -161,95 +161,115 @@ module Lookahead_coverage = struct
   open Info
 
   type tree = {
-    parent: tree;
-    state: Reachable.state index;
-    mutable covered: Terminal.set;
-    mutable next: tree list;
+    depth: int;
+    mutable next: (Reachable.state index * tree) list;
   }
 
+  let sentinel = { next = []; depth = 0 }
+
+  let add_node parent state =
+    let node = {depth = parent.depth + 1; next = []} in
+    parent.next <- (state, node) :: parent.next;
+    node
 
   type status = {
-    visited: Reachable.state IndexSet.t;
     rejected: Terminal.set;
     accepted: Terminal.set;
     node: tree;
   }
 
-  let rec count depth (sum, steps as acc) = function
-    | { next = []; _ } -> (sum + 1, steps + depth)
-    | { next; _ } -> List.fold_left (count (depth + 1)) acc next
+  let rec count (sum, steps as acc) = function
+    | { next = []; depth } -> (sum + 1, steps + depth)
+    | { next; _ } -> List.fold_left count_transitions acc next
+
+  and count_transitions acc (_st, node) = count acc node
 
   let measure map =
-    let count, steps = IndexMap.fold (fun _ nodes acc ->
-      List.fold_left (fun acc node -> count 1 acc node) acc nodes
-    ) map (0, 0) in
+    let count, steps =
+      IndexMap.fold
+        (fun _ nodes acc -> List.fold_left count acc nodes)
+        map (0, 0)
+    in
     Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
 
-  let update todo status state =
-    let accept = IndexSet.diff (Reachable.immediate_accept state) status.rejected in
-    let reject = Reachable.immediate_reject state in
-    let reject = IndexSet.diff reject status.accepted in
-    let rejected = IndexSet.union reject status.rejected in
-    let accepted = IndexSet.union accept status.accepted in
-    let node = {parent = status.node; state; covered = IndexSet.empty; next = []} in
-    let visited = if rejected != status.rejected then
-        IndexSet.singleton state
-      else
-        IndexSet.add state status.visited
-    in
-    let rec update_node node =
-      let todo' = Vector.get todo node.state in
-      let reject' = IndexSet.inter rejected todo' in
-      if not (IndexSet.is_empty reject') then (
-        let rem = IndexSet.diff todo' reject' in
-        Printf.eprintf "Removing %d lookaheads\n%!" (IndexSet.cardinal rem);
-        Vector.set todo node.state rem;
-        node.covered <- IndexSet.union node.covered reject';
-        update_node node.parent
-      )
-    in
-    update_node node;
-    {accepted; rejected; node; visited}
-
-  let visit_successor todo status state =
-    not (IndexSet.mem state status.visited) && (
-      let pra = IndexSet.diff (Reachable.potential_reject_after state) status.accepted in
-      if IndexSet.equal status.rejected pra then (
-        not (IndexSet.disjoint status.rejected (Vector.get todo state))
-      ) else (
-        assert (IndexSet.subset status.rejected pra);
-        true
-      )
+  (*let node_after = Vector.make Reachable.state sentinel
+  let node_before = Vector.make Reachable.state sentinel*)
+  let enter () =
+    let node_pra = Vector.init Reachable.state Reachable.potential_reject_after in
+    let node_prb = Vector.init Reachable.state Reachable.potential_reject_before in
+    fun status st ->
+    let rejected = IndexSet.diff (Reachable.immediate_reject st) status.accepted in
+    let accepted = IndexSet.diff (Reachable.immediate_accept st) status.rejected in
+    let rejected = IndexSet.union rejected status.rejected in
+    let accepted = IndexSet.union accepted status.accepted in
+    let prb = Vector.get node_prb st in
+    let prb' = IndexSet.diff prb rejected in
+    let pra = Vector.get node_pra st in
+    let pra' = IndexSet.diff pra accepted in
+    if prb == prb' || IndexSet.is_empty pra' then
+      None
+    else (
+      let node = add_node status.node st in
+      Vector.set node_prb st prb';
+      Vector.set node_pra st (IndexSet.diff pra pra');
+      Some {accepted; rejected; node}
     )
 
-  let root =
-    let todo = Vector.init Reachable.state
-        (fun st -> IndexSet.union
-            (Reachable.potential_reject_after st)
-            (Reachable.potential_reject_before st)
-        )
-    in
-    let rec enter status st =
-      let status = update todo status st in
-      IndexSet.iter (fun st' ->
-          if visit_successor todo status st' then
-            enter status st'
-        ) (Vector.get Reachable.successors st)
+  let dfs =
+    let enter = enter () in
+    let rec visit status st =
+      match enter status st with
+      | None -> ()
+      | Some status' ->
+        IndexSet.iter (fun st' -> visit status' st')
+          (Vector.get Reachable.successors st);
     in
     IndexMap.mapi (fun lrc tr ->
       let lr1 = Lrc.lr1_of_lrc lrc in
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
       Reachable.fold_targets (fun acc (state, _) ->
-        Printf.eprintf "New exploration\n%!";
-        let rec node = {parent = node; state; covered = rejected; next = []} in
-        let status = {accepted; rejected; node; visited = IndexSet.singleton state} in
-        enter status state;
+        let node = {next = []; depth = 0} in
+        let status = {accepted; rejected; node} in
+        visit status state;
         node :: acc
       ) [] tr
     ) Reachable.initial
 
+  let bfs =
+    let enter = enter () in
+    let visit acc (status, st) =
+      match enter status st with
+      | None -> acc
+      | Some status' ->
+        IndexSet.fold
+          (fun st' acc -> (status', st') :: acc)
+          (Vector.get Reachable.successors st) acc;
+    in
+    let todo, map =
+      let todo = ref [] in
+      let map =
+        IndexMap.mapi (fun lrc tr ->
+            let lr1 = Lrc.lr1_of_lrc lrc in
+            let accepted = Lr1.shift_on lr1 in
+            let rejected = Lr1.reject lr1 in
+            Reachable.fold_targets (fun acc (state, _) ->
+                let node = {next = []; depth = 0} in
+                let status = {accepted; rejected; node} in
+                todo := (status, state) :: !todo;
+                node :: acc
+              ) [] tr
+          ) Reachable.initial
+      in
+      !todo, map
+    in
+    let rec loop = function
+      | [] -> ()
+      | todo' -> loop (List.fold_left visit [] todo')
+    in
+    loop todo;
+    map
+
   let () =
-    Printf.eprintf "DONE\n%!";
-    Printf.eprintf "DFS Lookahead coverage: %s\n" (measure root)
+    Printf.eprintf "Lookahead coverage: dfs:%s bfs:%s\n" (measure dfs) (measure bfs)
 end
