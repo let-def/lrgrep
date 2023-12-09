@@ -75,38 +75,40 @@ module Reachability = Mid.Reachability.Make(Info)()
 (* Re-enable when minimization is fixed *)
 (*module Lrc = Mid.Lrc.Minimize(Info)(Mid.Lrc.Make(Info)(Reachability))
   module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()*)
-module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Mid.Lrc.Make(Info)(Reachability))()
+module Lrc = Mid.Lrc.Make(Info)(Reachability)
+module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()
 
 open Fix.Indexing
 
-type tree = {
-  mutable next: (Reachable.state index * tree) list;
-}
+module Reduction_coverage = struct
 
-let sentinel = { next = [] }
+  type tree = {
+    mutable next: (Reachable.state index * tree) list;
+  }
 
-let add_node root state = 
-  let node = { next = [] } in
-  root.next <- (state, node) :: root.next;
-  node
+  let sentinel = { next = [] }
 
-let rec count depth (sum, steps as acc) = function
-  | { next = [] } -> (sum + 1, steps + depth)
-  | { next } -> List.fold_left (count_transitions (depth + 1)) acc next
+  let add_node root state =
+    let node = { next = [] } in
+    root.next <- (state, node) :: root.next;
+    node
 
-and count_transitions depth acc (_, node) =
-  count depth acc node
+  let rec count depth (sum, steps as acc) = function
+    | { next = [] } -> (sum + 1, steps + depth)
+    | { next } -> List.fold_left (count_transitions (depth + 1)) acc next
 
-let measure node =
-  let count, steps = IndexMap.fold (fun _ node acc -> count 1 acc node) node (0, 0) in
-  Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
+  and count_transitions depth acc (_, node) =
+    count depth acc node
 
-module BFS_Reduction_coverage = struct
-  let root =
+  let measure node =
+    let count, steps = IndexMap.fold (fun _ node acc -> count 1 acc node) node (0, 0) in
+    Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
+
+  let bfs =
     let tree = Vector.make Reachable.state sentinel in
     let visited st = Vector.get tree st != sentinel in
     let enter parent acc (st, _) =
-      if visited st then 
+      if visited st then
         acc
       else (
         Vector.set tree st (add_node parent st);
@@ -125,7 +127,7 @@ module BFS_Reduction_coverage = struct
     in
     let acc = ref [] in
     let bfs =
-      IndexMap.map (fun tr -> 
+      IndexMap.map (fun tr ->
           let node = { next = [] } in
           acc := Reachable.fold_targets (enter node) !acc tr;
           node
@@ -134,11 +136,7 @@ module BFS_Reduction_coverage = struct
     loop !acc;
     bfs
 
-  let () = Printf.eprintf "BFS Reduction coverage: %s\n" (measure root)
-end
-
-module DFS_Reduction_coverage = struct
-  let root =
+  let dfs =
     let tree = Vector.make Reachable.state sentinel in
     let visited st = Vector.get tree st != sentinel in
     let rec enter parent (st, _) =
@@ -146,207 +144,112 @@ module DFS_Reduction_coverage = struct
         let node = add_node parent st in
         Vector.set tree st node;
         let _, tr = Vector.get Reachable.states st in
-        Reachable.iter_targets tr (enter node) 
+        Reachable.iter_targets tr (enter node)
       )
     in
-    IndexMap.map (fun tr -> 
+    IndexMap.map (fun tr ->
       let node = { next = [] } in
       Reachable.iter_targets tr (enter node);
       node
     ) Reachable.initial
 
-  let () = Printf.eprintf "DFS Reduction coverage: %s\n" (measure root)
+
+  let () = Printf.eprintf "Reduction coverage: dfs:%s, bfs:%s\n%!" (measure dfs) (measure bfs)
 end
 
-(*module DFS_Lookahead_coverage = struct
-  let root =
-    let tree = Vector.init Reachable.state Reachable.potential_reject in
-    let visited st = Vector.get tree st != sentinel in
-    let rec enter parent st =
-      if not (visited st) then (
-        let node = add_node parent st in
-        Vector.set tree st node;
-        IndexSet.iter (enter node) (Vector.get Reachable.successors st)
+module Lookahead_coverage = struct
+  open Info
+
+  type tree = {
+    parent: tree;
+    state: Reachable.state index;
+    mutable covered: Terminal.set;
+    mutable next: tree list;
+  }
+
+
+  type status = {
+    visited: Reachable.state IndexSet.t;
+    rejected: Terminal.set;
+    accepted: Terminal.set;
+    node: tree;
+  }
+
+  let rec count depth (sum, steps as acc) = function
+    | { next = []; _ } -> (sum + 1, steps + depth)
+    | { next; _ } -> List.fold_left (count (depth + 1)) acc next
+
+  let measure map =
+    let count, steps = IndexMap.fold (fun _ nodes acc ->
+      List.fold_left (fun acc node -> count 1 acc node) acc nodes
+    ) map (0, 0) in
+    Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
+
+  let update todo status state =
+    let accept = IndexSet.diff (Reachable.immediate_accept state) status.rejected in
+    let reject = Reachable.immediate_reject state in
+    let reject = IndexSet.diff reject status.accepted in
+    let rejected = IndexSet.union reject status.rejected in
+    let accepted = IndexSet.union accept status.accepted in
+    let node = {parent = status.node; state; covered = IndexSet.empty; next = []} in
+    let visited = if rejected != status.rejected then
+        IndexSet.singleton state
+      else
+        IndexSet.add state status.visited
+    in
+    let rec update_node node =
+      let todo' = Vector.get todo node.state in
+      let reject' = IndexSet.inter rejected todo' in
+      if not (IndexSet.is_empty reject') then (
+        let rem = IndexSet.diff todo' reject' in
+        Printf.eprintf "Removing %d lookaheads\n%!" (IndexSet.cardinal rem);
+        Vector.set todo node.state rem;
+        node.covered <- IndexSet.union node.covered reject';
+        update_node node.parent
       )
     in
-    IndexMap.map (fun tr -> 
-      let node = { next = [] } in
-      Reachable.iter_targets tr (enter node);
-      node
+    update_node node;
+    {accepted; rejected; node; visited}
+
+  let visit_successor todo status state =
+    not (IndexSet.mem state status.visited) && (
+      let pra = IndexSet.diff (Reachable.potential_reject_after state) status.accepted in
+      if IndexSet.equal status.rejected pra then (
+        not (IndexSet.disjoint status.rejected (Vector.get todo state))
+      ) else (
+        assert (IndexSet.subset status.rejected pra);
+        true
+      )
+    )
+
+  let root =
+    let todo = Vector.init Reachable.state
+        (fun st -> IndexSet.union
+            (Reachable.potential_reject_after st)
+            (Reachable.potential_reject_before st)
+        )
+    in
+    let rec enter status st =
+      let status = update todo status st in
+      IndexSet.iter (fun st' ->
+          if visit_successor todo status st' then
+            enter status st'
+        ) (Vector.get Reachable.successors st)
+    in
+    IndexMap.mapi (fun lrc tr ->
+      let lr1 = Lrc.lr1_of_lrc lrc in
+      let accepted = Lr1.shift_on lr1 in
+      let rejected = Lr1.reject lr1 in
+      Reachable.fold_targets (fun acc (state, _) ->
+        Printf.eprintf "New exploration\n%!";
+        let rec node = {parent = node; state; covered = rejected; next = []} in
+        let status = {accepted; rejected; node; visited = IndexSet.singleton state} in
+        enter status state;
+        node :: acc
+      ) [] tr
     ) Reachable.initial
 
-  let () = Printf.eprintf "DFS Reduction coverage: %s\n" (measure root)
-end*)
-
-(*module Lookahead_coverage = struct
-  let bfs =
-    let visited = Vector.make Reachable.state IndexSet.empty in
-    let enter (parent, la, st) acc =
-      if visited st then 
-        acc
-      else (
-        Vector.set tree st (add_node parent st);
-        st :: acc
-      )
-    in
-    let visit acc st =
-      let node = Vector.get tree st in
-      assert (node != sentinel);
-      IndexSet.fold (enter node) (Vector.get reach_forward st) acc
-    in
-    let rec loop = function
-      | [] -> ()
-      | acc -> loop (List.fold_left visit [] acc)
-    in
-    let acc = ref [] in
-    let bfs =
-      IndexMap.map (fun tr -> 
-          let node = { next = [] } in
-          acc := Reachable.fold_targets (enter node) tr !acc;
-          node
-        ) Reachable.initial
-    in
-    loop !acc;
-    bfs
-
-  let () = 
-    Printf.eprintf "Reduction coverage with %d sentences\n"
-      (IndexMap.fold (fun _ node acc -> count acc node) bfs 0)
-end*)
-
-(*let {ler = reach_backward; 
-     rel_star = reach_forward_closure;
-     ler_star = reach_backward_closure}
-  = closure_and_reversal reach_forward*)
-
-(* Check for well-formed reachability
-
   let () =
-    Vector.iteri (fun st preds ->
-        IndexSet.iter (fun pred ->
-            let _, tr = Vector.get Reachable.states pred in
-            assert (
-              Reachable.fold_targets (fun st' acc -> acc || st = st')
-                tr false
-            )
-          ) preds
-      ) reach_backward
-  
-  let () =
-    Vector.iteri (fun st succs ->
-        let _, tr = Vector.get Reachable.states st in
-        Reachable.iter_targets tr (fun st' -> assert (IndexSet.mem st' succs));
-        IndexSet.iter (fun st' ->
-            assert (
-              Reachable.fold_targets (fun st'' acc -> acc || st'' = st')
-                tr false
-            )
-          ) succs
-      ) reach_forward
-
-  let () =
-    Vector.iteri (fun st all_succs ->
-        let succs = Vector.get reach_forward st in
-        assert (IndexSet.subset succs all_succs);
-        IndexSet.iter (fun st' -> 
-            assert (IndexSet.subset (Vector.get reach_forward st') all_succs);
-            assert (IndexSet.subset (Vector.get reach_forward_closure st') all_succs);
-          ) succs;
-      ) reach_forward_closure
-*)
-
-(*module SCC = Tarjan.IndexedSCC(struct
-  type n = Reachable.state
-  let n = Reachable.state
-  let successors f n = IndexSet.iter f (Vector.get reach_forward n)
-end)
-
-let scc_forward = 
-  Vector.map (fun nodes ->
-    Misc.indexset_bind  nodes
-      (fun node ->
-        IndexSet.map 
-          (Vector.get SCC.component)
-          (Vector.get reach_forward node)
-      )
-  ) SCC.nodes
-
-let {ler = scc_backward; 
-     rel_star = scc_forward_closure;
-     ler_star = scc_backward_closure}
-  = closure_and_reversal scc_forward
-
-let () = Stopwatch.step Stopwatch.main "Computed closures"
-
-let unvisited = 
-  ref (IndexSet.init_interval 
-         (Index.of_int SCC.n 0)
-         (Index.of_int SCC.n (cardinal SCC.n - 1)))
-
-let paths = ref 0
-
-let () =
-  let pick_transition avoid i =
-    match
-      let is = Vector.get scc_forward i in
-      IndexSet.minimum (IndexSet.inter is !unvisited)
-    with
-    | Some j -> Some j
-    | None ->
-      let measure j = 
-        IndexSet.inter (Vector.get scc_forward_closure j) !unvisited
-        |> IndexSet.cardinal
-      in
-      IndexSet.fold (fun j candidate ->
-          if IndexSet.mem j !avoid then
-            candidate
-          else
-            let count = measure j in
-            match candidate with
-            | None -> Some (j, count)
-            | Some (_, count') ->
-              if count >= count' then
-                Some (j, count)
-              else
-                candidate
-        ) (Vector.get scc_forward i) None
-      |> Option.map fst
-  in
-  let rec loop () = 
-    IndexMap.iter (fun _lrc transitions ->
-        let initial = 
-          Reachable.fold_targets
-            (fun st acc ->
-               IndexSet.add (Vector.get SCC.component st) acc)
-            transitions IndexSet.empty
-        in
-        IndexSet.iter (fun i ->
-            let avoid = ref IndexSet.empty in
-            let rec loop_path i =
-              match pick_transition avoid i with
-              | None -> []
-              | Some j ->
-                unvisited := IndexSet.remove j !unvisited;
-                avoid := IndexSet.add j !avoid;
-                j :: loop_path j
-            in
-            let rec loop_cand () =
-              let unvisited' = !unvisited in
-              avoid := IndexSet.empty;
-              let path = loop_path i in
-              Printf.eprintf "length: %d\n" (List.length path);
-              if unvisited' != !unvisited then (
-                incr paths;
-                loop_cand ()
-              )
-            in
-            loop_cand ()
-          ) initial
-      ) Reachable.initial;
-    if not (IndexSet.is_empty !unvisited) then (
-      Printf.eprintf "paths: %d\nunvisited: %d\n%!" 
-        !paths (IndexSet.cardinal !unvisited);
-      loop ()
-    )
-  in
-  loop ()*)
+    Printf.eprintf "DONE\n%!";
+    Printf.eprintf "DFS Lookahead coverage: %s\n" (measure root)
+end
