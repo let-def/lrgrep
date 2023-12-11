@@ -159,8 +159,11 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       ()
   in
   let time = Stopwatch.enter Stopwatch.main "Generating code for entry %s" entry.name in
-  Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
-  Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
+  Printf.eprintf "Raw DFA: %d states, %d transitions (%d unique)\n"
+    (cardinal BigDFA.n)
+    (BigDFA.count_transitions ())
+    (BigDFA.count_unique_transitions ());
+  Printf.eprintf "Min DFA: %d states, %d transitions\n" (cardinal MinDFA.states) (cardinal MinDFA.transitions);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
   let unhandled = ref 0 in

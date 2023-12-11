@@ -144,6 +144,8 @@ sig
   module BigDFA : sig
     type n
     val n : n cardinal
+    val count_transitions : unit -> int
+    val count_unique_transitions : unit -> int
   end
 
   module Label : sig
@@ -161,6 +163,8 @@ sig
   module MinDFA : sig
     type states
     val states : states cardinal
+    type transitions
+    val transitions : transitions cardinal
   end
 
   module OutDFA : sig
@@ -370,6 +374,8 @@ struct
     val iter_transitions : 'n t -> ('n transition -> unit) -> unit
     val register_count : int
     val accepts : (n, (Clause.t * int) list) vector
+    val count_transitions : unit -> int
+    val count_unique_transitions : unit -> int
   end =
   struct
     open IndexBuffer
@@ -440,6 +446,8 @@ struct
         let compare g1 g2 = array_compare LazyNFA.compare g1 g2
       end)
 
+    let fine_merging = Option.is_some (Sys.getenv_opt "FINE_MERGING")
+
     let determinize group =
       let map = ref GroupMap.empty in
       let rec aux : type n . (n, LazyNFA.t) vector -> n t =
@@ -477,10 +485,16 @@ struct
                 Fwd_mapping ((Vector.map snd result), aux (Vector.map fst result))
               )
             in
-            let raw_transitions = ref [] in
-            IndexRefine.iter_merged_decomposition rev_transitions
-              (fun label targets -> push raw_transitions (process_class label targets));
-            let raw_transitions = !raw_transitions in
+            let raw_transitions =
+              if fine_merging then
+                List.map (fun (label, targets) -> process_class label targets)
+                  (IndexRefine.annotated_partition rev_transitions)
+              else
+                let acc = ref [] in
+                IndexRefine.iter_merged_decomposition rev_transitions
+                  (fun label targets -> push acc (process_class label targets));
+                !acc
+            in
             let reservation = Gen.reserve states in
             let state = {
               index = Gen.index reservation;
@@ -577,7 +591,7 @@ struct
       Vector.iter (fun (Packed t) ->
           let visited_labels = indexset_bind t.visited Stacks.label in
           t.visited_labels <- visited_labels;
-          t.transitions <-
+          let transitions =
             List.filter_map (fun (label, target) ->
                 if Lazy.is_val target then
                   let label = IndexSet.inter label visited_labels in
@@ -588,11 +602,72 @@ struct
                 else
                   None
               ) t.raw_transitions;
+          in
           t.raw_transitions <- [];
+          let transitions =
+            let compare
+                {mapping=Fwd_mapping (m1, t1); _}
+                {mapping=Fwd_mapping (m2, t2); _} =
+              let c = compare_index t1.index t2.index in
+              if c <> 0 then c else
+                let Refl = assert_equal_cardinal
+                    (Vector.length m1)
+                    (Vector.length m2)
+                in
+                Vector.compare (fun (i1, (cs1, _)) (i2, (cs2, _)) ->
+                    let c = compare_index i1 i2 in
+                    if c <> 0 then c else
+                      IndexSet.compare cs1 cs2
+                  ) m1 m2
+            in
+            let group x xs =
+              let Fwd_mapping (m, t) = x.mapping in
+              let label =
+                List.fold_left (fun acc x' ->
+                    let Fwd_mapping (m', _) = x'.mapping in
+                    let Refl = assert_equal_cardinal
+                        (Vector.length m)
+                        (Vector.length m')
+                    in
+                    Vector.iteri (fun j (_, (_, us')) ->
+                        if not (Usage.is_empty us') then
+                          let (i, (cs, us)) = Vector.get m j in
+                          Vector.set m j (i, (cs, Usage.join us us'))
+                      ) m';
+                    IndexSet.union x'.label acc)
+                  x.label xs
+              in
+              {label; mapping = Fwd_mapping (m, t); pairings = []}
+            in
+            group_by ~compare ~group transitions
+          in
+          t.transitions <-
+            List.sort (fun t1 t2 -> IndexSet.compare t1.label t2.label)
+            transitions;
         ) states
 
     let iter_transitions t f =
       List.iter f t.transitions
+
+    let count_transitions () =
+      let count = ref 0 in
+      Vector.iter (fun (Packed t) -> count := !count + List.length t.transitions)
+        states;
+      !count
+
+    let count_unique_transitions () =
+      let count = ref 0 in
+      Vector.iter (fun (Packed t) ->
+          let count' =
+            t.transitions
+            |> List.map
+              (fun {mapping = Fwd_mapping (_, t'); _} -> t'.index)
+            |> List.sort_uniq compare_index
+            |> List.length
+          in
+          count := !count + count'
+        ) states;
+      !count
 
     type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) mapping -> 'tgt rev_mapping
     type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
