@@ -246,4 +246,7 @@ module Vector : sig
 
   module type V = sig type n type a val vector : (n, a) t end
   module Of_array (A : sig type a val array : a array end) : V with type a = A.a
+
+  val equal : ('a -> 'a -> bool) -> ('n, 'a) t -> ('n, 'a) t -> bool
+  val compare : ('a -> 'a -> int) -> ('n, 'a) t -> ('n, 'a) t -> int
 end
