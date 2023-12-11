@@ -139,23 +139,9 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       in
       merge [] [s1] k1 rest
 
-  let cache = ref [||]
-
-  let cached_array_of_list (l : 'a list) : 'a array =
-    let cache : 'a array ref = Obj.magic cache in
-    List.iteri (fun i x ->
-        if i >= Array.length !cache then (
-          let cached = !cache in
-          cache := Array.make ((i + 1) * 2) x;
-          Array.blit cached 0 !cache 0 (Array.length cached)
-        );
-        (!cache).(i) <- x
-      ) l;
-    !cache
-
   let annotated_partition xs =
     let sets, annotations = List.split xs in
-    let annotations = cached_array_of_list annotations in
+    let annotations = Array.of_list annotations in
     let parts = compute_parts sets in
     let union = keyed_union_parts parts in
     let annotate key =
