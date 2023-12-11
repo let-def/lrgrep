@@ -92,7 +92,7 @@ module type S = sig
 
   val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
 
-  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> (int * 'b) list -> unit) -> unit
+  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> 'b list -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t

@@ -465,7 +465,7 @@ struct
             in
             let process_class label rev_targets =
               label, lazy (
-                let prepare_target (_, (index, captures, lazy nfa)) =
+                let prepare_target (index, captures, lazy nfa) =
                   nfa, (index, captures)
                 in
                 let Packed result =

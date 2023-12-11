@@ -15,7 +15,7 @@ module type S = sig
   val partition_and_total : 'a t list -> 'a t list * 'a t
   val annotated_partition_and_total : ('a t * 'b) list -> ('a t * 'b list) list * 'a t
   val iter_decomposition : ('a t * 'b) list -> ('a t -> (('b -> unit) -> unit) -> unit) -> unit
-  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> (int * 'b) list -> unit) -> unit
+  val iter_merged_decomposition : ('a t * 'b) list -> ('a t -> 'b list -> unit) -> unit
 end
 
 module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
@@ -208,7 +208,7 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       else
         y :: merge_uniq compare xxs ys
 
-  let iter_merged_decomposition (xs : ('a Set.t * 'b) list) (f : 'a Set.t -> (int * 'b) list -> unit) : unit =
+  let iter_merged_decomposition (xs : ('a Set.t * 'b) list) (f : 'a Set.t -> 'b list -> unit) : unit =
     let heap =
       let count = ref 0 in
       List.fold_left (fun h (s,a) ->
@@ -224,7 +224,7 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       match heap_pop2 heap with
       | Head (s1, k1, s2, k2, heap) ->
         process s1 k1 s2 k2 heap
-      | Tail (k, v) -> f k v
+      | Tail (k, v) -> f k (List.map snd v)
       | Done -> ()
 
     and process s1 k1 s2 k2 = function
@@ -234,7 +234,7 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
         let sp, s1 = Set.extract_unique_prefix s1 s2 in
         let sc, (s1, s2) = Set.extract_shared_prefix s1 s2 in
         if not (Set.is_empty sp) then
-          f sp k1;
+          f sp (List.map snd k1);
         let heap =
           if not (Set.is_empty sc)
           then heap_insert sc (merge_uniq cmp k1 k2) heap

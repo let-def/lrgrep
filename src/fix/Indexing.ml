@@ -210,6 +210,30 @@ module Vector = struct
   let copy (type n) (Vector a : (n, _) t) : (n, _) t =
     Vector (Array.copy a)
 
+  let equal (type n) eq (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    let rec loop i j =
+      if i = j then
+        true
+      else if eq (Array.unsafe_get a i) (Array.unsafe_get b i) then
+        loop (i + 1) j
+      else
+        false
+    in
+    loop 0 (Array.length a)
+
+  let compare (type n) cmp (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    let rec loop i j =
+      if i = j then
+        0
+      else
+        let c = cmp (Array.unsafe_get a i) (Array.unsafe_get b i) in
+        if c <> 0 then
+          c
+        else
+          loop (i + 1) j
+    in
+    loop 0 (Array.length a)
+
   let iter (type n) f (Vector a : (n, _) t) =
     Array.iter f a
 
