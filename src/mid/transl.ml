@@ -465,7 +465,7 @@ struct
                 step node' k'
             ) node.sub
       in
-      List.iter process_next (K.derive k)
+      List.iter process_next (K.derive Lr1.all k)
     in
     step lr1_trie_root (K.More (re, K.Done));
     (!reached, !immediate)

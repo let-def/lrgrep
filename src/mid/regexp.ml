@@ -119,12 +119,8 @@ module type S = sig
        However, this does not allow to distinguish between the regular
        expressions ϵ and _ which will both lead to "Done" while matching no
        transitions.
-
-       TODO not sure.
-       To simplify the NFA a bit, we could normalize by splitting disjunctions
-       before derivation.
     *)
-    val derive : t -> (label * t option) list
+    val derive : Lr1.set -> t -> (label * t option) list
   end
 end
 
@@ -389,7 +385,7 @@ struct
         on_outer r outer;
       !matched
 
-    let derive k =
+    let derive filter k =
       let accept r label = match !r with
         | (label', None) :: r' ->
           r := (label_union label' label, None) :: r'
@@ -507,11 +503,7 @@ struct
                 process_k {label with filter = matching} next;
           end
       in
-      let label = {
-        filter = Lr1.all;
-        captures = IndexSet.empty;
-        usage = Usage.empty;
-      } in
+      let label = {filter; captures = IndexSet.empty; usage = Usage.empty} in
       process_k label k;
       List.rev !ks
   end
