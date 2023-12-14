@@ -288,7 +288,15 @@ struct
                   (label, lazy (aux k')) :: process_transitions rest
               end
           in
-          let transitions = process_transitions (K.derive k) in
+          let inj ({K. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+          let prj filter (usage, captures, t) = ({K. filter; usage; captures}, t) in
+          let transitions =
+            K.derive Lr1.all k
+            |> process_transitions
+            |> List.map inj
+            |> IndexRefine.annotated_partition
+            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
+          in
           let uid = uid () in
           let accept = !accept in
           let t = {uid; k; transitions; accept; clause; mark=default_mark} in
