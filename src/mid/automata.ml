@@ -940,12 +940,12 @@ struct
         in
         process_next src_chain tgt_chain
       in
-      let visit acc (Packed src) =
+      let visit acc (_, Packed src) =
         assert (Vector.get chain_processed src.index);
-        List.fold_left (fun acc ({mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
+        List.fold_left (fun acc ({label; mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
             if not (Vector.get chain_processed tgt.index) then (
               process_direct_transition src mapping tgt;
-              (Packed tgt) :: acc
+              (label, Packed tgt) :: acc
             ) else (
               begin match process_shared_transition src mapping tgt with
                 | [] -> ()
@@ -959,9 +959,11 @@ struct
       in
       let rec loop = function
         | [] -> ()
-        | xs -> loop (List.fold_left visit [] xs)
+        | xs ->
+          loop (List.fold_left visit []
+                  (List.sort (fun (l1, _) (l2, _) -> IndexSet.compare l1 l2) xs))
       in
-      loop [Packed initial];
+      loop (visit [] ((), Packed initial));
       Stopwatch.step time
         "Constructed order chain with %d elements (%d direct transitions, %d shared, %d trivial pairings, %d non-trivial pairings, %d transitions with pairings)"
         (Order_chain.freeze chain)
