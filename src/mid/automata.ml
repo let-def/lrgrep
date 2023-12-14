@@ -940,21 +940,28 @@ struct
         in
         process_next src_chain tgt_chain
       in
-      let rec visit (Packed src) =
+      let visit acc (Packed src) =
         assert (Vector.get chain_processed src.index);
-        List.iter (fun ({mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
+        List.fold_left (fun acc ({mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
             if not (Vector.get chain_processed tgt.index) then (
               process_direct_transition src mapping tgt;
-              visit (Packed tgt)
-            ) else
-              match process_shared_transition src mapping tgt with
-              | [] -> ()
-              | pairings ->
-                incr transitions_with_pairing;
-                tr.pairings <- pairings
-        ) src.transitions;
+              (Packed tgt) :: acc
+            ) else (
+              begin match process_shared_transition src mapping tgt with
+                | [] -> ()
+                | pairings ->
+                  incr transitions_with_pairing;
+                  tr.pairings <- pairings
+              end;
+              acc
+            )
+        ) acc src.transitions
       in
-      visit (Packed initial);
+      let rec loop = function
+        | [] -> ()
+        | xs -> loop (List.fold_left visit [] xs)
+      in
+      loop [Packed initial];
       Stopwatch.step time
         "Constructed order chain with %d elements (%d direct transitions, %d shared, %d trivial pairings, %d non-trivial pairings, %d transitions with pairings)"
         (Order_chain.freeze chain)
