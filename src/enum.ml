@@ -169,7 +169,7 @@ module Lookahead_coverage = struct
     mutable next: tree list;
   }
 
-  and tree = Reachable.state index node
+  and tree = (Reachable.state index * Info.Reduction.t) node
 
   type root = Lrc.t node
 
@@ -209,7 +209,7 @@ module Lookahead_coverage = struct
   let enter () =
     let node_pra = Vector.init Reachable.state Reachable.potential_reject_after in
     let node_prb = Vector.init Reachable.state Reachable.potential_reject_before in
-    fun (Status status) st ->
+    fun (Status status) (st, _red as tr) ->
     let rejected = IndexSet.diff (Reachable.immediate_reject st) status.accepted in
     let accepted = IndexSet.diff (Reachable.immediate_accept st) status.node.rejected in
     let rejected = IndexSet.union rejected status.node.rejected in
@@ -222,7 +222,7 @@ module Lookahead_coverage = struct
       None
     else (
       let committed = IndexSet.diff (IndexSet.union status.node.committed pra') rejected in
-      let node = add_node status.node ~committed ~rejected st in
+      let node = add_node status.node ~committed ~rejected tr in
       Vector.set node_prb st prb';
       Vector.set node_pra st (IndexSet.diff pra pra');
       Some (Status {accepted; node})
@@ -230,44 +230,43 @@ module Lookahead_coverage = struct
 
   let dfs =
     let enter = enter () in
-    let rec visit status st =
-      match enter status st with
+    let rec visit status (st, _ as tr) =
+      match enter status tr with
       | None -> ()
       | Some status' ->
-        IndexSet.iter (fun st' -> visit status' st')
-          (Vector.get Reachable.successors st);
+        let _, trs = Vector.get Reachable.states st in
+        Reachable.iter_targets trs (fun tr' -> visit status' tr');
     in
-    IndexMap.mapi (fun lrc tr ->
+    IndexMap.mapi (fun lrc trs ->
       let lr1 = Lrc.lr1_of_lrc lrc in
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
-      let node = root lrc ~accepted ~rejected tr in
-      Reachable.iter_targets tr (fun (state, _) ->
-          let status = Status {accepted; node} in
-          visit status state;
-        );
+      let node = root lrc ~accepted ~rejected trs in
+      Reachable.iter_targets trs
+        (fun tr -> visit (Status {accepted; node}) tr);
       node
     ) Reachable.initial
 
   let bfs =
     let enter = enter () in
-    let visit acc (status, st) =
-      match enter status st with
+    let visit acc (status, (st, _ as tr)) =
+      match enter status tr with
       | None -> acc
       | Some status' ->
-        IndexSet.fold
-          (fun st' acc -> (status', st') :: acc)
-          (Vector.get Reachable.successors st) acc;
+        let _, trs = Vector.get Reachable.states st in
+        Reachable.fold_targets
+          (fun acc tr -> (status', tr) :: acc)
+          acc trs
     in
     let todo, map =
       let todo = ref [] in
-      let map = IndexMap.mapi (fun lrc tr ->
+      let map = IndexMap.mapi (fun lrc trs ->
           let lr1 = Lrc.lr1_of_lrc lrc in
           let accepted = Lr1.shift_on lr1 in
           let rejected = Lr1.reject lr1 in
-          let node = root lrc ~accepted ~rejected tr in
-          Reachable.iter_targets tr (fun (state, _) ->
-              todo := (Status {accepted; node}, state) :: !todo;
+          let node = root lrc ~accepted ~rejected trs in
+          Reachable.iter_targets trs (fun tr ->
+              todo := (Status {accepted; node}, tr) :: !todo;
             );
           node
         ) Reachable.initial
@@ -313,7 +312,7 @@ module Lookahead_coverage = struct
 
   type suffix =
     | Top of Lrc.t
-    | Reduce of Reachable.state index * suffix
+    | Reduce of (Reachable.state index * Info.Reduction.t) * suffix
 
   type protosentence = suffix * Terminal.set
 
@@ -344,8 +343,8 @@ module Lookahead_coverage = struct
       | Top lrc ->
         let lr1 = Lrc.lr1_of_lrc lrc in
         print_string (Lr1.to_string lr1)
-      | Reduce (red, suffix) ->
-        print_string ("red:" ^ Misc.string_of_index red ^ " ");
+      | Reduce ((redn, _red), suffix) ->
+        print_string ("redn:" ^ Misc.string_of_index redn ^ " ");
         print_suffix suffix
     in
     enum_sentences bfs (fun suffix lookaheads ->
