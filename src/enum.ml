@@ -137,19 +137,17 @@ module Reduction_coverage = struct
   let dfs =
     let visited = Vector.make Reachable.state false in
     let rec enter parent (st, _) =
-      if not (Vector.get visited st) then (
-        let node = add_node parent st in
-        Vector.set visited st true;
-        Reachable.iter_targets
-          (Vector.get Reachable.states st).transitions
-          (enter node)
-      )
+      if not (Vector.get visited st) then
+        visit (add_node parent st) st
+    and visit node st =
+      Vector.set visited st true;
+      Reachable.iter_targets
+        (Vector.get Reachable.states st).transitions
+        (enter node)
     in
     IndexMap.map (fun st ->
         let node = { depth = 1; next = [] } in
-        Reachable.iter_targets
-          (Vector.get Reachable.states st).transitions
-          (enter node);
+        visit node st;
         node
       ) Reachable.initial
 
@@ -177,12 +175,8 @@ module Lookahead_coverage = struct
     node: 'a node;
   } -> status
 
-  let root lrc ~accepted ~rejected tr =
-    let committed =
-      Reachable.fold_targets (fun acc (st, _) ->
-          IndexSet.union (Reachable.potential_reject_after st) acc
-        ) IndexSet.empty tr
-    in
+  let root lrc ~accepted ~rejected st =
+    let committed = Reachable.potential_reject_after st in
     let committed = IndexSet.diff committed accepted in
     let committed = IndexSet.diff committed rejected in
     {state = lrc; depth = 0; committed; rejected; next = []}
@@ -241,9 +235,9 @@ module Lookahead_coverage = struct
       let lr1 = Lrc.lr1_of_lrc lrc in
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
-      let trs = (Vector.get Reachable.states st).transitions in
-      let node = root lrc ~accepted ~rejected trs in
-      Reachable.iter_targets trs
+      let node = root lrc ~accepted ~rejected st in
+      Reachable.iter_targets
+        (Vector.get Reachable.states st).transitions
         (fun tr -> visit (Status {accepted; node}) tr);
       node
     ) Reachable.initial
@@ -264,11 +258,10 @@ module Lookahead_coverage = struct
           let lr1 = Lrc.lr1_of_lrc lrc in
           let accepted = Lr1.shift_on lr1 in
           let rejected = Lr1.reject lr1 in
-          let trs = (Vector.get Reachable.states st).transitions in
-          let node = root lrc ~accepted ~rejected trs in
-          Reachable.iter_targets trs (fun tr ->
-              todo := (Status {accepted; node}, tr) :: !todo;
-            );
+          let node = root lrc ~accepted ~rejected st in
+          Reachable.iter_targets
+            (Vector.get Reachable.states st).transitions
+            (fun tr -> Misc.push todo (Status {accepted; node}, tr));
           node
         ) Reachable.initial
       in
@@ -340,7 +333,6 @@ module Lookahead_coverage = struct
     IndexMap.iter (fun lrc node -> ignore (visit_suffix (Top lrc) node)) map
 
   let () =
-    if false then
     let rec print_suffix = function
       | Top lrc ->
         let lr1 = Lrc.lr1_of_lrc lrc in
