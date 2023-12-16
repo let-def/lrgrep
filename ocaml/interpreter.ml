@@ -186,7 +186,10 @@ let process_result lexbuf = function
         if i = 0 then (
           let top, _ = List.hd stack in
           let la = Info.Terminal.all in
-          let tr = Vector.get Regexp.Redgraph.initial top in
+          let tr =
+            Regexp.Redgraph.get_transitions
+              (Vector.get Regexp.Redgraph.initial top)
+          in
           outer := display_steps la 0 [la, tr.outer] tr.inner
         ) else (
           let rec process_steps acc = function

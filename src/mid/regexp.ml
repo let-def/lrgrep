@@ -481,7 +481,7 @@ struct
           let ks' = ref [] in
           let matching =
             IndexSet.filter (fun lr1 ->
-                let steps = Vector.get Redgraph.initial lr1 in
+                let steps = Redgraph.get_transitions (Vector.get Redgraph.initial lr1) in
                 let on_outer reduction = function
                   | (step :: _) as transitions when live_redstep reduction step ->
                     let label = {label with filter = IndexSet.singleton lr1} in

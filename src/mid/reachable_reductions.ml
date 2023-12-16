@@ -569,8 +569,13 @@ sig
     outer: target list list;
   }
 
-  val initial : transitions Lrc.map
-  val states : (state, config * transitions) vector
+  type desc = {
+    config: config;
+    transitions: transitions;
+  }
+
+  val initial : state index Lrc.map
+  val states : (state, desc) vector
 
   val successors : (state, state indexset) vector
   val predecessors : (state, state indexset) vector
@@ -625,6 +630,11 @@ struct
     outer: target list list;
   }
 
+  type desc = {
+    config: config;
+    transitions: transitions;
+  }
+
   let states = State.get_generator ()
 
   let nodes = Hashtbl.create 7
@@ -654,7 +664,7 @@ struct
       Hashtbl.add nodes config index;
       let transitions = Viable.get_transitions config.source in
       IndexBuffer.Gen.commit states reservation
-        (config, visit_transitions config.lrcs transitions);
+        {config; transitions = visit_transitions config.lrcs transitions};
       index
 
   and visit_outer lrcs {Viable.candidates; _} rest =
@@ -674,9 +684,9 @@ struct
 
   let initial =
     let process lrc =
-      visit_transitions
-        (Lrc.predecessors lrc)
-        (Vector.get Viable.initial (Lrc.lr1_of_lrc lrc))
+      let source = Vector.get Viable.initial (Lrc.lr1_of_lrc lrc) in
+      let lrcs = IndexSet.singleton lrc in
+      visit_config {source; lrcs}
     in
     IndexMap.inflate process Lrc.idle
 
@@ -703,34 +713,37 @@ struct
     acc
 
   let successors =
-    Vector.map (fun (_config, transitions) ->
+    Vector.map (fun desc ->
         rev_fold_targets
           (fun (st, _) acc -> IndexSet.add st acc)
-          transitions IndexSet.empty
+          desc.transitions IndexSet.empty
       ) states
 
   let predecessors =
     Misc.relation_reverse successors
 
   let immediate_reject st =
-    let config, _ = Vector.get states st in
-    let viable = Viable.get_config config.source in
+    let desc = Vector.get states st in
+    let viable = Viable.get_config desc.config.source in
     Lr1.reject viable.top
 
   let immediate_accept st =
-    let config, _ = Vector.get states st in
-    let viable = Viable.get_config config.source in
+    let desc = Vector.get states st in
+    let viable = Viable.get_config desc.config.source in
     Lr1.shift_on viable.top
 
 
   let unreachable_lookaheads =
     let table = Vector.make state Terminal.all in
     IndexMap.iter
-      (fun lrc transitions ->
+      (fun lrc st ->
          let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
-         iter_targets transitions (fun (st, _red) ->
-             let set = Terminal.intersect unreachable (Vector.get table st) in
-             Vector.set table st set)
+         iter_targets
+           (Vector.get states st).transitions
+           (fun (st, _red) ->
+              let set = Terminal.intersect unreachable (Vector.get table st) in
+              Vector.set table st set
+           )
       ) initial;
     fixpoint successors table
       ~propagate:(fun _src set1 tgt set2 ->

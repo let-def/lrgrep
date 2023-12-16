@@ -34,7 +34,7 @@ module type S = sig
     lookahead: Terminal.set;
   }
 
-  val initial : (Lr1.n, transitions) vector
+  val initial : (Lr1.n, state index) vector
 
   val get_config : state index -> config
   val get_stack : state index -> Lr1.t list
@@ -178,7 +178,7 @@ struct
         rest = [];
         lookahead = Terminal.all;
       } in
-      visit_transitions config
+      visit_config config
     )
 
   let states = IndexBuffer.Gen.freeze states
@@ -218,7 +218,7 @@ struct
 
   let states = Vector.map (fun (stack, steps) -> (stack, make_reduction_step steps)) states
 
-  let initial = Vector.map make_reduction_step initial
+  (*let initial = Vector.map make_reduction_step initial*)
   let reachable = Vector.get reachable
 
   let get_def = Vector.get states
