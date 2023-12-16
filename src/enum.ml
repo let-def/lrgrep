@@ -158,38 +158,36 @@ end
 module Lookahead_coverage = struct
   open Info
 
-  type 'a node = {
-    state: 'a;
+  type node = {
+    state: Reachable.state index;
     depth: int;
     committed: Terminal.set;
     rejected: Terminal.set;
-    mutable next: tree list;
+    mutable next: (Info.Reduction.t * node) list;
   }
 
-  and tree = (Reachable.state index * Info.Reduction.t) node
-
-  type root = Lrc.t node
-
-  type status = Status : {
+  type status = {
     accepted: Terminal.set;
-    node: 'a node;
-  } -> status
+    node: node;
+  }
 
-  let root lrc ~accepted ~rejected st =
-    let committed = Reachable.potential_reject_after st in
+  let root state ~accepted ~rejected =
+    let committed = Reachable.potential_reject_after state in
     let committed = IndexSet.diff committed accepted in
     let committed = IndexSet.diff committed rejected in
-    {state = lrc; depth = 0; committed; rejected; next = []}
+    {state; depth = 1; committed; rejected; next = []}
 
-  let add_node parent ~committed ~rejected state =
+  let add_node parent ~committed ~rejected (state, reduction) =
     let node = {state; depth = parent.depth + 1; committed; rejected; next = []} in
-    parent.next <- node :: parent.next;
+    parent.next <- (reduction, node) :: parent.next;
     node
 
-  let rec count : type a. (int * int) -> a node -> (int * int) =
-    fun (sum, steps as acc) -> function
-      | { next = []; depth; _ } -> (sum + 1, steps + depth)
-      | { next; _ } -> List.fold_left count acc next
+  let rec count (sum, steps as acc) = function
+    | { next = []; depth; _ } -> (sum + 1, steps + depth)
+    | { next; _ } -> List.fold_left count_transitions acc next
+
+  and count_transitions acc (_, node) =
+    count acc node
 
   let measure map =
     let count, steps =
@@ -202,7 +200,7 @@ module Lookahead_coverage = struct
   let enter () =
     let node_pra = Vector.init Reachable.state Reachable.potential_reject_after in
     let node_prb = Vector.init Reachable.state Reachable.potential_reject_before in
-    fun (Status status) (st, _red as tr) ->
+    fun status (st, _red as tr) ->
     let rejected = IndexSet.diff (Reachable.immediate_reject st) status.accepted in
     let accepted = IndexSet.diff (Reachable.immediate_accept st) status.node.rejected in
     let rejected = IndexSet.union rejected status.node.rejected in
@@ -218,7 +216,7 @@ module Lookahead_coverage = struct
       let node = add_node status.node ~committed ~rejected tr in
       Vector.set node_prb st prb';
       Vector.set node_pra st (IndexSet.diff pra pra');
-      Some (Status {accepted; node})
+      Some {accepted; node}
     )
 
   let dfs =
@@ -235,10 +233,10 @@ module Lookahead_coverage = struct
       let lr1 = Lrc.lr1_of_lrc lrc in
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
-      let node = root lrc ~accepted ~rejected st in
+      let node = root ~accepted ~rejected st in
       Reachable.iter_targets
         (Vector.get Reachable.states st).transitions
-        (fun tr -> visit (Status {accepted; node}) tr);
+        (fun tr -> visit {accepted; node} tr);
       node
     ) Reachable.initial
 
@@ -258,10 +256,10 @@ module Lookahead_coverage = struct
           let lr1 = Lrc.lr1_of_lrc lrc in
           let accepted = Lr1.shift_on lr1 in
           let rejected = Lr1.reject lr1 in
-          let node = root lrc ~accepted ~rejected st in
+          let node = root ~accepted ~rejected st in
           Reachable.iter_targets
             (Vector.get Reachable.states st).transitions
-            (fun tr -> Misc.push todo (Status {accepted; node}, tr));
+            (fun tr -> Misc.push todo ({accepted; node}, tr));
           node
         ) Reachable.initial
       in
@@ -280,8 +278,7 @@ module Lookahead_coverage = struct
   let measure_lookaheads map =
     let count = ref 0 in
     let remainder = ref 0 in
-    let rec visit : type a . a node -> Terminal.n IndexSet.t =
-      fun node ->
+    let rec visit node =
       let rejected =
         match node.next with
         | [] ->
@@ -289,7 +286,7 @@ module Lookahead_coverage = struct
           node.rejected
         | children ->
           List.fold_left
-            (fun acc node -> IndexSet.union acc (visit node))
+            (fun acc (_, node) -> IndexSet.union acc (visit node))
             IndexSet.empty children
       in
       assert (IndexSet.subset node.rejected rejected);
@@ -305,13 +302,13 @@ module Lookahead_coverage = struct
       (measure_lookaheads bfs)
 
   type suffix =
-    | Top of Lrc.t
-    | Reduce of (Reachable.state index * Info.Reduction.t) * suffix
+    | Top of Reachable.state index
+    | Reduce of Reachable.state index * Info.Reduction.t * suffix
 
   type protosentence = suffix * Terminal.set
 
   let enum_sentences map f =
-    let rec visit_suffix : type a. suffix -> a node -> Terminal.set =
+    let rec visit_node : suffix -> node -> Terminal.set =
       fun suffix node ->
       let rejected =
         match node.next with
@@ -320,25 +317,31 @@ module Lookahead_coverage = struct
           node.rejected
         | children ->
           List.fold_left
-            (fun acc node -> IndexSet.union acc (visit_node suffix node))
+            (fun acc node -> IndexSet.union acc (visit_child suffix node))
             IndexSet.empty children
       in
       assert (IndexSet.subset node.rejected rejected);
       let remainder = IndexSet.diff node.committed rejected in
       ignore remainder; (*TODO*)
       IndexSet.union rejected node.committed
-    and visit_node suffix node =
-      visit_suffix (Reduce (node.state, suffix)) node
+    and visit_child suffix (reduction, node) =
+      visit_node (Reduce (node.state, reduction, suffix)) node
     in
-    IndexMap.iter (fun lrc node -> ignore (visit_suffix (Top lrc) node)) map
+    IndexMap.iter (fun _lrc node -> ignore (visit_node (Top node.state) node)) map
 
   let () =
     let rec print_suffix = function
-      | Top lrc ->
-        let lr1 = Lrc.lr1_of_lrc lrc in
+      | Top state ->
+        let desc = Vector.get Reachable.states state in
+        let lr1 = Lrc.lr1_of_lrc (IndexSet.choose desc.config.lrcs) in
         print_string (Lr1.to_string lr1)
-      | Reduce ((redn, _red), suffix) ->
-        print_string ("redn:" ^ Misc.string_of_index redn ^ " ");
+      | Reduce (_state, reduction, suffix) ->
+        let prod = Reduction.production reduction in
+        let lhs = Production.lhs prod in
+        let rhs = Production.rhs prod in
+        Printf.printf "[%s: %s] "
+          (Nonterminal.to_string lhs)
+          (Misc.string_concat_map " " Symbol.name (Array.to_list rhs));
         print_suffix suffix
     in
     enum_sentences bfs (fun suffix lookaheads ->
