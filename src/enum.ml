@@ -155,15 +155,17 @@ module Reduction_coverage = struct
   let () = Printf.eprintf "Reduction coverage: dfs:%s, bfs:%s\n%!" (measure dfs) (measure bfs)
 end
 
+let lrc_successors =
+  Vector.get (Misc.relation_reverse' Lrc.n Lrc.predecessors)
+
 let lrc_prefix =
-  let successors = Misc.relation_reverse' Lrc.n Lrc.predecessors in
   let table = Vector.make Lrc.n [] in
   let expand prefix state acc =
     match Vector.get table state with
     | [] ->
       Vector.set table state prefix;
       let prefix = state :: prefix in
-      let successors = Vector.get successors state in
+      let successors = lrc_successors state in
       if IndexSet.is_empty successors then
         acc
       else
@@ -336,8 +338,6 @@ module Lookahead_coverage = struct
     | Top of Reachable.state index
     | Reduce of Reachable.state index * Info.Reduction.t * suffix
 
-  type protosentence = suffix * Terminal.set
-
   let enum_sentences map f =
     let rec visit_node : suffix -> node -> Terminal.set =
       fun suffix node ->
@@ -360,8 +360,59 @@ module Lookahead_coverage = struct
     in
     IndexMap.iter (fun _lrc node -> ignore (visit_node (Top node.state) node)) map
 
+  (*let prepend_reduction _st0 red st1 suffix =
+    let stack =
+      Misc.list_drop (Production.length (Reduction.production red))
+        (Viable.get_stack (Vector.get Reachable.states st1).config.source)
+    in
+    List.filter_map Lr1.incoming stack @ suffix*)
+
+  module Form_generator : sig
+    type t
+    val start : Lrc.set -> t
+    val grow : Lrc.set -> int -> t -> t
+    val finish : t -> Lrc.set list
+  end = struct
+    type t = Lrc.set list
+
+    let start x = [x]
+
+    let grow x n t =
+      let y = List.hd t in
+      if n <= 0 then (
+        assert (IndexSet.subset x y);
+        t
+      ) else (
+        let rec candidates acc y = function
+          | 1 -> x :: acc
+          | n ->
+            let y' = Misc.indexset_bind y Lrc.predecessors in
+            candidates (y' :: acc) y' (n - 1)
+        in
+        let rec prepend = function
+          | [] -> assert false
+          | [x] -> x :: t
+          | x :: y :: ys ->
+            let y' = Misc.indexset_bind x lrc_successors in
+            let y' = IndexSet.inter y y' in
+            assert (not (IndexSet.is_empty y'));
+            x :: prepend (y' :: ys)
+        in
+        prepend (candidates [] y n)
+      )
+
+    (*let rec finish = function
+      | [] -> []
+      | x :: xs ->
+        match finish xs with
+        | [] -> [x]
+        | x' :: _ as xs' ->
+          IndexSet.inter x (Misc.indexset_bind x' Lrc.predecessors) :: xs'*)
+    let finish x = x
+  end
+
   let () =
-    let rec print_suffix = function
+    (*let rec print_suffix = function
       | Top state ->
         let desc = Vector.get Reachable.states state in
         let lr1 = Lrc.lr1_of_lrc (IndexSet.choose desc.config.lrcs) in
@@ -375,10 +426,109 @@ module Lookahead_coverage = struct
           (Misc.string_concat_map " " Symbol.name (Array.to_list rhs));
         print_suffix suffix
     in
-    enum_sentences bfs (fun suffix lookaheads ->
-        print_suffix suffix;
+    let rec get_symbols = function
+      | Top state ->
+        let sentence =
+          (Vector.get Reachable.states state).config.lrcs
+          |> IndexSet.choose
+          |> Lrc.lr1_of_lrc
+          |> Lr1.incoming
+          |> Option.to_list
+        in
+        state, sentence
+      | Reduce (st', red, suffix) ->
+        let st, sentence = get_symbols suffix in
+        let sentence = prepend_reduction st' red st sentence in
+        (st', sentence)
+    in*)
+    let print_stack state =
+      let viable = (Vector.get Reachable.states state).config.source in
+      let stack = Viable.get_stack viable in
+      let lr1s = List.rev (List.filter_map Lr1.incoming stack) in
+      Printf.printf "stack: %s\n" (Misc.string_concat_map " " Symbol.name lr1s)
+    in
+    let print_reduction red =
+      let prod = Reduction.production red in
+      let lhs = Production.lhs prod in
+      let rhs = Production.rhs prod in
+      Printf.printf "[%s: %s]\n"
+        (Nonterminal.to_string lhs)
+        (Misc.string_concat_map " " Symbol.name (Array.to_list rhs));
+    in
+    let consumed_symbols red state =
+      let desc = Vector.get Reachable.states state in
+      let stack = Viable.get_stack desc.config.source in
+      let rhs = Production.rhs (Reduction.production red) in
+      let count = Array.length rhs - List.length stack in
+      if count > 0 then (
+        let symbols = Array.sub rhs 0 count in
+        Array.to_list symbols
+      ) else []
+    in
+    let construct_form suffix =
+      let rec loop =  function
+        | Top state ->
+          let lrcs = (Vector.get Reachable.states state).config.lrcs in
+          (state, Form_generator.start lrcs)
+        | Reduce (state, red, suffix) ->
+          let state', gen = loop suffix in
+          let lrcs = (Vector.get Reachable.states state).config.lrcs in
+          let stack = Viable.get_stack (Vector.get Reachable.states state').config.source in
+          let count = Production.length (Reduction.production red) - List.length stack in
+          (state, Form_generator.grow lrcs count gen)
+      in
+      let _, gen = loop suffix in
+      Form_generator.finish gen
+    in
+    let rec dump_suffix = function
+      | Top state ->
+        Printf.printf "top symbol: %s\n"
+          (Misc.string_concat_map " " Symbol.name
+             (Option.to_list
+                (Lr1.incoming
+                   (Lrc.lr1_of_lrc
+                      (IndexSet.choose
+                         (Vector.get Reachable.states state).config.lrcs)))));
+        print_stack state;
+        state
+      | Reduce (state, red, suffix) ->
+        let state' = dump_suffix suffix in
+        let symbols = consumed_symbols red state' in
+        if symbols <> [] then
+          Printf.printf "symbols: %s\n"
+            (Misc.string_concat_map " " Symbol.name symbols);
+        print_reduction red;
+        print_stack state;
+        state
+    in
+    let dump_prefix (Top state | Reduce (state, _, _)) =
+      let lrc = IndexSet.choose (Vector.get Reachable.states state).config.lrcs in
+      let prefix = lrc_prefix lrc in
+      let prefix = List.filter_map Lr1.incoming (List.rev_map Lrc.lr1_of_lrc prefix) in
+      Printf.printf "prefix: %s\n"
+        (Misc.string_concat_map " " Symbol.name prefix)
+    in
+    enum_sentences dfs (fun suffix lookaheads ->
+        print_endline "------------";
+        ignore (dump_suffix suffix);
+        dump_prefix suffix;
+        begin
+          let rec select_one = function
+            | [] -> []
+            | [x] -> [IndexSet.choose x]
+            | x :: y :: ys ->
+              let x = IndexSet.choose x in
+              x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
+          in
+          let form = select_one (construct_form suffix) in
+          let form = lrc_prefix (List.hd form) @ form in
+          print_string (
+            Misc.string_concat_map " "
+              (fun x -> Lr1.to_string (Lrc.lr1_of_lrc x)) form
+          )
+        end;
         print_newline ();
         print_endline (Misc.string_of_indexset ~index:Terminal.to_string lookaheads)
-    )
+      )
 
 end
