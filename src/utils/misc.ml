@@ -127,6 +127,14 @@ let vector_set_union vec index value =
 let tabulate_finset n f =
   Vector.get (Vector.init n f)
 
+let relation_reverse' n f =
+  let rev = Vector.make n IndexSet.empty in
+  Index.rev_iter n (fun src ->
+      IndexSet.iter (fun tgt -> vector_set_add rev tgt src)
+        (f src)
+    );
+  rev
+
 let relation_reverse rel =
   let rev = Vector.make (Vector.length rel) IndexSet.empty in
   Vector.rev_iteri (fun src tgts ->
@@ -299,3 +307,7 @@ let rec list_rev_iter f = function
   | [x1] ->
     f x1
   | [] -> ()
+
+let rec list_drop n = function
+  | _ :: xs when n > 0 -> list_drop (n - 1) xs
+  | xs -> xs
