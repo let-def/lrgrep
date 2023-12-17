@@ -155,6 +155,37 @@ module Reduction_coverage = struct
   let () = Printf.eprintf "Reduction coverage: dfs:%s, bfs:%s\n%!" (measure dfs) (measure bfs)
 end
 
+let lrc_prefix =
+  let successors = Misc.relation_reverse' Lrc.n Lrc.predecessors in
+  let table = Vector.make Lrc.n [] in
+  let expand prefix state acc =
+    match Vector.get table state with
+    | [] ->
+      Vector.set table state prefix;
+      let prefix = state :: prefix in
+      let successors = Vector.get successors state in
+      if IndexSet.is_empty successors then
+        acc
+      else
+        ((successors, prefix) :: acc)
+    | _ -> acc
+  in
+  let visit acc (successors, prefix) =
+    IndexSet.fold (expand prefix) successors acc
+  in
+  let rec loop = function
+    | [] -> ()
+    | other -> loop (List.fold_left visit [] other)
+  in
+  let todo = ref [] in
+  Index.iter Info.Lr1.n (fun lr1 ->
+      if Option.is_none (Info.Lr1.incoming lr1) then
+        todo := expand [] (Lrc.first_lrc_of_lr1 lr1) !todo
+    );
+  loop !todo;
+  Vector.get table
+
+
 module Lookahead_coverage = struct
   open Info
 
