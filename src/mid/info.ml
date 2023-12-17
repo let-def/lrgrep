@@ -471,8 +471,9 @@ struct
       Option.map Symbol.of_g (Grammar.Lr0.incoming (to_lr0 lr1))
 
     let idle = IndexSet.init_from_set n (fun lr1 ->
-        match incoming lr1 with
-        | Some sym -> Symbol.is_terminal sym
+        match Option.map Symbol.desc (incoming lr1) with
+        | Some (N _) -> false
+        | Some (T t) -> Grammar.Terminal.kind (Terminal.to_g t) = `REGULAR
         | None -> true
       )
 
@@ -597,7 +598,7 @@ struct
         n := !n + List.length reds;
         reds
       in
-      Vector.init Lr1.n import_lr1 
+      Vector.init Lr1.n import_lr1
 
     include Const(struct let cardinal = !n end)
 
@@ -608,7 +609,7 @@ struct
     let state = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
     let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
     let lookaheads = Vector.make n IndexSet.empty
-    let from_lr1 = 
+    let from_lr1 =
       let enum = Index.enumerate n in
       Vector.mapi (fun lr1 reds ->
           List.fold_left (fun set (prod, la) ->
