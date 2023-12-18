@@ -20,6 +20,7 @@ module Make
 sig
   include S with module Info := I
   val lookahead : n index -> I.Terminal.set
+  val class_index : n index -> int
 end =
 struct
   open I
@@ -44,8 +45,9 @@ struct
   let index_delta (type n) (i : n index) (j : n index) =
     (i :> int) - (j :> int)
 
-  let lr1_of_lrc, lrcs_of_lr1, first_lrc_of_lr1 =
-    let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0) in
+  let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
+
+  let lrcs_of_lr1 =
     let count = ref 0 in
     let init_lr1 lr1 =
       let classes = Reachability.Classes.for_lr1 lr1 in
@@ -60,13 +62,20 @@ struct
       done;
       !all
     in
-    let lrcs_of_lr1 = Vector.init Lr1.n init_lr1 in
-    (Vector.get lr1_of_lrc,
-      Vector.get lrcs_of_lr1,
-      (fun lr1 -> Option.get (IndexSet.minimum (Vector.get lrcs_of_lr1 lr1)))
-    )
+    Vector.init Lr1.n init_lr1
+
+  let first_lrc_of_lr1 = Vector.map (fun x -> Option.get (IndexSet.minimum x)) lrcs_of_lr1
+
+  let lr1_of_lrc       = Vector.get lr1_of_lrc
+  let lrcs_of_lr1      = Vector.get lrcs_of_lr1
+  let first_lrc_of_lr1 = Vector.get first_lrc_of_lr1
 
   let idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
+
+  let class_index lrc =
+    let lr1 = lr1_of_lrc lrc in
+    let lrc0 = first_lrc_of_lr1 lr1 in
+    index_delta lrc lrc0
 
   let lookahead lrc =
     let lr1 = lr1_of_lrc lrc in
