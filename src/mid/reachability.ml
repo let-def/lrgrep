@@ -16,77 +16,21 @@ module type S = sig
   module Info : Info.S
   open Info
 
-  module Unreduce :
-  sig
-    type t = {
-      production : Production.t;
-      lookahead : Terminal.set;
-      steps : Transition.any index list;
-      state : Lr1.t;
-    }
-    val goto_transition : Transition.goto index -> t list
+  module Classes : sig
+    val for_edge : Transition.goto index -> Terminal.set array
+    val for_lr1 : Lr1.t -> Terminal.set array
+    val pre_transition : Transition.any index -> Terminal.set array
+    val post_transition : Transition.any index -> Terminal.set array
   end
-  module Classes :
-  sig
-    module Node :
-    sig
-      type l = Lr1.n
-      and r = Transition.goto
-      type n
-      val n : n cardinal
-      val inj_l : l index -> n index
-      val inj_r : r index -> n index
-      val prj : n index -> (l index, r index) either
-    end
-    module Gr :
-    sig
-      type node = Node.n index
-      val n : int
-      val index : 'a index -> int
-      val visit_lr1 : (Node.n index -> unit) -> Lr1.t -> unit
-      val successors : (Node.n index -> unit) -> Node.n index -> unit
-      val iter : (Node.n index -> unit) -> unit
-    end
-    module Scc :
-    sig
-      val representative : Gr.node -> Gr.node
-      val scc : Gr.node -> Gr.node list
-      val iter : (Gr.node -> Gr.node list -> unit) -> unit
-      val rev_topological_iter :
-        (Gr.node -> Gr.node list -> unit) -> unit
-      val map : (Gr.node -> Gr.node list -> 'a) -> 'a list
-      val rev_map : (Gr.node -> Gr.node list -> 'a) -> 'a list
-    end
-    val classes_of :
-        Terminal.set list ->
-      Node.n index -> Terminal.set list
-    val visit_scc : 'a -> Node.n index list -> unit
-    val classes : (Node.n, Terminal.set array) vector
-    val for_edge : Node.r index -> Terminal.set array
-    val for_lr1 : Node.l index -> Terminal.set array
-    val t_singletons :
-        Terminal.n index -> Terminal.set array
-    val pre_transition :
-        Transition.any index -> Terminal.set array
-    val post_transition :
-        Transition.any index -> Terminal.set array
-  end
-  module Tree :
-  sig
+  module Tree : sig
     include CARDINAL
-    module Inner : CARDINAL
     val leaf : Transition.any index -> n index
-    val node : n index -> n index -> n index
-    val inject : Inner.n index -> n index
-    val split : n index -> (Transition.any index, Inner.n index) either
-    val define : Inner.n index -> n index * n index
-    val table_pre : (Inner.n, Terminal.set array) vector
-    val table_post : (Inner.n, Terminal.set array) vector
+    val split : n index -> (Transition.any index, n index * n index) either
+    val goto_equations : Transition.goto index -> Terminal.set * (n index * Terminal.set) list
     val pre_classes : n index -> Terminal.set array
     val post_classes : n index -> Terminal.set array
   end
-  module Cells :
-  sig
+  module Cells : sig
     type t = private int
     type offset = int
     type row = int
@@ -102,8 +46,7 @@ module type S = sig
     val encode : Tree.n index -> row -> column -> t
     val decode : t -> Tree.n index * row * column
   end
-  module Coercion :
-  sig
+  module Coercion : sig
     type pre = Pre_identity | Pre_singleton of int
     val pre : 'a indexset array -> 'a indexset array -> pre option
     type forward = int array array
@@ -115,7 +58,7 @@ module type S = sig
   end
 end
 
-module Make (Info : Info.S)() =
+module Make (Info : Info.S)() : S with module Info := Info =
 struct
   let time = Stopwatch.enter Stopwatch.main "Reachability"
 
@@ -379,10 +322,7 @@ struct
 
     (* Precompute the singleton partitions, e.g. { {t}, T/{t} } for each t *)
     let t_singletons =
-      let table =
-        Vector.init Terminal.n (fun t -> [|IndexSet.singleton t|])
-      in
-      fun t -> Vector.get table t
+      Vector.init Terminal.n (fun t -> [|IndexSet.singleton t|])
 
     let all_terminals =
       [|Terminal.all|]
@@ -394,7 +334,7 @@ struct
     *)
     let pre_transition tr =
       match Symbol.desc (Transition.symbol tr) with
-      | T t -> t_singletons t
+      | T t -> Vector.get t_singletons t
       | N _ -> for_lr1 (Transition.source tr)
 
     (* Just after taking a transition [tr], the lookahead has to belong to
@@ -512,7 +452,7 @@ struct
          - otherwise,
            [non_nullable] contains the pair [ccost(𝑠, 𝐴→𝜖•𝛼)], [creduce(𝑠, 𝐴→𝛼)}
       *)
-      Vector.init Transition.goto @@ fun tr ->
+      tabulate_finset Transition.goto @@ fun tr ->
       (* Number of rows in the compact cost matrix for tr *)
       let first_dim =
         Array.length (Classes.pre_transition (Transition.of_goto tr))
@@ -564,6 +504,11 @@ struct
       let l, r = define node in
       Vector.set table_pre node (pre_classes l);
       Vector.set table_post node (post_classes r)
+
+    let split i = match split i with
+      | L _ as result -> result
+      | R n -> R (define n)
+
   end
 
   (* ---------------------------------------------------------------------- *)
@@ -871,7 +816,7 @@ struct
       let node = Tree.leaf (Transition.of_goto tr) in
       let pre = Tree.pre_classes node in
       let post = Tree.post_classes node in
-      let nullable, non_nullable = Vector.get Tree.goto_equations tr in
+      let nullable, non_nullable = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
       if not (IndexSet.is_empty nullable) then (
         let offset_of = Cells.offset node in
