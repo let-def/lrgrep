@@ -66,7 +66,6 @@ module type S = sig
     val for_lr1 : Node.l index -> Terminal.set array
     val t_singletons :
         Terminal.n index -> Terminal.set array
-    val all_terminals : Terminal.set array
     val pre_transition :
         Transition.any index -> Terminal.set array
     val post_transition :
@@ -80,10 +79,6 @@ module type S = sig
     val node : n index -> n index -> n index
     val inject : Inner.n index -> n index
     val split : n index -> (Transition.any index, Inner.n index) either
-    val goto_equations :
-      (Transition.goto,
-        Terminal.set * (n index * Terminal.set) list)
-      vector
     val define : Inner.n index -> n index * n index
     val table_pre : (Inner.n, Terminal.set array) vector
     val table_post : (Inner.n, Terminal.set array) vector

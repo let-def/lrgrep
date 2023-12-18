@@ -411,6 +411,9 @@ module Lookahead_coverage = struct
     let finish x = x
   end
 
+  (*let lrc_to_terminals lrc =
+    Lrc*)
+
   let () =
     (*let rec print_suffix = function
       | Top state ->
@@ -510,8 +513,10 @@ module Lookahead_coverage = struct
     in
     enum_sentences dfs (fun suffix lookaheads ->
         print_endline "------------";
-        ignore (dump_suffix suffix);
-        dump_prefix suffix;
+        if false then (
+          ignore (dump_suffix suffix);
+          dump_prefix suffix;
+        );
         begin
           let rec select_one = function
             | [] -> []
@@ -521,7 +526,7 @@ module Lookahead_coverage = struct
               x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
           in
           let form = select_one (construct_form suffix) in
-          let form = lrc_prefix (List.hd form) @ form in
+          let form = List.rev_append (lrc_prefix (List.hd form)) form in
           print_string (
             Misc.string_concat_map " "
               (fun x -> Lr1.to_string (Lrc.lr1_of_lrc x)) form
