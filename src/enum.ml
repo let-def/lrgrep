@@ -1,5 +1,4 @@
 open Utils
-module StringSet = Set.Make(String)
 
 (* Command-line parsing. *)
 
@@ -55,18 +54,6 @@ let () = Stopwatch.step Stopwatch.main "Beginning"
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
 
 let () = Stopwatch.step Stopwatch.main "Loaded grammar"
-
-type 'a closure = {
-  ler: 'a;
-  rel_star: 'a;
-  ler_star: 'a;
-}
-
-let closure_and_reversal rel =
-  let ler = Misc.relation_reverse rel in
-  let rel_star = Misc.relation_closure ~reverse:ler rel in
-  let ler_star = Misc.relation_closure ~reverse:rel ler in
-  {ler;rel_star;ler_star}
 
 module Info = Mid.Info.Make(Grammar)
 module Viable = Mid.Viable_reductions.Make(Info)()
@@ -411,8 +398,149 @@ module Lookahead_coverage = struct
     let finish x = x
   end
 
-  (*let lrc_to_terminals lrc =
-    Lrc*)
+  let rec cells_of_lrc_list = function
+    | [] -> assert false
+    | [_] ->  []
+    | (x :: (y :: _ as tail)) ->
+      let xl = Lrc.lr1_of_lrc x in
+      let yl = Lrc.lr1_of_lrc y in
+      let yi = Lrc.class_index y in
+      let tr =
+        List.find
+          (fun tr -> Transition.source tr = xl)
+          (Transition.predecessors yl)
+      in
+      let open Reachability in
+      let xi =
+        match Classes.pre_transition tr with
+        | [|c_pre|] when IndexSet.is_singleton c_pre ->
+          if not (IndexSet.subset c_pre (Lrc.lookahead x)) then (
+            Printf.eprintf "pre:%s expected:%s\nfrom:%s to:%s after:%s\n%!"
+              (Misc.string_of_indexset ~index:Terminal.to_string c_pre)
+              (Misc.string_of_indexset ~index:Terminal.to_string (Lrc.lookahead x))
+              (Lr1.to_string xl)
+              (Lr1.to_string yl)
+              (if IndexSet.equal (Lrc.lookahead y) Terminal.all
+               then "all"
+               else Misc.string_of_indexset ~index:Terminal.to_string (Lrc.lookahead y))
+            ;
+            assert false
+          );
+          0
+        | _ -> Lrc.class_index x
+      in
+      let yi = (Coercion.infix (Classes.post_transition tr) (Classes.for_lr1 yl)).backward.(yi)
+      in
+      Cells.encode (Tree.leaf tr) xi yi :: cells_of_lrc_list tail
+
+  (*let expand_node xi node yi acc =
+    let open Reachability in
+    match Cells.cost (Cells.encode node xi yi) with
+    | 0 -> acc
+    | n ->
+      let _null, eqns = Tree.goto_equations goto in
+      let pre = Tree.pre_classes node in
+      let check_eqn (node', lookahead) =
+        match Coercion.pre pre (Tree.pre_classes node') with
+        | None -> None
+        | Some (Pre_singleton xi') ->
+          if xi = xi' then
+            Some (expand_transition (0,
+                                     | Some Pre_identity ->
+      in
+      Option.get (List.find_map check_eqn eqns)*)
+
+  exception Break of Terminal.t list
+
+  let rec prepend_word cell acc =
+    let open Reachability in
+    let node, i_pre, i_post = Cells.decode cell in
+    match Tree.split node with
+    | L tr ->
+      (* The node corresponds to a transition *)
+      begin match Transition.split tr with
+        | R shift ->
+          (* It is a shift transition, just shift the symbol *)
+          Transition.shift_symbol shift :: acc
+        | L goto ->
+          (* It is a goto transition *)
+          let nullable, non_nullable = Tree.goto_equations goto in
+          let c_pre = (Tree.pre_classes node).(i_pre) in
+          let c_post = (Tree.post_classes node).(i_post) in
+          if not (IndexSet.is_empty nullable) &&
+             IndexSet.quick_subset c_post nullable &&
+             not (IndexSet.disjoint c_pre c_post) then
+            (* If a nullable reduction is possible, don't do anything *)
+            acc
+          else
+            (* Otherwise look at all equations that define the cost of the
+               goto transition and recursively visit one of minimal cost *)
+            let current_cost = Cells.cost cell in
+            match
+              List.find_map (fun (node', lookahead) ->
+                  if IndexSet.disjoint c_post lookahead then
+                    (* The post lookahead class does not permit reducing this
+                       production *)
+                    None
+                  else
+                    let costs = Vector.get Cells.table node' in
+                    match Tree.pre_classes node' with
+                    | [|c_pre'|] when IndexSet.disjoint c_pre' c_pre ->
+                      (* The pre lookahead class does not allow to enter this
+                         branch. *)
+                      None
+                    | pre' ->
+                      (* Visit all lookahead classes, pre and post, and find
+                         the mapping between the parent node and this
+                         sub-node *)
+                      let pred_pre _ c_pre' = IndexSet.quick_subset c_pre' c_pre in
+                      let pred_post _ c_post' = IndexSet.quick_subset c_post c_post' in
+                      match
+                        Misc.array_findi pred_pre 0 pre',
+                        Misc.array_findi pred_post 0 (Tree.post_classes node')
+                      with
+                      | exception Not_found -> None
+                      | i_pre', i_post' ->
+                        let offset = Cells.offset node' i_pre' i_post' in
+                        if costs.(offset) = current_cost then
+                          (* We found a candidate of minimal cost *)
+                          Some (Cells.encode_offset node' offset)
+                        else
+                          None
+                ) non_nullable
+            with
+            | None ->
+              Printf.eprintf "abort, cost = %d\n%!" current_cost;
+              assert false
+            | Some cell' ->
+              (* Solve the sub-node *)
+              prepend_word cell' acc
+      end
+    | R (l, r) ->
+      (* It is an inner node.
+         We decompose the problem in a left-hand and a right-hand
+         sub-problems, and find sub-solutions of minimal cost *)
+      let current_cost = Cells.cost cell in
+      let coercion =
+        Coercion.infix (Tree.post_classes l) (Tree.pre_classes r)
+      in
+      let l_index = Cells.encode l in
+      let r_index = Cells.encode r in
+      begin try
+          Array.iteri (fun i_post_l all_pre_r ->
+              let l_cost = Cells.cost (l_index i_pre i_post_l) in
+              Array.iter (fun i_pre_r ->
+                  let r_cost = Cells.cost (r_index i_pre_r i_post) in
+                  if l_cost + r_cost = current_cost then (
+                    let acc = prepend_word (r_index i_pre_r i_post) acc in
+                    let acc = prepend_word (l_index i_pre i_post_l) acc in
+                    raise (Break acc)
+                  )
+                ) all_pre_r
+            ) coercion.Coercion.forward;
+          assert false
+        with Break acc -> acc
+      end
 
   let () =
     (*let rec print_suffix = function
@@ -526,13 +654,13 @@ module Lookahead_coverage = struct
               x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
           in
           let form = select_one (construct_form suffix) in
-          let form = List.rev_append (lrc_prefix (List.hd form)) form in
-          print_string (
-            Misc.string_concat_map " "
-              (fun x -> Lr1.to_string (Lrc.lr1_of_lrc x)) form
-          )
+          let lrcs = List.rev_append (lrc_prefix (List.hd form)) form in
+          let cells = cells_of_lrc_list lrcs in
+          let word = List.fold_right prepend_word cells [] in
+          let lrc_to_string x = Lr1.to_string (Lrc.lr1_of_lrc x) in
+          print_endline (Misc.string_concat_map " " lrc_to_string lrcs);
+          print_endline (Misc.string_concat_map " " Terminal.to_string word)
         end;
-        print_newline ();
         print_endline (Misc.string_of_indexset ~index:Terminal.to_string lookaheads)
       )
 
