@@ -79,21 +79,22 @@ struct
   let predecessors =
     let predecessors = Vector.make n IndexSet.empty in
     let process lr1 =
-      let first_lrc = first_lrc_of_lr1 lr1 in
-      match Lr1.incoming lr1 with
+      let tgt_first = first_lrc_of_lr1 lr1 in
+      match Option.map Symbol.desc (Lr1.incoming lr1) with
       | None -> ()
-      | Some sym when Symbol.is_terminal sym ->
-        Vector.set predecessors first_lrc @@
+      | Some (T t) ->
+        Vector.set predecessors tgt_first @@
         List.fold_left (fun acc tr ->
           let src = Transition.source tr in
-          let lrc_first = first_lrc_of_lr1 src in
-          let count = Array.length (Reachability.Classes.for_lr1 src) in
-          let lrc_last = index_shift lrc_first (count - 1) in
-          IndexSet.union acc (IndexSet.init_interval lrc_first lrc_last)
+          let class_index =
+            Misc.array_findi
+              (fun _ classe -> IndexSet.mem t classe) 0 (Reachability.Classes.for_lr1 src)
+          in
+          let src_index = index_shift (first_lrc_of_lr1 src) class_index in
+          IndexSet.add src_index acc
         ) IndexSet.empty (Transition.predecessors lr1)
       | Some _ ->
         let process_transition tr =
-          let source_lrc = first_lrc_of_lr1 (Transition.source tr) in
           let node = Reachability.Tree.leaf tr in
           let table = Vector.get Reachability.Cells.table node in
           let pre_classes = Reachability.Classes.pre_transition tr in
@@ -102,6 +103,7 @@ struct
             Reachability.Coercion.infix post_classes
               (Reachability.Classes.for_lr1 lr1)
           in
+          let src_first = first_lrc_of_lr1 (Transition.source tr) in
           let pre_classes = Array.length pre_classes in
           let post_classes = Array.length post_classes in
           for post = 0 to post_classes - 1 do
@@ -109,13 +111,13 @@ struct
             for pre = 0 to pre_classes - 1 do
               let index = Reachability.Cells.table_index ~post_classes ~pre ~post in
               if table.(index) < max_int then
-                reachable := IndexSet.add (index_shift source_lrc pre) !reachable
+                reachable := IndexSet.add (index_shift src_first pre) !reachable
             done;
             let reachable = !reachable in
             Array.iter
               (fun index ->
                 vector_set_union predecessors
-                  (index_shift first_lrc index) reachable)
+                  (index_shift tgt_first index) reachable)
               coercion.forward.(post)
           done
         in
