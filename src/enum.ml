@@ -92,7 +92,7 @@ module Reduction_coverage = struct
 
   let bfs =
     let visited = Vector.make Reachable.state false in
-    let enter parent acc (st, _) =
+    let enter parent ~depth:_ acc {Reachable.target=st; _} =
       if Vector.get visited st then
         acc
       else (
@@ -102,7 +102,7 @@ module Reduction_coverage = struct
       )
     in
     let visit acc (node, st) =
-      Reachable.fold_targets (enter node) acc
+      Reachable.fold_transitions (enter node) acc
         (Vector.get Reachable.states st).transitions
     in
     let rec loop = function
@@ -113,7 +113,7 @@ module Reduction_coverage = struct
     let bfs =
       IndexMap.map (fun st ->
         let node = { depth = 1; next = [] } in
-        acc := Reachable.fold_targets (enter node) !acc
+        acc := Reachable.fold_transitions (enter node) !acc
             (Vector.get Reachable.states st).transitions;
         node
       ) Reachable.initial
@@ -123,12 +123,12 @@ module Reduction_coverage = struct
 
   let dfs =
     let visited = Vector.make Reachable.state false in
-    let rec enter parent (st, _) =
+    let rec enter parent ~depth:_ {Reachable. target=st; _} =
       if not (Vector.get visited st) then
         visit (add_node parent st) st
     and visit node st =
       Vector.set visited st true;
-      Reachable.iter_targets
+      Reachable.iter_transitions
         (Vector.get Reachable.states st).transitions
         (enter node)
     in
@@ -252,7 +252,7 @@ module Lookahead_coverage = struct
     depth: int;
     committed: Terminal.set;
     rejected: Terminal.set;
-    mutable next: (Info.Reduction.t * node) list;
+    mutable next: (Info.Reduction.t * int * node) list;
   }
 
   type status = {
@@ -266,16 +266,16 @@ module Lookahead_coverage = struct
     let committed = IndexSet.diff committed rejected in
     {state; depth = 1; committed; rejected; next = []}
 
-  let add_node parent ~committed ~rejected (state, reduction) =
-    let node = {state; depth = parent.depth + 1; committed; rejected; next = []} in
-    parent.next <- (reduction, node) :: parent.next;
+  let add_node parent ~committed ~rejected ~depth {Reachable.target; reduction} =
+    let node = {state=target; depth = parent.depth + 1; committed; rejected; next = []} in
+    parent.next <- (reduction, depth, node) :: parent.next;
     node
 
   let rec count (sum, steps as acc) = function
     | { next = []; depth; _ } -> (sum + 1, steps + depth)
     | { next; _ } -> List.fold_left count_transitions acc next
 
-  and count_transitions acc (_, node) =
+  and count_transitions acc (_, _, node) =
     count acc node
 
   let measure map =
@@ -289,7 +289,8 @@ module Lookahead_coverage = struct
   let enter () =
     let node_pra = Vector.init Reachable.state Reachable.potential_reject_after in
     let node_prb = Vector.init Reachable.state Reachable.potential_reject_before in
-    fun status (st, _red as tr) ->
+    fun status ~depth tr ->
+    let st = tr.Reachable.target in
     let rejected = IndexSet.diff (Reachable.immediate_reject st) status.accepted in
     let accepted = IndexSet.diff (Reachable.immediate_accept st) status.node.rejected in
     let rejected = IndexSet.union rejected status.node.rejected in
@@ -302,7 +303,7 @@ module Lookahead_coverage = struct
       None
     else (
       let committed = IndexSet.diff (IndexSet.union status.node.committed pra') rejected in
-      let node = add_node status.node ~committed ~rejected tr in
+      let node = add_node status.node ~depth ~committed ~rejected tr in
       Vector.set node_prb st prb';
       Vector.set node_pra st (IndexSet.diff pra pra');
       Some {accepted; node}
@@ -310,34 +311,34 @@ module Lookahead_coverage = struct
 
   let dfs =
     let enter = enter () in
-    let rec visit status (st, _ as tr) =
-      match enter status tr with
+    let rec visit status ~depth tr =
+      match enter status ~depth tr with
       | None -> ()
       | Some status' ->
-        Reachable.iter_targets
-          (Vector.get Reachable.states st).transitions
-          (fun tr' -> visit status' tr');
+        Reachable.iter_transitions
+          (Vector.get Reachable.states tr.Reachable.target).transitions
+          (visit status');
     in
     IndexMap.mapi (fun lrc st ->
       let lr1 = Lrc.lr1_of_lrc lrc in
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
       let node = root ~accepted ~rejected st in
-      Reachable.iter_targets
+      Reachable.iter_transitions
         (Vector.get Reachable.states st).transitions
-        (fun tr -> visit {accepted; node} tr);
+        (visit {accepted; node});
       node
     ) Reachable.initial
 
   let bfs =
     let enter = enter () in
-    let visit acc (status, (st, _ as tr)) =
-      match enter status tr with
+    let visit acc (status, depth, tr) =
+      match enter status ~depth tr with
       | None -> acc
       | Some status' ->
-        Reachable.fold_targets
-          (fun acc tr -> (status', tr) :: acc)
-          acc (Vector.get Reachable.states st).transitions
+        Reachable.fold_transitions
+          (fun ~depth acc tr -> (status', depth, tr) :: acc)
+          acc (Vector.get Reachable.states tr.Reachable.target).transitions
     in
     let todo, map =
       let todo = ref [] in
@@ -346,9 +347,10 @@ module Lookahead_coverage = struct
           let accepted = Lr1.shift_on lr1 in
           let rejected = Lr1.reject lr1 in
           let node = root ~accepted ~rejected st in
-          Reachable.iter_targets
+          Reachable.iter_transitions
             (Vector.get Reachable.states st).transitions
-            (fun tr -> Misc.push todo ({accepted; node}, tr));
+            (fun ~depth tr ->
+               Misc.push todo ({accepted; node}, depth, tr));
           node
         ) Reachable.initial
       in
@@ -375,7 +377,7 @@ module Lookahead_coverage = struct
           node.rejected
         | children ->
           List.fold_left
-            (fun acc (_, node) -> IndexSet.union acc (visit node))
+            (fun acc (_, _, node) -> IndexSet.union acc (visit node))
             IndexSet.empty children
       in
       assert (IndexSet.subset node.rejected rejected);
@@ -391,8 +393,8 @@ module Lookahead_coverage = struct
       (measure_lookaheads bfs)
 
   type suffix =
-    | Top of Reachable.state index
-    | Reduce of Reachable.state index * Info.Reduction.t * suffix
+    | Top of Reachable.state index * Lrc.t
+    | Reduce of Reachable.state index * Info.Reduction.t * int * suffix
 
   let items_from_suffix suffix =
     let items_of_state state =
@@ -401,9 +403,9 @@ module Lookahead_coverage = struct
       config.top
     in
     let rec loop acc = function
-      | Reduce (state, _, next) ->
+      | Reduce (state, _, _, next) ->
         loop (Lr1.items (items_of_state state) :: acc) next
-      | Top state ->
+      | Top (state, _) ->
         Lr1.items (items_of_state state) :: acc
     in
     loop [] suffix
@@ -425,10 +427,11 @@ module Lookahead_coverage = struct
       let remainder = IndexSet.diff node.committed rejected in
       ignore remainder; (*TODO*)
       IndexSet.union rejected node.committed
-    and visit_child suffix (reduction, node) =
-      visit_node (Reduce (node.state, reduction, suffix)) node
+    and visit_child suffix (reduction, depth, node) =
+      visit_node (Reduce (node.state, reduction, depth, suffix)) node
     in
-    IndexMap.iter (fun _lrc node -> ignore (visit_node (Top node.state) node)) map
+    IndexMap.iter (fun lrc node ->
+        ignore (visit_node (Top (node.state, lrc)) node)) map
 
   (*let prepend_reduction _st0 red st1 suffix =
     let stack =
@@ -735,15 +738,53 @@ module Lookahead_coverage = struct
   let () =
     let construct_form suffix =
       let rec loop =  function
-        | Top state ->
+        | Top (state, _) ->
           Form_generator.start
             (Viable.get_config (Vector.get Reachable.states state).config.source).top
-        | Reduce (state, red, suffix) ->
+        | Reduce (state, red, _depth, suffix) ->
           let gen = loop suffix in
           let lrcs = (Vector.get Reachable.states state).config.lrcs in
           Form_generator.reduce gen lrcs (Reduction.production red)
       in
       Form_generator.finish (loop suffix)
+    in
+    let construct_form2 suffix =
+      let rec loop = function
+        | Top (state, lrc) ->
+          let lrcs = (Vector.get Reachable.states state).config.lrcs in
+          (lrcs, [IndexSet.singleton lrc])
+        | Reduce (state, _red, depth, suffix) ->
+          let (lrcs', result) = loop suffix in
+          let lrcs = (Vector.get Reachable.states state).config.lrcs in
+          let result =
+            if depth <= 0 then (
+              if depth = -1
+              then assert (IndexSet.equal lrcs lrcs')
+              else assert (IndexSet.subset lrcs lrcs');
+              result
+            ) else (
+              let rlrcs = ref lrcs' in
+              let result' = ref [lrcs'] in
+              for _ = 1 to depth - 1 do
+                rlrcs := Misc.indexset_bind !rlrcs Lrc.predecessors;
+                result' := !rlrcs :: !result';
+              done;
+              let rec restrict lrcs = function
+                | [] -> result
+                | x :: xs ->
+                  let lrcs = Misc.indexset_bind lrcs lrc_successors in
+                  IndexSet.inter lrcs x :: restrict lrcs xs
+              in
+              restrict lrcs !result'
+            )
+          in
+          (lrcs, result)
+      in
+      let lrcs, result = loop suffix in
+      if IndexSet.is_empty lrcs then
+        result
+      else
+        lrcs :: result
     in
     let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
     let print_items items =
@@ -758,23 +799,31 @@ module Lookahead_coverage = struct
         let x = IndexSet.choose x in
         x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
     in
+    let prepare_sentence lrcs =
+      let lrcs = select_one lrcs in
+      let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
+      Printf.printf "form: %s\n" (Misc.string_concat_map " " pr_lrc lrcs);
+      let cells = cells_of_lrc_list lrcs in
+      let result = List.fold_right prepend_word cells [] in
+      (List.hd lrcs, result)
+    in
     enum_sentences dfs (fun suffix lookaheads ->
-        let lrcs = select_one (construct_form suffix) in
-        let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
-        Printf.printf "form: %s\n" (Misc.string_concat_map " " pr_lrc lrcs);
+        let entrypoint, word = prepare_sentence (construct_form suffix) in
+        let _entrypoint, word' = prepare_sentence (construct_form2 suffix) in
+        assert (List.equal Index.equal word word');
         let entrypoint =
-          List.hd lrcs
+          entrypoint
           |> Lrc.lr1_of_lrc
           |> Lr1.entrypoint
           |> Option.get
           |> Nonterminal.to_string
         in
         let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
-        let cells = cells_of_lrc_list lrcs in
-        let word = List.fold_right prepend_word cells [] in
         print_string entrypoint;
         List.iter print_terminal word;
-        print_string " @";
+        print_string "\n";
+        List.iter print_terminal word';
+        print_string "\n@";
         IndexSet.iter print_terminal lookaheads;
         List.iter print_items (items_from_suffix suffix);
         print_newline ()
