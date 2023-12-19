@@ -400,21 +400,19 @@ module Lookahead_coverage = struct
     let items_of_state state =
       let desc = Vector.get Reachable.states state in
       let config = Viable.get_config desc.config.source in
-      config.top
+      Lr1.items config.top
     in
     let rec loop acc = function
       | Reduce (state, _, _, next) ->
-        loop (Lr1.items (items_of_state state) :: acc) next
+        loop (items_of_state state :: acc) next
       | Top (state, _) ->
-        Lr1.items (items_of_state state) :: acc
+        items_of_state state :: acc
     in
     loop [] suffix
 
   let enum_sentences map f =
-    let rec visit_node : suffix -> node -> Terminal.set =
-      fun suffix node ->
-      let rejected =
-        match node.next with
+    let rec visit_node suffix node =
+      let rejected = match node.next with
         | [] ->
           f suffix node.rejected;
           node.rejected
@@ -431,14 +429,7 @@ module Lookahead_coverage = struct
       visit_node (Reduce (node.state, reduction, depth, suffix)) node
     in
     IndexMap.iter (fun lrc node ->
-        ignore (visit_node (Top (node.state, lrc)) node)) map
-
-  (*let prepend_reduction _st0 red st1 suffix =
-    let stack =
-      Misc.list_drop (Production.length (Reduction.production red))
-        (Viable.get_stack (Vector.get Reachable.states st1).config.source)
-    in
-    List.filter_map Lr1.incoming stack @ suffix*)
+      ignore (visit_node (Top (node.state, lrc)) node)) map
 
   module Form_generator : sig
     type t
