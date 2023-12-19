@@ -290,27 +290,6 @@ let list_foralli f l =
   in
   loop 0 l
 
-let list_rev_iteri f xs =
-  let rec loop i = function
-    | x1 :: x2 :: x3 :: x4 :: xs ->
-      loop (i + 4) xs;
-      f (i + 3) x4;
-      f (i + 2) x3;
-      f (i + 1) x2;
-      f (i + 0) x1
-    | [x1; x2; x3] ->
-      f (i + 2) x3;
-      f (i + 1) x2;
-      f (i + 0) x1
-    | [x1; x2] ->
-      f (i + 1) x2;
-      f (i + 0) x1
-    | [x1] ->
-      f (i + 0) x1
-    | [] -> ()
-  in
-  loop 0 xs
-
 let rec list_rev_iter f = function
   | x1 :: x2 :: x3 :: x4 :: xs ->
     list_rev_iter f xs;

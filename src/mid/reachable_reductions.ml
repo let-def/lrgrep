@@ -562,14 +562,11 @@ sig
 
   type config = { source : Viable.state index; lrcs : Lrc.set; }
 
-  type transition = {
-    reduction: Reduction.t;
-    target: state index;
-  }
+  type target = state index * Reduction.t
 
   type transitions = {
-    inner: transition list;
-    outer: transition list list;
+    inner: target list;
+    outer: target list list;
   }
 
   type desc = {
@@ -583,10 +580,10 @@ sig
   val successors : (state, state indexset) vector
   val predecessors : (state, state indexset) vector
 
-  val iter_transitions : transitions -> (depth:int -> transition -> unit) -> unit
-  val rev_iter_transitions : transitions -> (depth:int -> transition -> unit) -> unit
-  val fold_transitions : (depth:int -> 'a -> transition -> 'a) -> 'a -> transitions -> 'a
-  val rev_fold_transitions : (depth:int -> transition -> 'a -> 'a) -> transitions -> 'a -> 'a
+  val iter_targets : transitions -> (target -> unit) -> unit
+  val rev_iter_targets : transitions -> (target -> unit) -> unit
+  val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
+  val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 
   val unreachable_lookaheads : state index -> Terminal.set
   val immediate_accept : state index -> Terminal.set
@@ -626,15 +623,11 @@ struct
     lrcs: Lrc.set;
   }
 
-  type transition = {
-    reduction: Reduction.t;
-    target: state index;
-  }
-
+  type target = state index * Reduction.t
 
   type transitions = {
-    inner: transition list;
-    outer: transition list list;
+    inner: target list;
+    outer: target list list;
   }
 
   type desc = {
@@ -652,7 +645,7 @@ struct
         List.fold_left
           (fun acc {Viable.target; lookahead=_; filter=(); reduction} ->
             let state = visit_config {source=target; lrcs} in
-            {target=state; reduction} :: acc)
+            (state, reduction) :: acc)
           acc candidates
       ) [] inner
     in
@@ -681,7 +674,7 @@ struct
       if IndexSet.is_empty lrcs then
         None
       else
-        Some {target=visit_config {lrcs; source=target}; reduction}
+        Some (visit_config {lrcs; source=target}, reduction)
     in
     let candidates = List.filter_map visit_candidate candidates in
     match rest with
@@ -701,32 +694,28 @@ struct
 
   let () = Stopwatch.step time "Nodes: %d" (cardinal state)
 
-  let iter_transitions {inner; outer} f =
-    List.iter (f ~depth:(-1)) inner;
-    List.iteri (fun depth xs -> List.iter (f ~depth) xs) outer
+  let iter_targets {inner; outer} f =
+    List.iter f inner;
+    List.iter (List.iter f) outer
 
-  let rev_iter_transitions {inner; outer} f =
-    list_rev_iter (f ~depth:(-1)) inner;
-    list_rev_iteri (fun depth xs -> list_rev_iter (f ~depth) xs) outer
+  let rev_iter_targets {inner; outer} f =
+    list_rev_iter f inner;
+    list_rev_iter (list_rev_iter f) outer
 
-  let fold_transitions f acc {inner; outer} =
-    let acc = ref (List.fold_left (f ~depth:(-1)) acc inner) in
-    List.iteri
-      (fun depth xs -> acc := List.fold_left (f ~depth) !acc xs)
-      outer;
-    !acc
+  let fold_targets f acc {inner; outer} =
+    let acc = List.fold_left f acc inner in
+    let acc = List.fold_left (List.fold_left f) acc outer in
+    acc
 
-  let rev_fold_transitions f {inner; outer} acc =
-    let acc = ref (List.fold_right (f ~depth:(-1)) inner acc) in
-    list_rev_iteri
-      (fun depth xs -> acc := List.fold_right (f ~depth) xs !acc)
-      outer;
-    !acc
+  let rev_fold_targets f {inner; outer} acc =
+    let acc = List.fold_right f inner acc in
+    let acc = List.fold_right (List.fold_right f) outer acc in
+    acc
 
   let successors =
     Vector.map (fun desc ->
-        rev_fold_transitions
-          (fun ~depth:_ tr acc -> IndexSet.add tr.target acc)
+        rev_fold_targets
+          (fun (st, _) acc -> IndexSet.add st acc)
           desc.transitions IndexSet.empty
       ) states
 
@@ -748,13 +737,13 @@ struct
     let table = Vector.make state Terminal.all in
     IndexMap.iter
       (fun lrc st ->
-        let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
-        iter_transitions
-          (Vector.get states st).transitions
-          (fun ~depth:_ tr ->
-            Vector.set table tr.target
-              (Terminal.intersect unreachable (Vector.get table tr.target))
-          )
+         let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
+         iter_targets
+           (Vector.get states st).transitions
+           (fun (st, _red) ->
+              let set = Terminal.intersect unreachable (Vector.get table st) in
+              Vector.set table st set
+           )
       ) initial;
     fixpoint successors table
       ~propagate:(fun _src set1 tgt set2 ->
@@ -816,7 +805,7 @@ struct
     in
     Vector.iter (fun (config, transitions) ->
         let la = get_lookahead config in
-        iter_transitions transitions (fun target ->
+        iter_targets transitions (fun target ->
             let la' = get_lookahead (fst (Vector.get states target)) in
             assert (IndexSet.subset la' la);
       )
