@@ -147,33 +147,102 @@ let lrc_successors =
 
 let lrc_prefix =
   let table = Vector.make Lrc.n [] in
-  let expand prefix state acc =
+  let todo = ref [] in
+  let expand prefix state =
     match Vector.get table state with
     | [] ->
       Vector.set table state prefix;
       let prefix = state :: prefix in
       let successors = lrc_successors state in
-      if IndexSet.is_empty successors then
-        acc
-      else
-        ((successors, prefix) :: acc)
-    | _ -> acc
+      if not (IndexSet.is_empty successors) then
+        Misc.push todo (successors, prefix)
+    | _ -> ()
   in
-  let visit acc (successors, prefix) =
-    IndexSet.fold (expand prefix) successors acc
+  let visit (successors, prefix) =
+    IndexSet.iter (expand prefix) successors
   in
   let rec loop = function
     | [] -> ()
-    | other -> loop (List.fold_left visit [] other)
+    | other ->
+      todo := [];
+      List.iter visit other;
+      loop !todo
   in
-  let todo = ref [] in
   Index.iter Info.Lr1.n (fun lr1 ->
       if Option.is_none (Info.Lr1.incoming lr1) then
-        todo := expand [] (Lrc.first_lrc_of_lr1 lr1) !todo
+        expand [] (Lrc.first_lrc_of_lr1 lr1)
     );
   loop !todo;
   Vector.get table
 
+let output_item oc (prod, dot) =
+  let open Info in
+  output_string oc " /";
+  output_string oc (Nonterminal.to_string (Production.lhs prod));
+  output_char oc ':';
+  let rhs = Production.rhs prod in
+  for i = 0 to dot - 1 do
+    output_char oc ' ';
+    output_string oc (Symbol.name rhs.(i));
+  done;
+  output_string oc " .";
+  for i = dot to Array.length rhs - 1 do
+    output_char oc ' ';
+    output_string oc (Symbol.name rhs.(i));
+  done
+
+let pr_lrc lrc =
+  let lr1 = Lrc.lr1_of_lrc lrc in
+  Info.Lr1.to_string lr1 ^ "@" ^
+  if (lr1 : _ index :> int) = 601 then
+    Misc.string_of_indexset
+      ~index:Info.Terminal.to_string
+      (Lrc.lookahead lrc)
+  else
+    string_of_int (Lrc.class_index lrc)
+
+(* Validate prefixes *)
+let () =
+  if false then
+    Index.iter Lrc.n (fun lrc ->
+        let open Info in
+        let lr1 = Lrc.lr1_of_lrc lrc in
+        let p, n =
+          match Lr1.items lr1 with
+          | [] -> assert false
+          | (p, n) :: other ->
+            List.fold_left
+              (fun (_, n as acc) (_, m as it) -> if m > n then it else acc)
+              (p, n) other
+        in
+        let rhs = Production.rhs p in
+        let prefix = lrc_prefix lrc in
+        let invalid () =
+          Printf.printf "Invalid prefix: %s\n"
+            (Misc.string_concat_map " " pr_lrc prefix);
+          Printf.printf "For state with items:\n";
+          List.iter (fun x ->
+              output_item stdout x;
+              print_newline ()
+            ) (Lr1.items lr1);
+        in
+        if prefix = [] then
+          invalid ()
+        else
+          let cursor = ref (lrc_prefix lrc) in
+          for i = n - 2 downto 0 do
+            let valid = match !cursor with
+              | [] -> false
+              | hd :: tl ->
+                cursor := tl;
+                Lr1.incoming (Lrc.lr1_of_lrc hd) = Some rhs.(i)
+            in
+            if not valid then (
+              invalid();
+              assert false
+            )
+          done
+      )
 
 module Lookahead_coverage = struct
   open Info
@@ -325,6 +394,20 @@ module Lookahead_coverage = struct
     | Top of Reachable.state index
     | Reduce of Reachable.state index * Info.Reduction.t * suffix
 
+  let items_from_suffix suffix =
+    let items_of_state state =
+      let desc = Vector.get Reachable.states state in
+      let config = Viable.get_config desc.config.source in
+      config.top
+    in
+    let rec loop acc = function
+      | Reduce (state, _, next) ->
+        loop (Lr1.items (items_of_state state) :: acc) next
+      | Top state ->
+        Lr1.items (items_of_state state) :: acc
+    in
+    loop [] suffix
+
   let enum_sentences map f =
     let rec visit_node : suffix -> node -> Terminal.set =
       fun suffix node ->
@@ -356,47 +439,154 @@ module Lookahead_coverage = struct
 
   module Form_generator : sig
     type t
+    val start : Lr1.t -> t
+    val pop : t -> t
+    val push : t -> t
+    val base : t -> Lrc.set -> t
+    val reduce : t -> Lrc.set -> Production.t -> t
+    val finish : t -> Lrc.set list
+  end = struct
+    type t = {
+      stack: Lrc.set list;
+      pop: Lrc.set list;
+      push: int;
+    }
+
+    let start lr1 =
+      let lrc = Lrc.first_lrc_of_lr1 lr1 in
+      let lrcs = Lrc.predecessors lrc in
+      let stack = [lrcs; IndexSet.singleton lrc] in
+      {stack; pop = []; push = 1 }
+
+    let top t = match t.pop with
+      | x :: _ -> x
+      | [] -> List.hd t.stack
+
+    let pop t =
+      if t.push > 0 then (
+        assert (t.pop = []);
+        {t with push = t.push - 1}
+      ) else (
+        assert (t.push = 0);
+        let top' = Misc.indexset_bind (top t) Lrc.predecessors in
+        {t with pop = top' :: t.pop}
+      )
+
+
+    let push t =
+      {t with push = t.push + 1}
+
+    let rec popn t = function
+      | 0 -> t
+      | n -> popn (pop t) (n - 1)
+
+    let base t x =
+      assert (IndexSet.subset x (top t));
+      match t.pop with
+      | [] ->
+        {t with stack = (x :: List.tl t.stack); pop = []}
+      | _x :: xs ->
+        let rec update x = function
+          | [] -> t.stack
+          | x' :: xs ->
+            let x'' = IndexSet.inter x' (Misc.indexset_bind x lrc_successors) in
+            assert (not (IndexSet.is_empty x''));
+            x'' :: update x'' xs
+        in
+        {t with stack = (x :: update x xs); pop = []}
+
+    let reduce t lrcs prod =
+      let t' = popn t (Production.length prod) in
+      let pr_lrcs xs =
+        Misc.string_concat_map " " (Misc.string_of_indexset ~index:pr_lrc) xs
+      in
+      let top = top t' in
+      if not (IndexSet.subset lrcs top) then (
+        Printf.eprintf "Broke base invariant:\n\
+                        reducing %s: %s\n\
+                        from gen: {stack:%s; pop:%s; push:%d}\n\
+                        after gen: {stack:%s; pop:%s; push:%d}\n\
+                        expected base: %s\n\
+                        found base: %s\n\
+                       "
+          (Nonterminal.to_string (Production.lhs prod))
+          (Misc.string_concat_map " " Symbol.name
+             (Array.to_list (Production.rhs prod)))
+          (pr_lrcs t.stack)
+          (pr_lrcs t.pop)
+          t.push
+          (pr_lrcs t'.stack)
+          (pr_lrcs t'.pop)
+          t'.push
+          (Misc.string_of_indexset ~index:pr_lrc lrcs)
+          (Misc.string_of_indexset ~index:pr_lrc top)
+      ) else (
+        assert (if IndexSet.is_empty lrcs then IndexSet.is_empty top else true)
+      );
+      base (push t') lrcs
+
+    let finish t =
+      assert (t.pop = []);
+      match t.stack with
+      | x :: xs when IndexSet.is_empty x -> xs
+      | xs -> xs
+  end
+
+  (*module Form_generator : sig
+    type t
     val start : Lrc.set -> t
     val grow : Lrc.set -> int -> t -> t
     val finish : t -> Lrc.set list
   end = struct
-    type t = Lrc.set list
 
-    let start x = [x]
+    type t = {
+      top: Lrc.set;
+      head: Lrc.set list;
+      tail: Lrc.set list;
+    }
 
-    let grow x n t =
-      let y = List.hd t in
+    let pr_lrcs lrcs =
+      let lr1s = IndexSet.map Lrc.lr1_of_lrc lrcs in
+      Misc.string_of_indexset ~index:Lr1.to_string lr1s
+
+    let start x =
+      Printf.printf "Form_gen: start with %s\n" (pr_lrcs x);
+      { top = x; head = []; tail = []}
+
+    let normalize t =
+      let rec prepend = function
+        | [] -> assert false
+        | [x] -> x :: t.tail
+        | x :: y :: ys ->
+          let y' = Misc.indexset_bind x lrc_successors in
+          let y' = IndexSet.inter y y' in
+          assert (not (IndexSet.is_empty y'));
+          let ys' = prepend (y' :: ys) in
+          Printf.printf "Form_gen: normalize %s\n" (pr_lrcs x);
+          x :: ys'
+      in
+      prepend (t.top :: t.head)
+
+    let rec candidates acc y = function
+      | 1 -> acc
+      | n ->
+        let y' = Misc.indexset_bind y Lrc.predecessors in
+        candidates (y' :: acc) y' (n - 1)
+
+    let grow top n t =
       if n <= 0 then (
-        assert (IndexSet.subset x y);
-        t
+        assert (IndexSet.subset top t.top);
+        Printf.printf "Form_gen: restrict %s\n" (pr_lrcs top);
+        {t with top = top}
       ) else (
-        let rec candidates acc y = function
-          | 1 -> x :: acc
-          | n ->
-            let y' = Misc.indexset_bind y Lrc.predecessors in
-            candidates (y' :: acc) y' (n - 1)
-        in
-        let rec prepend = function
-          | [] -> assert false
-          | [x] -> x :: t
-          | x :: y :: ys ->
-            let y' = Misc.indexset_bind x lrc_successors in
-            let y' = IndexSet.inter y y' in
-            assert (not (IndexSet.is_empty y'));
-            x :: prepend (y' :: ys)
-        in
-        prepend (candidates [] y n)
+        let tail = normalize t in
+        let head = candidates [] t.top n in
+        Printf.printf "Form_gen: grow %d: %s\n" n (Misc.string_concat_map " " pr_lrcs (top :: head));
+        {top; head; tail}
       )
 
-    (*let rec finish = function
-      | [] -> []
-      | x :: xs ->
-        match finish xs with
-        | [] -> [x]
-        | x' :: _ as xs' ->
-          IndexSet.inter x (Misc.indexset_bind x' Lrc.predecessors) :: xs'*)
-    let finish x = x
-  end
+    let finish = normalize
+  end*)
 
   let rec cells_of_lrc_list = function
     | [] -> assert false
@@ -599,17 +789,14 @@ module Lookahead_coverage = struct
     let construct_form suffix =
       let rec loop =  function
         | Top state ->
-          let lrcs = (Vector.get Reachable.states state).config.lrcs in
-          (state, Form_generator.start lrcs)
+          Form_generator.start
+            (Viable.get_config (Vector.get Reachable.states state).config.source).top
         | Reduce (state, red, suffix) ->
-          let state', gen = loop suffix in
+          let gen = loop suffix in
           let lrcs = (Vector.get Reachable.states state).config.lrcs in
-          let stack = Viable.get_stack (Vector.get Reachable.states state').config.source in
-          let count = Production.length (Reduction.production red) - List.length stack in
-          (state, Form_generator.grow lrcs count gen)
+          Form_generator.reduce gen lrcs (Reduction.production red)
       in
-      let _, gen = loop suffix in
-      Form_generator.finish gen
+      Form_generator.finish (loop suffix)
     in
     let rec dump_suffix = function
       | Top state ->
@@ -633,35 +820,65 @@ module Lookahead_coverage = struct
         state
     in
     let dump_prefix (Top state | Reduce (state, _, _)) =
-      let lrc = IndexSet.choose (Vector.get Reachable.states state).config.lrcs in
+      let lrc =
+        IndexSet.choose (Vector.get Reachable.states state).config.lrcs
+      in
+      print_endline "items: ";
+      List.iter (fun item ->
+        output_item stdout item;
+        output_char stdout '\n';
+      ) (Lr1.items (Lrc.lr1_of_lrc lrc));
       let prefix = lrc_prefix lrc in
-      let prefix = List.filter_map Lr1.incoming (List.rev_map Lrc.lr1_of_lrc prefix) in
+      let prefix =
+        List.filter_map Lr1.incoming
+          (List.rev_map Lrc.lr1_of_lrc prefix)
+      in
       Printf.printf "prefix: %s\n"
         (Misc.string_concat_map " " Symbol.name prefix)
     in
     enum_sentences dfs (fun suffix lookaheads ->
-        print_endline "------------";
         if false then (
+          print_endline "------------";
           ignore (dump_suffix suffix);
           dump_prefix suffix;
         );
-        begin
-          let rec select_one = function
-            | [] -> []
-            | [x] -> [IndexSet.choose x]
-            | x :: y :: ys ->
-              let x = IndexSet.choose x in
-              x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
-          in
-          let form = select_one (construct_form suffix) in
-          let lrcs = List.rev_append (lrc_prefix (List.hd form)) form in
-          let cells = cells_of_lrc_list lrcs in
-          let word = List.fold_right prepend_word cells [] in
-          let lrc_to_string x = Lr1.to_string (Lrc.lr1_of_lrc x) in
-          print_endline (Misc.string_concat_map " " lrc_to_string lrcs);
-          print_endline (Misc.string_concat_map " " Terminal.to_string word)
-        end;
-        print_endline (Misc.string_of_indexset ~index:Terminal.to_string lookaheads)
+        let choose_next s =
+          let x = IndexSet.choose s in
+          match IndexSet.minimum (IndexSet.remove x s) with
+          | None -> x
+          | Some x' -> x'
+        in
+        let rec select_one = function
+          | [] -> []
+          | [x] -> [choose_next x]
+          | x :: y :: ys ->
+            let x = choose_next x in
+            x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
+        in
+        let lrcs = select_one (construct_form suffix) in
+        let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
+        Printf.printf "form: %s\n" (Misc.string_concat_map " " pr_lrc lrcs);
+        let entrypoint =
+          List.hd lrcs
+          |> Lrc.lr1_of_lrc
+          |> Lr1.entrypoint
+          |> Option.get
+          |> Nonterminal.to_string
+        in
+        let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
+        let cells = cells_of_lrc_list lrcs in
+        let word = List.fold_right prepend_word cells [] in
+        let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
+        let print_items items =
+          print_string " [";
+          List.iter (output_item stdout) items;
+          print_string " ]";
+        in
+        print_string entrypoint;
+        List.iter print_terminal word;
+        print_string " @";
+        IndexSet.iter print_terminal lookaheads;
+        List.iter print_items (items_from_suffix suffix);
+        print_newline ()
       )
-
 end
