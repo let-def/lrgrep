@@ -733,59 +733,6 @@ module Lookahead_coverage = struct
       end
 
   let () =
-    (*let rec print_suffix = function
-      | Top state ->
-        let desc = Vector.get Reachable.states state in
-        let lr1 = Lrc.lr1_of_lrc (IndexSet.choose desc.config.lrcs) in
-        print_string (Lr1.to_string lr1)
-      | Reduce (_state, reduction, suffix) ->
-        let prod = Reduction.production reduction in
-        let lhs = Production.lhs prod in
-        let rhs = Production.rhs prod in
-        Printf.printf "[%s: %s] "
-          (Nonterminal.to_string lhs)
-          (Misc.string_concat_map " " Symbol.name (Array.to_list rhs));
-        print_suffix suffix
-    in
-    let rec get_symbols = function
-      | Top state ->
-        let sentence =
-          (Vector.get Reachable.states state).config.lrcs
-          |> IndexSet.choose
-          |> Lrc.lr1_of_lrc
-          |> Lr1.incoming
-          |> Option.to_list
-        in
-        state, sentence
-      | Reduce (st', red, suffix) ->
-        let st, sentence = get_symbols suffix in
-        let sentence = prepend_reduction st' red st sentence in
-        (st', sentence)
-    in*)
-    let print_stack state =
-      let viable = (Vector.get Reachable.states state).config.source in
-      let stack = Viable.get_stack viable in
-      let lr1s = List.rev (List.filter_map Lr1.incoming stack) in
-      Printf.printf "stack: %s\n" (Misc.string_concat_map " " Symbol.name lr1s)
-    in
-    let print_reduction red =
-      let prod = Reduction.production red in
-      let lhs = Production.lhs prod in
-      let rhs = Production.rhs prod in
-      Printf.printf "[%s: %s]\n"
-        (Nonterminal.to_string lhs)
-        (Misc.string_concat_map " " Symbol.name (Array.to_list rhs));
-    in
-    let consumed_symbols red state =
-      let desc = Vector.get Reachable.states state in
-      let stack = Viable.get_stack desc.config.source in
-      let rhs = Production.rhs (Reduction.production red) in
-      let count = Array.length rhs - List.length stack in
-      if count > 0 then (
-        let symbols = Array.sub rhs 0 count in
-        Array.to_list symbols
-      ) else []
-    in
     let construct_form suffix =
       let rec loop =  function
         | Top state ->
@@ -798,63 +745,20 @@ module Lookahead_coverage = struct
       in
       Form_generator.finish (loop suffix)
     in
-    let rec dump_suffix = function
-      | Top state ->
-        Printf.printf "top symbol: %s\n"
-          (Misc.string_concat_map " " Symbol.name
-             (Option.to_list
-                (Lr1.incoming
-                   (Lrc.lr1_of_lrc
-                      (IndexSet.choose
-                         (Vector.get Reachable.states state).config.lrcs)))));
-        print_stack state;
-        state
-      | Reduce (state, red, suffix) ->
-        let state' = dump_suffix suffix in
-        let symbols = consumed_symbols red state' in
-        if symbols <> [] then
-          Printf.printf "symbols: %s\n"
-            (Misc.string_concat_map " " Symbol.name symbols);
-        print_reduction red;
-        print_stack state;
-        state
+    let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
+    let print_items items =
+      print_string " [";
+      List.iter (output_item stdout) items;
+      print_string " ]";
     in
-    let dump_prefix (Top state | Reduce (state, _, _)) =
-      let lrc =
-        IndexSet.choose (Vector.get Reachable.states state).config.lrcs
-      in
-      print_endline "items: ";
-      List.iter (fun item ->
-        output_item stdout item;
-        output_char stdout '\n';
-      ) (Lr1.items (Lrc.lr1_of_lrc lrc));
-      let prefix = lrc_prefix lrc in
-      let prefix =
-        List.filter_map Lr1.incoming
-          (List.rev_map Lrc.lr1_of_lrc prefix)
-      in
-      Printf.printf "prefix: %s\n"
-        (Misc.string_concat_map " " Symbol.name prefix)
+    let rec select_one = function
+      | [] -> []
+      | [x] -> [IndexSet.choose x]
+      | x :: y :: ys ->
+        let x = IndexSet.choose x in
+        x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
     in
     enum_sentences dfs (fun suffix lookaheads ->
-        if false then (
-          print_endline "------------";
-          ignore (dump_suffix suffix);
-          dump_prefix suffix;
-        );
-        let choose_next s =
-          let x = IndexSet.choose s in
-          match IndexSet.minimum (IndexSet.remove x s) with
-          | None -> x
-          | Some x' -> x'
-        in
-        let rec select_one = function
-          | [] -> []
-          | [x] -> [choose_next x]
-          | x :: y :: ys ->
-            let x = choose_next x in
-            x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
-        in
         let lrcs = select_one (construct_form suffix) in
         let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
         Printf.printf "form: %s\n" (Misc.string_concat_map " " pr_lrc lrcs);
@@ -868,12 +772,6 @@ module Lookahead_coverage = struct
         let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
         let cells = cells_of_lrc_list lrcs in
         let word = List.fold_right prepend_word cells [] in
-        let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
-        let print_items items =
-          print_string " [";
-          List.iter (output_item stdout) items;
-          print_string " ]";
-        in
         print_string entrypoint;
         List.iter print_terminal word;
         print_string " @";
