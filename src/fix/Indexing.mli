@@ -176,6 +176,9 @@ module Index : sig
     module Index : T with type 'a t = 'a index
     module Coerce (F: F) (X : F(Int).S) : F(Index).S
   end
+
+  val equal : 'n index -> 'n index -> bool
+  val compare : 'n index -> 'n index -> int
 end
 
 (**A vector of type [(n, a) vector] is a (fixed-size) array whose indices lie

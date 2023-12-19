@@ -161,6 +161,9 @@ module Index = struct
       incr next;
       i
 
+  let equal = Int.equal
+  let compare = Int.compare
+
   module Unsafe = struct
     module type T = sig type 'a t end
     module type F = functor (X : T) -> sig module type S end
