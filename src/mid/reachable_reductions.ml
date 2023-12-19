@@ -685,7 +685,7 @@ struct
   let initial =
     let process lrc =
       let source = Vector.get Viable.initial (Lrc.lr1_of_lrc lrc) in
-      let lrcs = IndexSet.singleton lrc in
+      let lrcs = Lrc.predecessors lrc in
       visit_config {source; lrcs}
     in
     IndexMap.inflate process Lrc.idle
