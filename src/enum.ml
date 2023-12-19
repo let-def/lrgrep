@@ -526,61 +526,54 @@ module Lookahead_coverage = struct
       | xs -> xs
   end
 
-  (*module Form_generator : sig
+  module Form_gen2 : sig
     type t
-    val start : Lrc.set -> t
-    val grow : Lrc.set -> int -> t -> t
+    val top : potential:Lrc.set -> top:Lrc.t -> t
+    val reduce : potential:Lrc.set -> length:int -> t -> t
     val finish : t -> Lrc.set list
   end = struct
-
     type t = {
-      top: Lrc.set;
-      head: Lrc.set list;
-      tail: Lrc.set list;
+      stack: Lrc.set list;
+      potential: Lrc.set;
+      pushed: int;
     }
 
-    let pr_lrcs lrcs =
-      let lr1s = IndexSet.map Lrc.lr1_of_lrc lrcs in
-      Misc.string_of_indexset ~index:Lr1.to_string lr1s
+    let top ~potential ~top = { stack = [IndexSet.singleton top]; potential; pushed = 1 }
 
-    let start x =
-      Printf.printf "Form_gen: start with %s\n" (pr_lrcs x);
-      { top = x; head = []; tail = []}
-
-    let normalize t =
-      let rec prepend = function
-        | [] -> assert false
-        | [x] -> x :: t.tail
-        | x :: y :: ys ->
-          let y' = Misc.indexset_bind x lrc_successors in
-          let y' = IndexSet.inter y y' in
-          assert (not (IndexSet.is_empty y'));
-          let ys' = prepend (y' :: ys) in
-          Printf.printf "Form_gen: normalize %s\n" (pr_lrcs x);
-          x :: ys'
-      in
-      prepend (t.top :: t.head)
-
-    let rec candidates acc y = function
-      | 1 -> acc
-      | n ->
-        let y' = Misc.indexset_bind y Lrc.predecessors in
-        candidates (y' :: acc) y' (n - 1)
-
-    let grow top n t =
-      if n <= 0 then (
-        assert (IndexSet.subset top t.top);
-        Printf.printf "Form_gen: restrict %s\n" (pr_lrcs top);
-        {t with top = top}
-      ) else (
-        let tail = normalize t in
-        let head = candidates [] t.top n in
-        Printf.printf "Form_gen: grow %d: %s\n" n (Misc.string_concat_map " " pr_lrcs (top :: head));
-        {top; head; tail}
+    let reduce ~potential ~length t =
+      let pushed = t.pushed - length in
+      if pushed >= 0
+      then (
+        assert (
+          if pushed > 0
+          then IndexSet.equal potential t.potential
+          else IndexSet.subset potential t.potential
+        );
+        {t with pushed = pushed + 1; potential}
+      )
+      else (
+        let rec expand acc lrcs = function
+          | 1 -> acc
+          | n ->
+            let lrcs = Misc.indexset_bind lrcs Lrc.predecessors in
+            expand (lrcs :: acc) lrcs (n - 1)
+        in
+        let rec narrow lrcs = function
+          | [] -> t.stack
+          | x :: xs ->
+            let lrcs = Misc.indexset_bind lrcs lrc_successors in
+            IndexSet.inter x lrcs :: narrow lrcs xs
+        in
+        let stack = narrow potential (expand [t.potential] t.potential (- pushed)) in
+        {potential; stack; pushed = 1}
       )
 
-    let finish = normalize
-  end*)
+    let finish t =
+      if IndexSet.is_empty t.potential
+      then t.stack
+      else t.potential :: t.stack
+
+  end
 
   let rec cells_of_lrc_list = function
     | [] -> assert false
@@ -728,16 +721,18 @@ module Lookahead_coverage = struct
 
   let () =
     let construct_form suffix =
-      let rec loop =  function
-        | Top (state, _) ->
-          Form_generator.start
-            (Viable.get_config (Vector.get Reachable.states state).config.source).top
-        | Reduce (state, red, _depth, suffix) ->
-          let gen = loop suffix in
-          let lrcs = (Vector.get Reachable.states state).config.lrcs in
-          Form_generator.reduce gen lrcs (Reduction.production red)
+      let get_potential state =
+        (Vector.get Reachable.states state).config.lrcs
       in
-      Form_generator.finish (loop suffix)
+      let rec loop = function
+        | Top (state, top) ->
+          Form_gen2.top ~potential:(get_potential state) ~top
+        | Reduce (state, red, _depth, suffix) ->
+          Form_gen2.reduce (loop suffix)
+            ~potential:(get_potential state)
+            ~length:(Production.length (Reduction.production red))
+      in
+      Form_gen2.finish (loop suffix)
     in
     let construct_form2 suffix =
       let rec loop = function
@@ -799,9 +794,11 @@ module Lookahead_coverage = struct
       (List.hd lrcs, result)
     in
     enum_sentences dfs (fun suffix lookaheads ->
-        let entrypoint, word = prepare_sentence (construct_form suffix) in
-        let _entrypoint, word' = prepare_sentence (construct_form2 suffix) in
-        assert (List.equal Index.equal word word');
+        let form1 = construct_form suffix in
+        let form2 = construct_form2 suffix in
+        assert (List.equal IndexSet.equal form1 form2);
+        let  entrypoint, word1 = prepare_sentence form1 in
+        let _entrypoint, word2 = prepare_sentence form2 in
         let entrypoint =
           entrypoint
           |> Lrc.lr1_of_lrc
@@ -811,9 +808,9 @@ module Lookahead_coverage = struct
         in
         let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
         print_string entrypoint;
-        List.iter print_terminal word;
+        List.iter print_terminal word1;
         print_string "\n";
-        List.iter print_terminal word';
+        List.iter print_terminal word2;
         print_string "\n@";
         IndexSet.iter print_terminal lookaheads;
         List.iter print_items (items_from_suffix suffix);
