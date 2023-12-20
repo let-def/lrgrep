@@ -655,7 +655,6 @@ module Lookahead_coverage = struct
     enum_sentences dfs (fun suffix lookaheads ->
         let lrcs = select_one (construct_form suffix) in
         let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
-        Printf.printf "form: %s\n" (Misc.string_concat_map " " pr_lrc lrcs);
         let entrypoint =
           List.hd lrcs
           |> Lrc.lr1_of_lrc
