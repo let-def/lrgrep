@@ -590,6 +590,7 @@ sig
   val immediate_reject : state index -> Terminal.set
   val potential_reject_after : state index -> Terminal.set
   val potential_reject_before : state index -> Terminal.set
+  val eventual_reject : state index -> Terminal.set
 end =
 struct
   open I
@@ -731,7 +732,6 @@ struct
     let desc = Vector.get states st in
     let viable = Viable.get_config desc.config.source in
     Lr1.shift_on viable.top
-
 
   let unreachable_lookaheads =
     let table = Vector.make state Terminal.all in

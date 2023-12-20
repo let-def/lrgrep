@@ -344,7 +344,9 @@ module Lookahead_coverage = struct
       let map = IndexMap.mapi (fun lrc st ->
           let lr1 = Lrc.lr1_of_lrc lrc in
           let accepted = Lr1.shift_on lr1 in
-          let rejected = Lr1.reject lr1 in
+          let rejected =
+            IndexSet.union (Reachable.eventual_reject st) (Lr1.reject lr1)
+          in
           let node = root ~accepted ~rejected st in
           Reachable.iter_targets
             (Vector.get Reachable.states st).transitions
