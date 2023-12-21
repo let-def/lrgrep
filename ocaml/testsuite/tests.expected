@@ -110,7 +110,7 @@ Error: implementation: CLASS LIDENT COLON LET OPEN BANG UIDENT IN WITH
 
 --- PARSING test_0023.ml
 File "test_0023.ml", line 1, characters 33-37:
-Error: Expecting `in' to continue let-binding at line 1, character 25
+Error: Expecting `in' to continue let-binding at line 1, character 26
 --- KO test_0023.ml
 
 --- PARSING test_0024.ml
@@ -135,7 +135,7 @@ Error: implementation: CLASS LIDENT COLON LET OPEN UIDENT IN WITH
 
 --- PARSING test_0028.ml
 File "test_0028.ml", line 1, characters 31-35:
-Error: Expecting `in' to continue let-binding at line 1, character 23
+Error: Expecting `in' to continue let-binding at line 1, character 24
 --- KO test_0028.ml
 
 --- PARSING test_0029.ml
@@ -1500,7 +1500,7 @@ Error: implementation: LBRACKETPERCENTPERCENT UNDERSCORE
 
 --- PARSING test_0301.ml
 File "test_0301.ml", line 1, characters 34-37:
-Error: Expecting `in' to continue let-binding at line 1, character 14
+Error: Expecting `in' to continue let-binding at line 1, character 22
 --- KO test_0301.ml
 
 --- PARSING test_0302.ml
@@ -1510,12 +1510,12 @@ Error: implementation: LET EXCEPTION FALSE IN WITH
 
 --- PARSING test_0303.ml
 File "test_0303.ml", line 1, characters 29-34:
-Error: Expecting `in' to continue let-binding at line 1, character 19
+Error: Expecting `in' to continue let-binding at line 1, character 27
 --- KO test_0303.ml
 
 --- PARSING test_0304.ml
 File "test_0304.ml", line 1, characters 20-24:
-Error: Expecting `in' to continue let-binding at line 1, character 13
+Error: Expecting `in' to continue let-binding at line 1, character 14
 --- KO test_0304.ml
 
 --- PARSING test_0305.ml
@@ -1564,8 +1564,8 @@ Error: implementation: LET LBRACKETAT AND RBRACKET WHILE
 --- KO test_0313.ml
 
 --- PARSING test_0314.ml
-File "test_0314.ml", line 1, characters 39-41:
-Error: Expecting `in' to continue let-binding at line 1, character 0
+File "test_0314.ml", line 2, characters 41-43:
+Error: Expecting `in' to continue let-binding at line 2, character 34
 --- KO test_0314.ml
 
 --- PARSING test_0315.ml
@@ -1660,7 +1660,7 @@ Error: implementation: LET MODULE UIDENT EQUAL QUOTED_STRING_EXPR IN WITH
 
 --- PARSING test_0333.ml
 File "test_0333.ml", line 1, characters 32-35:
-Error: Expecting `in' to continue let-binding at line 1, character 11
+Error: Expecting `in' to continue let-binding at line 1, character 20
 --- KO test_0333.ml
 
 --- PARSING test_0334.ml
@@ -1690,7 +1690,7 @@ Error: implementation: LET OPEN BANG QUOTED_STRING_EXPR IN WITH
 
 --- PARSING test_0339.ml
 File "test_0339.ml", line 1, characters 23-27:
-Error: Expecting `in' to continue let-binding at line 1, character 10
+Error: Expecting `in' to continue let-binding at line 1, character 11
 --- KO test_0339.ml
 
 --- PARSING test_0340.ml
@@ -1715,7 +1715,7 @@ Error: implementation: LET OPEN QUOTED_STRING_EXPR IN WITH
 
 --- PARSING test_0344.ml
 File "test_0344.ml", line 1, characters 21-25:
-Error: Expecting `in' to continue let-binding at line 1, character 8
+Error: Expecting `in' to continue let-binding at line 1, character 9
 --- KO test_0344.ml
 
 --- PARSING test_0345.ml
@@ -2340,7 +2340,7 @@ Error: implementation: OBJECT INHERIT LET LBRACKETAT AND RBRACKET WHILE
 
 --- PARSING test_0469.ml
 File "test_0469.ml", line 1, characters 55-58:
-Error: Expecting `in' to continue let-binding at line 1, character 14
+Error: Expecting `in' to continue let-binding at line 1, character 48
 --- KO test_0469.ml
 
 --- PARSING test_0470.ml
@@ -2355,7 +2355,7 @@ Error: implementation: OBJECT INHERIT LET LIDENT IN WITH
 
 --- PARSING test_0472.ml
 File "test_0472.ml", line 1, characters 35-38:
-Error: Expecting `in' to continue let-binding at line 1, character 14
+Error: Expecting `in' to continue let-binding at line 1, character 28
 --- KO test_0472.ml
 
 --- PARSING test_0473.ml
@@ -2375,7 +2375,7 @@ Error: implementation: OBJECT INHERIT LET OPEN BANG UIDENT IN WITH
 
 --- PARSING test_0476.ml
 File "test_0476.ml", line 1, characters 33-37:
-Error: Expecting `in' to continue let-binding at line 1, character 25
+Error: Expecting `in' to continue let-binding at line 1, character 26
 --- KO test_0476.ml
 
 --- PARSING test_0477.ml
@@ -2400,7 +2400,7 @@ Error: implementation: OBJECT INHERIT LET OPEN UIDENT IN WITH
 
 --- PARSING test_0481.ml
 File "test_0481.ml", line 1, characters 31-35:
-Error: Expecting `in' to continue let-binding at line 1, character 23
+Error: Expecting `in' to continue let-binding at line 1, character 24
 --- KO test_0481.ml
 
 --- PARSING test_0482.ml
@@ -2415,7 +2415,7 @@ Error: implementation: OBJECT INHERIT LET PERCENT AND LBRACKETAT AND RBRACKET WH
 
 --- PARSING test_0484.ml
 File "test_0484.ml", line 1, characters 32-35:
-Error: Expecting `in' to continue let-binding at line 1, character 14
+Error: Expecting `in' to continue let-binding at line 1, character 25
 --- KO test_0484.ml
 
 --- PARSING test_0485.ml
@@ -3825,7 +3825,7 @@ Error: `then' is a keyword and cannot appear in this context (try then_)
 
 --- PARSING test_ko_07.ml
 File "test_ko_07.ml", line 2, characters 53-56:
-Error: Expecting `in' to continue let-binding at line 2, character 40
+Error: Expecting `in' to continue let-binding at line 2, character 51
 --- KO test_ko_07.ml
 
 --- PARSING test_ko_08.ml
