@@ -22,6 +22,13 @@ type program_instruction =
   | Priority of clause * priority * priority
   | Halt
 
+type 'a register_value =
+  | Empty
+  | Initial
+  | Value of 'a
+
+type 'a register_values = 'a register_value array
+
 let get_int table ~offset = function
   | 1 -> String.get_uint8 table offset
   | 2 -> String.get_uint16_be table offset
@@ -113,14 +120,15 @@ struct
          (List.map (function
               | None -> "None"
               | Some i -> "%" ^ string_of_int i ^ " = " ^ match bank.(i) with
-                | None -> "None"
-                | Some _ -> "Some _"
+                | Empty -> "Empty"
+                | Initial -> "Initial"
+                | Value _ -> "Value _"
             ) (Array.to_list regs)))
 
 
   let add_candidate candidates ~clause ~priority registers bank =
     let may_get = function
-      | None -> None
+      | None -> Empty
       | Some i -> bank.(i)
     in
     let mk () =
@@ -170,7 +178,9 @@ struct
       match program_step PE.program pc with
       | Store reg ->
         if debug then eprintf "Store %d\n" reg;
-        bank.(reg) <- P.top env;
+        bank.(reg) <- (match P.top env with
+            | Some x -> Value x
+            | None -> Initial);
         loop ()
       | Move (r1, r2) ->
         if debug then eprintf "Move %d -> %d\n" r1 r2;
@@ -178,7 +188,7 @@ struct
         loop ()
       | Clear r1 ->
         if debug then eprintf "Clear %d\n" r1;
-        bank.(r1) <- None;
+        bank.(r1) <- Empty;
         loop ()
       | Yield pc' ->
         if debug then prerr_endline "Yield";
@@ -210,7 +220,7 @@ struct
     loop ()
 
   let run env =
-    let bank = Array.make PE.registers None in
+    let bank = Array.make PE.registers Empty in
     let candidates = ref [] in
     let rec loop env pc =
       match interpret bank env candidates pc with

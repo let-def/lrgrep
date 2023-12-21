@@ -1459,6 +1459,8 @@ struct
 
   let bind_capture out ~roffset index (def, name) =
     let is_optional = IndexSet.mem index RunDFA.partial_captures in
+    let none = if is_optional then "None" else "assert false" in
+    let some x = if is_optional then "Some (" ^ x ^ ")" else x in
     let offset = !roffset in
     incr roffset;
     match def with
@@ -1466,8 +1468,9 @@ struct
       let typ = recover_type index in
       Printer.fmt out
         "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
-        \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
+        \      | Empty -> %s\n\
+        \      | Initial -> assert false\n\
+        \      | Value (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
         name name name offset
         (if is_optional then "(None, None, None)" else "assert false")
         E.parser_name
@@ -1487,30 +1490,31 @@ struct
             \        in\n"
             E.parser_name (String.concat " | " matchers) typ
       end;
-      let some x = if is_optional then "Some (" ^ x ^ ")" else x in
       Printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
       Printer.fmt out "    in\n";
       Printer.fmt out "    let _ = %s in\n" name
     | Start_loc ->
       Printer.fmt out
         "    let _startloc_%s_ = match __registers.(%d) with\n\
-        \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (_, _, p, _)) -> %sp\n\
+        \      | Empty -> %s\n\
+        \      | Initial -> %s\n\
+        \      | Value (%s.MenhirInterpreter.Element (_, _, p, _)) -> %s\n\
         \    in\n"
         name offset
-        (if is_optional then "None" else "__initialpos")
-        E.parser_name
-        (if is_optional then "Some " else "")
+        none
+        (some "__initialpos")
+        E.parser_name (some "p")
     | End_loc ->
       Printer.fmt out
         "    let _endloc_%s_ = match __registers.(%d) with\n\
-        \      | None -> %s\n\
-        \      | Some (%s.MenhirInterpreter.Element (_, _, _, p)) -> %sp\n\
+        \      | Empty -> %s\n\
+        \      | Initial -> %s\n\
+        \      | Value (%s.MenhirInterpreter.Element (_, _, _, p)) -> %s\n\
         \    in\n"
         name offset
-        (if is_optional then "None" else "__initialpos")
-        E.parser_name
-        (if is_optional then "Some " else "")
+        none
+        (some "__initialpos")
+        E.parser_name (some "p")
 
   let lookahead_constraint pattern =
     match pattern.Syntax.lookaheads with
@@ -1555,7 +1559,7 @@ struct
   let output_code out =
     Printer.fmt out
       "let execute_%s %s\n
-      \  (__clause, (__registers : %s.MenhirInterpreter.element option array))\n\
+      \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
       \  (__initialpos : Lexing.position)\n\
       \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
       \  : _ option = match __clause, token with\n"

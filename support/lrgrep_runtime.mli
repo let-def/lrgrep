@@ -82,6 +82,21 @@ type program_instruction =
   | Halt
     (** Program is finished, there will be no more matches. *)
 
+(** The type of values stored in a register.
+    All registers are initialized with [Empty], and [Clear] set a register back
+    to empty. [Value x] represents the capture of semantic value [x].
+    [Initial] is a place holder that represents the initial frame of the
+    parser's stack. There is no semantic value associated to it, but one can
+    still refer to the position, which will be the initial position of the file
+    being parsed. *)
+
+type 'a register_value =
+  | Empty
+  | Initial
+  | Value of 'a
+
+type 'a register_values = 'a register_value array
+
 (** [sparse_lookup table sidx state] searches for in [table] from index [sidx]
     for a cell mapping state [lr1].
     This realizes the lookup part of a [Match] instruction. *)
@@ -125,6 +140,6 @@ module Interpreter (PE : Parse_errors) (P : Parser) : sig
 
   (** Runs the program on a concrete parser.
       Returns the list of matching clauses with the captured variables. *)
-  val run : 'a P.env -> (clause * P.element option array) list
+  val run : 'a P.env -> (clause * P.element register_values) list
 
 end
