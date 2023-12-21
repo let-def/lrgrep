@@ -819,3 +819,153 @@ struct
   let () = Stopwatch.leave time
 
 end
+
+module Fallible
+    (Info : Info.S)
+    (Viable: Viable_reductions.S with module Info := Info)
+    (Lrc: Lrc.S with module Info := Info)
+    (Reach: S with module Info := Info
+               and module Viable := Viable
+               and module Lrc := Lrc)
+    () :
+sig
+  type state
+  val state : state cardinal
+
+  type config = {
+    source : Reach.state index;
+    active : Info.Terminal.set;
+    rejected : Info.Terminal.set;
+  }
+
+  type target = state index * Info.Reduction.t
+
+  type transitions = {
+    inner: target list;
+    outer: target list list;
+  }
+
+  type desc = {
+    config: config;
+    transitions: transitions;
+  }
+
+  val states : (state, desc) vector
+
+  (*type intermediate
+  val intermediate : intermediate cardinal*)
+
+  (*type stack
+  val stack : stack cardinal
+
+  type stack_desc =
+    | Any of Lrc.t
+    | Intermediate of intermediate index
+    | State of state index
+
+  val stack_desc : stack index -> stack_desc
+
+  val stack_transitions : stack index -> stack indexset
+
+  val stack_label : stack index -> Info.Lr1.set*)
+end =
+struct
+  open Info
+
+  module State = IndexBuffer.Gen.Make()
+  type state = State.n
+  let state = State.n
+
+  type config = {
+    source: Reach.state index;
+    active: Terminal.set;
+  }
+
+  type target = state index * Reduction.t
+
+  type transitions = {
+    inner: target list;
+    outer: target list list;
+  }
+
+  type desc = {
+    config: config;
+    transitions: transitions;
+  }
+
+  let states = State.get_generator ()
+
+  let nodes = Hashtbl.create 7
+
+  let rec visit_transitions active {Reach.inner; outer} =
+    let visit (reach, red) =
+      let active = IndexSet.inter active (Reach.potential_reject_after reach) in
+      if IndexSet.is_empty active
+      then None
+      else Some (visit_config {active; source=reach}, red)
+    in
+    let rec trim_map = function
+      | [] -> []
+      | x :: xs ->
+        let x' = List.filter_map visit x in
+        let xs' = trim_map xs in
+        match x', xs' with
+        | [], [] -> []
+        | _ -> x' :: xs'
+    in
+    let inner = List.filter_map visit inner in
+    let outer = trim_map outer in
+    {inner; outer}
+
+  and visit_config config =
+    match Hashtbl.find_opt nodes config with
+    | Some state -> state
+    | None ->
+      let reservation = IndexBuffer.Gen.reserve states in
+      let index = IndexBuffer.Gen.index reservation in
+      Hashtbl.add nodes config index;
+      let transitions = (Vector.get Reach.states config.source).transitions in
+      IndexBuffer.Gen.commit states reservation
+        {config; transitions = visit_transitions config.active transitions};
+      index
+
+  let initial =
+    let process source =
+      let active = Reach.potential_reject_after source in
+      if IndexSet.is_empty active
+      then None
+      else Some (visit_config {source; active})
+    in
+    IndexMap.map process Reach.initial
+
+  let states = IndexBuffer.Gen.freeze states
+
+  let () =
+    Printf.eprintf "Coverage: %d states (Reachability: %d states)\n"
+      (cardinal state) (cardinal Reach.state)
+
+(*  module Intermediate = IndexBuffer.Gen.Make()
+  module State_or_intermediate = Sum(State)(Intermediate)
+  module Stack = Sum(Lrc)(State_or_intermediate)
+
+  type intermediate = Intermediate.n
+  let intermediate = Intermediate.n
+
+  type stack = Stack.n
+  let stack = Stack.n
+
+  let intermediates = Intermediate.get_generator ()
+
+  type state_transitions = {
+    inner: state indexset;
+    outer: target list list;
+  }
+
+  let state_transitions =
+    Vector.map (fun desc ->
+        desc.transitions
+
+      ) states
+
+  let intermediates = IndexBuffer.Gen.freeze intermediates*)
+end
