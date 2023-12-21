@@ -403,7 +403,7 @@ struct
         let matching = ref IndexSet.empty in
         let rec visit_transitions label reduction = function
           | step :: transitions when live_redstep reduction step ->
-            List.iter visit_candidate step.candidates;
+            List.iter (visit_candidate label) step.candidates;
             begin match transitions with
               | step' :: _ when live_redstep reduction step' ->
                 let reducing = Reducing {reduction; transitions; next} in
@@ -411,7 +411,7 @@ struct
               | _ -> ()
             end
           | _ -> ()
-        and visit_candidate (candidate : Lr1.set Redgraph.goto_candidate) =
+        and visit_candidate label (candidate : Lr1.set Redgraph.goto_candidate) =
           match label_filter label candidate.filter with
           | Some label
             when reduce_target reduction candidate.target
