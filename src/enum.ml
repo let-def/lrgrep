@@ -301,8 +301,7 @@ module Lookahead_coverage = struct
     if prb == prb' || IndexSet.is_empty pra' then
       None
     else (
-      let committed = IndexSet.diff (IndexSet.union status.node.committed pra') rejected in
-      let node = add_node status.node ~committed ~rejected tr in
+      let node = add_node status.node ~committed:pra' ~rejected tr in
       Vector.set node_prb st prb';
       Vector.set node_pra st (IndexSet.diff pra pra');
       Some {accepted; node}
@@ -388,7 +387,7 @@ module Lookahead_coverage = struct
     Printf.sprintf "%d sentences (%d direct, %d indirect)" (!count + !remainder) !count !remainder
 
   let () =
-    Printf.eprintf "Concrete lookahead coverage: dfs:%s, bfs:%s\n"
+    Printf.eprintf "Concrete lookahead coverage: dfs:%s, bfs:%s\n%!"
       (measure_lookaheads dfs)
       (measure_lookaheads bfs)
 
@@ -410,7 +409,70 @@ module Lookahead_coverage = struct
     in
     loop [] suffix
 
+  type remainder_node = {
+    covered: Terminal.set;
+    parent: remainder_node;
+    mutable child: (Reachable.target * remainder_node) list;
+    mutable active: bool;
+  }
+
+  let rec activate node =
+    if not node.active then (
+      node.active <- true;
+      activate node.parent
+    )
+
+  let remainder_coverage_tree remainder0 state =
+    let remainder = ref remainder0 in
+    let todo = ref [] in
+    let visit (parent, active, (state, _ as transition)) =
+      let active = IndexSet.inter active !remainder in
+      let active = IndexSet.inter (Reachable.potential_reject_after state) active in
+      if not (IndexSet.is_empty active) then (
+        let covered = IndexSet.inter active (Reachable.immediate_reject state) in
+        let node = {covered; parent; child = []; active = false} in
+        parent.child <- (transition, node) :: parent.child;
+        if not (IndexSet.is_empty covered) then (
+          remainder := IndexSet.diff !remainder covered;
+          activate node;
+        );
+        Reachable.iter_targets (Vector.get Reachable.states state).transitions
+          (fun target -> Misc.push todo (node, active, target))
+      )
+    in
+    let rec root = {
+      covered = IndexSet.empty;
+      parent = root;
+      active = true;
+      child = [];
+    } in
+    Reachable.iter_targets (Vector.get Reachable.states state).transitions
+      (fun target -> Misc.push todo (root, remainder0, target));
+    let rec loop () = match !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter visit todo';
+        loop ()
+    in
+    loop ();
+    assert (IndexSet.is_empty !remainder);
+    let rec filter (_, node) =
+      node.active && (cleanup node; true)
+    and cleanup node =
+      node.child <- List.filter filter node.child
+    in
+    cleanup root;
+    root
+
   let enum_sentences map f =
+    let rec visit_remainder suffix node =
+      if not (IndexSet.is_empty node.covered) then
+        f suffix node.covered;
+      List.iter
+        (fun ((st, red), node') -> visit_remainder (Reduce (st, red, suffix)) node')
+        node.child
+    in
     let rec visit_node suffix node =
       let rejected = match node.next with
         | [] ->
@@ -422,8 +484,12 @@ module Lookahead_coverage = struct
             IndexSet.empty children
       in
       assert (IndexSet.subset node.rejected rejected);
+      assert (IndexSet.disjoint rejected (Reachable.immediate_accept node.state));
       let remainder = IndexSet.diff node.committed rejected in
-      ignore remainder; (*TODO*)
+      if not (IndexSet.is_empty remainder) then (
+        let tree = remainder_coverage_tree remainder node.state in
+        visit_remainder suffix tree
+      );
       IndexSet.union rejected node.committed
     and visit_child suffix (reduction, node) =
       visit_node (Reduce (node.state, reduction, suffix)) node
