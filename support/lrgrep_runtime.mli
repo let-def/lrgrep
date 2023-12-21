@@ -112,7 +112,7 @@ module type Parser = sig
   val current_state_number : 'a env -> int
 
   (** Returns the semantic value at the top of the stack, if any. *)
-  val really_top : 'a env -> element
+  val top : 'a env -> element option
 
   (** Returns the stack with the top frame removed,
       or [None] for an empty stack *)

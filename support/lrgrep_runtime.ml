@@ -96,7 +96,7 @@ module type Parser = sig
   type 'a env
   type element
   val current_state_number : 'a env -> int
-  val really_top : 'a env -> element
+  val top : 'a env -> element option
   val pop : 'a env -> 'a env option
 end
 
@@ -170,7 +170,7 @@ struct
       match program_step PE.program pc with
       | Store reg ->
         if debug then eprintf "Store %d\n" reg;
-        bank.(reg) <- Some (P.really_top env);
+        bank.(reg) <- P.top env;
         loop ()
       | Move (r1, r2) ->
         if debug then eprintf "Move %d -> %d\n" r1 r2;

@@ -1459,8 +1459,6 @@ struct
 
   let bind_capture out ~roffset index (def, name) =
     let is_optional = IndexSet.mem index RunDFA.partial_captures in
-    let none = if is_optional then "None" else "assert false" in
-    let some x = if is_optional then "Some (" ^ x ^ ")" else x in
     let offset = !roffset in
     incr roffset;
     match def with
@@ -1489,6 +1487,7 @@ struct
             \        in\n"
             E.parser_name (String.concat " | " matchers) typ
       end;
+      let some x = if is_optional then "Some (" ^ x ^ ")" else x in
       Printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
       Printer.fmt out "    in\n";
       Printer.fmt out "    let _ = %s in\n" name
@@ -1499,7 +1498,7 @@ struct
         \      | Some (%s.MenhirInterpreter.Element (_, _, p, _)) -> %sp\n\
         \    in\n"
         name offset
-        none
+        (if is_optional then "None" else "__initialpos")
         E.parser_name
         (if is_optional then "Some " else "")
     | End_loc ->
@@ -1509,7 +1508,7 @@ struct
         \      | Some (%s.MenhirInterpreter.Element (_, _, _, p)) -> %sp\n\
         \    in\n"
         name offset
-        none
+        (if is_optional then "None" else "__initialpos")
         E.parser_name
         (if is_optional then "Some " else "")
 
@@ -1557,6 +1556,7 @@ struct
     Printer.fmt out
       "let execute_%s %s\n
       \  (__clause, (__registers : %s.MenhirInterpreter.element option array))\n\
+      \  (__initialpos : Lexing.position)\n\
       \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
       \  : _ option = match __clause, token with\n"
       E.entry.name (String.concat " " E.entry.args)

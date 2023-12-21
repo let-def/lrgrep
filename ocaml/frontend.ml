@@ -46,7 +46,8 @@ let parse
     (lexbuf : Lexing.lexbuf)
     : a
   =
-  Location.input_name := lexbuf.lex_start_p.pos_fname;
+  let initial = lexbuf.lex_start_p in
+  Location.input_name := initial.pos_fname;
   let lexstate = Lexer_raw.make Lexer_raw.keyword_table in
   let module I = Parser_raw.MenhirInterpreter in
   let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
@@ -70,7 +71,7 @@ let parse
           | [] -> error_and_exit oc lexbuf
                     "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
-            match Parse_errors.execute_error_message m tok with
+            match Parse_errors.execute_error_message m initial tok with
             | None -> loop ms
             | Some err -> error_and_exit oc lexbuf err
         in
