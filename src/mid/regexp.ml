@@ -382,7 +382,7 @@ struct
       in
       loop inner;
       if outer <> [] then
-        on_outer r outer;
+        on_outer outer;
       !matched
 
     let derive filter k =
@@ -434,7 +434,7 @@ struct
           match label_filter label candidate.filter with
           | Some label
             when reduce_target reduction candidate.target
-                ~on_outer:(visit_transitions label) ->
+                ~on_outer:(visit_transitions label reduction) ->
             matching := IndexSet.union label.filter !matching
           | _ -> ()
         in
@@ -509,7 +509,7 @@ struct
           let matching =
             IndexSet.filter (fun lr1 ->
                 let steps = Redgraph.get_transitions (Vector.get Redgraph.initial lr1) in
-                let on_outer reduction = function
+                let on_outer = function
                   | (step :: _) as transitions when live_redstep reduction step ->
                     let label = {label with filter = IndexSet.singleton lr1} in
                     continue ks' label (Reducing {reduction; transitions; next})
