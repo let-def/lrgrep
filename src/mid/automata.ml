@@ -175,9 +175,9 @@ sig
     val label : transitions index -> Label.t
     val target : transitions index -> states index
 
-    (* Labels which are reachable (there exists stacks that could t
-       but for which the state defines no transition.
-       They should be rejected at runtime. *)
+    (* Labels which are reachable (there exists failing configurations (stack,
+       lookahead) that reach these state) but for which the state defines no
+       transition. They should be rejected at runtime. *)
     val unhandled : states index -> Lr1.set
 
     val outgoing : states index -> transitions indexset

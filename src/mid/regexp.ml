@@ -398,6 +398,25 @@ struct
         | r' ->
           r := (label, Some next) :: r'
       in
+      (* FIXME:
+         "can_succeed_next" is a workaround for a limitation of dataflow analysis.
+         It is used to place capture the end location of a reduction if is
+         likely to succeed at the next transition.
+         It is correct to always capture the location, however the dataflow
+         analysis does a bad job (!) of eliminating useless captures, which
+         lead to a bigger than necessary automaton. can_succeed_next is used as
+         a heuristic to not place unnecessary captures.
+
+         The proper solution is to improve the dataflow analysis, which will
+         lead to smaller automata in general and allows us to get rid of this
+         heuristic.
+       *)
+      let can_succeed_next (red : RE.reduction) = function
+        | (step : Lr1.set Redgraph.reduction_step) :: _ ->
+          List.exists (fun cand -> IndexSet.mem cand.Redgraph.target red.pattern)
+            step.candidates
+        | [] -> false
+      in
       let reduce_outer next label reduction transitions =
         let ks = ref [] in
         let matching = ref IndexSet.empty in
@@ -419,7 +438,11 @@ struct
             matching := IndexSet.union label.filter !matching
           | _ -> ()
         in
-        visit_transitions label reduction transitions;
+        visit_transitions
+          (if can_succeed_next reduction transitions
+           then label_capture label reduction.capture Usage.empty
+           else label)
+          reduction transitions;
         let matching =
           if not_empty !matching then
             Some {label with filter = !matching}
@@ -443,9 +466,9 @@ struct
             ks := ks' @ !ks
           | Some label, Longest ->
             ks := ks' @ !ks;
-            process_k (label_capture label reduction.capture reduction.usage) next
+            process_k (label_capture label IndexSet.empty reduction.usage) next
           | Some label, Shortest ->
-            process_k (label_capture label reduction.capture reduction.usage) next;
+            process_k (label_capture label IndexSet.empty reduction.usage) next;
             ks := ks' @ !ks
 
       and process_re label self next = function
@@ -476,8 +499,12 @@ struct
             | Some label' -> process_k label' next
           end
 
-        | Reduce (cap, r) ->
-          let label = label_capture label cap Usage.empty in
+        | Reduce (cap, reduction) ->
+          let label =
+            label_capture label
+              (IndexSet.union cap reduction.capture)
+              Usage.empty
+          in
           let ks' = ref [] in
           let matching =
             IndexSet.filter (fun lr1 ->
@@ -488,19 +515,21 @@ struct
                     continue ks' label (Reducing {reduction; transitions; next})
                   | _ -> ()
                 in
-                reduce_transitions ~on_outer r steps
+                reduce_transitions ~on_outer reduction steps
               ) label.filter
           in
-          let label = label_capture label r.capture r.usage in
-          begin match r.RE.policy with
+          let label =
+            label_filter
+              (label_capture label IndexSet.empty reduction.usage)
+              matching
+          in
+          begin match reduction.policy with
             | Shortest ->
-              if not_empty matching then
-                process_k {label with filter = matching} next;
-              ks := !ks' @ !ks
+              Option.iter (fun label -> process_k label next) label;
+              ks := !ks' @ !ks;
             | Longest ->
               ks := !ks' @ !ks;
-              if not_empty matching then
-                process_k {label with filter = matching} next;
+              Option.iter (fun label -> process_k label next) label;
           end
       in
       let label = {filter; captures = IndexSet.empty; usage = Usage.empty} in
