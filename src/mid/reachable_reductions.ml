@@ -550,13 +550,12 @@ struct
   let () = Stopwatch.leave time
 end
 
-module Make2
-    (I : Info.S)
-    (Viable: Viable_reductions.S with module Info := I)
-    (Lrc: Lrc.S with module Info := I)
-    () :
-sig
-  open I
+module type S = sig
+  module Info : Info.S
+  module Viable : Viable_reductions.S with module Info := Info
+  module Lrc : Lrc.S with module Info := Info
+  open Info
+
   type state
   val state : state cardinal
 
@@ -591,9 +590,19 @@ sig
   val potential_reject_after : state index -> Terminal.set
   val potential_reject_before : state index -> Terminal.set
   val eventual_reject : state index -> Terminal.set
-end =
+end
+
+module Make2
+    (Info : Info.S)
+    (Viable: Viable_reductions.S with module Info := Info)
+    (Lrc: Lrc.S with module Info := Info)
+    () :
+  S with module Info := Info
+     and module Viable := Viable
+     and module Lrc := Lrc
+=
 struct
-  open I
+  open Info
   let time = Stopwatch.enter Stopwatch.main "Reachable reductions (2)"
 
   (* Check that lookaheads are decreasing in redgraph
@@ -723,27 +732,20 @@ struct
   let predecessors =
     Misc.relation_reverse successors
 
+  let viable_config st =
+    Viable.get_config (Vector.get states st).config.source
+
   let immediate_reject st =
-    let desc = Vector.get states st in
-    let viable = Viable.get_config desc.config.source in
-    Lr1.reject viable.top
+    Lr1.reject (viable_config st).top
 
   let immediate_accept st =
-    let desc = Vector.get states st in
-    let viable = Viable.get_config desc.config.source in
-    Lr1.shift_on viable.top
+    Lr1.shift_on (viable_config st).top
 
   let unreachable_lookaheads =
     let table = Vector.make state Terminal.all in
-    IndexMap.iter (fun lrc st ->
-        let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
-        iter_targets
-          (Vector.get states st).transitions
-          (fun (st, _red) ->
-             let set = Terminal.intersect unreachable (Vector.get table st) in
-             Vector.set table st set
-          )
-      ) initial;
+    IndexMap.iter
+      (fun _lrc st -> Vector.set table st (immediate_accept st))
+      initial;
     fixpoint successors table
       ~propagate:(fun _src set1 tgt set2 ->
           let set1 = IndexSet.union set1 (immediate_accept tgt) in
