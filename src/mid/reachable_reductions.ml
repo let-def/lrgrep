@@ -735,15 +735,14 @@ struct
 
   let unreachable_lookaheads =
     let table = Vector.make state Terminal.all in
-    IndexMap.iter
-      (fun lrc st ->
-         let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
-         iter_targets
-           (Vector.get states st).transitions
-           (fun (st, _red) ->
-              let set = Terminal.intersect unreachable (Vector.get table st) in
-              Vector.set table st set
-           )
+    IndexMap.iter (fun lrc st ->
+        let unreachable = Lr1.shift_on (Lrc.lr1_of_lrc lrc) in
+        iter_targets
+          (Vector.get states st).transitions
+          (fun (st, _red) ->
+             let set = Terminal.intersect unreachable (Vector.get table st) in
+             Vector.set table st set
+          )
       ) initial;
     fixpoint successors table
       ~propagate:(fun _src set1 tgt set2 ->
@@ -764,7 +763,9 @@ struct
     Vector.get table
 
   let potential_reject_after =
-    let table = Vector.init state immediate_reject in
+    let table = Vector.init state
+        (fun st -> IndexSet.diff (immediate_reject st) (unreachable_lookaheads st))
+    in
     let propagate _src rej1 tgt rej2 =
       IndexSet.union (IndexSet.diff rej1 (unreachable_lookaheads tgt)) rej2
     in
@@ -784,6 +785,8 @@ struct
     let potential = ref 0 in
     let eventual = ref 0 in
     Index.iter state (fun st ->
+        assert (IndexSet.disjoint (potential_reject_after st) (unreachable_lookaheads st));
+        assert (IndexSet.disjoint (potential_reject_before st) (unreachable_lookaheads st));
         let ireject = immediate_reject st in
         let preject = potential_reject_after st in
         let ereject = IndexSet.diff (eventual_reject st) ireject in
