@@ -151,7 +151,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Mid.Automata.Entry
       (Transl)
       (*Lrc.Lrce Lrc.Lrc_NFA Lr1_stacks*)
-      (Reachable.Lrce)
+      (Reachable.Lrc_NFA)
       (struct
         let parser_name = parser_name
         let entry = entry
