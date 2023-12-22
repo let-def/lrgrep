@@ -197,7 +197,14 @@ struct
           | None -> IndexSet.iter f (Lrc.lrcs_of_lr1 lr1)
           | Some _ -> ())
 
-    let refinements _ = ()
+    let refinements (f : (add:(states index -> unit) -> unit) -> unit) =
+      Index.iter Lr1.n
+        (fun lr1 ->
+          match Lr1.incoming lr1 with
+          | None ->
+            f (fun ~add -> IndexSet.iter add (Lrc.lrcs_of_lr1 lr1))
+          | Some _ -> ()
+        )
   end
 
   module MDFA = Valmari.Minimize(struct
