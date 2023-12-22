@@ -591,6 +591,10 @@ module type S = sig
   val rev_iter_targets : transitions -> (target -> unit) -> unit
   val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
   val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
+
+  val extra_rejections : n index -> Terminal.set
+  val extra_transitions : n index -> transitions
+
 end
 
 module Make3
@@ -742,6 +746,26 @@ struct
     Misc.fixpoint predecessors table ~propagate:widen;
     Vector.get table
 
+  let extra_rejections =
+    tabulate_finset n
+      (fun st -> IndexSet.diff (potential_reject st) (rejected st))
+
+  let extra_transitions =
+    let has_extra st = not (IndexSet.is_empty (extra_rejections st)) in
+    let filter xs = List.filter (fun (st, _) -> has_extra st) xs in
+    let rec filter_trim = function
+      | [] -> []
+      | x :: xs ->
+        match filter x, filter_trim xs with
+        | [], [] -> []
+        | x', xs' -> x' :: xs'
+    in
+    tabulate_finset n (fun st ->
+        let {transitions; _} = Vector.get states st in
+        let inner = filter transitions.inner in
+        let outer = filter_trim transitions.outer in
+        {inner; outer}
+      )
 
   let () = Stopwatch.leave time
 
