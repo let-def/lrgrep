@@ -58,90 +58,13 @@ let () = Stopwatch.step Stopwatch.main "Loaded grammar"
 module Info = Mid.Info.Make(Grammar)
 module Viable = Mid.Viable_reductions.Make(Info)()
 module Reachability = Mid.Reachability.Make(Info)()
-(*module Lrc = Mid.Lrc.Make(Info)(Reachability)*)
-(* Re-enable when minimization is fixed *)
-(*module Lrc = Mid.Lrc.Minimize(Info)(Mid.Lrc.Make(Info)(Reachability))
-  module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()*)
+
 module Lrc = Mid.Lrc.Make(Info)(Reachability)
-module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()
-module Covered_red = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
+(* Re-enable when minimization is fixed *)
+(*module Lrc = Mid.Lrc.Minimize(Info)(Mid.Lrc.Make(Info)(Reachability))*)
+module Reach = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
 
 open Fix.Indexing
-
-module Reduction_coverage = struct
-
-  type tree = {
-    depth: int;
-    mutable next: (Reachable.state index * tree) list;
-  }
-
-  let add_node root state =
-    let node = { depth = root.depth + 1; next = [] } in
-    root.next <- (state, node) :: root.next;
-    node
-
-  let rec count (sum, steps as acc) = function
-    | { depth; next = [] } -> (sum + 1, steps + depth)
-    | { depth = _; next } -> List.fold_left count_transitions acc next
-
-  and count_transitions acc (_, node) =
-    count acc node
-
-  let measure node =
-    let count, steps = IndexMap.fold (fun _ node acc -> count acc node) node (0, 0) in
-    Printf.sprintf "%d sentences, average length %.02f" count (float steps /. float count)
-
-  let bfs =
-    let visited = Vector.make Reachable.state false in
-    let enter parent acc (st, _) =
-      if Vector.get visited st then
-        acc
-      else (
-        let node = add_node parent st in
-        Vector.set visited st true;
-        (node, st) :: acc
-      )
-    in
-    let visit acc (node, st) =
-      Reachable.fold_targets (enter node) acc
-        (Vector.get Reachable.states st).transitions
-    in
-    let rec loop = function
-      | [] -> ()
-      | acc -> loop (List.fold_left visit [] acc)
-    in
-    let acc = ref [] in
-    let bfs =
-      IndexMap.map (fun st ->
-        let node = { depth = 1; next = [] } in
-        acc := Reachable.fold_targets (enter node) !acc
-            (Vector.get Reachable.states st).transitions;
-        node
-      ) Reachable.initial
-    in
-    loop !acc;
-    bfs
-
-  let dfs =
-    let visited = Vector.make Reachable.state false in
-    let rec enter parent (st, _) =
-      if not (Vector.get visited st) then
-        visit (add_node parent st) st
-    and visit node st =
-      Vector.set visited st true;
-      Reachable.iter_targets
-        (Vector.get Reachable.states st).transitions
-        (enter node)
-    in
-    IndexMap.map (fun st ->
-        let node = { depth = 1; next = [] } in
-        visit node st;
-        node
-      ) Reachable.initial
-
-
-  let () = Printf.eprintf "Reduction coverage: dfs:%s, bfs:%s\n%!" (measure dfs) (measure bfs)
-end
 
 let lrc_successors =
   Vector.get (Misc.relation_reverse' Lrc.n Lrc.predecessors)
@@ -176,6 +99,185 @@ let lrc_prefix =
   loop !todo;
   Vector.get table
 
+module Sentence_gen = struct
+  open Info
+
+  let rec cells_of_lrc_list = function
+    | [] -> assert false
+    | [_] ->  []
+    | (x :: (y :: _ as tail)) ->
+      let xl = Lrc.lr1_of_lrc x in
+      let yl = Lrc.lr1_of_lrc y in
+      let yi = Lrc.class_index y in
+      let tr =
+        List.find
+          (fun tr -> Transition.source tr = xl)
+          (Transition.predecessors yl)
+      in
+      let open Reachability in
+      let xi =
+        match Classes.pre_transition tr with
+        | [|c_pre|] when IndexSet.is_singleton c_pre ->
+          if not (IndexSet.subset c_pre (Lrc.lookahead x)) then (
+            Printf.eprintf "pre:%s expected:%s\nfrom:%s to:%s after:%s\n%!"
+              (Misc.string_of_indexset ~index:Terminal.to_string c_pre)
+              (Misc.string_of_indexset ~index:Terminal.to_string (Lrc.lookahead x))
+              (Lr1.to_string xl)
+              (Lr1.to_string yl)
+              (if IndexSet.equal (Lrc.lookahead y) Terminal.all
+                then "all"
+                else Misc.string_of_indexset ~index:Terminal.to_string (Lrc.lookahead y))
+            ;
+            assert false
+          );
+          0
+        | _ -> Lrc.class_index x
+      in
+      let yi = (Coercion.infix (Classes.post_transition tr) (Classes.for_lr1 yl)).backward.(yi)
+      in
+      Cells.encode (Tree.leaf tr) xi yi :: cells_of_lrc_list tail
+
+  exception Break of Terminal.t list
+
+  let rec prepend_word cell acc =
+    let open Reachability in
+    let node, i_pre, i_post = Cells.decode cell in
+    match Tree.split node with
+    | L tr ->
+      (* The node corresponds to a transition *)
+      begin match Transition.split tr with
+        | R shift ->
+          (* It is a shift transition, just shift the symbol *)
+          Transition.shift_symbol shift :: acc
+        | L goto ->
+          (* It is a goto transition *)
+          let nullable, non_nullable = Tree.goto_equations goto in
+          let c_pre = (Tree.pre_classes node).(i_pre) in
+          let c_post = (Tree.post_classes node).(i_post) in
+          if not (IndexSet.is_empty nullable) &&
+            IndexSet.quick_subset c_post nullable &&
+            not (IndexSet.disjoint c_pre c_post) then
+            (* If a nullable reduction is possible, don't do anything *)
+            acc
+          else
+            (* Otherwise look at all equations that define the cost of the
+               goto transition and recursively visit one of minimal cost *)
+            let current_cost = Cells.cost cell in
+            match
+            List.find_map (fun (node', lookahead) ->
+              if IndexSet.disjoint c_post lookahead then
+                (* The post lookahead class does not permit reducing this
+                       production *)
+                None
+              else
+                let costs = Vector.get Cells.table node' in
+                match Tree.pre_classes node' with
+                | [|c_pre'|] when IndexSet.disjoint c_pre' c_pre ->
+                  (* The pre lookahead class does not allow to enter this
+                         branch. *)
+                  None
+                | pre' ->
+                  (* Visit all lookahead classes, pre and post, and find
+                         the mapping between the parent node and this
+                         sub-node *)
+                  let pred_pre _ c_pre' = IndexSet.quick_subset c_pre' c_pre in
+                  let pred_post _ c_post' = IndexSet.quick_subset c_post c_post' in
+                  match
+                  Misc.array_findi pred_pre 0 pre',
+                  Misc.array_findi pred_post 0 (Tree.post_classes node')
+                  with
+                  | exception Not_found -> None
+                  | i_pre', i_post' ->
+                    let offset = Cells.offset node' i_pre' i_post' in
+                    if costs.(offset) = current_cost then
+                      (* We found a candidate of minimal cost *)
+                      Some (Cells.encode_offset node' offset)
+                    else
+                      None
+            ) non_nullable
+            with
+            | None ->
+              Printf.eprintf "abort, cost = %d\n%!" current_cost;
+              assert false
+            | Some cell' ->
+              (* Solve the sub-node *)
+              prepend_word cell' acc
+        end
+    | R (l, r) ->
+      (* It is an inner node.
+         We decompose the problem in a left-hand and a right-hand
+         sub-problems, and find sub-solutions of minimal cost *)
+      let current_cost = Cells.cost cell in
+      let coercion =
+        Coercion.infix (Tree.post_classes l) (Tree.pre_classes r)
+      in
+      let l_index = Cells.encode l in
+      let r_index = Cells.encode r in
+      begin try
+        Array.iteri (fun i_post_l all_pre_r ->
+          let l_cost = Cells.cost (l_index i_pre i_post_l) in
+          Array.iter (fun i_pre_r ->
+            let r_cost = Cells.cost (r_index i_pre_r i_post) in
+            if l_cost + r_cost = current_cost then (
+              let acc = prepend_word (r_index i_pre_r i_post) acc in
+              let acc = prepend_word (l_index i_pre i_post_l) acc in
+              raise (Break acc)
+            )
+          ) all_pre_r
+        ) coercion.Coercion.forward;
+        assert false
+      with Break acc -> acc
+        end
+end
+
+module Form_generator : sig
+  type t
+  val top : potential:Lrc.set -> top:Lrc.t -> t
+  val reduce : potential:Lrc.set -> length:int -> t -> t
+  val finish : t -> Lrc.set list
+end = struct
+  type t = {
+    stack: Lrc.set list;
+    potential: Lrc.set;
+    pushed: int;
+  }
+
+  let top ~potential ~top = { stack = [IndexSet.singleton top]; potential; pushed = 1 }
+
+  let reduce ~potential ~length t =
+    let pushed = t.pushed - length in
+    if pushed >= 0
+    then (
+      assert (
+        if pushed > 0
+        then IndexSet.equal potential t.potential
+        else IndexSet.subset potential t.potential
+      );
+      {t with pushed = pushed + 1; potential}
+    )
+    else (
+      let rec expand acc lrcs = function
+        | 1 -> acc
+        | n ->
+          let lrcs = Misc.indexset_bind lrcs Lrc.predecessors in
+          expand (lrcs :: acc) lrcs (n - 1)
+      in
+      let rec narrow lrcs = function
+        | [] -> t.stack
+        | x :: xs ->
+          let lrcs = Misc.indexset_bind lrcs lrc_successors in
+          IndexSet.inter x lrcs :: narrow lrcs xs
+      in
+      let stack = narrow potential (expand [t.potential] t.potential (- pushed)) in
+      {potential; stack; pushed = 1}
+    )
+
+  let finish t =
+    if IndexSet.is_empty t.potential
+    then t.stack
+    else t.potential :: t.stack
+end
+
 let output_item oc (prod, dot) =
   let open Info in
   output_string oc " /";
@@ -202,50 +304,172 @@ let pr_lrc lrc =
   else
     string_of_int (Lrc.class_index lrc)
 
-(* Validate prefixes *)
-let () =
-  if false then
-    Index.iter Lrc.n (fun lrc ->
-        let open Info in
-        let lr1 = Lrc.lr1_of_lrc lrc in
-        let p, n =
-          match Lr1.items lr1 with
-          | [] -> assert false
-          | (p, n) :: other ->
-            List.fold_left
-              (fun (_, n as acc) (_, m as it) -> if m > n then it else acc)
-              (p, n) other
-        in
-        let rhs = Production.rhs p in
-        let prefix = lrc_prefix lrc in
-        let invalid () =
-          Printf.printf "Invalid prefix: %s\n"
-            (Misc.string_concat_map " " pr_lrc prefix);
-          Printf.printf "For state with items:\n";
-          List.iter (fun x ->
-              output_item stdout x;
-              print_newline ()
-            ) (Lr1.items lr1);
-        in
-        if prefix = [] then
-          invalid ()
-        else
-          let cursor = ref (lrc_prefix lrc) in
-          for i = n - 2 downto 0 do
-            let valid = match !cursor with
-              | [] -> false
-              | hd :: tl ->
-                cursor := tl;
-                Lr1.incoming (Lrc.lr1_of_lrc hd) = Some rhs.(i)
-            in
-            if not valid then (
-              invalid();
-              assert false
-            )
-          done
-      )
+module Boolvector : sig
+  type 'n t
+
+  val make : 'n cardinal -> 'n t
+  val test : 'n t -> 'n index -> bool
+  val set : 'n t -> 'n index -> unit
+  val clear : 'n t -> 'n index -> unit
+
+end = struct
+  type 'n t = bytes
+
+  let make c =
+    let n = cardinal c in
+    Bytes.make ((n + 7) lsr 3) '\000'
+
+  let test b n =
+    let n = (n : _ index :> int) in
+    let cell = n lsr 3 in
+    let bit = n land 7 in
+    Char.code (Bytes.unsafe_get b cell) land (1 lsl bit) <> 0
+
+  let set b n =
+    let n = (n : _ index :> int) in
+    let cell = n lsr 3 in
+    let bit = n land 7 in
+    Bytes.unsafe_set b cell
+      (Char.unsafe_chr (Char.code (Bytes.unsafe_get b cell) lor (1 lsl bit)))
+
+  let clear b n =
+    let n = (n : _ index :> int) in
+    let cell = n lsr 3 in
+    let bit = n land 7 in
+    Bytes.unsafe_set b cell
+      (Char.unsafe_chr (Char.code (Bytes.unsafe_get b cell) land lnot (1 lsl bit)))
+end
 
 module Lookahead_coverage = struct
+  open Info
+
+  let lr1_of state =
+    (Viable.get_config (Vector.get Reach.states state).config.viable).top
+
+  module Cover : sig
+    type n
+    val n : n cardinal
+    val index : Reach.state index -> n index
+  end = struct
+    type n = Lr0.n
+    let n = Lr0.n
+    let index st = Lr1.to_lr0 (lr1_of st)
+  end
+
+  let remainings () =
+    let table = Vector.make Cover.n IndexSet.empty in
+    Index.iter Reach.state (fun st ->
+        let i = Cover.index st in
+        let set = Vector.get table i in
+        Vector.set table i
+          (IndexSet.union (Reach.potential_reject st) set)
+      );
+    table
+
+  type suffix =
+    | Top of Reach.state index
+    | Reduce of Reach.state index * Info.Reduction.t * suffix
+
+  let enum_sentences f =
+    let remainings = remainings () in
+    let visited = Boolvector.make Reach.state in
+    let todo = ref [] in
+    let need_visit st =
+      if not (Boolvector.test visited st) then (
+        Boolvector.set visited st;
+        true
+      ) else
+        false
+    in
+    let visit_node (Top st | Reduce (st, _, _) as suffix) =
+      let i = Cover.index st in
+      let remaining = Vector.get remainings i in
+      let reached = IndexSet.inter remaining (Reach.rejected st) in
+      if not (IndexSet.is_empty reached) then (
+        Vector.set remainings i (IndexSet.diff remaining reached);
+        f suffix reached;
+      );
+      Reach.iter_targets
+        (Vector.get Reach.states st).transitions
+        (fun (st', red) ->
+           if need_visit st' then
+             Misc.push todo (Reduce (st', red, suffix)))
+    in
+    IndexMap.iter (fun _lrc st ->
+        assert (need_visit st);
+        visit_node (Top st)
+      ) Reach.initial;
+    while !todo <> [] do
+      let todo' = !todo in
+      todo := [];
+      List.iter visit_node todo'
+    done;
+    Vector.iter (fun set -> assert (IndexSet.is_empty set)) remainings
+
+  let items_from_suffix suffix =
+    let items_of_state state = Lr1.items (lr1_of state) in
+    let rec loop acc = function
+      | Reduce (state, _, next) ->
+        loop (items_of_state state :: acc) next
+      | Top state ->
+        items_of_state state :: acc
+    in
+    loop [] suffix
+
+  let () =
+    let construct_form suffix =
+      let get_potential state =
+        (Vector.get Reach.states state).config.lrcs
+      in
+      let rec loop = function
+        | Top state ->
+          Form_generator.top
+            ~potential:(get_potential state)
+            ~top:(Lrc.first_lrc_of_lr1 (lr1_of state))
+        | Reduce (state, red, suffix) ->
+          Form_generator.reduce (loop suffix)
+            ~potential:(get_potential state)
+            ~length:(Production.length (Reduction.production red))
+      in
+      Form_generator.finish (loop suffix)
+    in
+    let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
+    let print_items items =
+      print_string " [";
+      List.iter (output_item stdout) items;
+      print_string " ]";
+    in
+    let rec select_one = function
+      | [] -> []
+      | [x] -> [IndexSet.choose x]
+      | x :: y :: ys ->
+        let x = IndexSet.choose x in
+        x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
+    in
+    enum_sentences (fun suffix lookaheads ->
+        let lrcs = select_one (construct_form suffix) in
+        let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
+        let entrypoint =
+          List.hd lrcs
+          |> Lrc.lr1_of_lrc
+          |> Lr1.to_lr0
+          |> Lr0.entrypoint
+          |> Option.get
+          |> Nonterminal.to_string
+        in
+        let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
+        let cells = Sentence_gen.cells_of_lrc_list lrcs in
+        let word = List.fold_right Sentence_gen.prepend_word cells [] in
+        print_string entrypoint;
+        List.iter print_terminal word;
+        print_string " @";
+        IndexSet.iter print_terminal lookaheads;
+        List.iter print_items (items_from_suffix suffix);
+        print_newline ()
+      )
+end
+
+(*module Lookahead_coverage = struct
   open Info
 
   type node = {
@@ -742,4 +966,4 @@ module Lookahead_coverage = struct
         List.iter print_items (items_from_suffix suffix);
         print_newline ()
       )
-end
+end*)

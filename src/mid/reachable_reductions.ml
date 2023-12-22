@@ -856,6 +856,10 @@ sig
   val successors : (state, state indexset) vector
   val predecessors : (state, state indexset) vector
 
+  val accepted : state index -> Terminal.set
+  val rejected : state index -> Terminal.set
+  val potential_reject : state index -> Terminal.set
+
   val iter_targets : transitions -> (target -> unit) -> unit
   val rev_iter_targets : transitions -> (target -> unit) -> unit
   val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
@@ -998,6 +1002,42 @@ struct
 
   let predecessors =
     Misc.relation_reverse successors
+
+  let accepted st = (Vector.get states st).config.accepted
+  let rejected st = (Vector.get states st).config.rejected
+
+  let potential_reject =
+    let table = Vector.init state rejected in
+    let widen _src rej1 tgt rej2 =
+      IndexSet.union (IndexSet.diff rej1 (accepted tgt)) rej2
+    in
+    Misc.fixpoint predecessors table ~propagate:widen;
+    Vector.get table
+
+  (*let eventual_reject =
+    let table = Vector.init state rejected in
+    let widen _src rej1 tgt rej2 =
+      IndexSet.union (IndexSet.diff rej1 (accepted tgt)) rej2
+    in
+    Misc.fixpoint predecessors table ~propagate:widen;
+    let narrow _src rej1 _tgt rej2 = IndexSet.inter rej1 rej2 in
+    Misc.fixpoint predecessors table ~propagate:narrow;
+    Vector.get table
+
+  let () =
+    let states = ref 0 in
+    let count = ref 0 in
+    Index.iter state (fun st ->
+        match
+          IndexSet.cardinal (IndexSet.diff (eventual_reject st) (rejected st))
+        with
+        | 0 -> ()
+        | count' ->
+          incr states;
+          count := !count + count'
+      );
+    Stopwatch.step time "%d eventual rejections in %d states"
+      !count !states*)
 
   (*let viable_config st =
     Viable.get_config (Vector.get states st).config.source
