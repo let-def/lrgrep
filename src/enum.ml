@@ -379,38 +379,43 @@ module Lookahead_coverage = struct
   let suffix_state (Top st | Reduce (st, _, _)) = st
 
   let build_arborescence () =
+    let remainings = remainings () in
     let visited = Boolvector.make Reach.state in
-    let remainings = Vector.init Reach.state Reach.potential_reject in
     let todo = ref [] in
-    let visit_node (rejected, node) =
+    let need_visit st =
+      if not (Boolvector.test visited st)
+      then (Boolvector.set visited st; true)
+      else false
+    in
+    let visit_node node =
       let st = suffix_state node.suffix in
-      Boolvector.set visited st;
-      let rejected = IndexSet.union (Reach.rejected st) rejected in
-      let remaining = Vector.get remainings st in
-      node.committed <- IndexSet.inter remaining rejected;
-      if not (IndexSet.is_empty node.committed) then (
-        Vector.set remainings st (IndexSet.diff remaining node.committed);
-        Reach.iter_targets
-          (Vector.get Reach.states st).transitions
-          (fun (st', red) ->
+      let i = Cover.index st in
+      let remaining = Vector.get remainings i in
+      node.committed <- IndexSet.inter remaining (Reach.rejected st);
+      Vector.set remainings i (IndexSet.diff remaining node.committed);
+      Reach.iter_targets
+        (Vector.get Reach.states st).transitions
+        (fun (st', red) ->
+           if need_visit st' then (
              let node' = {
                suffix = Reduce (st', red, node.suffix);
                committed = IndexSet.empty;
                child = [];
              } in
              node.child <- node' :: node.child;
-             Misc.push todo (rejected, node')
-          )
-      )
+             Misc.push todo node'
+           )
+        )
     in
     let initials =
       IndexMap.fold (fun _lrc st acc ->
+          assert (need_visit st);
           let node = {
             suffix = Top st;
             committed = IndexSet.empty;
             child = [];
           } in
-          visit_node (IndexSet.empty, node);
+          visit_node node;
           node :: acc
         ) Reach.initial []
     in
@@ -419,37 +424,80 @@ module Lookahead_coverage = struct
       todo := [];
       List.iter visit_node todo'
     done;
-    Index.iter Reach.state (fun st -> assert (Boolvector.test visited st));
-    (*Vector.iter (fun set ->
-        if not (IndexSet.is_empty set) then (
-          prerr_endline (Misc.string_of_indexset ~index:Terminal.to_string set);
-          assert false;
+    (remainings, initials)
+
+  let build_remainder remaining suffix =
+    let remaining = ref remaining in
+    let todo = ref [] in
+    let visit node =
+      let st = suffix_state node.suffix in
+      node.committed <- IndexSet.inter !remaining (Reach.rejected st);
+      if not (IndexSet.is_empty node.committed) then
+        remaining := IndexSet.diff !remaining node.committed;
+      Reach.iter_targets (Vector.get Reach.states st).transitions
+        (fun (st', red) ->
+           if not (IndexSet.disjoint !remaining (Reach.potential_reject st))
+           then (
+             let node' = {
+               suffix = Reduce (st', red, node.suffix);
+               committed = IndexSet.empty;
+               child = [];
+             } in
+             node.child <- node' :: node.child;
+             Misc.push todo node'
+           )
         )
-      ) remainings;*)
-    initials
+    in
+    let root = {suffix; committed = IndexSet.empty; child = []} in
+    visit root;
+    while !todo <> [] do
+      let todo' = !todo in
+      todo := [];
+      List.iter visit todo'
+    done;
+    root
 
   let enum_sentences f =
-    let remainings = remainings () in
-    let rec visit node =
+    let remainings, forest = build_arborescence () in
+    let visited = Boolvector.make Reach.state in
+    let rec visit in_remainder node =
       let processed =
         List.fold_left
-          (fun acc node -> IndexSet.union (visit node) acc)
+          (fun acc node -> IndexSet.union (visit in_remainder node) acc)
           IndexSet.empty node.child
       in
-      let index = Cover.index (suffix_state node.suffix) in
-      let remaining = Vector.get remainings index in
       let processed =
-        let remainder = IndexSet.inter node.committed remaining in
-        let remainder = IndexSet.diff remainder processed in
+        let remainder = IndexSet.diff node.committed processed in
         if IndexSet.is_empty remainder then processed else (
           f node.suffix remainder;
           IndexSet.union remainder processed
         )
       in
-      Vector.set remainings index (IndexSet.diff remaining processed);
+      let processed =
+        let state = suffix_state node.suffix in
+        Boolvector.set visited state;
+        let index = Cover.index state in
+        let remaining = Vector.get remainings index in
+        if in_remainder then (
+          let remaining' = IndexSet.diff remaining processed in
+          if remaining != remaining' then
+            Vector.set remainings index remaining';
+          processed
+        ) else
+          let remainder =
+            IndexSet.inter remaining (Reach.potential_reject state)
+          in
+          if IndexSet.is_empty remainder then processed else (
+            let node' = build_remainder remainder node.suffix in
+            let remainder' = visit true node' in
+            assert (IndexSet.subset remainder remainder');
+            assert (IndexSet.disjoint (Vector.get remainings index) remainder);
+            IndexSet.union remainder' processed
+          )
+      in
       processed
     in
-    List.iter (fun node -> ignore (visit node)) (build_arborescence ());
+    List.iter (fun node -> ignore (visit false node)) forest;
     Vector.iter (fun set -> assert (IndexSet.is_empty set)) remainings
 
   let items_from_suffix suffix =
