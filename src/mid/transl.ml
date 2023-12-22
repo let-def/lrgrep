@@ -29,12 +29,12 @@ module type S = sig
   type capture_kind = Start_loc | End_loc | Value
   type lr1_trie = {
     mutable sub : lr1_trie Lr1.map;
-    mutable reached : Redgraph.state indexset;
+    mutable reached : Redgraph.n indexset;
   }
   val lr1_trie_root : lr1_trie
   val compile_reduce_expr :
     RE.t ->
-    Redgraph.state indexset * Lr1.n indexset
+    Redgraph.n indexset * Lr1.n indexset
   val transl :
     capture:(capture_kind -> string -> Capture.n index) ->
     for_reduction:bool ->
@@ -417,7 +417,7 @@ struct
 
   type lr1_trie = {
     mutable sub: lr1_trie Lr1.map;
-    mutable reached: Redgraph.state indexset;
+    mutable reached: Redgraph.n indexset;
   }
 
   let lr1_trie_root =
@@ -434,7 +434,7 @@ struct
         in
         visit_trie node' xs
     in
-    Index.iter Redgraph.state (fun state ->
+    Index.iter Redgraph.n (fun state ->
         let node = visit_trie root (Redgraph.get_stack state) in
         node.reached <- IndexSet.add state node.reached
       );

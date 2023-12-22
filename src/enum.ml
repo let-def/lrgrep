@@ -349,7 +349,7 @@ module Lookahead_coverage = struct
   module Cover : sig
     type n
     val n : n cardinal
-    val index : Reach.state index -> n index
+    val index : Reach.n index -> n index
   end = struct
     type n = Lr0.n
     let n = Lr0.n
@@ -358,7 +358,7 @@ module Lookahead_coverage = struct
 
   let remainings () =
     let table = Vector.make Cover.n IndexSet.empty in
-    Index.iter Reach.state (fun st ->
+    Index.iter Reach.n (fun st ->
         let i = Cover.index st in
         let set = Vector.get table i in
         Vector.set table i
@@ -367,8 +367,8 @@ module Lookahead_coverage = struct
     table
 
   type suffix =
-    | Top of Reach.state index
-    | Reduce of Reach.state index * Info.Reduction.t * suffix
+    | Top of Reach.n index
+    | Reduce of Reach.n index * Info.Reduction.t * suffix
 
   type node = {
     suffix: suffix;
@@ -380,7 +380,7 @@ module Lookahead_coverage = struct
 
   let build_arborescence () =
     let remainings = remainings () in
-    let visited = Boolvector.make Reach.state in
+    let visited = Boolvector.make Reach.n in
     let todo = ref [] in
     let need_visit st =
       if not (Boolvector.test visited st)
@@ -459,7 +459,7 @@ module Lookahead_coverage = struct
 
   let enum_sentences f =
     let remainings, forest = build_arborescence () in
-    let visited = Boolvector.make Reach.state in
+    let visited = Boolvector.make Reach.n in
     let rec visit in_remainder node =
       let processed =
         List.fold_left

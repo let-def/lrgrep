@@ -85,7 +85,7 @@ module type S = sig
 
   module RE : RE
     with module Info := Info
-     and type redstate := Redgraph.state
+     and type redstate := Redgraph.n
 
   module K : sig
     type label = {
@@ -136,7 +136,7 @@ struct
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
   module RE : RE with module Info := Info
-                  and type redstate := Redgraph.state =
+                  and type redstate := Redgraph.n =
   struct
     type uid = int
 
@@ -145,7 +145,7 @@ struct
       fun () -> incr k; !k
 
     type reduction = {
-      pattern: Redgraph.state indexset;
+      pattern: Redgraph.n indexset;
       capture: Capture.set;
       usage: Usage.set;
       policy: Syntax.quantifier_kind;
@@ -359,7 +359,7 @@ struct
     let live_redstep (red : RE.reduction) (step : _ Redgraph.reduction_step) =
       intersecting red.pattern step.reachable
 
-    let live_redstate (red : RE.reduction) (state : Redgraph.state index) =
+    let live_redstate (red : RE.reduction) (state : Redgraph.n index) =
       intersecting red.pattern (Redgraph.reachable state)
 
     let rec reduce_target ~on_outer r target =

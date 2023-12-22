@@ -6,18 +6,17 @@ module type S = sig
   module Info : Info.S
   open Info
 
-  type state
-  val state : state cardinal
+  include CARDINAL
 
   type 'a goto_candidate = {
-    target: state index;
+    target: n index;
     lookahead: Terminal.set;
     filter: 'a;
     reduction: Reduction.t;
   }
 
   type 'a reduction_step = {
-    reachable: state indexset;
+    reachable: n indexset;
     candidates: 'a goto_candidate list;
   }
 
@@ -34,15 +33,15 @@ module type S = sig
     lookahead: Terminal.set;
   }
 
-  val initial : (Lr1.n, state index) vector
+  val initial : (Lr1.n, n index) vector
 
-  val get_config : state index -> config
-  val get_stack : state index -> Lr1.t list
-  val get_transitions : state index -> transitions
+  val get_config : n index -> config
+  val get_stack : n index -> Lr1.t list
+  val get_transitions : n index -> transitions
 
-  val reachable : state index -> state indexset
+  val reachable : n index -> n indexset
 
-  val to_string : state index -> string
+  val to_string : n index -> string
 end
 
 module Make(Info : Info.S)() : S with module Info := Info =
@@ -51,9 +50,7 @@ struct
 
   let time = Stopwatch.enter Stopwatch.main "Viable_reductions.Make"
 
-  module State = IndexBuffer.Gen.Make()
-  type state = State.n
-  let state = State.n
+  include IndexBuffer.Gen.Make()
 
   type config = {
     top: Lr1.t;
@@ -62,14 +59,14 @@ struct
   }
 
   type 'a goto_candidate = {
-    target: state index;
+    target: n index;
     lookahead: Terminal.set;
     filter: 'a;
     reduction: Reduction.t;
   }
 
   type 'a reduction_step = {
-    reachable: state indexset;
+    reachable: n indexset;
     candidates: 'a goto_candidate list;
   }
 
@@ -97,7 +94,7 @@ struct
     Vector.init Lr1.n
       (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-  let states = State.get_generator ()
+  let states = get_generator ()
 
   let nodes = Hashtbl.create 7
 
@@ -234,6 +231,6 @@ struct
     string_concat_map " " Lr1.to_string states
 
   let () =
-    Stopwatch.step time "Viable reductions graph has %d nodes" (cardinal state);
+    Stopwatch.step time "Viable reductions graph has %d nodes" (cardinal n);
     Stopwatch.leave time
 end
