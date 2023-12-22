@@ -370,40 +370,134 @@ module Lookahead_coverage = struct
     | Top of Reach.state index
     | Reduce of Reach.state index * Info.Reduction.t * suffix
 
-  let enum_sentences f =
+  type node = {
+    suffix: suffix;
+    mutable committed: Terminal.set;
+    mutable child: node list;
+  }
+
+  let suffix_state (Top st | Reduce (st, _, _)) = st
+
+  let build_arborescence () =
     let remainings = remainings () in
     let visited = Boolvector.make Reach.state in
     let todo = ref [] in
     let need_visit st =
-      if not (Boolvector.test visited st) then (
-        Boolvector.set visited st;
-        true
-      ) else
-        false
+      if not (Boolvector.test visited st)
+      then (Boolvector.set visited st; true)
+      else false
     in
-    let visit_node (Top st | Reduce (st, _, _) as suffix) =
+    let visit_node node =
+      let st = suffix_state node.suffix in
       let i = Cover.index st in
       let remaining = Vector.get remainings i in
-      let reached = IndexSet.inter remaining (Reach.rejected st) in
-      if not (IndexSet.is_empty reached) then (
-        Vector.set remainings i (IndexSet.diff remaining reached);
-        f suffix reached;
-      );
+      node.committed <- IndexSet.inter remaining (Reach.rejected st);
+      Vector.set remainings i (IndexSet.diff remaining node.committed);
       Reach.iter_targets
         (Vector.get Reach.states st).transitions
         (fun (st', red) ->
-           if need_visit st' then
-             Misc.push todo (Reduce (st', red, suffix)))
+           if need_visit st' then (
+             let node' = {
+               suffix = Reduce (st', red, node.suffix);
+               committed = IndexSet.empty;
+               child = [];
+             } in
+             node.child <- node' :: node.child;
+             Misc.push todo node'
+           )
+        )
     in
-    IndexMap.iter (fun _lrc st ->
-        assert (need_visit st);
-        visit_node (Top st)
-      ) Reach.initial;
+    let initials =
+      IndexMap.fold (fun _lrc st acc ->
+          assert (need_visit st);
+          let node = {
+            suffix = Top st;
+            committed = IndexSet.empty;
+            child = [];
+          } in
+          visit_node node;
+          node :: acc
+        ) Reach.initial []
+    in
     while !todo <> [] do
       let todo' = !todo in
       todo := [];
       List.iter visit_node todo'
     done;
+    (remainings, initials)
+
+  let build_remainder remaining suffix =
+    let remaining = ref remaining in
+    let todo = ref [] in
+    let visit node =
+      let st = suffix_state node.suffix in
+      node.committed <- IndexSet.inter !remaining (Reach.rejected st);
+      if not (IndexSet.is_empty node.committed) then
+        remaining := IndexSet.diff !remaining node.committed;
+      Reach.iter_targets (Vector.get Reach.states st).transitions
+        (fun (st', red) ->
+           if not (IndexSet.disjoint !remaining (Reach.potential_reject st))
+           then (
+             let node' = {
+               suffix = Reduce (st', red, node.suffix);
+               committed = IndexSet.empty;
+               child = [];
+             } in
+             node.child <- node' :: node.child;
+             Misc.push todo node'
+           )
+        )
+    in
+    let root = {suffix; committed = IndexSet.empty; child = []} in
+    visit root;
+    while !todo <> [] do
+      let todo' = !todo in
+      todo := [];
+      List.iter visit todo'
+    done;
+    root
+
+  let enum_sentences f =
+    let remainings, forest = build_arborescence () in
+    let visited = Boolvector.make Reach.state in
+    let rec visit in_remainder node =
+      let processed =
+        List.fold_left
+          (fun acc node -> IndexSet.union (visit in_remainder node) acc)
+          IndexSet.empty node.child
+      in
+      let processed =
+        let remainder = IndexSet.diff node.committed processed in
+        if IndexSet.is_empty remainder then processed else (
+          f node.suffix remainder;
+          IndexSet.union remainder processed
+        )
+      in
+      let processed =
+        let state = suffix_state node.suffix in
+        Boolvector.set visited state;
+        let index = Cover.index state in
+        let remaining = Vector.get remainings index in
+        if in_remainder then (
+          let remaining' = IndexSet.diff remaining processed in
+          if remaining != remaining' then
+            Vector.set remainings index remaining';
+          processed
+        ) else
+          let remainder =
+            IndexSet.inter remaining (Reach.potential_reject state)
+          in
+          if IndexSet.is_empty remainder then processed else (
+            let node' = build_remainder remainder node.suffix in
+            let remainder' = visit true node' in
+            assert (IndexSet.subset remainder remainder');
+            assert (IndexSet.disjoint (Vector.get remainings index) remainder);
+            IndexSet.union remainder' processed
+          )
+      in
+      processed
+    in
+    List.iter (fun node -> ignore (visit false node)) forest;
     Vector.iter (fun set -> assert (IndexSet.is_empty set)) remainings
 
   let items_from_suffix suffix =
@@ -416,57 +510,54 @@ module Lookahead_coverage = struct
     in
     loop [] suffix
 
-  let () =
-    let construct_form suffix =
-      let get_potential state =
-        (Vector.get Reach.states state).config.lrcs
-      in
-      let rec loop = function
-        | Top state ->
-          Form_generator.top
-            ~potential:(get_potential state)
-            ~top:(Lrc.first_lrc_of_lr1 (lr1_of state))
-        | Reduce (state, red, suffix) ->
-          Form_generator.reduce (loop suffix)
-            ~potential:(get_potential state)
-            ~length:(Production.length (Reduction.production red))
-      in
-      Form_generator.finish (loop suffix)
+  let get_entrypoint lrc =
+    Nonterminal.to_string
+      (Option.get (Lr0.entrypoint (Lr1.to_lr0 (Lrc.lr1_of_lrc lrc))))
+
+  let rec select_one = function
+    | [] -> []
+    | [x] -> [IndexSet.choose x]
+    | x :: y :: ys ->
+      let x = IndexSet.choose x in
+      x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
+
+  let print_terminal t =
+    print_char ' ';
+    print_string (Terminal.to_string t)
+
+  let print_items items =
+    print_string " [";
+    List.iter (output_item stdout) items;
+    print_string " ]"
+
+  let form_from_suffix suffix =
+    let get_lrcs state = (Vector.get Reach.states state).config.lrcs in
+    let rec loop = function
+      | Top state ->
+        Form_generator.top
+          ~potential:(get_lrcs state)
+          ~top:(Lrc.first_lrc_of_lr1 (lr1_of state))
+      | Reduce (state, red, suffix) ->
+        Form_generator.reduce (loop suffix)
+          ~potential:(get_lrcs state)
+          ~length:(Production.length (Reduction.production red))
     in
-    let print_terminal t = print_char ' '; print_string (Terminal.to_string t) in
-    let print_items items =
-      print_string " [";
-      List.iter (output_item stdout) items;
-      print_string " ]";
-    in
-    let rec select_one = function
-      | [] -> []
-      | [x] -> [IndexSet.choose x]
-      | x :: y :: ys ->
-        let x = IndexSet.choose x in
-        x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
-    in
-    enum_sentences (fun suffix lookaheads ->
-        let lrcs = select_one (construct_form suffix) in
-        let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
-        let entrypoint =
-          List.hd lrcs
-          |> Lrc.lr1_of_lrc
-          |> Lr1.to_lr0
-          |> Lr0.entrypoint
-          |> Option.get
-          |> Nonterminal.to_string
-        in
-        let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
-        let cells = Sentence_gen.cells_of_lrc_list lrcs in
-        let word = List.fold_right Sentence_gen.prepend_word cells [] in
-        print_string entrypoint;
-        List.iter print_terminal word;
-        print_string " @";
-        IndexSet.iter print_terminal lookaheads;
-        List.iter print_items (items_from_suffix suffix);
-        print_newline ()
-      )
+    Form_generator.finish (loop suffix)
+
+  let () = enum_sentences (fun suffix lookaheads ->
+      let lrcs = select_one (form_from_suffix suffix) in
+      let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
+      let entrypoint = get_entrypoint (List.hd lrcs) in
+      let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
+      let cells = Sentence_gen.cells_of_lrc_list lrcs in
+      let word = List.fold_right Sentence_gen.prepend_word cells [] in
+      print_string entrypoint;
+      List.iter print_terminal word;
+      print_string " @";
+      IndexSet.iter print_terminal lookaheads;
+      List.iter print_items (items_from_suffix suffix);
+      print_newline ()
+    )
 end
 
 (*module Lookahead_coverage = struct
