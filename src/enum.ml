@@ -66,9 +66,6 @@ module Reach = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
 
 open Fix.Indexing
 
-let lrc_successors =
-  Vector.get (Misc.relation_reverse' Lrc.n Lrc.predecessors)
-
 let lrc_prefix =
   let table = Vector.make Lrc.n [] in
   let todo = ref [] in
@@ -77,7 +74,7 @@ let lrc_prefix =
     | [] ->
       Vector.set table state prefix;
       let prefix = state :: prefix in
-      let successors = lrc_successors state in
+      let successors = Lrc.successors state in
       if not (IndexSet.is_empty successors) then
         Misc.push todo (successors, prefix)
     | _ -> ()
@@ -265,7 +262,7 @@ end = struct
       let rec narrow lrcs = function
         | [] -> t.stack
         | x :: xs ->
-          let lrcs = Misc.indexset_bind lrcs lrc_successors in
+          let lrcs = Misc.indexset_bind lrcs Lrc.successors in
           IndexSet.inter x lrcs :: narrow lrcs xs
       in
       let stack = narrow potential (expand [t.potential] t.potential (- pushed)) in
@@ -519,7 +516,7 @@ module Lookahead_coverage = struct
     | [x] -> [IndexSet.choose x]
     | x :: y :: ys ->
       let x = IndexSet.choose x in
-      x :: select_one (IndexSet.inter (lrc_successors x) y :: ys)
+      x :: select_one (IndexSet.inter (Lrc.successors x) y :: ys)
 
   let print_terminal t =
     print_char ' ';

@@ -12,6 +12,7 @@ module type S = sig
   val lrcs_of_lr1 : Lr1.t -> set
   val first_lrc_of_lr1 : Lr1.t -> t
   val predecessors : t -> set
+  val successors : t -> set
 end
 
 module Make
@@ -86,13 +87,13 @@ struct
   let () = Stopwatch.step time "Computed LRC set"
 
   let predecessors =
-    let predecessors = Vector.make n IndexSet.empty in
+    let table = Vector.make n IndexSet.empty in
     let process lr1 =
       let tgt_first = first_lrc_of_lr1 lr1 in
       match Option.map Symbol.desc (Lr1.incoming lr1) with
       | None -> ()
       | Some (T t) ->
-        Vector.set predecessors tgt_first @@
+        Vector.set table tgt_first @@
         List.fold_left (fun acc tr ->
           let src = Transition.source tr in
           let class_index =
@@ -105,7 +106,7 @@ struct
       | Some _ ->
         let process_transition tr =
           let node = Reachability.Tree.leaf tr in
-          let table = Vector.get Reachability.Cells.table node in
+          let cells = Vector.get Reachability.Cells.table node in
           let pre_classes = Reachability.Classes.pre_transition tr in
           let post_classes = Reachability.Classes.post_transition tr in
           let coercion =
@@ -119,13 +120,13 @@ struct
             let reachable = ref IndexSet.empty in
             for pre = 0 to pre_classes - 1 do
               let index = Reachability.Cells.table_index ~post_classes ~pre ~post in
-              if table.(index) < max_int then
+              if cells.(index) < max_int then
                 reachable := IndexSet.add (index_shift src_first pre) !reachable
             done;
             let reachable = !reachable in
             Array.iter
               (fun index ->
-                vector_set_union predecessors
+                vector_set_union table
                   (index_shift tgt_first index) reachable)
               coercion.forward.(post)
           done
@@ -133,9 +134,16 @@ struct
         List.iter process_transition (Transition.predecessors lr1)
     in
     Index.iter Lr1.n process;
-    Vector.get predecessors
+    table
 
   let () = Stopwatch.step time "Computed predecessors"
+
+  let successors = Misc.relation_reverse predecessors
+
+  let () = Stopwatch.step time "Computed successors"
+
+  let predecessors = Vector.get predecessors
+  let successors = Vector.get successors
 
   let () = Stopwatch.leave time
 end
@@ -227,7 +235,12 @@ struct
     let table = Vector.make n IndexSet.empty in
     Index.iter MDFA.transitions
       (fun tr -> vector_set_add table (MDFA.source tr) (MDFA.target tr));
-    Vector.get table
+    table
+
+  let successors = Misc.relation_reverse predecessors
+
+  let predecessors = Vector.get predecessors
+  let successors = Vector.get successors
 
   let () =
     Stopwatch.step time "Minimized Lrc from %d states to %d"
