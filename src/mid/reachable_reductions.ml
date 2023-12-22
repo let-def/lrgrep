@@ -820,25 +820,25 @@ struct
 
 end
 
-module Fallible
+module Make3
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
     (Lrc: Lrc.S with module Info := Info)
-    (Reach: S with module Info := Info
-               and module Viable := Viable
-               and module Lrc := Lrc)
     () :
 sig
+  open Info
+
   type state
   val state : state cardinal
 
   type config = {
-    source : Reach.state index;
-    active : Info.Terminal.set;
-    rejected : Info.Terminal.set;
+    viable: Viable.state index;
+    lrcs : Lrc.set;
+    accepted: Terminal.set;
+    rejected: Terminal.set;
   }
 
-  type target = state index * Info.Reduction.t
+  type target = state index * Reduction.t
 
   type transitions = {
     inner: target list;
@@ -850,36 +850,37 @@ sig
     transitions: transitions;
   }
 
+  val initial : state index Lrc.map
   val states : (state, desc) vector
 
-  val initial : state index option Lrc.map
-  (*type intermediate
-  val intermediate : intermediate cardinal*)
+  val successors : (state, state indexset) vector
+  val predecessors : (state, state indexset) vector
 
-  (*type stack
-  val stack : stack cardinal
+  val iter_targets : transitions -> (target -> unit) -> unit
+  val rev_iter_targets : transitions -> (target -> unit) -> unit
+  val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
+  val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 
-  type stack_desc =
-    | Any of Lrc.t
-    | Intermediate of intermediate index
-    | State of state index
-
-  val stack_desc : stack index -> stack_desc
-
-  val stack_transitions : stack index -> stack indexset
-
-  val stack_label : stack index -> Info.Lr1.set*)
-end =
+  (*  val unreachable_lookaheads : state index -> Terminal.set
+      val immediate_accept : state index -> Terminal.set
+      val immediate_reject : state index -> Terminal.set
+      val potential_reject_after : state index -> Terminal.set
+      val potential_reject_before : state index -> Terminal.set
+      val eventual_reject : state index -> Terminal.set *)
+end
+=
 struct
   open Info
+  let time = Stopwatch.enter Stopwatch.main "Reachable reductions (3)"
 
   module State = IndexBuffer.Gen.Make()
   type state = State.n
   let state = State.n
 
   type config = {
-    source: Reach.state index;
-    active: Terminal.set;
+    viable: Viable.state index;
+    lrcs : Lrc.set;
+    accepted: Terminal.set;
     rejected: Terminal.set;
   }
 
@@ -899,87 +900,177 @@ struct
 
   let nodes = Hashtbl.create 7
 
-  let rec visit_transitions config {Reach.inner; outer} =
-    let visit (reach, red) =
-      let rejected = IndexSet.union config.rejected (Reach.immediate_reject reach) in
-      let active = IndexSet.inter (IndexSet.diff config.active (Reach.immediate_reject reach)) (Reach.potential_reject_after reach) in
-      if IndexSet.is_empty active
-      then None
-      else Some (visit_config {active; rejected; source=reach}, red)
+  let update_config config viable lrcs =
+    let lr1 = (Viable.get_config viable).top in
+    let accepted =
+      IndexSet.union config.accepted (Lr1.shift_on lr1)
+    and rejected =
+      IndexSet.union config.rejected
+        (IndexSet.diff (Lr1.reject lr1) config.accepted)
     in
-    let rec trim_map = function
-      | [] -> []
-      | x :: xs ->
-        let x' = List.filter_map visit x in
-        let xs' = trim_map xs in
-        match x', xs' with
-        | [], [] -> []
-        | _ -> x' :: xs'
-    in
-    let inner = List.filter_map visit inner in
-    let outer = trim_map outer in
-    {inner; outer}
+    {accepted; rejected; viable; lrcs}
 
-  and visit_config config =
+  let rec visit_config config =
     match Hashtbl.find_opt nodes config with
     | Some state -> state
     | None ->
       let reservation = IndexBuffer.Gen.reserve states in
       let index = IndexBuffer.Gen.index reservation in
       Hashtbl.add nodes config index;
-      let transitions = (Vector.get Reach.states config.source).transitions in
-      IndexBuffer.Gen.commit states reservation
-        {config; transitions = visit_transitions config transitions};
+      let transitions = visit_transitions config in
+      IndexBuffer.Gen.commit states reservation {config; transitions};
       index
 
-  let initial =
-    let process source =
-      let rejected = Reach.immediate_reject source in
-      let active = IndexSet.diff (Reach.potential_reject_after source) rejected in
-      if IndexSet.is_empty active
-      then None
-      else Some (visit_config {source; active; rejected})
+  and visit_update_config config target lrcs =
+    visit_config (update_config config target lrcs)
+
+  and visit_transitions config =
+    let {Viable.inner; outer} = Viable.get_transitions config.viable in
+    let inner =
+      List.fold_left (fun acc {Viable.candidates; _} ->
+        List.fold_left
+          (fun acc {Viable.target; lookahead=_; filter=(); reduction} ->
+            let state = visit_update_config config target config.lrcs in
+            (state, reduction) :: acc)
+          acc candidates
+      ) [] inner
     in
-    IndexMap.map process Reach.initial
+    let outer = match outer with
+      | first :: rest -> visit_outer config config.lrcs first rest
+      | [] -> []
+    in
+    {inner; outer}
+
+  and visit_outer config lrcs {Viable.candidates; _} rest =
+    let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
+      let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
+      let lrcs = indexset_bind lr1s compatible_lrc in
+      if IndexSet.is_empty lrcs
+      then None
+      else Some (visit_update_config config target lrcs, reduction)
+    in
+    let candidates = List.filter_map visit_candidate candidates in
+    match rest with
+    | [] -> [candidates]
+    | next :: rest ->
+      candidates ::
+      visit_outer config (indexset_bind lrcs Lrc.predecessors) next rest
+
+  let initial =
+    let process lrc =
+      let lr1 = Lrc.lr1_of_lrc lrc in
+      let accepted = Lr1.shift_on lr1 in
+      let rejected = Lr1.reject lr1 in
+      let viable = Vector.get Viable.initial lr1 in
+      let lrcs = Lrc.predecessors lrc in
+      visit_config {viable; accepted; rejected; lrcs}
+    in
+    IndexMap.inflate process Lrc.idle
 
   let states = IndexBuffer.Gen.freeze states
 
-  let () =
-    Printf.eprintf "Coverage: %d states (Reachability: %d states)\n"
-      (cardinal state) (cardinal Reach.state)
+  let () = Stopwatch.step time "Nodes: %d" (cardinal state)
 
-  module Intermediate = IndexBuffer.Gen.Make()
-  module State_or_intermediate = Sum(State)(Intermediate)
-  module Stack = Sum(Lrc)(State_or_intermediate)
+  let iter_targets {inner; outer} f =
+    List.iter f inner;
+    List.iter (List.iter f) outer
 
-  type intermediate = Intermediate.n
-  let intermediate = Intermediate.n
+  let rev_iter_targets {inner; outer} f =
+    list_rev_iter f inner;
+    list_rev_iter (list_rev_iter f) outer
 
-  type stack = Stack.n
-  let stack = Stack.n
+  let fold_targets f acc {inner; outer} =
+    let acc = List.fold_left f acc inner in
+    let acc = List.fold_left (List.fold_left f) acc outer in
+    acc
 
-  let intermediates = Intermediate.get_generator ()
+  let rev_fold_targets f {inner; outer} acc =
+    let acc = List.fold_right f inner acc in
+    let acc = List.fold_right (List.fold_right f) outer acc in
+    acc
 
-  type state_transitions = {
-    st_inner: state indexset;
-    st_outer: target list list;
-  }
-
-  let rec visit_outer lrcs = function
-    | [] -> []
-    | x :: xs ->
-
-
-  let state_transitions =
+  let successors =
     Vector.map (fun desc ->
-        let st_inner =
-          List.fold_left
-            (fun acc (state, _red) -> IndexSet.add state acc)
-            IndexSet.empty
-            desc.transitions.inner
-        in
-
+        rev_fold_targets
+          (fun (st, _) acc -> IndexSet.add st acc)
+          desc.transitions IndexSet.empty
       ) states
 
-  let intermediates = IndexBuffer.Gen.freeze intermediates
+  let predecessors =
+    Misc.relation_reverse successors
+
+  (*let viable_config st =
+    Viable.get_config (Vector.get states st).config.source
+
+  let immediate_reject st =
+    Lr1.reject (viable_config st).top
+
+  let immediate_accept st =
+    Lr1.shift_on (viable_config st).top
+
+  let unreachable_lookaheads =
+    let table = Vector.make state Terminal.all in
+    IndexMap.iter
+      (fun _lrc st -> Vector.set table st (immediate_accept st))
+      initial;
+    fixpoint successors table
+      ~propagate:(fun _src set1 tgt set2 ->
+          let set1 = IndexSet.union set1 (immediate_accept tgt) in
+          Terminal.intersect set1 set2);
+    Vector.get table
+
+  let potential_reject_before =
+    let table = Vector.init state (fun st ->
+        IndexSet.diff
+          (immediate_reject st)
+          (unreachable_lookaheads st)
+    ) in
+    let propagate _src rej1 _tgt rej2 =
+      IndexSet.union rej1 rej2
+    in
+    Misc.fixpoint successors table ~propagate;
+    Vector.get table
+
+  let potential_reject_after =
+    let table = Vector.init state
+        (fun st -> IndexSet.diff (immediate_reject st) (unreachable_lookaheads st))
+    in
+    let propagate _src rej1 tgt rej2 =
+      IndexSet.union (IndexSet.diff rej1 (unreachable_lookaheads tgt)) rej2
+    in
+    Misc.fixpoint predecessors table ~propagate;
+    table
+
+  let eventual_reject =
+    let table = Vector.copy potential_reject_after in
+    let propagate _src rej1 _tgt rej2 = IndexSet.inter rej1 rej2 in
+    Misc.fixpoint predecessors table ~propagate;
+    Vector.get table
+
+  let potential_reject_after = Vector.get potential_reject_after
+
+  let () =
+    let immediate = ref 0 in
+    let potential = ref 0 in
+    let eventual = ref 0 in
+    Index.iter state (fun st ->
+        assert (IndexSet.disjoint (potential_reject_after st) (unreachable_lookaheads st));
+        assert (IndexSet.disjoint (potential_reject_before st) (unreachable_lookaheads st));
+        let ireject = immediate_reject st in
+        let preject = potential_reject_after st in
+        let ereject = IndexSet.diff (eventual_reject st) ireject in
+        let ireject = IndexSet.cardinal ireject in
+        let preject = IndexSet.cardinal preject in
+        let ereject = IndexSet.cardinal ereject in
+        immediate := !immediate + ireject;
+        eventual  := !eventual  + ereject;
+        potential := !potential + preject - ireject - ereject;
+      );
+    Stopwatch.step time
+      "Guaranteed rejections (%d immediates, +%d eventual, +%d potential)"
+      !immediate !eventual !potential
+  *)
+
+  let () = Stopwatch.leave time
+
 end

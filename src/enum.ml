@@ -64,7 +64,7 @@ module Reachability = Mid.Reachability.Make(Info)()
   module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()*)
 module Lrc = Mid.Lrc.Make(Info)(Reachability)
 module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()
-module Covered_red = Mid.Reachable_reductions.Fallible(Info)(Viable)(Lrc)(Reachable)()
+module Covered_red = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
 
 open Fix.Indexing
 
@@ -727,7 +727,8 @@ module Lookahead_coverage = struct
         let entrypoint =
           List.hd lrcs
           |> Lrc.lr1_of_lrc
-          |> Lr1.entrypoint
+          |> Lr1.to_lr0
+          |> Lr0.entrypoint
           |> Option.get
           |> Nonterminal.to_string
         in

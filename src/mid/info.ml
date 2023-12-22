@@ -98,12 +98,19 @@ module type S = sig
     val all : set
   end
 
+  module Lr0 : sig
+    include GRAMMAR_INDEXED with type raw = Grammar.lr0
+    val incoming : t -> Symbol.t option
+    val items : t -> (Production.t * int) list
+    val entrypoint : t -> Nonterminal.t option
+  end
+
   module Lr1 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr1
     val all : set
     val idle : set
+    val to_lr0 : t -> Lr0.t
     val incoming : t -> Symbol.t option
-    val entrypoint : t -> Nonterminal.t option
     val items : t -> (Production.t * int) list
 
     (* Printing functions, for debug purposes.
@@ -320,6 +327,30 @@ struct
     let all = all n
   end
 
+  module Lr0 = struct
+    include Indexed(Grammar.Lr0)
+
+    let incoming lr0 =
+      Option.map Symbol.of_g (Grammar.Lr0.incoming (to_g lr0))
+
+    let items lr0 =
+      List.map
+        (fun (p,pos) -> (Production.of_g p, pos))
+        (Grammar.Lr0.items (to_g lr0))
+
+    let entrypoint lr0 =
+      match incoming lr0 with
+      | Some _ -> None
+      | None -> (
+          match items lr0 with
+          | [p, 0] ->
+            let p = Production.to_g p in
+            assert (Grammar.Production.kind p = `START);
+            Some (Nonterminal.of_g (Grammar.Production.lhs p))
+          | _ -> assert false
+        )
+  end
+
   (** [Transitions] module, defined below, depends on the set of Lr1 states
       but [Lr1] module depends on [Transitions].
       So [Prelr1] is defined first and is the raw set of Lr1 states. *)
@@ -466,10 +497,9 @@ struct
     include Prelr1
     let all = all n
 
-    let to_lr0 lr1 = Grammar.Lr1.lr0 (to_g lr1)
+    let to_lr0 lr1 = Lr0.of_g (Grammar.Lr1.lr0 (to_g lr1))
 
-    let incoming lr1 =
-      Option.map Symbol.of_g (Grammar.Lr0.incoming (to_lr0 lr1))
+    let incoming lr1 = Lr0.incoming (to_lr0 lr1)
 
     let idle = IndexSet.init_from_set n (fun lr1 ->
         match Option.map Symbol.desc (incoming lr1) with
@@ -478,31 +508,17 @@ struct
         | None -> true
       )
 
-    let items lr1 =
-      List.map
-        (fun (p,pos) -> (Production.of_g p, pos))
-        (Grammar.Lr0.items (to_lr0 lr1))
-
-    let entrypoint lr1 =
-      match incoming lr1 with
-      | Some _ -> None
-      | None -> (
-          match items lr1 with
-          | [p, 0] ->
-            let p = Production.to_g p in
-            assert (Grammar.Production.kind p = `START);
-            Some (Nonterminal.of_g (Grammar.Production.lhs p))
-          | _ -> assert false
-        )
+    let items lr1 = Lr0.items (to_lr0 lr1)
 
     (** A somewhat informative string description of the Lr1 state, for debug
         purposes. *)
     let to_string lr1 =
       string_of_index lr1 ^ ":" ^
-      match incoming lr1 with
+      let lr0 = to_lr0 lr1 in
+      match Lr0.incoming lr0 with
       | Some sym -> Symbol.name sym
       | None ->
-        let entrypoint = Option.get (entrypoint lr1) in
+        let entrypoint = Option.get (Lr0.entrypoint lr0) in
         let name = Bytes.of_string (Nonterminal.to_string entrypoint) in
         Bytes.set name (Bytes.length name - 1) ':';
         Bytes.unsafe_to_string name
