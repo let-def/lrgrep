@@ -852,6 +852,7 @@ sig
 
   val states : (state, desc) vector
 
+  val initial : state index option Lrc.map
   (*type intermediate
   val intermediate : intermediate cardinal*)
 
@@ -879,6 +880,7 @@ struct
   type config = {
     source: Reach.state index;
     active: Terminal.set;
+    rejected: Terminal.set;
   }
 
   type target = state index * Reduction.t
@@ -897,12 +899,13 @@ struct
 
   let nodes = Hashtbl.create 7
 
-  let rec visit_transitions active {Reach.inner; outer} =
+  let rec visit_transitions config {Reach.inner; outer} =
     let visit (reach, red) =
-      let active = IndexSet.inter active (Reach.potential_reject_after reach) in
+      let rejected = IndexSet.union config.rejected (Reach.immediate_reject reach) in
+      let active = IndexSet.inter (IndexSet.diff config.active (Reach.immediate_reject reach)) (Reach.potential_reject_after reach) in
       if IndexSet.is_empty active
       then None
-      else Some (visit_config {active; source=reach}, red)
+      else Some (visit_config {active; rejected; source=reach}, red)
     in
     let rec trim_map = function
       | [] -> []
@@ -926,15 +929,16 @@ struct
       Hashtbl.add nodes config index;
       let transitions = (Vector.get Reach.states config.source).transitions in
       IndexBuffer.Gen.commit states reservation
-        {config; transitions = visit_transitions config.active transitions};
+        {config; transitions = visit_transitions config transitions};
       index
 
   let initial =
     let process source =
-      let active = Reach.potential_reject_after source in
+      let rejected = Reach.immediate_reject source in
+      let active = IndexSet.diff (Reach.potential_reject_after source) rejected in
       if IndexSet.is_empty active
       then None
-      else Some (visit_config {source; active})
+      else Some (visit_config {source; active; rejected})
     in
     IndexMap.map process Reach.initial
 
@@ -944,7 +948,7 @@ struct
     Printf.eprintf "Coverage: %d states (Reachability: %d states)\n"
       (cardinal state) (cardinal Reach.state)
 
-(*  module Intermediate = IndexBuffer.Gen.Make()
+  module Intermediate = IndexBuffer.Gen.Make()
   module State_or_intermediate = Sum(State)(Intermediate)
   module Stack = Sum(Lrc)(State_or_intermediate)
 
@@ -957,15 +961,25 @@ struct
   let intermediates = Intermediate.get_generator ()
 
   type state_transitions = {
-    inner: state indexset;
-    outer: target list list;
+    st_inner: state indexset;
+    st_outer: target list list;
   }
+
+  let rec visit_outer lrcs = function
+    | [] -> []
+    | x :: xs ->
+
 
   let state_transitions =
     Vector.map (fun desc ->
-        desc.transitions
+        let st_inner =
+          List.fold_left
+            (fun acc (state, _red) -> IndexSet.add state acc)
+            IndexSet.empty
+            desc.transitions.inner
+        in
 
       ) states
 
-  let intermediates = IndexBuffer.Gen.freeze intermediates*)
+  let intermediates = IndexBuffer.Gen.freeze intermediates
 end

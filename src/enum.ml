@@ -64,7 +64,7 @@ module Reachability = Mid.Reachability.Make(Info)()
   module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()*)
 module Lrc = Mid.Lrc.Make(Info)(Reachability)
 module Reachable = Mid.Reachable_reductions.Make2(Info)(Viable)(Lrc)()
-module Covered_red = Mid.Reachable_reductions.Coverage(Info)(Viable)(Lrc)(Reachable)()
+module Covered_red = Mid.Reachable_reductions.Fallible(Info)(Viable)(Lrc)(Reachable)()
 
 open Fix.Indexing
 
