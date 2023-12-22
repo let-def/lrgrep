@@ -305,16 +305,25 @@ let rec diff s1 s2 =
   match s1, s2 with
   | N, _ | _, N -> s1
   | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
-    if addr1 < addr2
-    then C (addr1, ss1, diff qs1 s2)
-    else if addr1 > addr2
-    then diff s1 qs2
+    if addr1 < addr2 then (
+      let qs1' = diff qs1 s2 in
+      if qs1' == qs1 then
+        s1
+      else
+        C (addr1, ss1, qs1')
+    )
+    else if addr1 > addr2 then
+      diff s1 qs2
     else
       let ss = ss1 land lnot ss2 in
-      let d = diff qs1 qs2 in
-      if ss = 0
-      then d
-      else C (addr1, ss, d)
+      if ss = 0 then
+        diff qs1 qs2
+      else
+        let qs1' = diff qs1 qs2 in
+        if ss = ss1 && qs1' == qs1 then
+          s1
+        else
+          C (addr1, ss, qs1')
 
 let lsb x = (x land -x)
 let compare_lsb x y = lsb x - lsb y
