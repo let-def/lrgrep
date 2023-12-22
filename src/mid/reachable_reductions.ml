@@ -907,7 +907,8 @@ struct
   let update_config config viable lrcs =
     let lr1 = (Viable.get_config viable).top in
     let accepted =
-      IndexSet.union config.accepted (Lr1.shift_on lr1)
+      IndexSet.union config.accepted
+        (IndexSet.diff (Lr1.shift_on lr1) config.rejected)
     and rejected =
       IndexSet.union config.rejected
         (IndexSet.diff (Lr1.reject lr1) config.accepted)
@@ -1008,8 +1009,9 @@ struct
 
   let potential_reject =
     let table = Vector.init state rejected in
-    let widen _src rej1 tgt rej2 =
-      IndexSet.union (IndexSet.diff rej1 (accepted tgt)) rej2
+    let widen _src rej1 _tgt rej2 =
+      (*assert (IndexSet.disjoint rej1 (accepted tgt));*)
+      IndexSet.union rej1 rej2
     in
     Misc.fixpoint predecessors table ~propagate:widen;
     Vector.get table
