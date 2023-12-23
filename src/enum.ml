@@ -60,9 +60,13 @@ module Viable = Mid.Viable_reductions.Make(Info)()
 module Reachability = Mid.Reachability.Make(Info)()
 
 module Lrc = Mid.Lrc.Make(Info)(Reachability)
-(* Re-enable when minimization is fixed *)
-(*module Lrc = Mid.Lrc.Minimize(Info)(Mid.Lrc.Make(Info)(Reachability))*)
 module Reach = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
+
+module Failure =  struct
+  module MLrc = Mid.Lrc.Minimize(Info)(Lrc)
+  module MReach = Mid.Reachable_reductions.Make3(Info)(Viable)(MLrc)()
+  module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(MLrc)(MReach)()
+end
 
 open Fix.Indexing
 
