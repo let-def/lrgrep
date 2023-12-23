@@ -63,9 +63,9 @@ module Lrc = Mid.Lrc.Make(Info)(Reachability)
 module Reach = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()
 
 module Failure =  struct
-  module MLrc = Mid.Lrc.Minimize(Info)(Lrc)
-  module MReach = Mid.Reachable_reductions.Make3(Info)(Viable)(MLrc)()
-  module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(MLrc)(MReach)()
+  (*module Lrc = Mid.Lrc.Minimize(Info)(Lrc)
+  module Reach = Mid.Reachable_reductions.Make3(Info)(Viable)(Lrc)()*)
+  module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)()
 end
 
 open Fix.Indexing

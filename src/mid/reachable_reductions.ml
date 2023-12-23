@@ -825,8 +825,10 @@ struct
   let rec expand_outer lrcs = function
     | [] -> []
     | hd :: tl ->
-      let lrcs = Misc.indexset_bind lrcs Lrc.predecessors in
-      let tl = expand_outer lrcs tl in
+      let tl = match tl with
+        | [] -> []
+        | tl -> expand_outer (Misc.indexset_bind lrcs Lrc.predecessors) tl
+      in
       let hd =
         IndexSet.fold (fun st acc ->
             let lrcs = IndexSet.inter lrcs (lrcs_of st) in
@@ -857,10 +859,9 @@ struct
 
   type desc =
     | State of {
-        (*epsilon: n indexset;*)
         config: config;
         rejected: Info.Terminal.set;
-        next: n indexset;
+        epsilon: n indexset;
       }
     | Intermediate of {
         lrcs: Lrc.set;
@@ -898,25 +899,19 @@ struct
     loop st;
     !rejected, !acc
 
-  let reuse = ref 0
-
   let visit_intermediate lrcs next =
     let desc = Intermediate {lrcs; next} in
     match Hashtbl.find_opt intermediate_table desc with
-    | Some index -> incr reuse; index
+    | Some index -> index
     | None ->
       let index = IndexBuffer.Gen.add states desc in
       Hashtbl.add intermediate_table desc index;
       index
 
-  let rec prepare_state st (rejected', trees) =
+  let prepare_state st lrcs =
     let rejected, outer = inner_closure st in
-    let rejected = IndexSet.union rejected rejected' in
-    match outer with
-    | [] -> (rejected, trees)
-    | outer0 :: outer ->
-      let trees = expand_outer (lrcs_of st) outer :: trees in
-      IndexSet.fold prepare_state outer0 (rejected, trees)
+    let outer = expand_outer lrcs outer in
+    (rejected, outer)
 
   let rec visit_config config =
     let lrcs = IndexSet.inter (lrcs_of config.state) config.lrcs in
@@ -927,11 +922,11 @@ struct
       let reservation = IndexBuffer.Gen.reserve states in
       let index = IndexBuffer.Gen.index reservation in
       Hashtbl.add table config index;
-      let rejected, trees = prepare_state config.state (IndexSet.empty, []) in
-      let trees = merge_trees (List.flatten trees) in
-      let next = List.fold_left memoize_tree IndexSet.empty trees in
+      let rejected, trees = prepare_state config.state config.lrcs in
+      let trees = merge_trees trees in
+      let epsilon = List.fold_left memoize_tree IndexSet.empty trees in
       IndexBuffer.Gen.commit states reservation
-        (State {config; rejected; next});
+        (State {config; rejected; epsilon});
       index
 
   and memoize_tree acc (Node (lrcs, reachs, next)) =
@@ -951,7 +946,7 @@ struct
       (fun state -> visit_config {lrcs = lrcs_of state; state})
       Reach.initial
 
-  let () = Stopwatch.step time "Nodes: %d (intermediate reuse: %d)\n" (cardinal n) !reuse
+  let () = Stopwatch.step time "Nodes: %d" (cardinal n)
 
   let () = Stopwatch.leave time
 end
