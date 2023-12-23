@@ -802,10 +802,25 @@ struct
       else if c > 0 then
         n2 :: merge_tree l1 l2'
       else
-        Node (s1, IndexSet.union r1 r2, t1 @ t2) :: merge_tree l1' l2'
+        Node (s1, IndexSet.union r1 r2, merge_tree t1 t2) :: merge_tree l1' l2'
 
   let order_node (Node (s1, _, _)) (Node (s2, _, _)) =
     IndexSet.compare s1 s2
+
+  let rec merge_trees ls =
+    let ls = List.sort order_node ls in
+    let rec visit_many s r t = function
+      | Node (s', r', t') :: rest when IndexSet.equal s s' ->
+        visit_many s (IndexSet.union r r') (t' @ t) rest
+      | rest ->
+        Node (s, r, merge_trees t) :: visit_one rest
+    and visit_one = function
+      | Node (s, r, t) :: Node (s', r', t') :: rest when IndexSet.equal s s' ->
+        visit_many s (IndexSet.union r r') (t' @ t) rest
+      | x :: xs -> x :: visit_one xs
+      | [] -> []
+    in
+    visit_one ls
 
   let rec expand_outer lrcs = function
     | [] -> []
@@ -842,7 +857,7 @@ struct
 
   type desc =
     | State of {
-        epsilon: n indexset;
+        (*epsilon: n indexset;*)
         config: config;
         rejected: Info.Terminal.set;
         next: n indexset;
@@ -894,6 +909,15 @@ struct
       Hashtbl.add intermediate_table desc index;
       index
 
+  let rec prepare_state st (rejected', trees) =
+    let rejected, outer = inner_closure st in
+    let rejected = IndexSet.union rejected rejected' in
+    match outer with
+    | [] -> (rejected, trees)
+    | outer0 :: outer ->
+      let trees = expand_outer (lrcs_of st) outer :: trees in
+      IndexSet.fold prepare_state outer0 (rejected, trees)
+
   let rec visit_config config =
     let lrcs = IndexSet.inter (lrcs_of config.state) config.lrcs in
     let config = {config with lrcs} in
@@ -903,17 +927,11 @@ struct
       let reservation = IndexBuffer.Gen.reserve states in
       let index = IndexBuffer.Gen.index reservation in
       Hashtbl.add table config index;
-      let rejected, outer = inner_closure config.state in
-      let epsilon, outer = match outer with
-        | [] -> IndexSet.empty, []
-        | outer0 :: outer ->
-          IndexSet.map (fun st' -> visit_config {config with state=st'}) outer0,
-          outer
-      in
-      let outer = expand_outer lrcs outer in
-      let next = List.fold_left memoize_tree IndexSet.empty outer in
+      let rejected, trees = prepare_state config.state (IndexSet.empty, []) in
+      let trees = merge_trees (List.flatten trees) in
+      let next = List.fold_left memoize_tree IndexSet.empty trees in
       IndexBuffer.Gen.commit states reservation
-        (State {epsilon; config; rejected; next});
+        (State {config; rejected; next});
       index
 
   and memoize_tree acc (Node (lrcs, reachs, next)) =
