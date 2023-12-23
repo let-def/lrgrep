@@ -789,62 +789,64 @@ struct
 
   let lrcs_of st = (Vector.get Reach.states st).config.lrcs
 
+  open Info
+
   type tree =
-    Node of Lrc.set * Reach.n indexset * tree list
+    Node of Lrc.set * Terminal.set * Reach.n indexset * tree list
 
   let rec merge_tree l1 l2 = match l1, l2 with
     | [], xs | xs, [] -> xs
-    | (Node (s1, r1, t1) as n1) :: l1',
-      (Node (s2, r2, t2) as n2) :: l2' ->
+    | (Node (s1, j1, r1, t1) as n1) :: l1',
+      (Node (s2, j2, r2, t2) as n2) :: l2' ->
       let c = IndexSet.compare s1 s2 in
       if c < 0 then
         n1 :: merge_tree l1' l2
       else if c > 0 then
         n2 :: merge_tree l1 l2'
       else
-        Node (s1, IndexSet.union r1 r2, merge_tree t1 t2) :: merge_tree l1' l2'
+        Node (s1, IndexSet.union j1 j2, IndexSet.union r1 r2, merge_tree t1 t2) :: merge_tree l1' l2'
 
-  let order_node (Node (s1, _, _)) (Node (s2, _, _)) =
+  let order_node (Node (s1, _, _, _)) (Node (s2, _, _, _)) =
     IndexSet.compare s1 s2
 
   let rec merge_trees ls =
     let ls = List.sort order_node ls in
-    let rec visit_many s r t = function
-      | Node (s', r', t') :: rest when IndexSet.equal s s' ->
-        visit_many s (IndexSet.union r r') (t' @ t) rest
+    let rec visit_many s j r t = function
+      | Node (s', j', r', t') :: rest when IndexSet.equal s s' ->
+        visit_many s (IndexSet.union j j') (IndexSet.union r r') (t' @ t) rest
       | rest ->
-        Node (s, r, merge_trees t) :: visit_one rest
+        Node (s, j, r, merge_trees t) :: visit_one rest
     and visit_one = function
-      | Node (s, r, t) :: Node (s', r', t') :: rest when IndexSet.equal s s' ->
-        visit_many s (IndexSet.union r r') (t' @ t) rest
+      | Node (s, j, r, t) :: Node (s', j', r', t') :: rest when IndexSet.equal s s' ->
+        visit_many s (IndexSet.union j j') (IndexSet.union r r') (t' @ t) rest
       | x :: xs -> x :: visit_one xs
       | [] -> []
     in
     visit_one ls
 
-  let rec expand_outer lrcs = function
+  let rec expand_outer rejected lrcs = function
     | [] -> []
     | hd :: tl ->
       let tl = match tl with
         | [] -> []
-        | tl -> expand_outer (Misc.indexset_bind lrcs Lrc.predecessors) tl
+        | tl -> expand_outer rejected (Misc.indexset_bind lrcs Lrc.predecessors) tl
       in
       let hd =
         IndexSet.fold (fun st acc ->
             let lrcs = IndexSet.inter lrcs (lrcs_of st) in
             if IndexSet.is_empty lrcs
             then acc
-            else Node (lrcs, IndexSet.singleton st, []) :: acc
+            else Node (lrcs, rejected, IndexSet.singleton st, []) :: acc
           ) hd []
         |> List.sort order_node
       in
-      let tl = List.filter_map (fun (Node (lrcs', _, _) as tree) ->
+      let tl = List.filter_map (fun (Node (lrcs', _, _, _) as tree) ->
           let lrcs = IndexSet.inter lrcs
               (Misc.indexset_bind lrcs' Lrc.successors)
           in
           if IndexSet.is_empty lrcs
           then None
-          else Some (Node (lrcs, IndexSet.empty, [tree]))
+          else Some (Node (lrcs, rejected, IndexSet.empty, [tree]))
         ) tl
         |> List.sort order_node
       in
@@ -865,6 +867,7 @@ struct
       }
     | Intermediate of {
         lrcs: Lrc.set;
+        rejected: Info.Terminal.set;
         next: n indexset;
       }
 
@@ -899,8 +902,8 @@ struct
     loop st;
     !rejected, !acc
 
-  let visit_intermediate lrcs next =
-    let desc = Intermediate {lrcs; next} in
+  let visit_intermediate lrcs rejected next =
+    let desc = Intermediate {lrcs; rejected; next} in
     match Hashtbl.find_opt intermediate_table desc with
     | Some index -> index
     | None ->
@@ -910,7 +913,7 @@ struct
 
   let prepare_state st lrcs =
     let rejected, outer = inner_closure st in
-    let outer = expand_outer lrcs outer in
+    let outer = expand_outer rejected lrcs outer in
     (rejected, outer)
 
   let rec visit_config config =
@@ -929,7 +932,7 @@ struct
         (State {config; rejected; epsilon});
       index
 
-  and memoize_tree acc (Node (lrcs, reachs, next)) =
+  and memoize_tree acc (Node (lrcs, rejected, reachs, next)) =
     let acc =
       IndexSet.fold
         (fun state acc ->
@@ -939,14 +942,28 @@ struct
     let next = List.fold_left memoize_tree IndexSet.empty next in
     if IndexSet.is_empty next
     then acc
-    else IndexSet.add (visit_intermediate lrcs next) acc
+    else IndexSet.add (visit_intermediate lrcs rejected next) acc
 
   let initial =
     IndexMap.map
       (fun state -> visit_config {lrcs = lrcs_of state; state})
       Reach.initial
 
+  let states = IndexBuffer.Gen.freeze states
+
   let () = Stopwatch.step time "Nodes: %d" (cardinal n)
 
+  let outer_transitions =
+    let rec raw_transitions st acc =
+      match Vector.get states st with
+      | Intermediate {lrcs; next; _} ->
+        (IndexSet.map Lrc.lr1_of_lrc lrcs, next) :: acc
+      | State {epsilon; _} ->
+        IndexSet.fold raw_transitions epsilon acc
+    in
+    tabulate_finset n
+      (fun st -> raw_transitions st [])
+
+  let () = Stopwatch.step time "Outer transitions"
   let () = Stopwatch.leave time
 end
