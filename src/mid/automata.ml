@@ -1480,15 +1480,15 @@ struct
       begin match typ with
         | None -> ()
         | Some (symbols, typ) ->
-          let matchers =
-            List.map symbol_matcher (IndexSet.elements symbols)
-          in
           Printer.fmt out
-            "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n\
-            \          | %s -> (x : %s) \n\
-            \          | _ -> assert false\n\
+            "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n" 
+            E.parser_name;
+            List.iter (fun symbol -> 
+              Printer.fmt out "          | %s -> (x : %s)\n" 
+              (symbol_matcher symbol) typ) (IndexSet.elements symbols);
+            Printer.fmt out
+            "          | _ -> assert false\n\
             \        in\n"
-            E.parser_name (String.concat " | " matchers) typ
       end;
       Printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
       Printer.fmt out "    in\n";
