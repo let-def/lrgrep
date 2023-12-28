@@ -1481,10 +1481,10 @@ struct
         | None -> ()
         | Some (symbols, typ) ->
           Printer.fmt out
-            "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n" 
+            "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n"
             E.parser_name;
-            List.iter (fun symbol -> 
-              Printer.fmt out "          | %s -> (x : %s)\n" 
+            List.iter (fun symbol ->
+              Printer.fmt out "          | %s -> (x : %s)\n"
               (symbol_matcher symbol) typ) (IndexSet.elements symbols);
             Printer.fmt out
             "          | _ -> assert false\n\
