@@ -1,1 +1,1 @@
-(dirs ("src" "ocaml" "support"))
+(dirs ("src" "ocaml" "support" "tiny"))

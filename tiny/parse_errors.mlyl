@@ -1,0 +1,3 @@
+rule error_message = parse error
+| OPAREN ; [chars]
+{ "Unclosed '('" }
