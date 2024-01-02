@@ -125,12 +125,6 @@ module Regexp = Mid.Regexp.Make(Info)(Viable)
 module Transl = Mid.Transl.Make(Regexp)
 module Reachability = Mid.Reachability.Make(Info)()
 module Lrc = Mid.Lrc.Make(Info)(Reachability)
-(* Re-enable when minimization is fixed *)
-(*module Lrc = Mid.Lrc.Minimize(Info)(Lrc)*)
-module Reachable = Mid.Reachable_reductions.Make(Info)(Lrc)()
-
-(* FIXME: Faster implementation of Lrc Redgraph, use that later
- * module Tmp = Lrc.Redgraph2(Regexp.Redgraph)() *)
 
 module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
 
@@ -150,8 +144,12 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
   let open Mid.Automata.Entry
       (Transl)
-      (*Lrc.Lrce Lrc.Lrc_NFA Lr1_stacks*)
-      (Reachable.Lrc_NFA)
+      (struct
+        include Lrc
+        let initials = Lrc.idle
+        let next = Lrc.predecessors
+        let label lrc = IndexSet.singleton (Lrc.lr1_of_lrc lrc)
+      end)
       (struct
         let parser_name = parser_name
         let entry = entry
