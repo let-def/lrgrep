@@ -244,6 +244,29 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
+  let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+  let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+  let module Check = Failure.Check(struct
+      type n = OutDFA.states
+      let n = OutDFA.states
+      let initial = OutDFA.initial
+      let successors = tabulate_finset n (fun st ->
+          IndexSet.fold (fun tr acc ->
+              ((OutDFA.label tr).filter, OutDFA.target tr) :: acc
+            ) (OutDFA.outgoing st) []
+        )
+      let accept = tabulate_finset n (fun st ->
+          let m = OutDFA.matching st in
+          List.fold_left (fun acc (clause, _, _) ->
+              if Clause.total clause then
+                match Clause.lookaheads clause with
+                | None -> Info.Terminal.all
+                | Some set -> IndexSet.union set acc
+              else
+                acc
+            ) IndexSet.empty m
+        )
+    end) in
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
       let cap = captures clause in
