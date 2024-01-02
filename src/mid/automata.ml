@@ -5,6 +5,8 @@ open Fix.Indexing
 open Regexp
 open Lrgrep_support
 
+type priority = int
+
 module type STACKS = sig
   type lr1
   type n
@@ -137,6 +139,8 @@ sig
   module Clause : sig
     include CARDINAL
     type t = n index
+    val total : t -> bool
+    val lookaheads : t -> Terminal.set option
   end
 
   val captures : Clause.t -> Capture.set
@@ -152,7 +156,7 @@ sig
       captures: (Capture.t * Register.t) list;
       clear: Register.set;
       moves: Register.t Register.map;
-      priority: (Clause.t * int * int) list;
+      priority: (Clause.t * priority * priority) list;
     }
     val register_count : int
     val compare : t -> t -> int
@@ -181,7 +185,7 @@ sig
     val unhandled : states index -> Lr1.set
 
     val outgoing : states index -> transitions indexset
-    val matching : states index -> (Clause.t * int * Register.t Capture.map) list
+    val matching : states index -> (Clause.t * priority * Register.t Capture.map) list
     val threads : states index -> (bool * Clause.t * Register.t Capture.map) list
   end
 
@@ -202,7 +206,8 @@ struct
     type desc = {
       action: actions index;
       pattern: Syntax.pattern;
-      total: bool;
+      partial: bool;
+      has_lookaheads: bool;
     }
 
     include Vector.Of_array(struct
@@ -215,10 +220,11 @@ struct
                     {
                       action = Index.of_int Actions.n index;
                       pattern;
-                      total = match clause.Syntax.action with
-                        | Syntax.Unreachable -> true
-                        | Syntax.Total _ -> pattern.lookaheads = []
-                        | Syntax.Partial _ -> false
+                      partial = (match clause.Syntax.action with
+                          | Syntax.Unreachable -> false
+                          | Syntax.Total _ -> false
+                          | Syntax.Partial _ -> true);
+                      has_lookaheads = (pattern.lookaheads <> []);
                     }
                   )
               )
@@ -229,8 +235,6 @@ struct
     type t = n index
 
     let n = Vector.length vector
-
-    let get = Vector.get vector
 
     let actions =
       let index = ref 0 in
@@ -244,6 +248,41 @@ struct
           ) E.entry.clauses
       in
       Vector.cast_array Actions.n (Array.of_list list)
+
+    let total c = not (Vector.get vector c).partial
+
+    let lookaheads = tabulate_finset n (fun st ->
+        match (Vector.get vector st).pattern.lookaheads with
+        | [] -> None
+        | symbols ->
+          let lookahead_msg =
+            "Lookahead can either be a terminal or `first(nonterminal)'"
+          in
+          let sym_pattern (sym, pos) =
+            match sym with
+            | Syntax.Apply ("first", [sym]) ->
+              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
+                | L t ->
+                  let t = Info.Terminal.to_string t in
+                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                            t ^ " is a terminal")
+                | R n ->
+                  Nonterminal.to_g n
+                  |> Grammar.Nonterminal.first
+                  |> List.map Info.Terminal.of_g
+              end
+            | Syntax.Name _ ->
+              begin match Symbol.prj (Indices.get_symbol pos sym) with
+                | R n ->
+                  failwith (lookahead_msg ^ "; " ^
+                            Info.Nonterminal.to_string n ^ " is a nonterminal")
+                | L t -> [t]
+              end
+            | _ ->
+              failwith lookahead_msg
+          in
+          Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
+      )
   end
 
   module LazyNFA = struct
@@ -466,7 +505,10 @@ struct
               in
               group_fold
                 (fun i (nfa : LazyNFA.t) acc ->
-                   if nfa.accept && (Clause.get nfa.clause).total then
+                   if nfa.accept && (
+                       let desc = Vector.get Clause.vector nfa.clause in
+                       not desc.partial && not desc.has_lookaheads
+                     ) then
                      accept := Some nfa.clause;
                    List.rev_map (make i) nfa.transitions @ acc)
                 group []
@@ -1516,45 +1558,18 @@ struct
         (some "__initialpos")
         E.parser_name (some "p")
 
-  let lookahead_constraint pattern =
-    match pattern.Syntax.lookaheads with
-    | [] -> None
-    | symbols ->
-      let lookahead_msg =
-        "Lookahead can either be a terminal or `first(nonterminal)'"
-      in
+  let lookahead_constraint index =
+    match Clause.lookaheads index with
+    | None -> None
+    | Some terms ->
       let term_pattern t =
         let name = Info.Terminal.to_string t in
         match Info.Terminal.semantic_value t with
         | None -> name
         | Some _ -> name ^ " _"
       in
-      let sym_pattern (sym, pos) =
-        match sym with
-        | Syntax.Apply ("first", [sym]) ->
-          begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
-            | L t ->
-              let t = Info.Terminal.to_string t in
-              failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                        t ^ " is a terminal")
-            | R n ->
-              Info.Nonterminal.to_g n
-              |> Grammar.Nonterminal.first
-              |> List.map Info.Terminal.of_g
-              |> List.map term_pattern
-          end
-        | Syntax.Name _ ->
-          begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
-            | R n ->
-              failwith (lookahead_msg ^ "; " ^
-                        Info.Nonterminal.to_string n ^ " is a nonterminal")
-            | L t -> [term_pattern t]
-          end
-        | _ ->
-          failwith lookahead_msg
-      in
-      Some (string_concat_map ~wrap:("(",")") "|" Fun.id @@
-            List.concat_map sym_pattern symbols)
+      Some (string_concat_map ~wrap:("(",")")
+              "|" term_pattern (IndexSet.elements terms))
 
   let output_code out =
     Printer.fmt out
@@ -1568,11 +1583,10 @@ struct
     let output_action (source, clauses) (captures, _states) =
       Printer.fmt out " ";
       IndexSet.iter (fun index ->
-          let clause = Vector.get Clause.vector index in
           Printer.fmt out
             " | %d, %s"
             (Index.to_int index)
-            (Option.value (lookahead_constraint clause.pattern)
+            (Option.value (lookahead_constraint index)
                ~default:"_");
         ) clauses;
       Printer.fmt out " ->\n";
@@ -1591,7 +1605,7 @@ struct
       end;
       let constrained =
         IndexSet.filter
-          (fun clause -> (Clause.get clause).pattern.lookaheads <> [])
+          (fun clause -> Option.is_some (Clause.lookaheads clause))
           clauses
       in
       if not (IndexSet.is_empty constrained) then
