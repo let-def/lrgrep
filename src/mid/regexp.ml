@@ -364,15 +364,15 @@ struct
 
     let rec reduce_target ~on_outer r target =
       (live_redstate r target &&
-       reduce_transitions ~on_outer r
+       reduce_inner_transitions ~on_outer r
          (Redgraph.get_transitions target))
       || IndexSet.mem target r.pattern
 
-    and reduce_transitions ~on_outer r {Redgraph. inner; outer} =
+    and reduce_inner_transitions ~on_outer r {Redgraph. inner; outer} =
       let matched = ref false in
       let visit_candidate (c : unit Redgraph.goto_candidate) =
-        if reduce_target ~on_outer r c.target
-        then matched := true
+        if reduce_target ~on_outer r c.target then
+          matched := true
       in
       let rec loop = function
         | step :: xs when live_redstep r step ->
@@ -506,17 +506,16 @@ struct
               Usage.empty
           in
           let ks' = ref [] in
-          let matching =
-            IndexSet.filter (fun lr1 ->
-                let steps = Redgraph.get_transitions (Vector.get Redgraph.initial lr1) in
-                let on_outer = function
-                  | (step :: _) as transitions when live_redstep reduction step ->
-                    let label = {label with filter = IndexSet.singleton lr1} in
-                    continue ks' label (Reducing {reduction; transitions; next})
-                  | _ -> ()
-                in
-                reduce_transitions ~on_outer reduction steps
-              ) label.filter
+          let matching = IndexSet.filter (fun lr1 ->
+              let on_outer = function
+                | (step :: _) as transitions when live_redstep reduction step ->
+                  let label = {label with filter = IndexSet.singleton lr1} in
+                  continue ks' label (Reducing {reduction; transitions; next})
+                | _ -> ()
+              in
+              reduce_inner_transitions ~on_outer reduction
+                (Redgraph.get_transitions (Vector.get Redgraph.initial lr1))
+            ) label.filter
           in
           let label =
             label_filter
