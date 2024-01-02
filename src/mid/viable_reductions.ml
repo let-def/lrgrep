@@ -31,10 +31,9 @@ module type S = sig
     top: Lr1.t;
     rest: Lr1.t list;
     lookahead: Terminal.set;
-    initial: bool;
   }
 
-  val initial : (Lr1.n, n index) vector
+  val initial : (Lr1.n, outer_transitions) vector
 
   val get_config : n index -> config
   val get_stack : n index -> Lr1.t list
@@ -57,7 +56,6 @@ struct
     top: Lr1.t;
     rest: Lr1.t list;
     lookahead: Terminal.set;
-    initial: bool;
   }
 
   type 'a goto_candidate = {
@@ -120,7 +118,7 @@ struct
         | top :: rest ->
           visit_inner {config with top; rest} next
         | [] ->
-          ([], visit_outer config.lookahead (IndexSet.singleton config.top) next)
+          ([], visit_outers config.lookahead (IndexSet.singleton config.top) next)
       in
       let process_goto red =
         let prod = Reduction.production red in
@@ -130,56 +128,54 @@ struct
           None
         else
           let rest = config.top :: config.rest in
-          let target = visit_config {top; rest; lookahead; initial = config.initial} in
+          let target = visit_config {top; rest; lookahead} in
           Some {target; lookahead; filter=(); reduction=red}
       in
       (List.filter_map process_goto (IndexSet.elements gotos) :: inner, outer)
 
-  and visit_outer lookahead successors = function
+  and visit_outers lookahead lr1_states = function
     | [] -> []
     | gotos :: next ->
-      let lr1_states = Lr1.set_predecessors successors in
-      let next = visit_outer lookahead lr1_states next in
-      let process_goto red acc =
-        let lookahead =
-          Terminal.intersect lookahead (Reduction.lookaheads red)
-        in
-        if IndexSet.is_empty lookahead then acc
-        else
-          let lhs = Production.lhs (Reduction.production red) in
-          let process_target source acc =
-            let target_lhs = Transition.find_goto_target source lhs in
-            IndexMap.update target_lhs (function
-              | Some (sources, target) ->
-                Some (IndexSet.add source sources, target)
-              | None ->
-                let config = {
-                  top = target_lhs;
-                  rest = [];
-                  lookahead;
-                  initial = false;
-                } in
-                Some (IndexSet.singleton source, visit_config config)
-            ) acc
-          in
-          let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
-          let add_target _ (filter, target) acc =
-            {filter; target; lookahead; reduction=red} :: acc
-          in
-          IndexMap.fold add_target by_target acc
-      in
-      let gotos = IndexSet.fold process_goto gotos [] in
-      gotos :: next
+      let lr1_states = indexset_bind lr1_states Lr1.predecessors in
+      visit_outer lookahead lr1_states gotos next
 
-  let initial =
-    Vector.init Lr1.n (fun lr1 ->
-      let config = {
-        top = lr1;
-        rest = [];
-        lookahead = Terminal.all;
-        initial = true;
-      } in
-      visit_config config
+  and visit_outer lookahead lr1_states gotos next =
+    let next = visit_outers lookahead lr1_states next in
+    let process_goto red acc =
+      let lookahead =
+        Terminal.intersect lookahead (Reduction.lookaheads red)
+      in
+      if IndexSet.is_empty lookahead then acc
+      else
+        let lhs = Production.lhs (Reduction.production red) in
+        let process_target source acc =
+          let target_lhs = Transition.find_goto_target source lhs in
+          IndexMap.update target_lhs (function
+            | Some (sources, target) ->
+              Some (IndexSet.add source sources, target)
+            | None ->
+              let config = {
+                top = target_lhs;
+                rest = [];
+                lookahead;
+              } in
+              Some (IndexSet.singleton source, visit_config config)
+          ) acc
+        in
+        let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
+        let add_target _ (filter, target) acc =
+          {filter; target; lookahead; reduction=red} :: acc
+        in
+        IndexMap.fold add_target by_target acc
+    in
+    let gotos = IndexSet.fold process_goto gotos [] in
+    gotos :: next
+
+  let initial = Vector.init Lr1.n (fun lr1 ->
+      match Vector.get reductions lr1 with
+      | [] -> []
+      | gotos :: next ->
+        visit_outer Terminal.all (IndexSet.singleton lr1) gotos next
     )
 
   let states = IndexBuffer.Gen.freeze states
@@ -198,28 +194,29 @@ struct
     close_relation reachable;
     reachable
 
-  let make_reduction_step (inner, outer) =
-    let rec process_steps = function
-      | [] -> []
-      | step :: steps ->
-        let steps = process_steps steps in
-        let acc = match steps with
-          | [] -> IndexSet.empty
-          | x :: _ -> x.reachable
-        in
-        let reachable =
-          List.fold_left (fun acc candidate ->
+  let rec process_steps = function
+    | [] -> []
+    | step :: steps ->
+      let steps = process_steps steps in
+      let acc = match steps with
+        | [] -> IndexSet.empty
+        | x :: _ -> x.reachable
+      in
+      let reachable =
+        List.fold_left (fun acc candidate ->
             IndexSet.union acc
               (Vector.get reachable candidate.target))
-            acc step
-        in
-        {reachable; candidates=step} :: steps
-    in
+          acc step
+      in
+      {reachable; candidates=step} :: steps
+
+  let make_reduction_step (inner, outer) =
     {inner = process_steps inner; outer = process_steps outer}
+
+  let initial = Vector.map process_steps initial
 
   let states = Vector.map (fun (stack, steps) -> (stack, make_reduction_step steps)) states
 
-  (*let initial = Vector.map make_reduction_step initial*)
   let reachable = Vector.get reachable
 
   let get_def = Vector.get states

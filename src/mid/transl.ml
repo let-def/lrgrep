@@ -422,13 +422,8 @@ struct
 
   let lr1_trie_root =
     let root = {sub = IndexMap.empty; reached = IndexSet.empty} in
-    let rec visit_trie node initial = function
+    let rec visit_trie node = function
       | [] -> node
-      | [_] when initial ->
-        (* States reached immediately after initiating a reduction contains an
-           extra stack frame that is not part of the goto sequence.
-           We ignore it. *)
-        node
       | x :: xs ->
         let node' = match IndexMap.find_opt x node.sub with
           | Some node' -> node'
@@ -437,11 +432,11 @@ struct
             node.sub <- IndexMap.add x node' node.sub;
             node'
         in
-        visit_trie node' initial xs
+        visit_trie node' xs
     in
     Index.iter Redgraph.n (fun state ->
         let config = Redgraph.get_config state in
-        let node = visit_trie root config.initial (config.top :: config.rest) in
+        let node = visit_trie root (config.top :: config.rest) in
         node.reached <- IndexSet.add state node.reached
       );
     root

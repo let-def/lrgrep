@@ -417,9 +417,7 @@ struct
             step.candidates
         | [] -> false
       in
-      let reduce_outer next label reduction transitions =
-        let ks = ref [] in
-        let matching = ref IndexSet.empty in
+      let reduce_outer matching ks next label reduction transitions =
         let rec visit_transitions label reduction = function
           | step :: transitions when live_redstep reduction step ->
             List.iter (visit_candidate label) step.candidates;
@@ -442,14 +440,7 @@ struct
           (if can_succeed_next reduction transitions
            then label_capture label reduction.capture Usage.empty
            else label)
-          reduction transitions;
-        let matching =
-          if not_empty !matching then
-            Some {label with filter = !matching}
-          else
-            None
-        in
-        (matching, !ks)
+          reduction transitions
       in
       let ks = ref [] in
       let rec process_k label = function
@@ -460,16 +451,18 @@ struct
           process_re label self next re.desc
 
         | Reducing {reduction; transitions; next} ->
-          let l', ks' = reduce_outer next label reduction transitions in
-          match l', reduction.policy with
+          let l' = ref IndexSet.empty in
+          let ks' = ref [] in
+          reduce_outer l' ks' next label reduction transitions;
+          match label_filter label !l', reduction.policy with
           | None, _ ->
-            ks := ks' @ !ks
+            ks := !ks' @ !ks
           | Some label, Longest ->
-            ks := ks' @ !ks;
+            ks := !ks' @ !ks;
             process_k (label_capture label IndexSet.empty reduction.usage) next
           | Some label, Shortest ->
             process_k (label_capture label IndexSet.empty reduction.usage) next;
-            ks := ks' @ !ks
+            ks := !ks' @ !ks
 
       and process_re label self next = function
         | Set (s, var, usage) ->
@@ -506,21 +499,18 @@ struct
               Usage.empty
           in
           let ks' = ref [] in
-          let matching = IndexSet.filter (fun lr1 ->
-              let on_outer = function
-                | (step :: _) as transitions when live_redstep reduction step ->
-                  let label = {label with filter = IndexSet.singleton lr1} in
-                  continue ks' label (Reducing {reduction; transitions; next})
-                | _ -> ()
-              in
-              reduce_inner_transitions ~on_outer reduction
-                (Redgraph.get_transitions (Vector.get Redgraph.initial lr1))
-            ) label.filter
-          in
+          let matching = ref IndexSet.empty in
+          IndexSet.iter (fun lr1 ->
+              reduce_outer matching ks'
+                next
+                {label with filter = IndexSet.singleton lr1}
+                reduction
+                (Vector.get Redgraph.initial lr1)
+            ) label.filter;
           let label =
             label_filter
               (label_capture label IndexSet.empty reduction.usage)
-              matching
+              !matching
           in
           begin match reduction.policy with
             | Shortest ->

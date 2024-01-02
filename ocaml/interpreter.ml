@@ -147,28 +147,29 @@ let print_lr1 state =
   | None -> None
   | Some sym -> Some (Info.Symbol.name sym)
 
-module RR = Regexp.Redgraph
+open Info
 
 let rec display_steps la n acc = function
-  | [] -> acc
-  | {RR. reachable=_; candidates} :: rest ->
-    let acc = List.fold_left (display_candidate la n) acc candidates in
-    display_steps la (n - 1) acc rest
+    | [] -> acc
+    | {Viable. reachable=_; candidates} :: rest ->
+      let acc = List.fold_left (display_candidate la n) acc candidates in
+      display_steps la (n - 1) acc rest
 
-and display_candidate : type a . Info.Terminal.set -> int -> _ -> a RR.goto_candidate -> _ =
-  fun la n acc {RR. target; lookahead; filter=_; reduction=_} ->
+and display_candidate
+  : type a . Info.Terminal.set -> int -> _ -> a Viable.goto_candidate -> _ =
+  fun la n acc {Viable. target; lookahead; filter=_; reduction=_} ->
   let la = IndexSet.inter la lookahead in
   if IndexSet.is_empty la then
     acc
   else
-    let {RR. inner; outer} = RR.get_transitions target in
+    let {Viable. inner; outer} = Viable.get_transitions target in
     let acc =
       if outer <> []
       then (la, outer) :: acc
       else acc
     in
     let acc = display_steps la (n + 1) acc inner in
-    let config = RR.get_config target in
+    let config = Viable.get_config target in
     Printf.printf "\x1b[1;33m\t\t%s↱ %s\n"
       (String.make n ' ') (Option.get (print_lr1 config.top));
     acc
@@ -185,29 +186,27 @@ let process_result lexbuf = function
     List.iteri (fun i (state, loc) ->
         if i = 0 then (
           let top, _ = List.hd stack in
-          let la = Info.Terminal.all in
-          let tr =
-            Regexp.Redgraph.get_transitions
-              (Vector.get Regexp.Redgraph.initial top)
-          in
-          outer := display_steps la 0 [la, tr.outer] tr.inner
-        ) else (
-          let rec process_steps acc = function
-            | (_, []) -> acc
-            | (la, step :: next) ->
-              let candidates =
-                List.filter
-                  (fun c -> IndexSet.mem state c.RR.filter)
-                  step.RR.candidates
-              in
-              let threads = List.fold_left (display_candidate la 1) [] candidates in
-              (la, next) :: process_threads acc threads
-          and process_threads acc = function
-            | [] -> acc
-            | thread :: threads ->
-              process_threads (process_steps acc thread) threads
-          in
-          outer := process_threads [] !outer
+          outer := [Terminal.all, Vector.get Viable.initial top]
+        );
+        let rec process_steps acc = function
+          | (_, []) -> acc
+          | (la, step :: next) ->
+            let candidates =
+              List.filter
+                (fun c -> IndexSet.mem state c.Viable.filter)
+                step.Viable.candidates
+            in
+            let threads = List.fold_left (display_candidate la 1) [] candidates in
+            (la, next) :: process_threads acc threads
+        and process_threads acc = function
+          | [] -> acc
+          | thread :: threads ->
+            process_threads (process_steps acc thread) threads
+        in
+        outer := process_threads [] !outer;
+        if i = 0 || !opt_stack_items then (
+          print_string "\x1b[0;36m";
+          List.iter print_endline (print_items state);
         );
         print_string "\x1b[0m- ";
         print_string (
@@ -223,10 +222,6 @@ let process_result lexbuf = function
             print_endline (Grammar.Nonterminal.name nt)
           | Some sym -> print_endline sym
         end;
-        if i = 0 || !opt_stack_items then (
-          print_string "\x1b[0;36m";
-          List.iter print_endline (print_items state);
-        );
         print_string "\x1b[0m";
       ) stack;
     if !opt_dump_states then
