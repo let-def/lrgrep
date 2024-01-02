@@ -217,15 +217,6 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-  let unhandled = ref 0 in
-  Index.iter OutDFA.states (fun state ->
-      if not (IndexSet.is_empty (OutDFA.unhandled state)) then
-        incr unhandled;
-    );
-  Printf.eprintf "states with unhandled transitions: %d\n%!" !unhandled;
-  (*let module Coverage =
-    Mid.Coverage.Make(Info)(OutDFA)(Lrc.Lrce)
-  in*)
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
       let cap = captures clause in
