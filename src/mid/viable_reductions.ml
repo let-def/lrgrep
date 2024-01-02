@@ -31,6 +31,7 @@ module type S = sig
     top: Lr1.t;
     rest: Lr1.t list;
     lookahead: Terminal.set;
+    initial: bool;
   }
 
   val initial : (Lr1.n, n index) vector
@@ -56,6 +57,7 @@ struct
     top: Lr1.t;
     rest: Lr1.t list;
     lookahead: Terminal.set;
+    initial: bool;
   }
 
   type 'a goto_candidate = {
@@ -128,7 +130,7 @@ struct
           None
         else
           let rest = config.top :: config.rest in
-          let target = visit_config {top; rest; lookahead} in
+          let target = visit_config {top; rest; lookahead; initial = config.initial} in
           Some {target; lookahead; filter=(); reduction=red}
       in
       (List.filter_map process_goto (IndexSet.elements gotos) :: inner, outer)
@@ -155,6 +157,7 @@ struct
                   top = target_lhs;
                   rest = [];
                   lookahead;
+                  initial = false;
                 } in
                 Some (IndexSet.singleton source, visit_config config)
             ) acc
@@ -174,6 +177,7 @@ struct
         top = lr1;
         rest = [];
         lookahead = Terminal.all;
+        initial = true;
       } in
       visit_config config
     )
