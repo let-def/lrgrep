@@ -422,8 +422,8 @@ let () =
           (output stdout)
       | Enum_lr1 ->
         Enum.enumerate
-          ~cover:Info.Lr0.n
-          ~index:(fun x -> Info.Lr1.to_lr0 (Enum.Coverage.lr1_of x))
+          ~cover:Info.Lr1.n
+          ~index:(fun x -> Enum.Coverage.lr1_of x)
           (output stdout)
       | Enum_goto ->
         Enum.enumerate
