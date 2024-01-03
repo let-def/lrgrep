@@ -12,6 +12,13 @@ let opt_check_coverage = ref false
 let opt_verbose = ref false
 let opt_debug_stack = ref []
 
+type enumerate =
+  | Enum_lr0
+  | Enum_lr1
+  | Enum_goto
+
+let opt_enumerate = ref None
+
 let escape_and_align_left fmt =
   Printf.ksprintf (fun str ->
       let str = Bytes.unsafe_of_string (String.escaped str) in
@@ -60,6 +67,21 @@ let specs = [
   " Print version number and exit";
   "-coverage", Arg.Set opt_check_coverage,
   " Check error coverage";
+  "-enumerate", Arg.String (function
+      | "lr0" -> opt_enumerate := Some Enum_lr0
+      | "lr1" -> opt_enumerate := Some Enum_lr1
+      | "goto" -> opt_enumerate := Some Enum_goto
+      | msg ->
+        Printf.eprintf
+          "-enumerate: invalid value %S, argument can be lr0, lr1, goto\n\
+           From least verbose to most verbose:\n\
+           - lr0: enumerate sentences to reach lr0 states\n\
+           - lr1: enumerate sentences to reach lr1 states\n\
+           - goto: enumerate sentences to follow all goto transitions\n"
+          msg;
+      exit 1
+  ),
+  " <lr0|lr1|goto> Enumerate sentences to cover failing configurations";
   "-debug-stack", Arg.String (fun stack ->
       opt_debug_stack :=
         List.map
@@ -71,13 +93,6 @@ let specs = [
 ]
 
 let () = Arg.parse specs (fun name -> opt_source_name := Some name) usage
-
-let source_file = match !opt_source_name with
-  | None ->
-    Format.eprintf "No source provided, stopping now.\n";
-    Arg.usage specs usage;
-    exit 1
-  | Some name -> name
 
 let grammar_file = match !opt_grammar_file with
   | Some filename -> filename
@@ -102,18 +117,6 @@ let print_parse_error_and_exit lexbuf exn =
     | _ -> Printexc.raise_with_backtrace exn bt
   end;
   exit 3
-
-let lexer_definition =
-  let ic = open_in_bin source_file in
-  Front.Lexer.ic := Some ic;
-  let lexbuf = Lexing.from_channel ~with_positions:true ic in
-  Lexing.set_filename lexbuf source_file;
-  let result =
-    try Front.Parser.lexer_definition Front.Lexer.main lexbuf
-    with exn -> print_parse_error_and_exit lexbuf exn
-  in
-  Front.Lexer.ic := None;
-  result
 
 let () = Stopwatch.step Stopwatch.main "Beginning"
 
@@ -316,12 +319,19 @@ let output_table oc entry (registers, initial, (program, table, remap)) =
   print "  let program = %S\n" program;
   print "end\n"
 
-let () = (
-  (*if !verbose then (
-    let doc = Cmon.list_map Regexp.K.cmon kst.direct in
-    Format.eprintf "%a\n%!" Cmon.format (Syntax.print_entrypoints entry);
-    Format.eprintf "%a\n%!" Cmon.format doc;
-    );*)
+let process_source source_file =
+  let lexer_definition =
+    let ic = open_in_bin source_file in
+    Front.Lexer.ic := Some ic;
+    let lexbuf = Lexing.from_channel ~with_positions:true ic in
+    Lexing.set_filename lexbuf source_file;
+    let result =
+      try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+      with exn -> print_parse_error_and_exit lexbuf exn
+    in
+    Front.Lexer.ic := None;
+    result
+  in
   let oc, out = match !opt_output_name with
     | None -> (None, None)
     | Some filename ->
@@ -358,12 +368,10 @@ let () = (
       end;
       print_ocaml_code out lexer_definition.header
     );
-
   List.iter (fun entry ->
       let program = process_entry out entry in
       Option.iter (fun oc -> output_table oc entry program) oc
     ) lexer_definition.entrypoints;
-
   out |> Option.iter (fun out ->
       Mid.Automata.Printer.print out "\n";
       print_ocaml_code out lexer_definition.trailer;
@@ -372,7 +380,25 @@ let () = (
         | _ -> Mid.Automata.Printer.print out "\nend\n"
       end;
     );
+  Option.iter close_out oc
 
-  Option.iter close_out oc;
-  (* Print matching functions *)
-)
+let () =
+  begin match !opt_enumerate with
+    | None -> ()
+    | Some _precision ->
+      let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
+        let initials = indexset_bind all_entrypoints Lrc.lrcs_of_lr1
+      end) in
+      let module Reachable = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+      let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable) in
+      ()
+  end;
+  begin match !opt_source_name with
+    | None ->
+      if Option.is_none !opt_enumerate then (
+        Format.eprintf "No source provided, stopping now.\n";
+        Arg.usage specs usage;
+        exit 1
+      )
+    | Some path -> process_source path
+  end;
