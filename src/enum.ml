@@ -266,29 +266,25 @@ struct
       output_string oc (Symbol.name t);
       output_char oc '"'
 
-    let output_item oc (prod, dot) =
-      output_string oc "{\"lhs\":";
-      output_symbol oc (Symbol.inj_r (Production.lhs prod));
-      output_string oc ",\"rhs\":[";
-      let rhs = Production.rhs prod in
-      for i = 0 to dot - 1 do
-        if i <> 0 then output_char oc ';';
-        output_symbol oc rhs.(i);
-      done;
-      output_string oc "],\"dot\":";
-      output_string oc (string_of_int dot);
-      output_char oc '}'
-
-    let output_terminal oc t =
-      output_symbol oc (Symbol.inj_l t)
-
     let output_list f oc xs =
       output_char oc '[';
       List.iteri (fun i x ->
-          if i <> 0 then output_char oc ';';
+          if i <> 0 then output_char oc ',';
           f oc x
         ) xs;
       output_char oc ']'
+
+    let output_item oc (prod, dot) =
+      Printf.fprintf oc
+        "{\"lhs\":%a,\"rhs\":%a,\"dot\":%d}"
+        output_symbol
+          (Symbol.inj_r (Production.lhs prod))
+        (output_list output_symbol)
+          (Array.to_list (Production.rhs prod))
+        dot
+
+    let output_terminal oc t =
+      output_symbol oc (Symbol.inj_l t)
 
     let output_sentence oc (entrypoint, terminals, lookaheads, items) =
       Printf.fprintf oc
