@@ -222,6 +222,83 @@ struct
       else t.potential :: t.stack
   end
 
+  module Output_raw = struct
+    open Info
+
+    let output_terminal oc t =
+      output_char oc ' ';
+      output_string oc (Terminal.to_string t)
+
+    let output_item oc (prod, dot) =
+      output_string oc " /";
+      output_string oc (Nonterminal.to_string (Production.lhs prod));
+      output_char oc ':';
+      let rhs = Production.rhs prod in
+      for i = 0 to dot - 1 do
+        output_char oc ' ';
+        output_string oc (Symbol.name rhs.(i));
+      done;
+      output_string oc " .";
+      for i = dot to Array.length rhs - 1 do
+        output_char oc ' ';
+        output_string oc (Symbol.name rhs.(i));
+      done
+
+    let output_items oc items =
+      output_string oc " [";
+      List.iter (output_item oc) items;
+      output_string oc " ]"
+
+    let output_sentence oc (entrypoint, terminals, lookaheads, items) =
+      print_string entrypoint;
+      List.iter (output_terminal oc) terminals;
+      print_string " @";
+      IndexSet.iter (output_terminal oc) lookaheads;
+      List.iter (output_items oc) items;
+      print_newline ()
+  end
+
+  module Output_json = struct
+    open Info
+
+    let output_symbol oc t =
+      output_char oc '"';
+      output_string oc (Symbol.name t);
+      output_char oc '"'
+
+    let output_item oc (prod, dot) =
+      output_string oc "{\"lhs\":";
+      output_symbol oc (Symbol.inj_r (Production.lhs prod));
+      output_string oc ",\"rhs\":[";
+      let rhs = Production.rhs prod in
+      for i = 0 to dot - 1 do
+        if i <> 0 then output_char oc ';';
+        output_symbol oc rhs.(i);
+      done;
+      output_string oc "],\"dot\":";
+      output_string oc (string_of_int dot);
+      output_char oc '}'
+
+    let output_terminal oc t =
+      output_symbol oc (Symbol.inj_l t)
+
+    let output_list f oc xs =
+      output_char oc '[';
+      List.iteri (fun i x ->
+          if i <> 0 then output_char oc ';';
+          f oc x
+        ) xs;
+      output_char oc ']'
+
+    let output_sentence oc (entrypoint, terminals, lookaheads, items) =
+      Printf.fprintf oc
+        "{\"entrypoint\":%S,\"sentence\":%a,\"lookaheads\":%a,\"states\":%a}\n"
+        entrypoint
+        (output_list output_terminal) terminals
+        (output_list output_terminal) (IndexSet.elements lookaheads)
+        (output_list (output_list output_item))  items
+  end
+
   module Coverage = struct
     open Info
     include Mid.Coverage_tree.Make (struct
@@ -262,6 +339,7 @@ struct
             ~length:(Production.length (Reduction.production red))
       in
       Form_generator.finish (loop suffix)
+
     let get_entrypoint lrc =
       Nonterminal.to_string
         (Option.get (Lr0.entrypoint (Lr1.to_lr0 (Lrc.lr1_of_lrc lrc))))
@@ -273,48 +351,18 @@ struct
         let x = IndexSet.choose x in
         x :: select_one (IndexSet.inter (Lrc.successors x) y :: ys)
 
-    let output_terminal oc t =
-      output_char oc ' ';
-      output_string oc (Terminal.to_string t)
-
-    let output_item oc (prod, dot) =
-      output_string oc " /";
-      output_string oc (Nonterminal.to_string (Production.lhs prod));
-      output_char oc ':';
-      let rhs = Production.rhs prod in
-      for i = 0 to dot - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done;
-      output_string oc " .";
-      for i = dot to Array.length rhs - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done
-
-    let output_items oc items =
-      output_string oc " [";
-      List.iter (output_item oc) items;
-      output_string oc " ]"
-
-    let output_sentence oc suffix lookaheads =
+    let generate_sentence suffix lookaheads =
       let lrcs = select_one (form_from_suffix suffix) in
       let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
       let entrypoint = get_entrypoint (List.hd lrcs) in
       let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
       let cells = Sentence_gen.cells_of_lrc_list lrcs in
-      let word = List.fold_right Sentence_gen.prepend_word cells [] in
-      print_string entrypoint;
-      List.iter (output_terminal oc) word;
-      print_string " @";
-      IndexSet.iter (output_terminal oc) lookaheads;
-      List.iter (output_items oc) (items_from_suffix suffix);
-      print_newline ()
-
-    let () =
-      enum_sentences
-        ~cover:Lr0.n
-        ~index:(fun st -> Lr1.to_lr0 (lr1_of st))
-        (output_sentence stdout)
+      let terminals = List.fold_right Sentence_gen.prepend_word cells [] in
+      (entrypoint, terminals, lookaheads, items_from_suffix suffix)
   end
+
+  let enumerate ~cover ~index output =
+    Coverage.enum_sentences ~cover ~index
+      (fun suffix lookaheads ->
+        output (Coverage.generate_sentence suffix lookaheads))
 end

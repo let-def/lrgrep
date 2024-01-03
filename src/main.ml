@@ -19,6 +19,12 @@ type enumerate =
 
 let opt_enumerate = ref None
 
+type enumerate_format =
+  | Efmt_raw
+  | Efmt_json
+
+let opt_enumerate_format = ref Efmt_raw
+
 let escape_and_align_left fmt =
   Printf.ksprintf (fun str ->
       let str = Bytes.unsafe_of_string (String.escaped str) in
@@ -71,17 +77,30 @@ let specs = [
       | "lr0" -> opt_enumerate := Some Enum_lr0
       | "lr1" -> opt_enumerate := Some Enum_lr1
       | "goto" -> opt_enumerate := Some Enum_goto
-      | msg ->
+      | arg ->
         Printf.eprintf
-          "-enumerate: invalid value %S, argument can be lr0, lr1, goto\n\
-           From least verbose to most verbose:\n\
+          "-enumerate: invalid value %S\n\
+           Valid values, from least to most verbose:\n\
            - lr0: enumerate sentences to reach lr0 states\n\
            - lr1: enumerate sentences to reach lr1 states\n\
            - goto: enumerate sentences to follow all goto transitions\n"
-          msg;
+          arg;
       exit 1
   ),
   " <lr0|lr1|goto> Enumerate sentences to cover failing configurations";
+  "-enumerate-format", Arg.String (function
+      | "raw" -> opt_enumerate_format := Efmt_raw
+      | "json" -> opt_enumerate_format := Efmt_json
+      | arg ->
+        Printf.eprintf
+          "-enumerate-format: invalid value %S\n\
+           From least verbose to most verbose:\n\
+           - raw (default): custom format, with one sentence group per line\n\
+           - json: a line-delimited sequence of json objects\n"
+          arg;
+      exit 1
+  ),
+  " <raw|json> Format used to output enumeration";
   "-debug-stack", Arg.String (fun stack ->
       opt_debug_stack :=
         List.map
@@ -385,13 +404,32 @@ let process_source source_file =
 let () =
   begin match !opt_enumerate with
     | None -> ()
-    | Some _precision ->
+    | Some precision ->
       let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
         let initials = indexset_bind all_entrypoints Lrc.lrcs_of_lr1
       end) in
       let module Reachable = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
       let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable) in
-      ()
+      let output = match !opt_enumerate_format with
+        | Efmt_raw -> Enum.Output_raw.output_sentence
+        | Efmt_json -> Enum.Output_json.output_sentence
+      in
+      match precision with
+      | Enum_lr0 ->
+        Enum.enumerate
+          ~cover:Info.Lr0.n
+          ~index:(fun x -> Info.Lr1.to_lr0 (Enum.Coverage.lr1_of x))
+          (output stdout)
+      | Enum_lr1 ->
+        Enum.enumerate
+          ~cover:Info.Lr0.n
+          ~index:(fun x -> Info.Lr1.to_lr0 (Enum.Coverage.lr1_of x))
+          (output stdout)
+      | Enum_goto ->
+        Enum.enumerate
+          ~cover:Reachable.n
+          ~index:(fun x -> x)
+          (output stdout)
   end;
   begin match !opt_source_name with
     | None ->
