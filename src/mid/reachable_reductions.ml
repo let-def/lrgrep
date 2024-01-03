@@ -457,15 +457,9 @@ struct
     | Intermediate t -> t.lrcs
     | State t -> t.config.lrcs
 
-  let () = Stopwatch.step time "Outer transitions"
-
-  let () = Stopwatch.leave time
-
-  let count ?(negate=false) pred vector =
-    let k = ref 0 in
-    let expected = not negate in
-    Vector.iter (fun dfa -> if pred dfa = expected then incr k) vector;
-    !k
+  let () =
+    Stopwatch.step time "Outer transitions";
+    Stopwatch.leave time
 
   module Check(DFA : sig
     type n
@@ -473,7 +467,14 @@ struct
     val initial : n index
     val successors : n index -> (Lr1.set * n index) list
     val accept : n index -> Terminal.set
-  end) = struct
+  end) =
+  struct
+
+    let count ?(negate=false) pred vector =
+      let k = ref 0 in
+      let expected = not negate in
+      Vector.iter (fun dfa -> if pred dfa = expected then incr k) vector;
+      !k
 
     let time = Stopwatch.enter Stopwatch.main "Check"
 
@@ -501,60 +502,70 @@ struct
         List.iter (fun (dfa, nfa) -> propagate dfa nfa) todo';
         fixpoint ~propagate todo
 
+    let rec diffs d = function
+      | [] -> d
+      | x :: xs -> diffs (IndexSet.diff d x) xs
+
     module Reducible_forward = struct
-      let table = Vector.make DFA.n Decreasing.maximum
 
-      let follow update dfa handled (lr1s, nfa) =
-        List.fold_left begin fun lr1s (label, dfa') ->
-          let lr1s' = IndexSet.diff lr1s label in
-          if lr1s != lr1s' then
-            update dfa' nfa handled;
-          lr1s'
-        end lr1s (DFA.successors dfa)
+      let () = Stopwatch.step time "Forward propagating reductions"
 
-      let propagate update dfa f =
-        List.iter begin fun (dom, handled) ->
-          let handled = IndexSet.union handled (DFA.accept dfa) in
-          if handled != Terminal.all then
+      let table = Vector.make DFA.n Increasing.minimum
+
+      let todo =
+        let initial_pieces =
+          let handled = DFA.accept DFA.initial in
+          IndexMap.fold
+            (fun _ st acc ->
+               let dom = IndexSet.singleton st in
+               let img = diffs (potential st) [rejected st; handled] in
+               (dom, img) :: acc
+            ) initial []
+        in
+        ref [DFA.initial, Increasing.piecewise initial_pieces]
+
+      let update dfa g =
+        let f = Vector.get table dfa in
+        let f, df = Increasing.increase f g in
+        if not (Increasing.is_minimum df) then (
+          Vector.set table dfa f;
+          push todo (dfa, df);
+        )
+
+      let follow dfa unhandled (lr1s, nfa) =
+        List.fold_left (fun lr1s (label, dfa') ->
+            let lr1s' = IndexSet.diff lr1s label in
+            if lr1s != lr1s' then
+              update dfa' (Increasing.piece nfa
+                             (IndexSet.diff unhandled (DFA.accept dfa')));
+            lr1s'
+          ) lr1s (DFA.successors dfa)
+
+      let propagate dfa f =
+        List.iter (fun (dom, unhandled) ->
             let process_dom x =
-              if not (IndexSet.subset (potential x) handled) then
-                let process piece = ignore (follow update dfa handled piece) in
-                List.iter process (outer_transitions x)
+              let process piece = ignore (follow dfa unhandled piece) in
+              List.iter process (outer_transitions x)
             in
             IndexSet.iter process_dom dom;
-        end (Decreasing.to_list f)
+          ) (Increasing.to_list f)
 
-      let () =
-        let todo = ref [] in
-        let update dfa dom handled =
-          let f = Vector.get table dfa in
-          let f, df = Decreasing.decrease f (Decreasing.piece dom handled) in
-          if not (Decreasing.is_maximum df) then (
-            Vector.set table dfa f;
-            push todo (dfa, df);
-          )
-        in
-        IndexMap.iter begin fun lrc st ->
-          let dom = IndexSet.singleton (Lrc.lr1_of_lrc lrc) in
-          let img = IndexSet.singleton st in
-          ignore (follow update DFA.initial IndexSet.empty (dom, img))
-        end initial;
-        fixpoint ~propagate:(propagate update) todo
+      let () = fixpoint ~propagate todo
 
       let () =
         Stopwatch.step time "Reducible fix point: reached %d states"
-          (count ~negate:true Decreasing.is_maximum table)
+          (count ~negate:true Increasing.is_minimum table)
     end
 
-    module Reducible_backward = struct
+    (*module Reducible_backward = struct
 
       let transitions = Vector.make DFA.n []
 
       let () =
         let reverse src (f : (n, Terminal.n) Decreasing.t) =
           let register src n dst ns' ts =
-              Vector.set_cons transitions dst
-                (ns', src, n, ts)
+            Vector.set_cons transitions dst
+              (ns', src, n, ts)
           in
           List.iter (fun (ns, ts) ->
               IndexSet.iter (fun n ->
@@ -570,20 +581,20 @@ struct
         Vector.iteri reverse Reducible_forward.table
 
       let table = Vector.mapi (fun dfa f ->
-        let image =
-          List.fold_left
-            (fun acc (lr1s, _) -> IndexSet.union acc lr1s)
-            IndexSet.empty (DFA.successors dfa)
-        in
-        Decreasing.map (fun (ns, img) ->
-          let pred n =
-            List.exists
-              (fun (lr1s, _) -> not (IndexSet.subset lr1s image))
-              (outer_transitions n)
+          let image =
+            List.fold_left
+              (fun acc (lr1s, _) -> IndexSet.union acc lr1s)
+              IndexSet.empty (DFA.successors dfa)
           in
-          (IndexSet.filter pred ns, img)
-        ) f
-      ) Reducible_forward.table
+          Decreasing.map (fun (ns, img) ->
+              let pred n =
+                List.exists
+                  (fun (lr1s, _) -> not (IndexSet.subset lr1s image))
+                  (outer_transitions n)
+              in
+              (IndexSet.filter pred ns, img)
+            ) f
+        ) Reducible_forward.table
 
       let todo = ref []
 
@@ -628,7 +639,7 @@ struct
       let () =
         let count = count Decreasing.is_maximum table in
         Stopwatch.step time "Prepared forward prefix (%d empty, %d non empty)"
-        count (cardinal DFA.n - count)
+          count (cardinal DFA.n - count)
 
       let follow update dfa (lrcs, img) =
         let img = IndexSet.union img (DFA.accept dfa) in
@@ -767,7 +778,7 @@ struct
 
       let () =
         Stopwatch.step time "Prefix coverage tree has %d nodes (max depth: %d)" !nodes !max_depth
-    end
+    end*)
 
     let () = Stopwatch.leave time
 
