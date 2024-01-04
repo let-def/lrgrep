@@ -1,6 +1,7 @@
 open Utils
 open Misc
 open Fix.Indexing
+open Monotonous
 
 module type S = sig
   module Info : Info.S
@@ -511,7 +512,7 @@ struct
     module Reducible_forward = struct
       let () = Stopwatch.step time "Forward propagating reductions"
 
-      let table = Vector.make DFA.n Monotonous.minimum
+      let table = Vector.make DFA.n Increasing.minimum
 
       let initial_pieces =
         IndexMap.fold
@@ -519,19 +520,19 @@ struct
           initial []
 
       let todo =
-        ref [DFA.initial, Monotonous.piecewise initial_pieces]
+        ref [DFA.initial, Increasing.piecewise initial_pieces]
 
       let update dfa g =
         let f = Vector.get table dfa in
-        let f, df = Monotonous.increase ~ignore:(DFA.accept dfa) f g in
-        if not (Monotonous.is_minimum df) then (
+        let f, df = Increasing.increase ~ignore:(DFA.accept dfa) f g in
+        if not (Increasing.is_minimum df) then (
           Vector.set table dfa f;
           push todo (dfa, df);
         )
 
       let follow dfa unhandled (lr1s, nfa') =
         let image nfa = IndexSet.inter unhandled (potential nfa) in
-        let g = Monotonous.from nfa' image in
+        let g = Increasing.from nfa' image in
         ignore (
           List.fold_left (fun lr1s (label, dfa') ->
               let lr1s' = IndexSet.diff lr1s label in
@@ -549,7 +550,7 @@ struct
                 (outer_transitions nfa)
             in
             IndexSet.iter process_dom dom;
-          ) (Monotonous.to_list f)
+          ) (Increasing.to_list f)
 
       let () = fixpoint ~propagate todo
 
@@ -560,10 +561,10 @@ struct
                 IndexSet.iter (fun nfa ->
                     assert (IndexSet.subset img (potential nfa))
                   ) nfas;
-              ) (Monotonous.to_list f)
+              ) (Increasing.to_list f)
           ) table;
         Stopwatch.step time "Reducible fixpoint: reached %d states"
-          (count ~negate:true Monotonous.is_minimum table)
+          (count ~negate:true Increasing.is_minimum table)
     end
 
     (*module Reducible_backward = struct
@@ -596,7 +597,7 @@ struct
                 List.fold_left process acc (outer_transitions nfa)
               in
               IndexSet.fold process_dom dom acc
-            ) [] (Monotonous.to_list f)
+            ) [] (Increasing.to_list f)
         in
         Vector.mapi propagate Reducible_forward.table
 
@@ -606,15 +607,15 @@ struct
 
       let table = Vector.mapi (fun dfa pieces ->
             let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
-            Monotonous.piecewise (List.map prepare pieces)
+            Increasing.piecewise (List.map prepare pieces)
           ) uncovered
 
       let todo = ref []
 
       let update dfa g =
         let f = Vector.get table dfa in
-        let f, df = Monotonous.increase f g in
-        if not (Monotonous.is_minimum df) then (
+        let f, df = Increasing.increase f g in
+        if not (Increasing.is_minimum df) then (
           Vector.set table dfa f;
           push todo (dfa, df);
         )
@@ -625,9 +626,9 @@ struct
                 if not (IndexSet.disjoint nfa_tgts nfa_tgts') then
                   let unhandled = IndexSet.inter unhandled unhandled' in
                   if not (IndexSet.is_empty unhandled) then
-                    update dfa_src (Monotonous.piece (IndexSet.singleton nfa_src) unhandled);
+                    update dfa_src (Increasing.piece (IndexSet.singleton nfa_src) unhandled);
           ) (Vector.get transitions dfa_tgt)
-        ) (Monotonous.to_list f)
+        ) (Increasing.to_list f)
 
       let () =
         Vector.iteri propagate table;
@@ -635,8 +636,8 @@ struct
 
       let () =
         Stopwatch.step time "Reducible backward fixpoint: %d states reached"
-          (count ~negate:true Monotonous.is_minimum table);
-        assert (not (Monotonous.is_minimum (Vector.get table DFA.initial)));
+          (count ~negate:true Increasing.is_minimum table);
+        assert (not (Increasing.is_minimum (Vector.get table DFA.initial)));
     end*)
 
     module Prefix_forward = struct
@@ -653,24 +654,24 @@ struct
         in
         Vector.mapi (fun dfa f ->
           if dfa = DFA.initial then
-            Monotonous.piecewise (
-              if true then
+            Increasing.piecewise (
+              if false then
                 expand (
-                  Monotonous.to_list (Monotonous.piecewise Reducible_forward.initial_pieces)
+                  Increasing.to_list (Increasing.piecewise Reducible_forward.initial_pieces)
                 )
               else
-                expand (Monotonous.to_list f)
+                expand (Increasing.to_list f)
             )
           else
-            Monotonous.minimum
+            Increasing.minimum
         ) Reducible_forward.table
 
       let todo = ref []
 
       let update dfa g =
         let f = Vector.get table dfa in
-        let f, df = Monotonous.increase ~ignore:(DFA.accept dfa) f g in
-        if not (Monotonous.is_minimum df) then (
+        let f, df = Increasing.increase ~ignore:(DFA.accept dfa) f g in
+        if not (Increasing.is_minimum df) then (
           Vector.set table dfa f;
           push todo (dfa, df);
         )
@@ -679,13 +680,13 @@ struct
         ignore (
           List.fold_left (fun lrcs (label, dfa') ->
               let lrcs' = IndexSet.filter (fun lrc -> IndexSet.mem (Lrc.lr1_of_lrc lrc) label) lrcs in
-              update dfa' (Monotonous.piece (indexset_bind lrcs' Lrc.predecessors) unhandled);
+              update dfa' (Increasing.piece (indexset_bind lrcs' Lrc.predecessors) unhandled);
               IndexSet.diff lrcs lrcs'
             ) lrcs (DFA.successors dfa)
         )
 
       let propagate dfa f =
-        List.iter (follow dfa) (Monotonous.to_list f)
+        List.iter (follow dfa) (Increasing.to_list f)
 
       let () =
         Vector.iteri propagate table;
@@ -695,10 +696,10 @@ struct
         Vector.iteri (fun dfa f ->
             List.iter (fun (_, img) ->
                 assert (IndexSet.disjoint img (DFA.accept dfa));
-              ) (Monotonous.to_list f)
+              ) (Increasing.to_list f)
           ) table;
         Stopwatch.step time "Prefix forward fixpoint: reached %d states"
-          (count ~negate:true Monotonous.is_minimum table)
+          (count ~negate:true Increasing.is_minimum table)
     end
 
     let () = Stopwatch.leave time
