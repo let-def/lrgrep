@@ -326,7 +326,17 @@ let rec diff s1 s2 =
           C (addr1, ss, qs1')
 
 let lsb x = (x land -x)
-let compare_lsb x y = lsb x - lsb y
+let compare_lsb x y =
+  let x = lsb x in
+  let y = lsb y in
+  if x > 0 && y > 0 then
+    x - y
+  else if x > 0 then
+    -1
+  else if y > 0 then
+    1
+  else
+    0
 
 let compare_minimum s1 s2 =
   match s1, s2 with
@@ -335,14 +345,7 @@ let compare_minimum s1 s2 =
   | _, N -> 1
   | C (addr1, ss1, _), C (addr2, ss2, _) ->
     match Int.compare addr1 addr2 with
-    | 0 ->
-      begin match compare_lsb ss1 ss2 with
-        | 0 ->
-          let ss1' = ss1 land lnot ss2 in
-          let ss2' = ss2 land lnot ss1 in
-          compare_lsb ss1' ss2'
-        | n -> n
-      end
+    | 0 -> compare_lsb ss1 ss2
     | n -> n
 
 let sorted_union xs = List.fold_right union xs empty
