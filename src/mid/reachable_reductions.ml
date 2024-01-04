@@ -733,14 +733,34 @@ struct
         in
         Vector.mapi propagate Reducible_forward.table
 
-      let () =
-        Stopwatch.step time "Reducible backward: %d uncovered states"
-          (count ((<>) []) uncovered)
 
-      let table = Vector.map (fun pieces ->
-          let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
-          Increasing.piecewise (List.map prepare pieces)
+      let table = Vector.mapi (fun dfa pieces ->
+          let red_uncovered =
+            let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
+            Increasing.piecewise (List.map prepare pieces)
+          in
+          let prefix_uncovered = Vector.get Prefix_backward.table dfa in
+          List.fold_left (fun acc (nfas, unhandled) ->
+              IndexSet.fold (fun nfa acc ->
+                  let unhandled = IndexSet.inter unhandled (rejected nfa) in
+                  if IndexSet.is_empty unhandled then acc else
+                    let unhandled' =
+                      IndexSet.fold
+                        (fun lrc acc ->
+                           IndexSet.union (Increasing.image prefix_uncovered lrc) acc)
+                        (lrcs_of nfa) IndexSet.empty
+                    in
+                    let unhandled = IndexSet.inter unhandled unhandled' in
+                    Increasing.add acc nfa unhandled
+                ) nfas acc
+            ) red_uncovered
+            (Increasing.to_list (Vector.get Reducible_forward.table dfa))
         ) uncovered
+
+      let () =
+        Stopwatch.step time "Reducible backward: %d directly uncovered states, %d including prefix"
+          (count ((<>) []) uncovered)
+          (count ~negate:true Increasing.is_minimum table)
 
       let todo = ref []
 

@@ -23,6 +23,15 @@ module Increasing_ref = struct
         | Some s' -> IndexSet.subset s s'
       ) m1
 
+  let add t x y =
+    if IndexSet.is_empty y then
+      t
+    else
+      IndexMap.update x (function
+          | None -> Some y
+          | Some y' -> Some (IndexSet.union y y')
+        ) t
+
   let increase ?(ignore=IndexSet.empty) m1 m2 =
     let delta = ref IndexMap.empty in
     let main =

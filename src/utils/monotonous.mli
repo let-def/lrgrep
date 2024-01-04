@@ -32,6 +32,7 @@ module Increasing_ref : sig
   val to_list : ('a, 'b) t -> ('a, 'b) piece list
   val from : 'a IndexSet.t -> ('a index -> 'b IndexSet.t) -> ('a, 'b) t
   val filter : ('a, 'b) t -> ('a index -> 'b IndexSet.t -> bool) -> ('a, 'b) t
+  val add : ('a, 'b) t -> 'a index -> 'b IndexSet.t -> ('a, 'b) t
 
   val less_than : ('a, 'b) t -> ('a, 'b) t -> bool
 end
