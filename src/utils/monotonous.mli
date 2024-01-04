@@ -17,6 +17,24 @@ module Increasing : sig
   val from : 'a IndexSet.t -> ('a index -> 'b IndexSet.t) -> ('a, 'b) t
 end
 
+module Increasing_ref : sig
+  type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
+  type ('a, 'b) t
+
+  val minimum : ('a, 'b) t
+  val is_minimum : ('a, 'b) t -> bool
+  val piece : 'a IndexSet.t -> 'b IndexSet.t -> ('a, 'b) t
+  val piecewise : ('a IndexSet.t * 'b IndexSet.t) list -> ('a, 'b) t
+  val increase :
+    ?ignore:'b IndexSet.t ->
+    ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t * ('a, 'b) t
+  val image : ('a, 'b) t -> 'a Index.t -> 'b IndexSet.t
+  val to_list : ('a, 'b) t -> ('a, 'b) piece list
+  val from : 'a IndexSet.t -> ('a index -> 'b IndexSet.t) -> ('a, 'b) t
+
+  val less_than : ('a, 'b) t -> ('a, 'b) t -> bool
+end
+
 module Decreasing : sig
   type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
   type ('a, 'b) t = private ('a, 'b) piece list

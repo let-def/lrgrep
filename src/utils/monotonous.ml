@@ -1,3 +1,72 @@
+module Increasing_ref = struct
+  type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
+  type ('a, 'b) t = ('a, 'b IndexSet.t) IndexMap.t
+
+  let minimum = IndexMap.empty
+  let is_minimum = IndexMap.is_empty
+  let piece dom img = IndexMap.inflate (fun _ -> img) dom
+
+  let rec piecewise = function
+    | [] -> minimum
+    | (dom, img) :: tl ->
+      IndexSet.fold (fun x m ->
+        IndexMap.update x (function
+          | None -> Some img
+          | Some img' -> Some (IndexSet.union img img')
+        ) m
+      ) dom (piecewise tl)
+
+  let less_than m1 m2 =
+    IndexMap.for_all (fun x s ->
+        match IndexMap.find_opt x m2 with
+        | None -> false
+        | Some s' -> IndexSet.subset s s'
+      ) m1
+
+  let increase ?(ignore=IndexSet.empty) m1 m2 =
+    let delta = ref IndexMap.empty in
+    let main =
+      IndexMap.merge (fun x v1 v2 ->
+        match v1, v2 with
+        | Some img, None -> Some img
+        | Some img, Some img' ->
+          let img' = IndexSet.diff img' ignore in
+          let dimg = IndexSet.diff img' img in
+          if IndexSet.is_empty dimg then
+            Some img
+          else (
+            delta := IndexMap.add x dimg !delta;
+            Some (IndexSet.union dimg img)
+          )
+        | None, Some img' ->
+          let img' = IndexSet.diff img' ignore in
+          if IndexSet.is_empty img' then
+            None
+          else (
+            delta := IndexMap.add x img' !delta;
+            Some img'
+          )
+        | None, None -> None
+      ) m1 m2
+    in
+    (*assert (less_than m1 main);*)
+    (main, !delta)
+
+  let image m x =
+    Option.value ~default:IndexSet.empty (IndexMap.find_opt x m)
+
+  let to_list m =
+    IndexMap.fold (fun dom img acc ->
+      match acc with
+      | (dom', img') :: rest when IndexSet.equal img img' ->
+        (IndexSet.add dom dom', img') :: rest
+      | otherwise -> (IndexSet.singleton dom, img) :: otherwise
+    ) m []
+
+  let from s f = IndexMap.inflate f s
+end
+
+
 module Increasing = struct
   type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
   type ('a, 'b) t = ('a, 'b) piece list

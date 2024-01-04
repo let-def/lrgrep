@@ -3,6 +3,8 @@ open Misc
 open Fix.Indexing
 open Monotonous
 
+module Increasing = Increasing_ref
+
 module type S = sig
   module Info : Info.S
   module Viable: Viable_reductions.S with module Info := Info
@@ -514,13 +516,7 @@ struct
 
       let table = Vector.make DFA.n Increasing.minimum
 
-      let initial_pieces =
-        IndexMap.fold
-          (fun _ st acc -> (IndexSet.singleton st, potential st) :: acc)
-          initial []
-
-      let todo =
-        ref [DFA.initial, Increasing.piecewise initial_pieces]
+      let todo = ref []
 
       let update dfa g =
         let f = Vector.get table dfa in
@@ -529,6 +525,16 @@ struct
           Vector.set table dfa f;
           push todo (dfa, df);
         )
+
+      let () =
+        update DFA.initial (
+          Increasing.piecewise (
+            IndexMap.fold
+              (fun _ st acc -> (IndexSet.singleton st, potential st) :: acc)
+              initial []
+          )
+        )
+
 
       let follow dfa unhandled (lr1s, nfa') =
         let image nfa = IndexSet.inter unhandled (potential nfa) in
@@ -567,79 +573,6 @@ struct
           (count ~negate:true Increasing.is_minimum table)
     end
 
-    (*module Reducible_backward = struct
-      let transitions = Vector.make DFA.n []
-
-      let uncovered =
-        let follow dfa nfa unhandled lr1s nfa' =
-          let has_image nfa' = not (IndexSet.disjoint unhandled (delta nfa')) in
-          let nfa' = IndexSet.filter has_image nfa' in
-          if IndexSet.is_empty nfa' then
-            IndexSet.empty
-          else
-            List.fold_left (fun lr1s (label, dfa') ->
-                let lr1s' = IndexSet.diff lr1s label in
-                if lr1s != lr1s' then
-                  Vector.set_cons transitions dfa'
-                    (nfa', unhandled, IndexSet.inter lr1s label, dfa, nfa);
-                lr1s'
-              ) lr1s (DFA.successors dfa)
-        in
-        let propagate dfa f =
-          List.fold_left (fun acc (dom, unhandled) ->
-              let process_dom nfa acc =
-                let process acc (lr1s, nfa') =
-                  let rem = follow dfa nfa unhandled lr1s nfa' in
-                  if IndexSet.is_empty rem
-                  then acc
-                  else (nfa, unhandled, rem, nfa') :: acc
-                in
-                List.fold_left process acc (outer_transitions nfa)
-              in
-              IndexSet.fold process_dom dom acc
-            ) [] (Increasing.to_list f)
-        in
-        Vector.mapi propagate Reducible_forward.table
-
-      let () =
-        Stopwatch.step time "Reducible backward: %d uncovered states"
-          (count ((<>) []) uncovered)
-
-      let table = Vector.mapi (fun dfa pieces ->
-            let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
-            Increasing.piecewise (List.map prepare pieces)
-          ) uncovered
-
-      let todo = ref []
-
-      let update dfa g =
-        let f = Vector.get table dfa in
-        let f, df = Increasing.increase f g in
-        if not (Increasing.is_minimum df) then (
-          Vector.set table dfa f;
-          push todo (dfa, df);
-        )
-
-      let propagate dfa_tgt f =
-        List.iter (fun (nfa_tgts, unhandled) ->
-          List.iter (fun (nfa_tgts', unhandled', _, dfa_src, nfa_src) ->
-                if not (IndexSet.disjoint nfa_tgts nfa_tgts') then
-                  let unhandled = IndexSet.inter unhandled unhandled' in
-                  if not (IndexSet.is_empty unhandled) then
-                    update dfa_src (Increasing.piece (IndexSet.singleton nfa_src) unhandled);
-          ) (Vector.get transitions dfa_tgt)
-        ) (Increasing.to_list f)
-
-      let () =
-        Vector.iteri propagate table;
-        fixpoint ~propagate todo
-
-      let () =
-        Stopwatch.step time "Reducible backward fixpoint: %d states reached"
-          (count ~negate:true Increasing.is_minimum table);
-        assert (not (Increasing.is_minimum (Vector.get table DFA.initial)));
-    end*)
-
     module Prefix_forward = struct
       let table =
         let expand f =
@@ -652,18 +585,10 @@ struct
                 ) nfas acc
             ) [] f
         in
-        Vector.mapi (fun dfa f ->
-          if dfa = DFA.initial then
+        Vector.map (fun f ->
             Increasing.piecewise (
-              if false then
-                expand (
-                  Increasing.to_list (Increasing.piecewise Reducible_forward.initial_pieces)
-                )
-              else
-                expand (Increasing.to_list f)
+              expand (Increasing.to_list f)
             )
-          else
-            Increasing.minimum
         ) Reducible_forward.table
 
       let todo = ref []
@@ -702,7 +627,80 @@ struct
           (count ~negate:true Increasing.is_minimum table)
     end
 
+    module Reducible_backward = struct
+      let transitions = Vector.make DFA.n []
+
+      let uncovered =
+        let follow dfa nfa unhandled lr1s nfa' =
+          let has_image nfa' = not (IndexSet.disjoint unhandled (delta nfa')) in
+          let nfa' = IndexSet.filter has_image nfa' in
+          if IndexSet.is_empty nfa' then
+            IndexSet.empty
+          else
+            List.fold_left (fun lr1s (label, dfa') ->
+                let lr1s' = IndexSet.diff lr1s label in
+                if lr1s != lr1s' then
+                  Vector.set_cons transitions dfa'
+                    (nfa', unhandled, IndexSet.inter lr1s label, dfa, nfa);
+                lr1s'
+              ) lr1s (DFA.successors dfa)
+        in
+        let propagate dfa f =
+          List.fold_left (fun acc (dom, unhandled) ->
+              let process_dom nfa acc =
+                let process acc (lr1s, nfa') =
+                  let rem = follow dfa nfa unhandled lr1s nfa' in
+                  if IndexSet.is_empty rem
+                  then acc
+                  else (nfa, unhandled, rem, nfa') :: acc
+                in
+                List.fold_left process acc (outer_transitions nfa)
+              in
+              IndexSet.fold process_dom dom acc
+            ) [] (Increasing.to_list f)
+        in
+        Vector.mapi propagate Reducible_forward.table
+
+      let () =
+        Stopwatch.step time "Reducible backward: %d uncovered states"
+          (count ((<>) []) uncovered)
+
+      let table = Vector.map (fun pieces ->
+          let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
+          Increasing.piecewise (List.map prepare pieces)
+        ) uncovered
+
+      let todo = ref []
+
+      let update dfa g =
+        let f = Vector.get table dfa in
+        let f, df = Increasing.increase f g in
+        if not (Increasing.is_minimum df) then (
+          Vector.set table dfa f;
+          push todo (dfa, df);
+        )
+
+      let propagate dfa_tgt f =
+        List.iter (fun (nfa_tgts, unhandled) ->
+            List.iter (fun (nfa_tgts', unhandled', _, dfa_src, nfa_src) ->
+                if not (IndexSet.disjoint nfa_tgts nfa_tgts') then
+                  let unhandled = IndexSet.inter unhandled unhandled' in
+                  if not (IndexSet.is_empty unhandled) then
+                    update dfa_src (Increasing.piece (IndexSet.singleton nfa_src) unhandled);
+              ) (Vector.get transitions dfa_tgt)
+          ) (Increasing.to_list f)
+
+      let () =
+        Vector.iteri propagate table;
+        fixpoint ~propagate todo
+
+      let () =
+        Stopwatch.step time "Reducible backward fixpoint: %d states reached"
+          (count ~negate:true Increasing.is_minimum table)
+    end
+
     let () = Stopwatch.leave time
 
   end
+
 end
