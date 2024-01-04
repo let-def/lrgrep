@@ -42,7 +42,7 @@ module Increasing = struct
     else
       (dom, img) :: xs
 
-  let increase f g =
+  let increase ?(ignore=IndexSet.empty) f g =
     let g = ref g in
     let pieces = ref [] in
     let rec visit_g dom0 img0 = function
@@ -53,12 +53,16 @@ module Increasing = struct
         if IndexSet.is_empty dom then
           x :: visit_g dom0 img0 g'
         else
-          let img = IndexSet.union img0 img' in
-          if not (IndexSet.equal img img0) then (
-            pieces := insert dom img !pieces;
-            dom0 := IndexSet.diff !dom0 dom;
-          );
-          cons (IndexSet.diff dom' dom) img' (visit_g dom0 img0 g')
+          let img' = IndexSet.diff img' ignore in
+          if not (IndexSet.is_empty img') then
+            let img = IndexSet.union img0 img' in
+            if not (IndexSet.equal img img0) then (
+              pieces := insert dom img !pieces;
+              dom0 := IndexSet.diff !dom0 dom;
+            );
+            cons (IndexSet.diff dom' dom) img' (visit_g dom0 img0 g')
+          else
+            visit_g dom0 img0 g'
     in
     let rec visit_f = function
       | f when is_minimum !g -> f
@@ -72,7 +76,12 @@ module Increasing = struct
           cons !dom0 img (visit_f f')
     in
     let f = visit_f f in
-    let df = merge !pieces !g in
+    let g =
+      if IndexSet.is_empty ignore
+      then !g
+      else List.map (fun (dom, img') -> dom, IndexSet.diff img' ignore) !g
+    in
+    let df = merge !pieces g in
     (merge f df, df)
 
   let image f x =
@@ -110,6 +119,18 @@ module Increasing = struct
       | x :: xs -> x :: merge xs
     in
     merge pieces
+
+  let from dom f =
+    piecewise (
+      IndexSet.fold_right (fun acc point ->
+          let img = f point in
+          if IndexSet.is_empty img then acc else
+            match acc with
+            | (dom', img') :: rest when IndexSet.equal img img' ->
+              (IndexSet.add point dom', img') :: rest
+            | acc -> (IndexSet.singleton point, img) :: acc
+        ) [] dom
+    )
 
   let to_list x = x
 
