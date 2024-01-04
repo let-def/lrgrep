@@ -64,6 +64,9 @@ module Increasing_ref = struct
     ) m []
 
   let from s f = IndexMap.inflate f s
+
+  let filter t f =
+    IndexMap.filter f t
 end
 
 

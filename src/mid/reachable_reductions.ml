@@ -627,6 +627,78 @@ struct
           (count ~negate:true Increasing.is_minimum table)
     end
 
+    module Prefix_backward = struct
+      let transitions = Vector.make DFA.n IndexMap.empty
+
+      let table =
+        Vector.mapi (fun src f ->
+            let lr1s =
+              List.fold_left (fun acc (lr1s, tgt) ->
+                  IndexSet.fold
+                    (fun lr1 acc -> IndexMap.add lr1 tgt acc)
+                    lr1s acc
+                )
+                IndexMap.empty (DFA.successors src)
+            in
+            Increasing.filter f
+              (fun lrc unhandled ->
+                 match IndexMap.find_opt (Lrc.lr1_of_lrc lrc) lr1s with
+                 | None -> true
+                 | Some tgt ->
+                   let map = Vector.get transitions tgt in
+                   let lrcs = Lrc.predecessors lrc in
+                   let map =
+                     IndexSet.fold (fun lrc' map ->
+                         IndexMap.update lrc'
+                           (fun xs -> Some ((src, lrc, unhandled) :: Option.value ~default:[] xs))
+                           map
+                       ) lrcs map
+                   in
+                   Vector.set transitions tgt map;
+                   false
+              )
+          ) Prefix_forward.table
+
+      let () =
+        Stopwatch.step time "Prefix backward initialized with %d states"
+          (count ~negate:true Increasing.is_minimum table)
+
+      let todo = ref []
+
+      let update dfa g =
+        let f = Vector.get table dfa in
+        let f, df = Increasing.increase f g in
+        if not (Increasing.is_minimum df) then (
+          Vector.set table dfa f;
+          push todo (dfa, df);
+        )
+
+      let follow dfa (lrcs, unhandled) =
+        let tr = Vector.get transitions dfa in
+        IndexSet.iter (fun lrc ->
+            match IndexMap.find_opt lrc tr with
+            | None -> assert (dfa = DFA.initial)
+            | Some trs ->
+              List.iter (fun (src, lrc', unhandled') ->
+                  let unhandled = IndexSet.inter unhandled unhandled' in
+                  if not (IndexSet.is_empty unhandled) then (
+                    update src (Increasing.piece (IndexSet.singleton lrc') unhandled)
+                  )
+                ) trs
+          ) lrcs
+
+      let propagate dfa f =
+        List.iter (follow dfa) (Increasing.to_list f)
+
+      let () =
+        Vector.iteri propagate table;
+        fixpoint ~propagate todo
+
+      let () =
+        Stopwatch.step time "Prefix backward fixpoint: reached %d states"
+          (count ~negate:true Increasing.is_minimum table)
+    end
+
     module Reducible_backward = struct
       let transitions = Vector.make DFA.n []
 

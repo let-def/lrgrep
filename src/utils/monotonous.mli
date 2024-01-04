@@ -31,6 +31,7 @@ module Increasing_ref : sig
   val image : ('a, 'b) t -> 'a Index.t -> 'b IndexSet.t
   val to_list : ('a, 'b) t -> ('a, 'b) piece list
   val from : 'a IndexSet.t -> ('a index -> 'b IndexSet.t) -> ('a, 'b) t
+  val filter : ('a, 'b) t -> ('a index -> 'b IndexSet.t -> bool) -> ('a, 'b) t
 
   val less_than : ('a, 'b) t -> ('a, 'b) t -> bool
 end
