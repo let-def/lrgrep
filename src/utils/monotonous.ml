@@ -76,6 +76,19 @@ module Increasing_ref = struct
 
   let filter t f =
     IndexMap.filter f t
+
+  let intersect m1 m2 =
+    IndexMap.merge (fun _ v1 v2 ->
+        match v1, v2 with
+        | Some s1, Some s2 -> Some (IndexSet.inter s1 s2)
+        | _ -> None
+      ) m1 m2
+
+  let fold t f acc =
+    IndexMap.fold f t acc
+
+  let iter t f =
+    IndexMap.iter f t
 end
 
 

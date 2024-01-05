@@ -492,6 +492,18 @@ struct
         );
       Vector.get table
 
+    let successor =
+      let index src =
+        List.fold_left (fun acc (lr1s, tgt) ->
+            IndexSet.fold
+              (fun lr1 acc -> IndexMap.add lr1 tgt acc)
+              lr1s acc
+          ) IndexMap.empty (DFA.successors src)
+      in
+      let table = Vector.init DFA.n index in
+      fun dfa lr1 ->
+        IndexMap.find_opt lr1 (Vector.get table dfa)
+
     let reverse ~propagate fixpoint =
       let table = Vector.make DFA.n [] in
       let update src tgt dom img =
@@ -526,15 +538,14 @@ struct
           push todo (dfa, df);
         )
 
-      let () =
-        update DFA.initial (
-          Increasing.piecewise (
-            IndexMap.fold
-              (fun _ st acc -> (IndexSet.singleton st, potential st) :: acc)
-              initial []
-          )
+      let initial_fun =
+        Increasing.piecewise (
+          IndexMap.fold
+            (fun _ st acc -> (IndexSet.singleton st, potential st) :: acc)
+            initial []
         )
 
+      let () = update DFA.initial initial_fun
 
       let follow dfa unhandled (lr1s, nfa') =
         let image nfa = IndexSet.inter unhandled (potential nfa) in
@@ -549,47 +560,38 @@ struct
         )
 
       let propagate dfa f =
-        List.iter (fun (dom, unhandled) ->
-            let process_dom nfa =
-              List.iter
-                (follow dfa (IndexSet.inter unhandled (delta nfa)))
-                (outer_transitions nfa)
-            in
-            IndexSet.iter process_dom dom;
-          ) (Increasing.to_list f)
+        Increasing.iter f (fun nfa unhandled ->
+            List.iter
+              (follow dfa (IndexSet.inter unhandled (delta nfa)))
+              (outer_transitions nfa)
+          )
 
       let () = fixpoint ~propagate todo
 
       let () =
         Vector.iteri (fun dfa f ->
-            List.iter (fun (nfas, img) ->
+            Increasing.iter f (fun nfa img ->
                 assert (IndexSet.disjoint img (DFA.accept dfa));
-                IndexSet.iter (fun nfa ->
-                    assert (IndexSet.subset img (potential nfa))
-                  ) nfas;
-              ) (Increasing.to_list f)
+                assert (IndexSet.subset img (potential nfa))
+              )
           ) table;
         Stopwatch.step time "Reducible fixpoint: reached %d states"
           (count ~negate:true Increasing.is_minimum table)
     end
 
     module Prefix_forward = struct
+      let expand f =
+        Increasing.fold f (fun nfa unhandled acc ->
+            let unhandled = IndexSet.inter unhandled (rejected nfa) in
+            if IndexSet.is_empty unhandled
+            then acc
+            else (lrcs_of nfa, unhandled) :: acc
+          ) []
+
       let table =
-        let expand f =
-          List.fold_left (fun acc (nfas, unhandled) ->
-              IndexSet.fold (fun nfa acc ->
-                  let unhandled = IndexSet.inter unhandled (rejected nfa) in
-                  if IndexSet.is_empty unhandled
-                  then acc
-                  else (lrcs_of nfa, unhandled) :: acc
-                ) nfas acc
-            ) [] f
-        in
-        Vector.map (fun f ->
-            Increasing.piecewise (
-              expand (Increasing.to_list f)
-            )
-        ) Reducible_forward.table
+        Vector.map
+          (fun f -> Increasing.piecewise (expand f))
+          Reducible_forward.table
 
       let todo = ref []
 
@@ -601,17 +603,14 @@ struct
           push todo (dfa, df);
         )
 
-      let follow dfa (lrcs, unhandled) =
-        ignore (
-          List.fold_left (fun lrcs (label, dfa') ->
-              let lrcs' = IndexSet.filter (fun lrc -> IndexSet.mem (Lrc.lr1_of_lrc lrc) label) lrcs in
-              update dfa' (Increasing.piece (indexset_bind lrcs' Lrc.predecessors) unhandled);
-              IndexSet.diff lrcs lrcs'
-            ) lrcs (DFA.successors dfa)
-        )
+      let follow src lrc unhandled =
+        match successor src (Lrc.lr1_of_lrc lrc) with
+        | None -> ()
+        | Some tgt ->
+          update tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
 
       let propagate dfa f =
-        List.iter (follow dfa) (Increasing.to_list f)
+        Increasing.iter f (follow dfa)
 
       let () =
         Vector.iteri propagate table;
@@ -619,9 +618,8 @@ struct
 
       let () =
         Vector.iteri (fun dfa f ->
-            List.iter (fun (_, img) ->
-                assert (IndexSet.disjoint img (DFA.accept dfa));
-              ) (Increasing.to_list f)
+            Increasing.iter f
+              (fun _ img -> assert (IndexSet.disjoint img (DFA.accept dfa)))
           ) table;
         Stopwatch.step time "Prefix forward fixpoint: reached %d states"
           (count ~negate:true Increasing.is_minimum table)
@@ -673,22 +671,20 @@ struct
           push todo (dfa, df);
         )
 
-      let follow dfa (lrcs, unhandled) =
+      let follow dfa lrc unhandled =
         let tr = Vector.get transitions dfa in
-        IndexSet.iter (fun lrc ->
-            match IndexMap.find_opt lrc tr with
-            | None -> assert (dfa = DFA.initial)
-            | Some trs ->
-              List.iter (fun (src, lrc', unhandled') ->
-                  let unhandled = IndexSet.inter unhandled unhandled' in
-                  if not (IndexSet.is_empty unhandled) then (
-                    update src (Increasing.piece (IndexSet.singleton lrc') unhandled)
-                  )
-                ) trs
-          ) lrcs
+        match IndexMap.find_opt lrc tr with
+        | None -> assert (dfa = DFA.initial)
+        | Some trs ->
+          List.iter (fun (src, lrc', unhandled') ->
+              let unhandled = IndexSet.inter unhandled unhandled' in
+              if not (IndexSet.is_empty unhandled) then (
+                update src (Increasing.piece (IndexSet.singleton lrc') unhandled)
+              )
+            ) trs
 
       let propagate dfa f =
-        List.iter (follow dfa) (Increasing.to_list f)
+        Increasing.iter f (follow dfa)
 
       let () =
         Vector.iteri propagate table;
@@ -718,21 +714,17 @@ struct
               ) lr1s (DFA.successors dfa)
         in
         let propagate dfa f =
-          List.fold_left (fun acc (dom, unhandled) ->
-              let process_dom nfa acc =
-                let process acc (lr1s, nfa') =
-                  let rem = follow dfa nfa unhandled lr1s nfa' in
-                  if IndexSet.is_empty rem
-                  then acc
-                  else (nfa, unhandled, rem, nfa') :: acc
-                in
-                List.fold_left process acc (outer_transitions nfa)
+          Increasing.fold f (fun nfa unhandled acc ->
+              let process acc (lr1s, nfa') =
+                let rem = follow dfa nfa unhandled lr1s nfa' in
+                if IndexSet.is_empty rem
+                then acc
+                else (nfa, unhandled, rem, nfa') :: acc
               in
-              IndexSet.fold process_dom dom acc
-            ) [] (Increasing.to_list f)
+              List.fold_left process acc (outer_transitions nfa)
+            ) []
         in
         Vector.mapi propagate Reducible_forward.table
-
 
       let table = Vector.mapi (fun dfa pieces ->
           let red_uncovered =
@@ -740,21 +732,19 @@ struct
             Increasing.piecewise (List.map prepare pieces)
           in
           let prefix_uncovered = Vector.get Prefix_backward.table dfa in
-          List.fold_left (fun acc (nfas, unhandled) ->
-              IndexSet.fold (fun nfa acc ->
-                  let unhandled = IndexSet.inter unhandled (rejected nfa) in
-                  if IndexSet.is_empty unhandled then acc else
-                    let unhandled' =
-                      IndexSet.fold
-                        (fun lrc acc ->
-                           IndexSet.union (Increasing.image prefix_uncovered lrc) acc)
-                        (lrcs_of nfa) IndexSet.empty
-                    in
-                    let unhandled = IndexSet.inter unhandled unhandled' in
-                    Increasing.add acc nfa unhandled
-                ) nfas acc
+          Increasing.fold (Vector.get Reducible_forward.table dfa)
+            (fun nfa unhandled acc ->
+               let unhandled = IndexSet.inter unhandled (rejected nfa) in
+               if IndexSet.is_empty unhandled then acc else
+                 let unhandled' =
+                   IndexSet.fold
+                     (fun lrc acc ->
+                        IndexSet.union (Increasing.image prefix_uncovered lrc) acc)
+                     (lrcs_of nfa) IndexSet.empty
+                 in
+                 let unhandled = IndexSet.inter unhandled unhandled' in
+                 Increasing.add acc nfa unhandled
             ) red_uncovered
-            (Increasing.to_list (Vector.get Reducible_forward.table dfa))
         ) uncovered
 
       let () =
@@ -773,14 +763,15 @@ struct
         )
 
       let propagate dfa_tgt f =
-        List.iter (fun (nfa_tgts, unhandled) ->
+        Increasing.iter f (fun nfa_tgt unhandled ->
             List.iter (fun (nfa_tgts', unhandled', _, dfa_src, nfa_src) ->
-                if not (IndexSet.disjoint nfa_tgts nfa_tgts') then
+                if IndexSet.mem nfa_tgt nfa_tgts' then
                   let unhandled = IndexSet.inter unhandled unhandled' in
                   if not (IndexSet.is_empty unhandled) then
                     update dfa_src (Increasing.piece (IndexSet.singleton nfa_src) unhandled);
-              ) (Vector.get transitions dfa_tgt)
-          ) (Increasing.to_list f)
+              )
+              (Vector.get transitions dfa_tgt)
+          )
 
       let () =
         Vector.iteri propagate table;
@@ -790,6 +781,24 @@ struct
         Stopwatch.step time "Reducible backward fixpoint: %d states reached"
           (count ~negate:true Increasing.is_minimum table)
     end
+
+    (*module Determinize() = struct
+      include IndexBuffer.Gen.Make()
+
+      let states = get_generator ()
+
+      let nodes = Hashtbl.create 7
+
+      let normalize (f, g) =
+        let g =
+
+        (Increasing.to_list f)
+
+      let initial =
+
+
+      let states = IndexBuffer.Gen.freeze states
+    end*)
 
     let () = Stopwatch.leave time
 
