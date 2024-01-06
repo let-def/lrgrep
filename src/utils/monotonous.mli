@@ -34,11 +34,13 @@ module Increasing_ref : sig
   val filter : ('a, 'b) t -> ('a index -> 'b IndexSet.t -> bool) -> ('a, 'b) t
   val add : ('a, 'b) t -> 'a index -> 'b IndexSet.t -> ('a, 'b) t
 
+  val union : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t
   val intersect : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t
   val less_than : ('a, 'b) t -> ('a, 'b) t -> bool
 
   val fold : ('a, 'b) t -> ('a index -> 'b IndexSet.t -> 'c -> 'c) -> 'c -> 'c
   val iter : ('a, 'b) t -> ('a index -> 'b IndexSet.t -> unit) -> unit
+  val subtract : ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t
 end
 
 module Decreasing : sig

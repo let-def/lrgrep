@@ -8,6 +8,8 @@ module Increasing_ref = struct
 
   let rec piecewise = function
     | [] -> minimum
+    | (_, img) :: tl when IndexSet.is_empty img ->
+      piecewise tl
     | (dom, img) :: tl ->
       IndexSet.fold (fun x m ->
         IndexMap.update x (function
@@ -61,6 +63,9 @@ module Increasing_ref = struct
     (*assert (less_than m1 main);*)
     (main, !delta)
 
+  let union m1 m2 =
+    IndexMap.union (fun _ s1 s2 -> Some (IndexSet.union s1 s2)) m1 m2
+
   let image m x =
     Option.value ~default:IndexSet.empty (IndexMap.find_opt x m)
 
@@ -72,7 +77,8 @@ module Increasing_ref = struct
       | otherwise -> (IndexSet.singleton dom, img) :: otherwise
     ) m []
 
-  let from s f = IndexMap.inflate f s
+  let from s f =
+    IndexSet.fold (fun i map -> add map i (f i)) s minimum
 
   let filter t f =
     IndexMap.filter f t
@@ -80,7 +86,9 @@ module Increasing_ref = struct
   let intersect m1 m2 =
     IndexMap.merge (fun _ v1 v2 ->
         match v1, v2 with
-        | Some s1, Some s2 -> Some (IndexSet.inter s1 s2)
+        | Some s1, Some s2 ->
+          let s = IndexSet.inter s1 s2 in
+          if IndexSet.is_empty s then None else Some s
         | _ -> None
       ) m1 m2
 
@@ -89,6 +97,21 @@ module Increasing_ref = struct
 
   let iter t f =
     IndexMap.iter f t
+
+  let subtract m1 m2 =
+    IndexMap.merge (fun _ v1 v2 ->
+        match v1 with
+        | None -> None
+        | Some v1 ->
+          match v2 with
+          | None -> Some v1
+          | Some v2 ->
+            let v' = IndexSet.diff v1 v2 in
+            if IndexSet.is_empty v' then
+              None
+            else
+              Some v'
+      ) m1 m2
 end
 
 
