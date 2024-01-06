@@ -25,6 +25,8 @@ type enumerate_format =
 
 let opt_enumerate_format = ref Efmt_raw
 
+let opt_enumerate_entrypoint = ref []
+
 let escape_and_align_left fmt =
   Printf.ksprintf (fun str ->
       let str = Bytes.unsafe_of_string (String.escaped str) in
@@ -101,6 +103,9 @@ let specs = [
       exit 1
   ),
   " <raw|json> Format used to output enumeration";
+  "-enumerate-entrypoint", Arg.String (push opt_enumerate_entrypoint),
+  " <start-symbol> Enumerate starting from this entrypoint\n\
+  \ Default is to enumerate all start symbols.";
   "-debug-stack", Arg.String (fun stack ->
       opt_debug_stack :=
         List.map
@@ -405,8 +410,18 @@ let () =
   begin match !opt_enumerate with
     | None -> ()
     | Some precision ->
+      let initials =
+        match List.rev !opt_enumerate_entrypoint with
+        | [] -> all_entrypoints
+        | syms ->
+          translate_entrypoints Fun.id (Fun.const ())
+            (fun () msg ->
+               Printf.eprintf "Invalid -enumerat-entrypoint: %s" msg;
+               exit 1)
+            syms
+      in
       let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
-        let initials = indexset_bind all_entrypoints Lrc.lrcs_of_lr1
+        let initials = indexset_bind initials Lrc.lrcs_of_lr1
       end) in
       let module Reachable = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
       let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable) in
