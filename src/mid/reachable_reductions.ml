@@ -50,6 +50,16 @@ module type S = sig
   val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 end
 
+let cons_opt x xs =
+  let xs = match xs with
+    | None -> []
+    | Some xs -> xs
+  in
+  x :: xs
+
+let some_cons_opt x xs =
+  Some (cons_opt x xs)
+
 module Make
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
@@ -516,7 +526,7 @@ struct
       | [] -> ()
       | todo' ->
         todo := [];
-        List.iter (fun (dfa, nfa) -> propagate dfa nfa) todo';
+        List.iter propagate todo';
         fixpoint ~propagate todo
 
     let rec diffs d = function
@@ -550,16 +560,17 @@ struct
       let follow dfa unhandled (lr1s, nfa') =
         let image nfa = IndexSet.inter unhandled (potential nfa) in
         let g = Increasing.from nfa' image in
-        ignore (
-          List.fold_left (fun lr1s (label, dfa') ->
-              let lr1s' = IndexSet.diff lr1s label in
-              if lr1s != lr1s' then
-                update dfa' g;
-              lr1s'
-            ) lr1s (DFA.successors dfa)
-        )
+        if not (Increasing.is_minimum g) then
+          ignore (
+            List.fold_left (fun lr1s (label, dfa') ->
+                let lr1s' = IndexSet.diff lr1s label in
+                if lr1s != lr1s' then
+                  update dfa' g;
+                lr1s'
+              ) lr1s (DFA.successors dfa)
+          )
 
-      let propagate dfa f =
+      let propagate (dfa, f) =
         Increasing.iter f (fun nfa unhandled ->
             List.iter
               (follow dfa (IndexSet.inter unhandled (delta nfa)))
@@ -577,21 +588,38 @@ struct
           ) table;
         Stopwatch.step time "Reducible fixpoint: reached %d states"
           (count ~negate:true Increasing.is_minimum table)
+
+      let iter_transitions dfa f fn =
+        let follow unhandled (lr1s, nfa') =
+          let image nfa = IndexSet.inter unhandled (potential nfa) in
+          let g = Increasing.from nfa' image in
+          if not (Increasing.is_minimum g) then
+            IndexSet.iter (fun lr1 ->
+                match successor dfa lr1 with
+                | None -> ()
+                | Some dfa' ->
+                  fn lr1 dfa' g
+              ) lr1s
+        in
+        Increasing.iter f (fun nfa unhandled ->
+            List.iter
+              (follow (IndexSet.inter unhandled (delta nfa)))
+              (outer_transitions nfa)
+          )
     end
 
     module Prefix_forward = struct
       let expand f =
-        Increasing.fold f (fun nfa unhandled acc ->
-            let unhandled = IndexSet.inter unhandled (rejected nfa) in
-            if IndexSet.is_empty unhandled
-            then acc
-            else (lrcs_of nfa, unhandled) :: acc
-          ) []
+        Increasing.piecewise (
+          Increasing.fold f (fun nfa unhandled acc ->
+              let unhandled = IndexSet.inter unhandled (rejected nfa) in
+              if IndexSet.is_empty unhandled
+              then acc
+              else (lrcs_of nfa, unhandled) :: acc
+            ) []
+        )
 
-      let table =
-        Vector.map
-          (fun f -> Increasing.piecewise (expand f))
-          Reducible_forward.table
+      let table = Vector.map expand Reducible_forward.table
 
       let todo = ref []
 
@@ -609,11 +637,21 @@ struct
         | Some tgt ->
           update tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
 
-      let propagate dfa f =
+      let propagate (dfa, f) =
+        Increasing.iter f (follow dfa)
+
+      let iter_transitions dfa f fn =
+        let follow src lrc unhandled =
+          let lr1 = Lrc.lr1_of_lrc lrc in
+          match successor src lr1 with
+          | None -> ()
+          | Some tgt ->
+            fn lr1 tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
+        in
         Increasing.iter f (follow dfa)
 
       let () =
-        Vector.iteri propagate table;
+        Vector.iteri (fun i x -> propagate (i, x)) table;
         fixpoint ~propagate todo
 
       let () =
@@ -648,8 +686,7 @@ struct
                    let map =
                      IndexSet.fold (fun lrc' map ->
                          IndexMap.update lrc'
-                           (fun xs -> Some ((src, lrc, unhandled) :: Option.value ~default:[] xs))
-                           map
+                           (some_cons_opt (src, lrc, unhandled)) map
                        ) lrcs map
                    in
                    Vector.set transitions tgt map;
@@ -683,11 +720,11 @@ struct
               )
             ) trs
 
-      let propagate dfa f =
+      let propagate (dfa, f) =
         Increasing.iter f (follow dfa)
 
       let () =
-        Vector.iteri propagate table;
+        Vector.iteri (fun i x -> propagate (i, x)) table;
         fixpoint ~propagate todo
 
       let () =
@@ -762,7 +799,7 @@ struct
           push todo (dfa, df);
         )
 
-      let propagate dfa_tgt f =
+      let propagate (dfa_tgt, f) =
         Increasing.iter f (fun nfa_tgt unhandled ->
             List.iter (fun (nfa_tgts', unhandled', _, dfa_src, nfa_src) ->
                 if IndexSet.mem nfa_tgt nfa_tgts' then
@@ -774,7 +811,7 @@ struct
           )
 
       let () =
-        Vector.iteri propagate table;
+        Vector.iteri (fun i x -> propagate (i,x)) table;
         fixpoint ~propagate todo
 
       let () =
@@ -782,23 +819,183 @@ struct
           (count ~negate:true Increasing.is_minimum table)
     end
 
-    (*module Determinize() = struct
-      include IndexBuffer.Gen.Make()
+    module Determinize = struct
+      let normalize f g =
+        (f, Increasing.union g (Prefix_forward.expand f))
 
-      let states = get_generator ()
+      let initial_fun =
+        let f1 = Reducible_forward.initial_fun in
+        let f2 = Vector.get Reducible_backward.table DFA.initial in
+        normalize (Increasing.intersect f1 f2) Increasing.minimum
 
-      let nodes = Hashtbl.create 7
+      let todo_red = Vector.copy Reducible_backward.table
+      let todo_pre = Vector.copy Prefix_backward.table
 
-      let normalize (f, g) =
-        let g =
+      module Sym_or_lr1 = Sum(Symbol)(Lr1)
 
-        (Increasing.to_list f)
+      let sym_of lr1 = match Lr1.incoming lr1 with
+        | Some sym -> Sym_or_lr1.inj_l sym
+        | None -> Sym_or_lr1.inj_r lr1
 
-      let initial =
+      type node = {
+        mutable reached: (DFA.n, (n, Terminal.n) Increasing.t * (Lrc.n, Terminal.n) Increasing.t) IndexMap.t;
+        mutable child: (Sym_or_lr1.n, node) IndexMap.t;
+      }
 
+      let count = ref 0
 
-      let states = IndexBuffer.Gen.freeze states
-    end*)
+      let new_node () =
+        incr count;
+        {
+          reached = IndexMap.empty;
+          child = IndexMap.empty;
+        }
+
+      let get_child node sym =
+        match IndexMap.find_opt sym node.child with
+        | Some node' -> node'
+        | None ->
+          let node' = new_node () in
+          node.child <- IndexMap.add sym node' node.child;
+          node'
+
+      let todo = ref []
+
+      let propagate (node, dfa, (f,g)) =
+        let f' = Vector.get todo_red dfa in
+        let g' = Vector.get todo_pre dfa in
+        let f = Increasing.intersect f f' in
+        let g = Increasing.intersect g g' in
+        let (f, g) = normalize f g in
+        if not (Increasing.is_minimum f &&
+                Increasing.is_minimum g) then (
+            node.reached <- IndexMap.add dfa (f, g) node.reached;
+            Vector.set todo_red dfa (Increasing.subtract f' f);
+            Vector.set todo_pre dfa (Increasing.subtract g' g);
+            let transitions = ref IndexMap.empty in
+            let update_transition lr1 tgt (f,g) =
+              let sym = sym_of lr1 in
+              transitions := IndexMap.update sym
+                  (function
+                    | None -> Some (IndexMap.singleton tgt (f,g))
+                    | Some map' ->
+                      Some (IndexMap.update tgt (function
+                          | None -> Some (f,g)
+                          | Some (f',g') -> Some (Increasing.union f f', Increasing.union g g')
+                        ) map')
+                  )
+                  !transitions
+            in
+            Reducible_forward.iter_transitions dfa f
+              (fun lr1 dfa' f' -> update_transition lr1 dfa' (f',Increasing.minimum));
+            Prefix_forward.iter_transitions dfa g
+              (fun lr1 dfa' g' -> update_transition lr1 dfa' (Increasing.minimum,g'));
+            IndexMap.iter (fun sym map' ->
+                let node' = get_child node sym in
+                IndexMap.iter (fun dfa' fg ->
+                    push todo (node', dfa', fg)
+                  ) map'
+              ) !transitions
+        )
+
+      let root = new_node ()
+
+      let () =
+        propagate (root, DFA.initial, initial_fun);
+        fixpoint ~propagate todo
+
+      let rec count_branch node =
+        let count =
+          IndexMap.fold (fun _ node' acc ->
+              acc + count_branch node'
+            ) node.child 0
+        in
+        if count = 0 && not (IndexMap.is_empty node.reached) then
+          1
+        else
+          count
+
+      let iter_branches node fn =
+        let rec loop prefix node =
+          let ok =
+            IndexMap.fold (fun sym node' acc ->
+                ( match Sym_or_lr1.prj sym with
+                  | L sym -> loop (sym :: prefix) node'
+                  | R _lr1 ->
+                    match IndexMap.choose_opt node'.reached with
+                    | None -> false
+                    | Some (_dfa, (f, g)) ->
+                      fn f g prefix;
+                      true
+                ) || acc
+              ) node.child false
+          in
+          if not ok then
+            match IndexMap.choose_opt node.reached with
+            | None -> false
+            | Some (_dfa, (f, g)) ->
+              fn f g prefix;
+              true
+          else
+            ok
+        in
+        ignore (loop [] node)
+
+      let lrc_prefix =
+        let table = Vector.make Lrc.n [] in
+        let todo = ref [] in
+        let expand prefix state =
+          match Vector.get table state with
+          | [] ->
+            Vector.set table state prefix;
+            let prefix = state :: prefix in
+            let successors = Lrc.successors state in
+            if not (IndexSet.is_empty successors) then
+              Misc.push todo (successors, prefix)
+          | _ -> ()
+        in
+        let visit (successors, prefix) =
+          IndexSet.iter (expand prefix) successors
+        in
+        let rec loop = function
+          | [] -> ()
+          | other ->
+            todo := [];
+            List.iter visit other;
+            loop !todo
+        in
+        Index.iter Info.Lr1.n (fun lr1 ->
+          if Option.is_none (Info.Lr1.incoming lr1) then
+            expand [] (Lrc.first_lrc_of_lr1 lr1)
+        );
+        loop !todo;
+        Vector.get table
+
+      let () =
+        Vector.iter (fun i -> assert (Increasing.is_minimum i)) todo_red;
+        Vector.iter (fun i -> assert (Increasing.is_minimum i)) todo_pre;
+        Stopwatch.step time "Covering tree has %d nodes, %d branches" !count (count_branch root);
+        iter_branches root begin fun _f g suffix ->
+          try
+            Increasing.fold g (fun lrc unhandled () ->
+                let prefix = List.map Lrc.lr1_of_lrc (lrc_prefix lrc @ [lrc]) in
+                let entry = List.hd prefix in
+                let prefix = List.tl prefix in
+                let prefix = List.filter_map Lr1.incoming prefix in
+                let pr_sym sym =
+                    print_string (Symbol.name sym);
+                    print_char ' '
+                in
+                print_string (Lr1.to_string entry);
+                print_char ' ';
+                List.iter pr_sym prefix;
+                List.iter pr_sym suffix;
+                print_endline (Misc.string_of_indexset ~index:Terminal.to_string unhandled)
+              ) ();
+            prerr_endline "TODO"
+          with Exit -> ()
+        end
+    end
 
     let () = Stopwatch.leave time
 
