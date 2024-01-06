@@ -978,7 +978,7 @@ struct
         iter_branches root begin fun _f g suffix ->
           try
             Increasing.fold g (fun lrc unhandled () ->
-                let prefix = List.map Lrc.lr1_of_lrc (lrc_prefix lrc @ [lrc]) in
+                let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
                 let entry = List.hd prefix in
                 let prefix = List.tl prefix in
                 let prefix = List.filter_map Lr1.incoming prefix in
