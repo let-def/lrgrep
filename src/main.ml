@@ -1,4 +1,6 @@
 open Utils
+open Misc
+
 module StringSet = Set.Make(String)
 
 (* Command-line parsing. *)
@@ -137,9 +139,48 @@ struct
   let label = IndexSet.singleton
 end
 
-let all_initials () =
-  IndexSet.init_from_set Info.Lr1.n
-    (fun lr1 -> Option.is_none (Info.Lr1.incoming lr1))
+let entrypoints =
+  let table = Hashtbl.create 7 in
+  Fix.Indexing.Index.iter Info.Lr1.n (fun lr1 ->
+      match Info.Lr0.entrypoint (Info.Lr1.to_lr0 lr1) with
+      | None -> ()
+      | Some nt ->
+        let name = Info.Nonterminal.to_string nt in
+        (* When "n" is a non-terminal marked %start, Menhir generates a special
+           symbol "n'" that represents the use of "n" as a start symbol. "n" is
+           kept for uses as a normal non-terminal elsewhere in the grammar.
+           To refer to "n" as a start-symbol we have to look for "n'".
+           Here we do the converse, chopping of a "'" to find the source
+           nonterminal . *)
+        let name = String.sub name 0 (String.length name - 1) in
+        Hashtbl.add table name lr1
+    );
+  table
+
+let all_entrypoints =
+  Hashtbl.fold
+    (fun _ lr1 acc -> IndexSet.add lr1 acc)
+    entrypoints IndexSet.empty
+
+let translate_entrypoints prj loc err symbols =
+  let unhandled = ref [] in
+  let result =
+    List.filter_map (fun sym ->
+        let result = Hashtbl.find_opt entrypoints (prj sym) in
+        if Option.is_none result then push unhandled sym;
+        result
+      ) symbols
+  in
+  match List.rev !unhandled with
+  | [] -> IndexSet.of_list result
+  | first :: rest as all ->
+    Printf.ksprintf (fun msg -> err (loc first) msg)
+      "Unknown start symbol%s %s.\nValid start symbols are %s."
+      (if rest = [] then "" else "s")
+      (string_concat_map ", " prj all)
+      (string_concat_map ", " Fun.id
+         (List.sort String.compare
+            (Hashtbl.fold (fun key _ acc -> key :: acc) entrypoints [])))
 
 let parser_name =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
@@ -148,43 +189,14 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
   let initials =
     match entry.startsymbols with
-    | [] -> all_initials ()
+    | [] -> all_entrypoints
     | syms ->
-      let get_name lr1 =
-        let name =
-          Info.Lr1.to_lr0 lr1
-          |> Info.Lr0.entrypoint
-          |> Option.get
-          |> Info.Nonterminal.to_string
-        in
-        String.sub name 0 (String.length name - 1)
-      in
-      let initials =
-        IndexSet.init_from_set Info.Lr1.n
-          (fun lr1 ->
-             match Info.Lr0.entrypoint (Info.Lr1.to_lr0 lr1) with
-             | None -> false
-             | Some nt ->
-              let name = Info.Nonterminal.to_string nt in
-              let real_name = String.sub name 0 (String.length name - 1) in
-              List.mem_assoc real_name syms
-          )
-      in
-      let syms' = StringSet.of_list (List.map get_name (IndexSet.elements initials)) in
-      begin match
-          List.filter (fun (sym, _) -> not (StringSet.mem sym syms')) syms
-        with
-        | [] -> ()
-        | ((_, pos) :: rest) as all ->
-          error pos "Unknown start symbol%s %s.\nValid start symbols are %s."
-            (if rest = [] then "" else "s")
-            (Misc.string_concat_map ", " fst all)
-            (Misc.string_concat_map ", " get_name (IndexSet.elements (all_initials ())))
-      end;
-      initials
+      translate_entrypoints fst snd
+        (fun loc msg -> error loc "%s" msg)
+        syms
   in
   let module Lrc = Mid.Lrc.Close(Info)(Lrc)
-    (struct let initials = Misc.indexset_bind initials Lrc.lrcs_of_lr1 end)
+    (struct let initials = indexset_bind initials Lrc.lrcs_of_lr1 end)
   in
   let open Mid.Automata.Entry
       (Transl)
