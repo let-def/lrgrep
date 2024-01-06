@@ -49,7 +49,7 @@ end = struct
     output t (Printf.sprintf "# %d %S\n" (line + 1) filename)
 
   let print_loc t (loc : Syntax.location) =
-    print_loc_dir t loc.loc_file loc.start_line;
+    print_loc_dir t loc.loc_file (loc.start_line - 1);
     output t (String.make loc.start_col ' ')
 
   let print ?loc t msg =
