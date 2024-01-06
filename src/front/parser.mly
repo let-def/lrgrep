@@ -63,7 +63,7 @@ header:
 ;
 
 definition:
-| name=IDENT args=IDENT* "=" "parse" startsymbols=IDENT* error=boption("error")
+| name=IDENT args=IDENT* "=" "parse" startsymbols=positioned(IDENT)* error=boption("error")
   "|" clauses=separated_nonempty_list("|",case)
   { {startsymbols; error; name; args; clauses} }
 ;

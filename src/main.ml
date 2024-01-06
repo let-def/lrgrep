@@ -137,11 +137,55 @@ struct
   let label = IndexSet.singleton
 end
 
+let all_initials () =
+  IndexSet.init_from_set Info.Lr1.n
+    (fun lr1 -> Option.is_none (Info.Lr1.incoming lr1))
+
 let parser_name =
   String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
 let process_entry oc (entry : Front.Syntax.entry) = (
   let open Fix.Indexing in
+  let initials =
+    match entry.startsymbols with
+    | [] -> all_initials ()
+    | syms ->
+      let get_name lr1 =
+        let name =
+          Info.Lr1.to_lr0 lr1
+          |> Info.Lr0.entrypoint
+          |> Option.get
+          |> Info.Nonterminal.to_string
+        in
+        String.sub name 0 (String.length name - 1)
+      in
+      let initials =
+        IndexSet.init_from_set Info.Lr1.n
+          (fun lr1 ->
+             match Info.Lr0.entrypoint (Info.Lr1.to_lr0 lr1) with
+             | None -> false
+             | Some nt ->
+              let name = Info.Nonterminal.to_string nt in
+              let real_name = String.sub name 0 (String.length name - 1) in
+              List.mem_assoc real_name syms
+          )
+      in
+      let syms' = StringSet.of_list (List.map get_name (IndexSet.elements initials)) in
+      begin match
+          List.filter (fun (sym, _) -> not (StringSet.mem sym syms')) syms
+        with
+        | [] -> ()
+        | ((_, pos) :: rest) as all ->
+          error pos "Unknown start symbol%s %s.\nValid start symbols are %s."
+            (if rest = [] then "" else "s")
+            (Misc.string_concat_map ", " fst all)
+            (Misc.string_concat_map ", " get_name (IndexSet.elements (all_initials ())))
+      end;
+      initials
+  in
+  let module Lrc = Mid.Lrc.Close(Info)(Lrc)
+    (struct let initials = Misc.indexset_bind initials Lrc.lrcs_of_lr1 end)
+  in
   let open Mid.Automata.Entry
       (Transl)
       (struct

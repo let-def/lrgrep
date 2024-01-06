@@ -2,27 +2,77 @@ open Utils
 open Misc
 open Fix.Indexing
 
-module type S = sig
+module type RAW0 = sig
   include Info.INDEXED
   module Info : Info.S
   open Info
 
-  val idle : set
+  val all_idle : set
   val lr1_of_lrc : t -> Lr1.t
   val lrcs_of_lr1 : Lr1.t -> set
   val first_lrc_of_lr1 : Lr1.t -> t
-  val predecessors : t -> set
-  val successors : t -> set
+  val all_successors : t -> set
+end
+
+module type RAW = sig
+  include RAW0
+  val lookahead : n index -> Info.Terminal.set
+  val class_index : n index -> int
+end
+
+module type S = sig
+  include RAW
+  val reachable : n indexset
+  val idle : n indexset
+  val predecessors : n index -> n indexset
+  val successors : n index -> n indexset
+end
+
+module Close(Info : Info.S)
+    (Lrc : RAW with module Info := Info)
+    (For : sig val initials : Lrc.set end)
+  : S with module Info := Info and type n = Lrc.n =
+struct
+  include Lrc
+
+  type n = Lrc.n
+  let n = Lrc.n
+
+  let reachable = ref IndexSet.empty
+
+  let successors =
+    let table = Vector.make Lrc.n IndexSet.empty in
+    let todo = ref For.initials in
+    let populate i =
+      reachable := IndexSet.add i !reachable;
+      if IndexSet.is_empty (Vector.get table i) then (
+        let succ = Lrc.all_successors i in
+        todo := IndexSet.union succ !todo;
+        Vector.set table i succ;
+      )
+    in
+    while not (IndexSet.is_empty !todo) do
+      let todo' = !todo in
+      todo := IndexSet.empty;
+      IndexSet.rev_iter populate todo';
+    done;
+    table
+
+  let predecessors = Misc.relation_reverse successors
+
+  let successors = Vector.get successors
+  let predecessors = Vector.get predecessors
+
+  let reachable = !reachable
+
+  let idle = IndexSet.inter Lrc.all_idle reachable
 end
 
 module Make
     (I : Info.S)
-    (Reachability : Reachability.S with module Info := I) :
-sig
-  include S with module Info := I
-  val lookahead : n index -> I.Terminal.set
-  val class_index : n index -> int
-end =
+    (Reachability : Reachability.S with module Info := I)
+: RAW with module Info := I
+=
 struct
   open I
 
@@ -71,7 +121,7 @@ struct
   let lrcs_of_lr1      = Vector.get lrcs_of_lr1
   let first_lrc_of_lr1 = Vector.get first_lrc_of_lr1
 
-  let idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
+  let all_idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
 
   let class_index lrc =
     let lr1 = lr1_of_lrc lrc in
@@ -86,7 +136,9 @@ struct
 
   let () = Stopwatch.step time "Computed LRC set"
 
-  let predecessors =
+  let all_successors =
+    (* TODO: this computes the predecessors and then reverse the relation.
+     * We could compute the successors directly. *)
     let table = Vector.make n IndexSet.empty in
     let process lr1 =
       let tgt_first = first_lrc_of_lr1 lr1 in
@@ -134,22 +186,12 @@ struct
         List.iter process_transition (Transition.predecessors lr1)
     in
     Index.iter Lr1.n process;
-    table
-
-  let () = Stopwatch.step time "Computed predecessors"
-
-  let successors = Misc.relation_reverse predecessors
-
-  let () = Stopwatch.step time "Computed successors"
-
-  let predecessors = Vector.get predecessors
-  let successors = Vector.get successors
+    Vector.get (Misc.relation_reverse table)
 
   let () = Stopwatch.leave time
 end
 
-(* FIXME: TODO: The minimization code has a bug when reaching an initial state. (limit condition) *)
-module Minimize(Info : Info.S)(Lrc : S with module Info := Info) : S with module Info := Info =
+module Minimize(Info : Info.S)(Lrc : RAW0 with module Info := Info) : RAW0 with module Info := Info =
 struct
   open Info
   let time = Stopwatch.enter Stopwatch.main "Minimizing Lrc"
@@ -163,7 +205,7 @@ struct
       let array =
         let count = ref 0 in
         Index.iter Lrc.n
-          (fun lrc -> count := !count + IndexSet.cardinal (Lrc.predecessors lrc));
+          (fun lrc -> count := !count + IndexSet.cardinal (Lrc.all_successors lrc));
         let array = Array.make !count (Index.of_int Lrc.n 0, Index.of_int Lrc.n 0) in
         let index = ref 0 in
         Index.iter Lrc.n
@@ -171,7 +213,7 @@ struct
             IndexSet.iter (fun tgt ->
               array.(!index) <- (src, tgt);
               incr index;
-            ) (Lrc.predecessors src)
+            ) (Lrc.all_successors src)
           );
         array
     end)
@@ -188,7 +230,7 @@ struct
     let target tr = snd (Vector.get Transitions.vector tr)
 
     let initials f =
-      IndexSet.iter f Lrc.idle
+      IndexSet.iter f Lrc.all_idle
 
     let finals f =
       Index.iter Lr1.n
@@ -219,7 +261,7 @@ struct
   type set = n indexset
   type 'a map = (n, 'a) indexmap
 
-  let idle =
+  let all_idle =
     let set = ref IndexSet.empty in
     Array.iter (fun t -> set := IndexSet.add t !set) MDFA.initials;
     !set
@@ -238,16 +280,11 @@ struct
   let first_lrc_of_lr1 lr1 =
     Option.get (IndexSet.minimum (lrcs_of_lr1 lr1))
 
-  let predecessors =
+  let all_successors =
     let table = Vector.make n IndexSet.empty in
     Index.iter MDFA.transitions
-      (fun tr -> vector_set_add table (MDFA.source tr) (MDFA.target tr));
-    table
-
-  let successors = Misc.relation_reverse predecessors
-
-  let predecessors = Vector.get predecessors
-  let successors = Vector.get successors
+      (fun tr -> vector_set_add table (MDFA.target tr) (MDFA.source tr));
+    Vector.get table
 
   let () =
     Stopwatch.step time "Minimized Lrc from %d states to %d"

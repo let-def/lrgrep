@@ -93,8 +93,7 @@ type clause = {
 (** An .mlyl file can contain multiple entrypoints, each is represented as an
     instance of [entry] *)
 type entry = {
-  startsymbols: string list; (** TODO: unused for now, the list of startsymbols
-                                 of the grammar that this rule applies on. *)
+  startsymbols: (string * position) list;
   error   : bool; (** true if the entry is of the form
                         rule x ... = parse error
                         | ...
@@ -240,7 +239,7 @@ let cmon_clause {patterns; action} =
 
 let cmon_entrypoints {error; startsymbols; name; args; clauses} =
   Cmon.record [
-    "startsymbols", Cmon.list_map Cmon.string startsymbols;
+    "startsymbols", Cmon.list_map (cmon_positioned Cmon.string) startsymbols;
     "error", Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list_map Cmon.string args;
