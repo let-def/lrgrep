@@ -326,17 +326,8 @@ let rec diff s1 s2 =
           C (addr1, ss, qs1')
 
 let lsb x = (x land -x)
-let compare_lsb x y =
-  let x = lsb x in
-  let y = lsb y in
-  if x > 0 && y > 0 then
-    x - y
-  else if x > 0 then
-    -1
-  else if y > 0 then
-    1
-  else
-    0
+
+let compare_lsb x y = Int.compare (lsb x - 1) (lsb y - 1)
 
 let compare_minimum s1 s2 =
   match s1, s2 with
