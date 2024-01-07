@@ -210,7 +210,7 @@ struct
       ) states
 
   let predecessors =
-    Misc.relation_reverse successors
+    relation_reverse successors
 
   let accepted st = (Vector.get states st).config.accepted
   let rejected st = (Vector.get states st).config.rejected
@@ -221,7 +221,7 @@ struct
       (*assert (IndexSet.disjoint rej1 (accepted tgt));*)
       IndexSet.union rej1 rej2
     in
-    Misc.fixpoint predecessors table ~propagate:widen;
+    fixpoint predecessors table ~propagate:widen;
     Vector.get table
 
   let () = Stopwatch.leave time
@@ -311,7 +311,7 @@ struct
     | hd :: tl ->
       let tl = match tl with
         | [] -> []
-        | tl -> expand_outer rejected (Misc.indexset_bind lrcs Lrc.predecessors) tl
+        | tl -> expand_outer rejected (indexset_bind lrcs Lrc.predecessors) tl
       in
       let hd =
         IndexSet.fold (fun st acc ->
@@ -324,7 +324,7 @@ struct
       in
       let tl = List.filter_map (fun (Node (lrcs', _, _, _) as tree) ->
           let lrcs = IndexSet.inter lrcs
-              (Misc.indexset_bind lrcs' Lrc.successors)
+              (indexset_bind lrcs' Lrc.successors)
           in
           if IndexSet.is_empty lrcs
           then None
@@ -951,7 +951,7 @@ struct
             let prefix = state :: prefix in
             let successors = Lrc.successors state in
             if not (IndexSet.is_empty successors) then
-              Misc.push todo (successors, prefix)
+              push todo (successors, prefix)
           | _ -> ()
         in
         let visit (successors, prefix) =
@@ -971,29 +971,54 @@ struct
         loop !todo;
         Vector.get table
 
+      let handle_lrc suffix lrc unhandled =
+        let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
+        let entry = List.hd prefix in
+        let prefix = List.tl prefix in
+        let prefix = List.filter_map Lr1.incoming prefix in
+        let pr_sym sym =
+          print_string (Symbol.name sym);
+          print_char ' '
+        in
+        print_string (Lr1.to_string entry);
+        print_char ' ';
+        List.iter pr_sym prefix;
+        List.iter pr_sym suffix;
+        print_endline (string_of_indexset ~index:Terminal.to_string unhandled)
+
+      let handle_nfa _suffix _nfa unhandled =
+        print_string "TODO ";
+        print_endline (string_of_indexset ~index:Terminal.to_string unhandled)
+
       let () =
         Vector.iter (fun i -> assert (Increasing.is_minimum i)) todo_red;
         Vector.iter (fun i -> assert (Increasing.is_minimum i)) todo_pre;
         Stopwatch.step time "Covering tree has %d nodes, %d branches" !count (count_branch root);
-        iter_branches root begin fun _f g suffix ->
-          try
-            Increasing.fold g (fun lrc unhandled () ->
-                let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
-                let entry = List.hd prefix in
-                let prefix = List.tl prefix in
-                let prefix = List.filter_map Lr1.incoming prefix in
-                let pr_sym sym =
-                    print_string (Symbol.name sym);
-                    print_char ' '
-                in
-                print_string (Lr1.to_string entry);
-                print_char ' ';
-                List.iter pr_sym prefix;
-                List.iter pr_sym suffix;
-                print_endline (Misc.string_of_indexset ~index:Terminal.to_string unhandled)
-              ) ();
-            prerr_endline "TODO"
-          with Exit -> ()
+        iter_branches root begin fun f g suffix ->
+          let todo = ref (
+            IndexSet.empty
+            |> Increasing.fold g (fun _ -> IndexSet.union)
+            |> Increasing.fold f (fun _ -> IndexSet.union)
+          ) in
+          let register_case lrc unhandled acc =
+            (IndexSet.cardinal unhandled, lrc, unhandled) :: acc
+          in
+          let order_case (c1, _, _) (c2, _, _) = Int.compare c2 c1 in
+          let handle_case fn (_, case, unhandled) =
+            let unhandled = IndexSet.inter !todo unhandled in
+            if not (IndexSet.is_empty unhandled) then (
+              todo := IndexSet.diff !todo unhandled;
+              fn case unhandled
+            )
+          in
+          let handle_cases fn f =
+              Increasing.fold f register_case []
+              |> List.sort order_case
+              |> List.iter (handle_case fn)
+          in
+          handle_cases (handle_lrc suffix) g;
+          if not (IndexSet.is_empty !todo) then
+            handle_cases (handle_nfa suffix) f;
         end
     end
 
