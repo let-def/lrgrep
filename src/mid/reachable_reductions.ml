@@ -986,9 +986,41 @@ struct
         List.iter pr_sym suffix;
         print_endline (string_of_indexset ~index:Terminal.to_string unhandled)
 
-      let handle_nfa _suffix _nfa unhandled =
-        print_string "TODO ";
-        print_endline (string_of_indexset ~index:Terminal.to_string unhandled)
+
+      let handle_nfa suffix nfa unhandled =
+        print_endline "HANDLING NFA";
+        let unhandled = ref unhandled in
+        let threads = ref [nfa, suffix] in
+        let visit suffix nfa =
+          let handled = IndexSet.inter !unhandled (rejected nfa) in
+          if not (IndexSet.is_empty handled) then (
+            unhandled := IndexSet.diff !unhandled handled;
+            let lrc = IndexSet.choose (lrcs_of nfa) in
+            handle_lrc suffix lrc handled
+          );
+          if not (IndexSet.disjoint !unhandled (potential nfa)) then
+            push threads (nfa, suffix)
+        in
+        let expand (nfa, suffix) =
+          List.iter
+            (fun (lr1s, nfa') ->
+               let suffix =
+                 Option.get (Lr1.incoming (IndexSet.choose lr1s)) :: suffix
+               in
+               IndexSet.iter (visit suffix) nfa'
+            )
+            (outer_transitions nfa)
+        in
+        let rec loop () =
+          match !threads with
+          | _ when IndexSet.is_empty !unhandled -> ()
+          | [] -> assert false
+          | threads' ->
+            threads := [];
+            List.iter expand threads';
+            loop ()
+        in
+        loop ()
 
       let () =
         Vector.iter (fun i -> assert (Increasing.is_minimum i)) todo_red;
