@@ -108,22 +108,22 @@ wild_symbol:
 
 regleaf:
 | "(" regexp ")" { $2 }
-| capture wild_symbol { mk_re (Atom ($1, $2, Utils.Usage.new_mark ())) $endpos }
+| capture wild_symbol { mk_re (Atom ($1, $2, Utils.Usage.new_mark ())) $startpos }
 | capture "[" regexp "]"
   { let mark, policy, expr = match $3.desc with
         | Reduce {capture=None; mark; policy=Shortest; expr} ->
            (mark, Longest, expr)
         | _ -> (Utils.Usage.new_mark (), Shortest, $3)
     in
-    mk_re (Reduce {capture=$1; mark; expr; policy}) $endpos
+    mk_re (Reduce {capture=$1; mark; expr; policy}) $startpos
   }
 ;
 
 regterm:
 | regleaf         { $1 }
-| regleaf "*"     { mk_re (Repetition {expr=$1; policy=Shortest}) $endpos }
-| regleaf "*" "*" { mk_re (Repetition {expr=$1; policy=Longest}) $endpos }
-| regleaf "?"     { mk_re (Alternative [$1; mk_re (Concat []) $endpos]) $endpos }
+| regleaf "*"     { mk_re (Repetition {expr=$1; policy=Shortest}) $startpos }
+| regleaf "*" "*" { mk_re (Repetition {expr=$1; policy=Longest}) $startpos }
+| regleaf "?"     { mk_re (Alternative [$1; mk_re (Concat []) $startpos]) $startpos }
 ;
 
 filter_symbol:
@@ -134,7 +134,7 @@ filter_symbol:
 
 filter:
 | "/" ioption(terminated(symbol, ":")) positioned(filter_symbol)+
-  { mk_re (Filter {lhs = $2; rhs = $3}) $endpos }
+  { mk_re (Filter {lhs = $2; rhs = $3}) $startpos }
 ;
 
 regseq_loop:
@@ -145,8 +145,8 @@ regseq_loop:
 ;
 
 regseq:
-| (*empty*)   { mk_re (Concat []) $endpos }
-| regseq_loop { match $1 with [x] -> x | xs  -> mk_re (Concat xs) $endpos }
+| (*empty*)   { mk_re (Concat []) $startpos }
+| regseq_loop { match $1 with [x] -> x | xs  -> mk_re (Concat xs) $startpos }
 ;
 
 regsum_loop:
@@ -155,7 +155,7 @@ regsum_loop:
 ;
 
 regexp:
-| regsum_loop { match $1 with [x] -> x | xs -> mk_re (Alternative xs) $endpos }
+| regsum_loop { match $1 with [x] -> x | xs -> mk_re (Alternative xs) $startpos }
 ;
 
 prompt_sentence:
