@@ -1067,8 +1067,9 @@ struct
       if not (Boolvector.test visited index) then (
         Boolvector.set visited index;
         let desc = Vector.get UncoveredDFA.states index in
-        IndexMap.iter (fun sym fg ->
-            f (sym :: suffix) (UncoveredDFA.add_image fg IndexSet.empty)
+        IndexMap.iter (fun sym (_f, g) ->
+            Increasing.iter g
+              (fun lrc unhandled -> f lrc (sym :: suffix) unhandled)
           ) desc.uncovered;
         IndexMap.iter (fun sym state' ->
             push todo (sym :: suffix, state')
@@ -1077,15 +1078,43 @@ struct
     in
     fixpoint ~propagate todo
 
-  let () = enum_sentence (fun suffix unhandled ->
+  let lrc_prefix =
+    let table = Vector.make Lrc.n [] in
+    let todo = ref [] in
+    let expand prefix state =
+      match Vector.get table state with
+      | [] ->
+        Vector.set table state prefix;
+        let prefix = state :: prefix in
+        let successors = Lrc.successors state in
+        if not (IndexSet.is_empty successors) then
+          push todo (successors, prefix)
+      | _ -> ()
+    in
+    Index.iter Info.Lr1.n (fun lr1 ->
+        if Option.is_none (Info.Lr1.incoming lr1) then
+          expand [] (Lrc.first_lrc_of_lr1 lr1)
+      );
+    let propagate (successors, prefix) =
+      IndexSet.iter (expand prefix) successors
+    in
+    fixpoint ~propagate todo;
+    Vector.get table
+
+  let () = enum_sentence (fun lrc suffix unhandled ->
       let suffix = List.filter_map (fun sym ->
           match Sym_or_lr1.prj sym with
           | L sym -> Some sym
           | R _ -> None
         ) suffix
       in
-      Printf.printf "%s %s\n"
-        (string_concat_map " " Symbol.name suffix)
+      let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
+      let entry = List.hd prefix in
+      let prefix = List.tl prefix in
+      let prefix = List.filter_map Lr1.incoming prefix in
+      Printf.printf "%s %s %s\n"
+        (Lr1.to_string entry)
+        (string_concat_map " " Symbol.name (prefix @ suffix))
         (string_of_indexset ~index:Terminal.to_string unhandled)
     )
   (*module Coverage = Coverage_tree.Make(UncoveredDFA)
