@@ -954,41 +954,36 @@ struct
               push todo (successors, prefix)
           | _ -> ()
         in
-        let visit (successors, prefix) =
-          IndexSet.iter (expand prefix) successors
-        in
-        let rec loop = function
-          | [] -> ()
-          | other ->
-            todo := [];
-            List.iter visit other;
-            loop !todo
-        in
         Index.iter Info.Lr1.n (fun lr1 ->
           if Option.is_none (Info.Lr1.incoming lr1) then
             expand [] (Lrc.first_lrc_of_lr1 lr1)
         );
-        loop !todo;
+        let propagate (successors, prefix) =
+          IndexSet.iter (expand prefix) successors
+        in
+        fixpoint ~propagate todo;
         Vector.get table
+
+      let print_sym sym =
+        print_char ' ';
+        print_string (Symbol.name sym)
 
       let handle_lrc suffix lrc unhandled =
         let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
         let entry = List.hd prefix in
         let prefix = List.tl prefix in
         let prefix = List.filter_map Lr1.incoming prefix in
-        let pr_sym sym =
-          print_string (Symbol.name sym);
-          print_char ' '
-        in
         print_string (Lr1.to_string entry);
+        List.iter print_sym prefix;
+        List.iter print_sym suffix;
         print_char ' ';
-        List.iter pr_sym prefix;
-        List.iter pr_sym suffix;
         print_endline (string_of_indexset ~index:Terminal.to_string unhandled)
 
 
       let handle_nfa suffix nfa unhandled =
-        print_endline "HANDLING NFA";
+        print_string "HANDLING NFA";
+        List.iter print_sym suffix;
+        print_newline ();
         let unhandled = ref unhandled in
         let threads = ref [nfa, suffix] in
         let visit suffix nfa =
