@@ -40,7 +40,7 @@ let mk_re desc pos = {desc; position = make_position pos}
        COMMA       ","
        SEMI        ";"
        COLON       ":"
-       PARTIAL     "partial"
+       PARTIAL     "%partial"
        SLASH       "/"
        AT          "@"
        ELLIPSIS    "..."
@@ -56,15 +56,28 @@ lexer_definition:
   { {header=$1; entrypoints=$3; trailer=$4} }
 ;
 
+ident:
+| IDENT { $1      }
+| RULE  { "rule"  }
+| PARSE { "parse" }
+| ERROR { "error" }
+| AND   { "and"   }
+;
+
 header:
 | ACTION { $1 }
 | (*empty*)
   { ({loc_file=""; start_pos=0; end_pos=0; start_line=1; start_col=0}, "") }
 ;
 
+startsymbols:
+| (*empty*) { [] }
+| "(" separated_nonempty_list(",", positioned(ident)) ")" { $2 }
+;
+
 definition:
-| name=IDENT args=IDENT* "=" "parse" startsymbols=positioned(IDENT)* error=boption("error")
-  "|" clauses=separated_nonempty_list("|",case)
+| name=ident args=ident* "=" "parse" error=boption("error") startsymbols=startsymbols
+  clauses=clause+
   { {startsymbols; error; name; args; clauses} }
 ;
 
@@ -74,14 +87,14 @@ case_patterns:
 | regexp lookaheads "|" case_patterns { { expr=$1; lookaheads=$2 } :: $4 }
 ;
 
-case:
-| case_patterns case_action { {patterns=$1; action=$2} }
+clause:
+| "|" case_patterns case_action { {patterns=$2; action=$3} }
 ;
 
 case_action:
-| ACTION           { Total $1    }
-| "partial" ACTION { Partial $2  }
-| UNREACHABLE      { Unreachable }
+| ACTION            { Total $1    }
+| "%partial" ACTION { Partial $2  }
+| UNREACHABLE       { Unreachable }
 
 
 positioned(X):
@@ -93,8 +106,8 @@ lookaheads:
 ;
 
 symbol:
-| IDENT                                     { Name $1 }
-| IDENT "(" separated_list(",", symbol) ")" { Apply ($1, $3) }
+| ident                                     { Name $1 }
+| ident "(" separated_list(",", symbol) ")" { Apply ($1, $3) }
 ;
 
 wild_symbol:
@@ -103,7 +116,7 @@ wild_symbol:
 ;
 
 %inline capture:
-| ioption(terminated(IDENT,"=")) { $1 }
+| ioption(terminated(ident,"=")) { $1 }
 ;
 
 regleaf:

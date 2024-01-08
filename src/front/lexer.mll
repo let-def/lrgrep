@@ -163,11 +163,12 @@ rule main = parse
     | "parse" -> PARSE
     | "error" -> ERROR
     | "and" -> AND
-    | "partial" -> PARTIAL
     | s -> IDENT s
   }
 | '\\' (ident as s) (* Workaround reserved names *)
   { IDENT s }
+| "%partial"
+  { PARTIAL }
 | '{' [' ' '\009']* '.' [' ' '\009']* '}' (* unreachable clause *)
   { UNREACHABLE }
 | '{'

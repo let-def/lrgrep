@@ -28,7 +28,7 @@
 rule error_message = parse error
 
 | e=expr; SEMI @ ELSE
-  partial {
+  %partial {
     match e with
     | {pexp_desc = Pexp_ifthenelse(_, _, None); _} -> (
       Some ("The semicolon " ^ line_and_char $startloc(e)
@@ -41,7 +41,7 @@ rule error_message = parse error
 (* A list of type parameters that is not followed by the path of a type constructore *)
 (* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
 | LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); rp=RPAREN /atomic_type: LPAREN _ RPAREN . ...
-  partial {
+  %partial {
     match List.rev typs with
     | [] | [_] -> None
     | typs -> Some Ast_helper.(
@@ -87,7 +87,7 @@ rule error_message = parse error
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
 | [_* / ... _ . LIDENT ...]
-  partial { match Lexer_raw.as_keyword token with
+  %partial { match Lexer_raw.as_keyword token with
     | None -> None
     | Some kw ->
       Some ("`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)")
