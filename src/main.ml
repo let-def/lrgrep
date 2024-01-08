@@ -246,7 +246,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
   let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
   let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-  let module Check = Failure.Check(struct
+  let module Check = Mid.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
       type n = OutDFA.states
       let n = OutDFA.states
       let initial = OutDFA.initial
