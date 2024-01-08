@@ -2,9 +2,9 @@ open Fix.Indexing
 
 type 'n t = bytes
 
-let make c =
+let make c default =
   let n = cardinal c in
-  Bytes.make ((n + 7) lsr 3) '\000'
+  Bytes.make ((n + 7) lsr 3) (if default then '\xFF' else '\x00')
 
 let test b n =
   let n = (n : _ index :> int) in

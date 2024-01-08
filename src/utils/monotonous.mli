@@ -21,6 +21,9 @@ module Increasing_ref : sig
   type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
   type ('a, 'b) t
 
+  val equal : ('a, 'b) t -> ('a, 'b) t -> bool
+  val compare : ('a, 'b) t -> ('a, 'b) t -> int
+
   val minimum : ('a, 'b) t
   val is_minimum : ('a, 'b) t -> bool
   val piece : 'a IndexSet.t -> 'b IndexSet.t -> ('a, 'b) t

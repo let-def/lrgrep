@@ -530,6 +530,7 @@ module Coverage_check
        val successors : n index -> (Lr1.set * n index) list
        val accept : n index -> Terminal.set
      end)
+    ()
 =
 struct
   open Info
@@ -638,19 +639,15 @@ struct
       Stopwatch.step time "Reducible fixpoint: reached %d states"
         (count ~negate:true Increasing.is_minimum table)
 
-    let iter_transitions dfa f fn =
+    let iter_transitions dfa inc ~f =
       let follow unhandled (lr1s, nfa') =
         let image nfa = IndexSet.inter unhandled (NFA.potential nfa) in
         let g = Increasing.from nfa' image in
         if not (Increasing.is_minimum g) then
-          IndexSet.iter (fun lr1 ->
-              match successor dfa lr1 with
-              | None -> ()
-              | Some dfa' ->
-                fn lr1 dfa' g
-            ) lr1s
+          IndexSet.iter (fun lr1 -> f lr1 g (successor dfa lr1))
+            lr1s
       in
-      Increasing.iter f (fun nfa unhandled ->
+      Increasing.iter inc (fun nfa unhandled ->
           List.iter
             (follow (IndexSet.inter unhandled (NFA.delta nfa)))
             (NFA.outer_transitions nfa)
@@ -689,15 +686,14 @@ struct
     let propagate (dfa, f) =
       Increasing.iter f (follow dfa)
 
-    let iter_transitions dfa f fn =
+    let iter_transitions dfa inc ~f =
       let follow src lrc unhandled =
         let lr1 = Lrc.lr1_of_lrc lrc in
-        match successor src lr1 with
-        | None -> ()
-        | Some tgt ->
-          fn lr1 tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
+        f lr1
+          (Increasing.piece (Lrc.predecessors lrc) unhandled)
+          (successor src lr1)
       in
-      Increasing.iter f (follow dfa)
+      Increasing.iter inc (follow dfa)
 
     let () =
       Vector.iteri (fun i x -> propagate (i, x)) table;
@@ -868,7 +864,258 @@ struct
         (count ~negate:true Increasing.is_minimum table)
   end
 
-  module Determinize = struct
+  module Sym_or_lr1 = Sum(Symbol)(Lr1)
+
+  module FG = struct
+    type t = (NFA.n, Terminal.n) Increasing.t * (Lrc.n, Terminal.n) Increasing.t
+
+    let compare (a1,b1) (a2,b2) =
+      let c = Increasing.compare a1 a2 in
+      if c <> 0 then c else
+        Increasing.compare b1 b2
+
+    let normalize f g =
+      (f, Increasing.union g (Prefix_forward.expand f))
+
+    let is_minimum (f,g) =
+      Increasing.is_minimum f && Increasing.is_minimum g
+
+    let union (f,g) (f',g')=
+      (Increasing.union f f', Increasing.union g g')
+  end
+
+
+  module UncoveredNFA = struct
+    include IndexBuffer.Gen.Make()
+
+    type desc = {
+      dfa: DFA.n index;
+      fg: FG.t;
+      mutable transitions: (Sym_or_lr1.n, n indexset) indexmap;
+      mutable uncovered: (Sym_or_lr1.n, FG.t) indexmap;
+    }
+
+    let states = get_generator ()
+
+    let initial_fun =
+      let f1 = Reducible_forward.initial_fun in
+      let f2 = Vector.get Reducible_backward.table DFA.initial in
+      FG.normalize (Increasing.intersect f1 f2) Increasing.minimum
+
+    let sym_of lr1 = match Lr1.incoming lr1 with
+      | Some sym -> Sym_or_lr1.inj_l sym
+      | None -> Sym_or_lr1.inj_r lr1
+
+    module KeyMap = Map.Make(FG)
+
+    let visited = Vector.make DFA.n KeyMap.empty
+
+    let todo = ref []
+
+    let visit dfa (f,g) =
+      let f' = Vector.get Reducible_backward.table dfa in
+      let g' = Vector.get Prefix_backward.table dfa in
+      let f = Increasing.intersect f f' in
+      let g = Increasing.intersect g g' in
+      let fg = FG.normalize f g in
+      if FG.is_minimum (f,g) then None else
+        let visited' = Vector.get visited dfa in
+        match KeyMap.find_opt fg visited' with
+        | Some _ as result -> result
+        | None ->
+          let reservation = IndexBuffer.Gen.reserve states in
+          let index = IndexBuffer.Gen.index reservation in
+          let desc = {
+            dfa; fg; transitions = IndexMap.empty;
+            uncovered = IndexMap.empty;
+          } in
+          Vector.set visited dfa (KeyMap.add fg index visited');
+          push todo desc;
+          IndexBuffer.Gen.commit states reservation desc;
+          Some index
+
+    let propagate ({dfa; fg; _} as desc) =
+      let transitions = ref IndexMap.empty in
+      let update_inc key fg map =
+        if FG.is_minimum fg then map else
+          IndexMap.update key (function
+              | None -> Some fg
+              | Some fg' -> Some (FG.union fg fg')
+            ) map
+      in
+      let update_transition lr1 fg dfa' =
+        let sym = sym_of lr1 in
+        match dfa' with
+        | None ->
+          desc.uncovered <- update_inc sym fg desc.uncovered
+        | Some tgt ->
+          transitions := IndexMap.update sym (function
+              | None -> Some (IndexMap.singleton tgt fg)
+              | Some map' -> Some (update_inc tgt fg map')
+            ) !transitions
+      in
+      Reducible_forward.iter_transitions dfa (fst fg)
+        ~f:(fun lr1 f' dfa' -> update_transition lr1 (f',Increasing.minimum) dfa');
+      Prefix_forward.iter_transitions dfa (snd fg)
+        ~f:(fun lr1 g' dfa' -> update_transition lr1 (Increasing.minimum,g') dfa');
+      let visit_target dfa' fg acc =
+        match visit dfa' fg with
+        | None -> acc
+        | Some index -> IndexSet.add index acc
+      in
+      let visit_tr map' = IndexMap.fold visit_target map' IndexSet.empty in
+      let transitions = IndexMap.map visit_tr !transitions in
+      desc.transitions <- transitions
+
+    let initial =
+      Option.fold
+        ~none:IndexSet.empty
+        ~some:IndexSet.singleton
+        (visit DFA.initial initial_fun)
+
+    let () = fixpoint ~propagate todo
+
+    let states = IndexBuffer.Gen.freeze states
+
+    let () = Stopwatch.step time "Uncovered NFA has %d states" (cardinal n)
+  end
+
+  module UncoveredDFA = struct
+    include IndexBuffer.Gen.Make()
+
+    type desc = {
+      nfas: UncoveredNFA.n indexset;
+      transitions: (Sym_or_lr1.n, n index) indexmap;
+      uncovered: (Sym_or_lr1.n, FG.t) indexmap;
+    }
+
+    let states = get_generator ()
+
+    let table : (UncoveredNFA.n indexset, _) Hashtbl.t = Hashtbl.create 7
+
+    let rec visit nfas =
+      match Hashtbl.find_opt table nfas with
+      | Some index -> index
+      | None ->
+        let reservation = IndexBuffer.Gen.reserve states in
+        let index = IndexBuffer.Gen.index reservation in
+        Hashtbl.add table nfas index;
+        let visit_nfa nfa (uncovered, transitions) =
+          let ndesc = Vector.get UncoveredNFA.states nfa in
+          (IndexMap.union (fun _ m1 m2 -> Some (FG.union m1 m2))
+             uncovered ndesc.uncovered,
+           IndexMap.union (fun _ m1 m2 -> Some (IndexSet.union m1 m2))
+             ndesc.transitions transitions)
+        in
+        let uncovered, transitions =
+          IndexSet.fold visit_nfa nfas
+            (IndexMap.empty, IndexMap.empty)
+        in
+        let transitions = IndexMap.map visit transitions in
+        let desc = {nfas; transitions; uncovered} in
+        IndexBuffer.Gen.commit states reservation desc;
+        index
+
+    let initial = visit UncoveredNFA.initial
+
+    let states = IndexBuffer.Gen.freeze states
+
+    let () =
+      let count_f = ref 0 in
+      let count_g = ref 0 in
+      Vector.iter (fun desc ->
+          IndexMap.iter (fun _ (f,g) ->
+              if not (Increasing.is_minimum f) then incr count_f;
+              if not (Increasing.is_minimum g) then incr count_g;
+            ) desc.uncovered
+        ) states;
+      Stopwatch.step time "Uncovered DFA has %d states (%d uncovered lrc, %d uncovered nfa)"
+        (cardinal n)
+        !count_g
+        !count_f
+
+    type terminal = Terminal.n
+    type transition = Sym_or_lr1.n index
+
+    let initials f = f initial
+    let successors i f =
+      let desc = Vector.get states i in
+      IndexMap.iter f desc.transitions
+
+    let add_image (f, g) acc =
+      acc
+      |> Increasing.fold f (fun _ img acc -> IndexSet.union img acc)
+      |> Increasing.fold g (fun _ img acc -> IndexSet.union img acc)
+
+    let rejected = tabulate_finset n (fun i ->
+        let desc = Vector.get states i in
+        IndexMap.fold (fun _ -> add_image) desc.uncovered IndexSet.empty
+      )
+
+    let potential_reject = tabulate_finset n (fun i ->
+        let desc = Vector.get states i in
+        IndexSet.fold
+          (fun nfa acc -> add_image (Vector.get UncoveredNFA.states nfa).fg acc)
+          desc.nfas IndexSet.empty
+      )
+  end
+
+  let enum_sentence f =
+    let visited = Boolvector.make UncoveredDFA.n false in
+    let todo = ref [[], UncoveredDFA.initial] in
+    let propagate (suffix, index) =
+      if not (Boolvector.test visited index) then (
+        Boolvector.set visited index;
+        let desc = Vector.get UncoveredDFA.states index in
+        IndexMap.iter (fun sym fg ->
+            f (sym :: suffix) (UncoveredDFA.add_image fg IndexSet.empty)
+          ) desc.uncovered;
+        IndexMap.iter (fun sym state' ->
+            push todo (sym :: suffix, state')
+          ) desc.transitions
+      )
+    in
+    fixpoint ~propagate todo
+
+  let () = enum_sentence (fun suffix unhandled ->
+      let suffix = List.filter_map (fun sym ->
+          match Sym_or_lr1.prj sym with
+          | L sym -> Some sym
+          | R _ -> None
+        ) suffix
+      in
+      Printf.printf "%s %s\n"
+        (string_concat_map " " Symbol.name suffix)
+        (string_of_indexset ~index:Terminal.to_string unhandled)
+    )
+  (*module Coverage = Coverage_tree.Make(UncoveredDFA)
+
+  let () =
+    let count = ref 0 in
+    Coverage.enum_sentences ~cover:UncoveredDFA.n ~index:(fun x -> x)
+      (fun _ _ ->
+         if !count = 1000 then
+           Printf.printf "%d sentences\n" !count;
+         incr count;
+      );
+    Stopwatch.step time "Covered using %d sentences" !count*)
+
+  (*module Determinize = struct
+    module Sym_or_lr1 = Sum(Symbol)(Lr1)
+
+    include IndexBuffer.Gen.Make()
+
+    type fg = (NFA.n, Terminal.n) Increasing.t * (Lrc.n, Terminal.n) Increasing.t
+
+    type desc = {
+      dfa: DFA.n index;
+      fg: fg;
+      mutable transitions: (Sym_or_lr1.n, n index) indexmap;
+      mutable uncovered: (Sym_or_lr1.n, fg) indexmap;
+    }
+
+    let states = get_generator ()
+
     let normalize f g =
       (f, Increasing.union g (Prefix_forward.expand f))
 
@@ -877,76 +1124,85 @@ struct
       let f2 = Vector.get Reducible_backward.table DFA.initial in
       normalize (Increasing.intersect f1 f2) Increasing.minimum
 
-    let todo_red = Vector.copy Reducible_backward.table
-    let todo_pre = Vector.copy Prefix_backward.table
-
-    module Sym_or_lr1 = Sum(Symbol)(Lr1)
-
     let sym_of lr1 = match Lr1.incoming lr1 with
       | Some sym -> Sym_or_lr1.inj_l sym
       | None -> Sym_or_lr1.inj_r lr1
 
-    type node = {
-      mutable reached: (DFA.n, (NFA.n, Terminal.n) Increasing.t *
-                               (Lrc.n, Terminal.n) Increasing.t) IndexMap.t;
-      mutable child: (Sym_or_lr1.n, node) IndexMap.t;
-    }
+    module KeyMap = Map.Make(struct
+        type t = (NFA.n, Terminal.n) Increasing.t *
+                 (Lrc.n, Terminal.n) Increasing.t
+        let compare (a1,b1) (a2,b2) =
+          let c = Increasing.compare a1 a2 in
+          if c <> 0 then c else
+            Increasing.compare b1 b2
+      end)
 
-    let count = ref 0
-
-    let new_node () =
-      incr count;
-      {
-        reached = IndexMap.empty;
-        child = IndexMap.empty;
-      }
-
-    let get_child node sym =
-      match IndexMap.find_opt sym node.child with
-      | Some node' -> node'
-      | None ->
-        let node' = new_node () in
-        node.child <- IndexMap.add sym node' node.child;
-        node'
+    let visited = Vector.make DFA.n KeyMap.empty
 
     let todo = ref []
 
-    let propagate (node, dfa, (f,g)) =
-      let f' = Vector.get todo_red dfa in
-      let g' = Vector.get todo_pre dfa in
+    let is_minimum (f,g) =
+      Increasing.is_minimum f && Increasing.is_minimum g
+
+    let union (f,g) (f',g')=
+      (Increasing.union f f', Increasing.union g g')
+
+    let visit dfa (f,g) =
+      let f' = Vector.get Reducible_backward.table dfa in
+      let g' = Vector.get Prefix_backward.table dfa in
       let f = Increasing.intersect f f' in
       let g = Increasing.intersect g g' in
-      let (f, g) = normalize f g in
-      if not (Increasing.is_minimum f &&
-              Increasing.is_minimum g) then (
-        node.reached <- IndexMap.add dfa (f, g) node.reached;
-        Vector.set todo_red dfa (Increasing.subtract f' f);
-        Vector.set todo_pre dfa (Increasing.subtract g' g);
-        let transitions = ref IndexMap.empty in
-        let update_transition lr1 tgt (f,g) =
-          let sym = sym_of lr1 in
-          transitions := IndexMap.update sym
-              (function
-                | None -> Some (IndexMap.singleton tgt (f,g))
-                | Some map' ->
-                  Some (IndexMap.update tgt (function
-                      | None -> Some (f,g)
-                      | Some (f',g') -> Some (Increasing.union f f', Increasing.union g g')
-                    ) map')
-              )
-              !transitions
-        in
-        Reducible_forward.iter_transitions dfa f
-          (fun lr1 dfa' f' -> update_transition lr1 dfa' (f',Increasing.minimum));
-        Prefix_forward.iter_transitions dfa g
-          (fun lr1 dfa' g' -> update_transition lr1 dfa' (Increasing.minimum,g'));
-        IndexMap.iter (fun sym map' ->
+      let fg = normalize f g in
+      if is_minimum (f,g) then None else
+        let visited' = Vector.get visited dfa in
+        match KeyMap.find_opt fg visited' with
+        | Some _ as result -> result
+        | None ->
+          let reservation = IndexBuffer.Gen.reserve states in
+          let index = IndexBuffer.Gen.index reservation in
+          let desc = {
+            dfa; fg; transitions = IndexMap.empty;
+            uncovered = IndexMap.empty;
+          } in
+          Vector.set visited dfa (KeyMap.add fg index visited');
+          push todo desc;
+          IndexBuffer.Gen.commit states reservation desc;
+          Some index
+
+    let process ({dfa; fg; _} as desc) =
+      let uncovered = ref IndexMap.empty in
+      let transitions = ref IndexMap.empty in
+      let update_inc key fg map =
+        if is_minimum fg then map else
+          IndexMap.update key (function
+              | None -> Some fg
+              | Some fg' -> Some (union fg fg')
+            ) map
+      in
+      let update_transition lr1 fg dfa' =
+        let sym = sym_of lr1 in
+        match dfa' with
+        | None ->
+          uncovered := update_inc sym fg !uncovered
+        | Some tgt ->
+          transitions := IndexMap.update sym (function
+              | None -> Some (IndexMap.singleton tgt fg)
+              | Some map' -> Some (update_inc tgt fg map')
+            ) !transitions
+      in
+      Reducible_forward.iter_transitions dfa (fst fg)
+        ~f:(fun lr1 f' dfa' -> update_transition lr1 (f',Increasing.minimum) dfa');
+      Prefix_forward.iter_transitions dfa (snd fg)
+        ~f:(fun lr1 g' dfa' -> update_transition lr1 (Increasing.minimum,g') dfa');
+      let transitions =
+        IndexMap.map (fun sym map' ->
             let node' = get_child node sym in
             IndexMap.iter (fun dfa' fg ->
                 push todo (node', dfa', fg)
               ) map'
           ) !transitions
-      )
+      in
+      index
 
     let root = new_node ()
 
@@ -1097,7 +1353,7 @@ struct
         if not (IndexSet.is_empty !todo) then
           handle_cases (handle_nfa suffix) f;
       end
-  end
+  end*)
 
   let () = Stopwatch.leave time
 

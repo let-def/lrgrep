@@ -2,6 +2,9 @@ module Increasing_ref = struct
   type ('a, 'b) piece = ('a IndexSet.t * 'b IndexSet.t)
   type ('a, 'b) t = ('a, 'b IndexSet.t) IndexMap.t
 
+  let equal a b = IndexMap.equal IndexSet.equal a b
+  let compare a b = IndexMap.compare IndexSet.compare a b
+
   let minimum = IndexMap.empty
   let is_minimum = IndexMap.is_empty
   let piece dom img = IndexMap.inflate (fun _ -> img) dom

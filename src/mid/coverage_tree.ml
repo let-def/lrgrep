@@ -45,7 +45,7 @@ struct
 
   let build_arborescence ~cover ~index =
     let remainings = remainings ~cover ~index in
-    let visited = Boolvector.make Graph.n in
+    let visited = Boolvector.make Graph.n false in
     let todo = ref [] in
     let need_visit st =
       if not (Boolvector.test visited st)
@@ -119,7 +119,7 @@ struct
 
   let enum_sentences ~cover ~index f =
     let remainings, forest = build_arborescence ~cover ~index in
-    let visited = Boolvector.make Graph.n in
+    let visited = Boolvector.make Graph.n false in
     let rec visit in_remainder node =
       let processed =
         List.fold_left

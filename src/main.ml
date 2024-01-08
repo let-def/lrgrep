@@ -266,7 +266,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
                 acc
             ) IndexSet.empty m
         )
-    end) in
+    end)() in
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
       let cap = captures clause in
