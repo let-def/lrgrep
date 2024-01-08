@@ -1060,16 +1060,54 @@ struct
       )
   end
 
-  let enum_sentence f =
+  let expand_nfa fn suffix nfa unhandled =
+    let unhandled = ref unhandled in
+    let threads = ref [nfa, suffix] in
+    let visit suffix nfa =
+      let handled = IndexSet.inter !unhandled (NFA.rejected nfa) in
+      if not (IndexSet.is_empty handled) then (
+        unhandled := IndexSet.diff !unhandled handled;
+        let lrc = IndexSet.choose (NFA.lrcs_of nfa) in
+        fn suffix lrc handled
+      );
+      if not (IndexSet.disjoint !unhandled (NFA.potential nfa)) then
+        push threads (nfa, suffix)
+    in
+    let expand (nfa, suffix) =
+      List.iter
+        (fun (lr1s, nfa') ->
+          let lr1 = IndexSet.choose lr1s in
+          let sym = match Lr1.incoming lr1 with
+            | None -> Sym_or_lr1.inj_r lr1
+            | Some sym -> Sym_or_lr1.inj_l sym
+          in
+          let suffix = sym :: suffix in
+          IndexSet.iter (visit suffix) nfa'
+        )
+        (NFA.outer_transitions nfa)
+    in
+    let rec loop () =
+      match !threads with
+      | _ when IndexSet.is_empty !unhandled -> ()
+      | [] -> assert false
+      | threads' ->
+        threads := [];
+        List.iter expand threads';
+        loop ()
+    in
+    loop ()
+
+  let enum_sentence fn =
     let visited = Boolvector.make UncoveredDFA.n false in
     let todo = ref [[], UncoveredDFA.initial] in
     let propagate (suffix, index) =
       if not (Boolvector.test visited index) then (
         Boolvector.set visited index;
         let desc = Vector.get UncoveredDFA.states index in
-        IndexMap.iter (fun sym (_f, g) ->
-            Increasing.iter g
-              (fun lrc unhandled -> f lrc (sym :: suffix) unhandled)
+        IndexMap.iter (fun sym (f, g) ->
+            let suffix = sym :: suffix in
+            Increasing.iter f (expand_nfa fn suffix);
+            Increasing.iter g (fn suffix)
           ) desc.uncovered;
         IndexMap.iter (fun sym state' ->
             push todo (sym :: suffix, state')
@@ -1101,7 +1139,7 @@ struct
     fixpoint ~propagate todo;
     Vector.get table
 
-  let () = enum_sentence (fun lrc suffix unhandled ->
+  let () = enum_sentence (fun suffix lrc unhandled ->
       let suffix = List.filter_map (fun sym ->
           match Sym_or_lr1.prj sym with
           | L sym -> Some sym
