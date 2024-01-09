@@ -235,7 +235,11 @@ let process_entry oc (entry : Front.Syntax.entry) = (
       (Transl)
       (struct
         include Lrc
-        let initials = Lrc.idle
+        let initials =
+          if entry.error then
+            Lrc.idle
+          else
+            IndexSet.init_from_set Lrc.n (fun _ -> true)
         let next = Lrc.predecessors
         let label lrc = IndexSet.singleton (Lrc.lr1_of_lrc lrc)
       end)
