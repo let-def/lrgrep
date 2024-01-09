@@ -162,7 +162,6 @@ rule main = parse
     | "rule" -> RULE
     | "parse" -> PARSE
     | "error" -> ERROR
-    | "and" -> AND
     | s -> IDENT s
   }
 | '\\' (ident as s) (* Workaround reserved names *)

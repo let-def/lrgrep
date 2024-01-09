@@ -26,7 +26,6 @@ let mk_re desc pos = {desc; position = make_position pos}
 %token RULE        "rule"
        PARSE       "parse"
        ERROR       "error"
-       AND         "and"
        EQUAL       "="
        BAR         "|"
        UNDERSCORE  "_"
@@ -52,8 +51,8 @@ let mk_re desc pos = {desc; position = make_position pos}
 %%
 
 lexer_definition:
-| header "rule" separated_list("and", definition) header EOF
-  { {header=$1; entrypoints=$3; trailer=$4} }
+| header definition* header EOF
+  { {header=$1; entrypoints=$2; trailer=$3} }
 ;
 
 ident:
@@ -61,7 +60,6 @@ ident:
 | RULE  { "rule"  }
 | PARSE { "parse" }
 | ERROR { "error" }
-| AND   { "and"   }
 ;
 
 header:
@@ -76,7 +74,7 @@ startsymbols:
 ;
 
 definition:
-| name=ident args=ident* "=" "parse" error=boption("error") startsymbols=startsymbols
+| "rule" name=ident args=ident* "=" "parse" error=boption("error") startsymbols=startsymbols
   clauses=clause+
   { {startsymbols; error; name; args; clauses} }
 ;
