@@ -244,29 +244,51 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-  let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
-  let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-  let module Check = Mid.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
+  if !opt_check_coverage then (
+    let open Info in
+    let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+    let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+    let module Check = Mid.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
       type n = OutDFA.states
       let n = OutDFA.states
       let initial = OutDFA.initial
       let successors = tabulate_finset n (fun st ->
-          IndexSet.fold (fun tr acc ->
-              ((OutDFA.label tr).filter, OutDFA.target tr) :: acc
-            ) (OutDFA.outgoing st) []
-        )
+        IndexSet.fold (fun tr acc ->
+          ((OutDFA.label tr).filter, OutDFA.target tr) :: acc
+        ) (OutDFA.outgoing st) []
+      )
       let accept = tabulate_finset n (fun st ->
-          let m = OutDFA.matching st in
-          List.fold_left (fun acc (clause, _, _) ->
-              if Clause.total clause then
-                match Clause.lookaheads clause with
-                | None -> Info.Terminal.all
-                | Some set -> IndexSet.union set acc
-              else
-                acc
-            ) IndexSet.empty m
-        )
+        let m = OutDFA.matching st in
+        List.fold_left (fun acc (clause, _, _) ->
+          if Clause.total clause then
+            match Clause.lookaheads clause with
+            | None -> Info.Terminal.all
+            | Some set -> IndexSet.union set acc
+          else
+            acc
+        ) IndexSet.empty m
+      )
     end)() in
+    Check.enum_sentence (fun suffix lrc unhandled ->
+      let suffix = List.filter_map (fun sym ->
+        match Check.Sym_or_lr1.prj sym with
+        | L sym -> Some sym
+        | R _ -> None
+      ) suffix
+      in
+      let entry, prefix =
+        match List.rev_map Lrc.lr1_of_lrc (lrc :: Lrc.some_prefix lrc) with
+        | [] -> assert false
+        | entry :: prefix ->
+          entry, prefix
+      in
+      let prefix = List.filter_map Lr1.incoming prefix in
+      Printf.printf "%s %s %s\n"
+        (Lr1.to_string entry)
+        (string_concat_map " " Symbol.name (prefix @ suffix))
+        (string_of_indexset ~index:Terminal.to_string unhandled)
+    )
+  );
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
       let cap = captures clause in
