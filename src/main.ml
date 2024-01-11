@@ -8,7 +8,9 @@ module StringSet = Set.Make(String)
 let opt_source_name = ref None
 let opt_output_name = ref None
 let opt_grammar_file = ref None
-let opt_check_coverage = ref false
+let opt_coverage = ref false
+let opt_coverage_silent = ref false
+let opt_coverage_fatal = ref false
 let opt_verbose = ref false
 let opt_debug_stack = ref []
 
@@ -73,8 +75,12 @@ let specs = [
   " Print version and exit";
   "-vnum", Arg.Unit print_version_num,
   " Print version number and exit";
-  "-coverage", Arg.Set opt_check_coverage,
+  "-coverage", Arg.Set opt_coverage,
   " Check error coverage";
+  "-coverage-silent", Arg.Set opt_coverage_silent,
+  " Check coverage but do not enumerate uncovered cases (suitable for continuous integration)";
+  "-coverage-fatal", Arg.Set opt_coverage_fatal,
+  " Abort LRGrep if uncovered cases were found";
   "-enumerate", Arg.String (function
       | "lr0" -> opt_enumerate := Some Enum_lr0
       | "lr1" -> opt_enumerate := Some Enum_lr1
@@ -244,7 +250,7 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
   Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
   Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
-  if !opt_check_coverage then (
+  if !opt_coverage || !opt_coverage_silent || !opt_coverage_fatal then (
     let open Info in
     let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
     let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
@@ -269,25 +275,34 @@ let process_entry oc (entry : Front.Syntax.entry) = (
         ) IndexSet.empty m
       )
     end)() in
-    Check.enum_sentence (fun suffix lrc unhandled ->
-      let suffix = List.filter_map (fun sym ->
-        match Check.Sym_or_lr1.prj sym with
-        | L sym -> Some sym
-        | R _ -> None
-      ) suffix
-      in
-      let entry, prefix =
-        match List.rev_map Lrc.lr1_of_lrc (lrc :: Lrc.some_prefix lrc) with
-        | [] -> assert false
-        | entry :: prefix ->
-          entry, prefix
-      in
-      let prefix = List.filter_map Lr1.incoming prefix in
-      Printf.printf "%s %s %s\n"
-        (Lr1.to_string entry)
-        (string_concat_map " " Symbol.name (prefix @ suffix))
-        (string_of_indexset ~index:Terminal.to_string unhandled)
-    )
+    if !Check.Forward.found_uncovered then (
+      Printf.eprintf "rule %s: coverage is not exhaustive\n"
+        entry.Front.Syntax.name;
+      if not !opt_coverage_silent then (
+        let module Backward = Check.Backward() in
+        Backward.enum_sentence (fun suffix lrc unhandled ->
+            let suffix = List.filter_map (fun sym ->
+                match Backward.Sym_or_lr1.prj sym with
+                | L sym -> Some sym
+                | R _ -> None
+              ) suffix
+            in
+            let entry, prefix =
+              match List.rev_map Lrc.lr1_of_lrc (lrc :: Lrc.some_prefix lrc) with
+              | [] -> assert false
+              | entry :: prefix ->
+                entry, prefix
+            in
+            let prefix = List.filter_map Lr1.incoming prefix in
+            Printf.printf "%s %s %s\n"
+              (Lr1.to_string entry)
+              (string_concat_map " " Symbol.name (prefix @ suffix))
+              (string_of_indexset ~index:Terminal.to_string unhandled)
+          )
+      );
+      if !opt_coverage_fatal then
+        exit 2
+    );
   );
   let get_state_for_compaction index =
     let add_match (clause, priority, regs) =
