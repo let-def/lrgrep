@@ -12,36 +12,6 @@ module Make
       and module Lrc := Lrc)
 =
 struct
-  let lrc_prefix =
-    let table = Vector.make Lrc.n [] in
-    let todo = ref [] in
-    let expand prefix state =
-      match Vector.get table state with
-      | [] ->
-        Vector.set table state prefix;
-        let prefix = state :: prefix in
-        let successors = Lrc.successors state in
-        if not (IndexSet.is_empty successors) then
-          Misc.push todo (successors, prefix)
-      | _ -> ()
-    in
-    let visit (successors, prefix) =
-      IndexSet.iter (expand prefix) successors
-    in
-    let rec loop = function
-      | [] -> ()
-      | other ->
-        todo := [];
-        List.iter visit other;
-        loop !todo
-    in
-    Index.iter Info.Lr1.n (fun lr1 ->
-      if Option.is_none (Info.Lr1.incoming lr1) then
-        expand [] (Lrc.first_lrc_of_lr1 lr1)
-    );
-    loop !todo;
-    Vector.get table
-
   module Sentence_gen =
   struct
     open Info
@@ -349,7 +319,7 @@ struct
 
     let generate_sentence suffix lookaheads =
       let lrcs = select_one (form_from_suffix suffix) in
-      let lrcs = List.rev_append (lrc_prefix (List.hd lrcs)) lrcs in
+      let lrcs = List.rev_append (Lrc.some_prefix (List.hd lrcs)) lrcs in
       let entrypoint = get_entrypoint (List.hd lrcs) in
       let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
       let cells = Sentence_gen.cells_of_lrc_list lrcs in

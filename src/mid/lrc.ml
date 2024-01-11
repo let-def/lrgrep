@@ -26,6 +26,7 @@ module type S = sig
   val idle : n indexset
   val predecessors : n index -> n indexset
   val successors : n index -> n indexset
+  val some_prefix : n index -> n index list
 end
 
 module Close(Info : Info.S)
@@ -66,6 +67,33 @@ struct
   let reachable = !reachable
 
   let idle = IndexSet.inter Lrc.all_idle reachable
+
+  let some_prefix = lazy (
+    let table = Vector.make Lrc.n [] in
+    let todo = ref [] in
+    let expand prefix state =
+      match Vector.get table state with
+      | [] ->
+        Vector.set table state prefix;
+        let prefix = state :: prefix in
+        let succ = successors state in
+        if not (IndexSet.is_empty succ) then
+          push todo (succ, prefix)
+      | _ -> ()
+    in
+    Index.iter Info.Lr1.n (fun lr1 ->
+        if Option.is_none (Info.Lr1.incoming lr1) then
+          expand [] (Lrc.first_lrc_of_lr1 lr1)
+      );
+    let propagate (succ, prefix) =
+      IndexSet.iter (expand prefix) succ
+    in
+    fixpoint ~propagate todo;
+    Vector.get table
+  )
+
+  let some_prefix st = Lazy.force some_prefix st
+
 end
 
 module Make

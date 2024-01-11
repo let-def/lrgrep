@@ -142,7 +142,7 @@ let relation_reverse rel =
     ) rel;
   rev
 
-let fixpoint  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vector)
+let fix_relation  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vector)
     ~(propagate : 'n index -> 'a -> 'n index -> 'a -> 'a)
   =
   let n = Vector.length values in
@@ -170,7 +170,7 @@ let close_relation ?reverse rel =
     | Some rev -> rev
     | None -> relation_reverse rel
   in
-  fixpoint rev rel
+  fix_relation rev rel
     ~propagate:(fun _ v _ v' -> IndexSet.union v v')
 
 let relation_closure ?reverse rel =
@@ -311,3 +311,11 @@ let rec list_rev_iter f = function
 let rec list_drop n = function
   | _ :: xs when n > 0 -> list_drop (n - 1) xs
   | xs -> xs
+
+let rec fixpoint ~propagate todo = match !todo with
+  | [] -> ()
+  | todo' ->
+    todo := [];
+    List.iter propagate todo';
+    fixpoint ~propagate todo
+

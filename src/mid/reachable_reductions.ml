@@ -221,7 +221,7 @@ struct
       (*assert (IndexSet.disjoint rej1 (accepted tgt));*)
       IndexSet.union rej1 rej2
     in
-    fixpoint predecessors table ~propagate:widen;
+    fix_relation predecessors table ~propagate:widen;
     Vector.get table
 
   let () = Stopwatch.leave time
@@ -571,13 +571,6 @@ struct
     in
     Vector.iteri (fun src f -> propagate (update src) src f) fixpoint;
     Vector.get table
-
-  let rec fixpoint ~propagate todo = match !todo with
-    | [] -> ()
-    | todo' ->
-      todo := [];
-      List.iter propagate todo';
-      fixpoint ~propagate todo
 
   let rec diffs d = function
     | [] -> d
@@ -1116,29 +1109,6 @@ struct
     in
     fixpoint ~propagate todo
 
-  let lrc_prefix =
-    let table = Vector.make Lrc.n [] in
-    let todo = ref [] in
-    let expand prefix state =
-      match Vector.get table state with
-      | [] ->
-        Vector.set table state prefix;
-        let prefix = state :: prefix in
-        let successors = Lrc.successors state in
-        if not (IndexSet.is_empty successors) then
-          push todo (successors, prefix)
-      | _ -> ()
-    in
-    Index.iter Info.Lr1.n (fun lr1 ->
-        if Option.is_none (Info.Lr1.incoming lr1) then
-          expand [] (Lrc.first_lrc_of_lr1 lr1)
-      );
-    let propagate (successors, prefix) =
-      IndexSet.iter (expand prefix) successors
-    in
-    fixpoint ~propagate todo;
-    Vector.get table
-
   let () = enum_sentence (fun suffix lrc unhandled ->
       let suffix = List.filter_map (fun sym ->
           match Sym_or_lr1.prj sym with
@@ -1146,7 +1116,7 @@ struct
           | R _ -> None
         ) suffix
       in
-      let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: lrc_prefix lrc) in
+      let prefix = List.rev_map Lrc.lr1_of_lrc (lrc :: Lrc.some_prefix lrc) in
       let entry = List.hd prefix in
       let prefix = List.tl prefix in
       let prefix = List.filter_map Lr1.incoming prefix in
