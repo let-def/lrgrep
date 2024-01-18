@@ -27,25 +27,28 @@ let index_transitions (type state) (type transition)
     (target : transition index -> state index)
   : state index -> (transition index -> unit) -> unit
   =
-  let f = Array.make (cardinal states + 1) 0 in
-  Index.iter transitions (fun t ->
-      let state = (target t :> int) in
-      f.(state) <- f.(state) + 1
-    );
-  for i = 0 to cardinal states - 1 do
-    f.(i + 1) <- f.(i + 1) + f.(i)
-  done;
-  let a = Array.make (cardinal transitions) (Index.of_int transitions 0) in
-  Index.rev_iter transitions (fun t ->
-    let state = (target t :> int) in
-    let index = f.(state) - 1 in
-    f.(state) <- index;
-    a.(index) <- t
-    );
-  (fun st fn ->
-     let st = (st : state index :> int) in
-     for i = f.(st) to f.(st + 1) - 1 do fn a.(i) done
-  )
+  if cardinal transitions = 0 then
+    (fun _ _ -> ())
+  else
+    let f = Array.make (cardinal states + 1) 0 in
+    Index.iter transitions (fun t ->
+        let state = (target t :> int) in
+        f.(state) <- f.(state) + 1
+      );
+    for i = 0 to cardinal states - 1 do
+      f.(i + 1) <- f.(i + 1) + f.(i)
+    done;
+    let a = Array.make (cardinal transitions) (Index.of_int transitions 0) in
+    Index.rev_iter transitions (fun t ->
+        let state = (target t :> int) in
+        let index = f.(state) - 1 in
+        f.(state) <- index;
+        a.(index) <- t
+      );
+    (fun st fn ->
+       let st = (st : state index :> int) in
+       for i = f.(st) to f.(st + 1) - 1 do fn a.(i) done
+    )
 
 let discard_unreachable
     (type state) (type transition)
@@ -214,10 +217,6 @@ sig
 end = Do_minimize
     (struct include In type label = Label.t end)
     (struct
-      let () =
-        if cardinal In.transitions = 0 then
-          invalid_arg "Valmari: degenerate input, no transition"
-
       (* State partition *)
       let blocks = Partition.create In.states
 
@@ -280,10 +279,6 @@ sig
 end = Do_minimize
     (In)
     (struct
-      let () =
-        if cardinal In.transitions = 0 then
-          invalid_arg "Valmari: degenerate input, no transition"
-
       (* State partition *)
       let blocks = Partition.create In.states
 
