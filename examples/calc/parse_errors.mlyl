@@ -1,2 +1,10 @@
+{
+  let print_loc (pos : Lexing.position) =
+    Printf.sprintf "line %d, column %d"
+     pos.pos_lnum (pos.pos_cnum - pos.pos_bol)
+}
+
 rule error_message = parse error
-| { "Syntax error" }
+| / ... . INT { "Syntax error: expecting an integer" }
+| lpos=LPAREN; [expr / ... . RPAREN]
+  { "Syntax error: expecting a closing parenthesis (opened at " ^ print_loc $startloc(lpos) ^ ")" }

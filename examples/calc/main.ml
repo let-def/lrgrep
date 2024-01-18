@@ -38,7 +38,7 @@ let process (line : string) =
   | Result.Ok value ->
     Printf.printf "%d\n%!" value
   | Result.Error msg ->
-    Printf.fprintf stderr "%s%!" msg
+    Printf.fprintf stderr "%s\n%!" msg
 
 let process (optional_line : string option) =
   match optional_line with
