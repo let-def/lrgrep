@@ -51,7 +51,7 @@ let mk_re desc pos = {desc; position = make_position pos}
 %%
 
 lexer_definition:
-| header definition* header EOF
+| header rule+ header EOF
   { {header=$1; entrypoints=$2; trailer=$3} }
 ;
 
@@ -73,7 +73,7 @@ startsymbols:
 | "(" separated_nonempty_list(",", positioned(ident)) ")" { $2 }
 ;
 
-definition:
+rule:
 | "rule" name=ident args=ident* "=" "parse" error=boption("error") startsymbols=startsymbols
   clauses=clause+
   { {startsymbols; error; name; args; clauses} }
