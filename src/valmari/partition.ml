@@ -128,7 +128,11 @@ let discard t f =
   done;
   discard_unmarked t
 
-let set_count t = t.set_count
+let set_count t =
+  if t.set_count = 1 && t.first.(0) >= t.past.(0) then
+    0
+  else
+    t.set_count
 
 let set_of (t : 'a t) elt = t.set_of.((elt : 'a index :> int))
 

@@ -1351,10 +1351,31 @@ struct
 
   let () = Stopwatch.step time "MinDFA"
 
-  module OutDFA = struct
+  module type OUTDFA = sig
+    type states
+    val states : states cardinal
+    val initial : states index
 
+    type transitions
+    val transitions : transitions cardinal
+
+    val source : transitions index -> states index
+    val label : transitions index -> Label.t
+    val target : transitions index -> states index
+
+    (* Labels which are reachable (there exists failing configurations (stack,
+       lookahead) that reach these state) but for which the state defines no
+       transition. They should be rejected at runtime. *)
+    val unhandled : states index -> Lr1.set
+
+    val outgoing : states index -> transitions indexset
+    val matching : states index -> (Clause.t * priority * Register.t Capture.map) list
+    val threads : states index -> (bool * Clause.t * Register.t Capture.map) list
+  end
+
+  module MakeOutDFA() = struct
     include MinDFA
-      let initial = initials.(0)
+    let initial = initials.(0)
 
     (*include RunDFA
     let initial = BigDFA.initial
@@ -1424,6 +1445,27 @@ struct
 
     let () = Stopwatch.step time "OutDFA"
   end
+
+  module OutDFA = (val (
+      if Array.length MinDFA.initials = 0 then
+        (module struct
+          module States = Const(struct let cardinal = 1 end)
+          type states = States.n
+          let states = States.n
+          let initial = Index.of_int states 0
+          type transitions = Empty.n
+          let transitions = Empty.n
+          let source _ = assert false
+          let label _ = assert false
+          let target _ = assert false
+          let unhandled _ = Lr1.idle
+          let outgoing _ = IndexSet.empty
+          let matching _ = []
+          let threads _ = []
+        end : OUTDFA)
+      else
+        (module MakeOutDFA() : OUTDFA)
+    ))
 
   let captures_lr1 =
     let map = ref IndexMap.empty in
