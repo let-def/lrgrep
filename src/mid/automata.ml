@@ -1573,7 +1573,7 @@ struct
 
   let output_code out =
     Printer.fmt out
-      "let execute_%s %s\n
+      "let lrgrep_execute_%s %s\n\
       \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
       \  (__initialpos : Lexing.position)\n\
       \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\

@@ -50,7 +50,6 @@ let parse
   Location.input_name := initial.pos_fname;
   let lexstate = Lexer_raw.make Lexer_raw.keyword_table in
   let module I = Parser_raw.MenhirInterpreter in
-  let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
   let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
       let tok' = get_token oc lexstate lexbuf in
@@ -60,7 +59,7 @@ let parse
     | I.Accepted x -> x
     | I.Rejected -> assert false
     | I.HandlingError _ ->
-      match PE.run env with
+      match Parse_errors.lrgrep_run Parse_errors.lrgrep_program_error_message env with
       | [] -> error_and_exit oc lexbuf
                 "Syntax error (no handler for it)"
       | matches ->
@@ -71,7 +70,7 @@ let parse
           | [] -> error_and_exit oc lexbuf
                     "Syntax error (partial handler did not handle the case)"
           | m :: ms ->
-            match Parse_errors.execute_error_message m initial tok with
+            match Parse_errors.lrgrep_execute_error_message m initial tok with
             | None -> loop ms
             | Some err -> error_and_exit oc lexbuf err
         in

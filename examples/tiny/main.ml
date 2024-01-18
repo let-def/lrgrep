@@ -5,7 +5,6 @@ let parse
     : (a, string) result
   =
   let module I = Parser.MenhirInterpreter in
-  let module PE = Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(I) in
   let idx = ref 0 in
   let last_token = ref None in
   let get_token () =
@@ -38,13 +37,9 @@ let parse
     | I.Accepted x -> Ok x
     | I.Rejected -> assert false
     | I.HandlingError _ ->
-      match PE.run env with
-      | [] -> report "Syntax error (no handler for it)"
-      | matches -> (
-        match List.find_map (fun m -> Parse_errors.execute_error_message m Lexing.dummy_pos tok) matches with
-        | None -> report "Syntax error (partial handler did not handle the case)"
-        | Some err -> report err
-      )
+      match Parse_errors.error_message env Lexing.dummy_pos tok with
+      | None -> report "Syntax error (no handler)"
+      | Some err -> report err
   in
   match checkpoint Lexing.dummy_pos with
   | I.InputNeeded env as cp ->

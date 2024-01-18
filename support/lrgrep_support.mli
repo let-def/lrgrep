@@ -57,7 +57,7 @@ module Code_emitter : sig
 
   (** Produce a final program, with all emitted instructions at the
       correct positions and reading all pending relocations references. *)
-  val link : t -> RT.program
+  val link : t -> RT.program_code
 end
 
 (** The action of a transition is pair of:
@@ -95,7 +95,7 @@ type ('state, 'clause, 'lr1) state = {
 (** The result of compaction is a program, a sparse table, and an array
     mapping each DFA state to the PC of the instructions that implement this
     state. *)
-type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
+type compact_dfa = RT.program_code * RT.sparse_table * RT.program_counter array
 
 (** Run the compaction algorithm on a dfa *)
 val compact : 'state cardinal -> ('state index -> ('state, _, _) state) -> compact_dfa

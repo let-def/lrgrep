@@ -157,7 +157,7 @@ module Code_emitter : sig
   val position : t -> int
   val emit : t -> RT.program_instruction -> unit
   val emit_yield_reloc : t -> RT.program_counter ref -> unit
-  val link : t -> RT.program
+  val link : t -> RT.program_code
 end = struct
   type t = {
     mutable reloc: (int * int ref) list;
@@ -259,7 +259,7 @@ type ('state, 'clause, 'lr1) state = {
   (** Transitions for this state, as a list of labels and actions. *)
 }
 
-type compact_dfa = RT.program * RT.sparse_table * RT.program_counter array
+type compact_dfa = RT.program_code * RT.sparse_table * RT.program_counter array
 
 let compare_transition_action t1 t2 =
   let c = Int.compare (Index.to_int t1.target) (Index.to_int t2.target) in

@@ -40,12 +40,12 @@ type sparse_table = string
 *)
 type sparse_index = int
 
-(** A program is a sequence of serialized [program_instruction] *)
-type program = string
+(** The code of a program is a sequence of serialized [program_instruction] *)
+type program_code = string
 
-(** A [program_counter] is an offset of the [program] string, and by
-    construction always point at the beginning of an instruction
-    (it is invalid otherwise). *)
+(** A [program_counter] is an offset in the [program_code] string.
+    By construction it always point at the beginning of an instruction
+    (otherwise, it is invalid). *)
 type program_counter = int
 
 (** The instructions of the bytecode language of the matcher *)
@@ -104,15 +104,15 @@ val sparse_lookup : sparse_table -> sparse_index -> lr1 -> program_counter optio
 
 (** [program_step program pc] decodes the instruction at address [!pc] and
     increases [pc]. *)
-val program_step : program -> program_counter ref -> program_instruction
+val program_step : program_code -> program_counter ref -> program_instruction
 
-(** All the elements composing a parse error matching program. *)
-module type Parse_errors = sig
-  val registers : int
-  val initial : program_counter
-  val table : sparse_table
-  val program : program
-end
+(** All the elements composing an error matching program. *)
+type program = {
+  registers : int;
+  initial : program_counter;
+  table : sparse_table;
+  code : program_code;
+}
 
 (** A minimal module type mimicking [Menhir] incremental interface,
     suitable to run a matching program. *)
@@ -134,12 +134,18 @@ module type Parser = sig
   val pop : 'a env -> 'a env option
 end
 
-(** Instantiate an interpreter for a parse error program and a parser
-    representation *)
-module Interpreter (PE : Parse_errors) (P : Parser) : sig
+(** A matching candidate.
+    An lrgrep program found that a clause matches with the a set of register
+    values.
+    However this might not be the clause with the highest priority.
+    The action is not executed immediately and the candidate is saved for
+    later.
+    ['element] is the type of stack elements (semantic values) of the parser.
+*)
+type 'element candidate = clause * 'element register_values
 
-  (** Runs the program on a concrete parser.
-      Returns the list of matching clauses with the captured variables. *)
-  val run : 'a P.env -> (clause * P.element register_values) list
-
+(** Instantiate an interpreter for a parser representation *)
+module Interpreter (P : Parser) : sig
+  (** Run the program on a concrete parser, return the list of candidates. *)
+  val lrgrep_run : program -> 'a P.env -> P.element candidate list
 end

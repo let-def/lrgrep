@@ -1,6 +1,4 @@
 module Interpreter = Parser.MenhirInterpreter
-module Error_analyzer =
-  Lrgrep_runtime.Interpreter(Parse_errors.Table_error_message)(Interpreter)
 
 let rec parse
     (lexbuf : Lexing.lexbuf)
@@ -19,13 +17,9 @@ let rec parse
     handle_error last_token last_env
 
 and handle_error last_token last_env =
-  match Error_analyzer.run last_env with
-  | [] -> Result.Error "Syntax error (no handler for it)"
-  | matches -> (
-      match List.find_map (fun m -> Parse_errors.execute_error_message m Lexing.dummy_pos last_token) matches with
-      | None -> Result.Error "Syntax error (partial handler did not handle the case)"
-      | Some err -> Result.Error err
-    )
+  match Parse_errors.error_message last_env Lexing.dummy_pos last_token with
+  | None -> Result.Error "Syntax error (no handler)"
+  | Some err -> Result.Error err
 
 and consume lexbuf = function
   | Interpreter.InputNeeded env as checkpoint ->

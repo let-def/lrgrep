@@ -396,16 +396,30 @@ let process_entry oc (entry : Front.Syntax.entry) = (
   (Label.register_count, Index.to_int OutDFA.initial, program)
 )
 
-
-let output_table oc entry (registers, initial, (program, table, remap)) =
-  let print fmt = Printf.fprintf oc fmt in
-  print "module Table_%s : Lrgrep_runtime.Parse_errors = struct\n"
+let output_table out entry (registers, initial, (program, table, remap)) =
+  let print fmt = Mid.Automata.Printer.fmt out fmt in
+  print
+    "let lrgrep_program_%s : Lrgrep_runtime.program = {\n"
     entry.Front.Syntax.name;
-  print "  let registers = %d\n" registers;
-  print "  let initial = %d\n" remap.(initial);
-  print "  let table = %S\n" table;
-  print "  let program = %S\n" program;
-  print "end\n"
+  print "  registers = %d;\n" registers;
+  print "  initial = %d;\n" remap.(initial);
+  print "  table = %S;\n" table;
+  print "  code = %S;\n" program;
+  print "}\n"
+
+let output_wrapper out entry =
+  let {Front.Syntax.name; args; _} = entry in
+  let args = "lrgrep_initial" :: "lrgrep_lookahead" :: args in
+  let args = String.concat " " args in
+  Mid.Automata.Printer.fmt out
+    "let %s _lrgrep_env %s = (\n\
+    \  List.find_map \n\
+    \    (fun m -> lrgrep_execute_%s m %s)\n\
+    \    (lrgrep_run lrgrep_program_%s _lrgrep_env)\n\
+     )\n"
+    name args
+    name args
+    name
 
 let process_source source_file =
   let lexer_definition =
@@ -456,9 +470,16 @@ let process_source source_file =
       end;
       print_ocaml_code out lexer_definition.header
     );
+  Option.iter (fun out ->
+    Mid.Automata.Printer.fmt out
+      "include Lrgrep_runtime.Interpreter(%s.MenhirInterpreter)\n" parser_name;
+  ) out;
   List.iter (fun entry ->
       let program = process_entry out entry in
-      Option.iter (fun oc -> output_table oc entry program) oc
+      Option.iter (fun out ->
+          output_table out entry program;
+          output_wrapper out entry
+        ) out
     ) lexer_definition.entrypoints;
   out |> Option.iter (fun out ->
       Mid.Automata.Printer.print out "\n";
@@ -480,7 +501,7 @@ let () =
         | syms ->
           translate_entrypoints Fun.id (Fun.const ())
             (fun () msg ->
-               Printf.eprintf "Invalid -enumerat-entrypoint: %s" msg;
+               Printf.eprintf "Invalid -enumerate-entrypoint: %s" msg;
                exit 1)
             syms
       in
