@@ -527,7 +527,7 @@ struct
         else
           RE.Alt [RE.make re.position r; RE.make re.position (RE.Filter immediate)]
       | Concat res ->
-        RE.Seq (List.map (transl ~for_reduction) res)
+        RE.Seq (List.rev_map (transl ~for_reduction) res)
       | Filter {lhs; rhs} ->
         let states =
           transl_filter re.position ~lhs ~rhs

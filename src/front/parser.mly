@@ -157,7 +157,7 @@ regseq_loop:
 
 regseq:
 | (*empty*)   { mk_re (Concat []) $startpos }
-| regseq_loop { match $1 with [x] -> x | xs  -> mk_re (Concat xs) $startpos }
+| regseq_loop { match $1 with [x] -> x | xs  -> mk_re (Concat (List.rev xs)) $startpos }
 ;
 
 regsum_loop:
