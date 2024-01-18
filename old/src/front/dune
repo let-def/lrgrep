@@ -1,6 +1,0 @@
-(menhir (modules parser))
-(ocamllex lexer)
-
-(library
- (name front)
- (libraries cmon))
