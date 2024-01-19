@@ -142,8 +142,6 @@ module type S = sig
 
     (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
     val intersect : set -> set -> set
-
-    val is_accepting: t -> bool
   end
 
   module Transition : sig
@@ -211,7 +209,6 @@ module type S = sig
     val lookaheads: t -> Terminal.set
 
     val from_lr1: Lr1.t -> set
-    val is_accepting: Lr1.t -> bool
   end
 end
 
@@ -588,15 +585,6 @@ struct
       else IndexSet.inter a b
 
     let () = Stopwatch.step time "Lr1"
-
-    let is_accepting =
-      let table = Boolvector.make n false in
-      let is_pseudo t = Grammar.Terminal.kind (Terminal.to_g t) = `PSEUDO in
-      Index.iter n (fun lr1 ->
-          if IndexSet.exists is_pseudo (reduce_on lr1) then
-            Boolvector.set table lr1
-        );
-      Boolvector.test table
   end
 
   (** A more convenient presentation of reductions than the one from Cmly.
@@ -606,37 +594,17 @@ struct
       Start productions are ignored. *)
   module Reduction = struct
     let n = ref 0
-
-    let is_accepting = Boolvector.make Lr1.n false
-
     let raw =
       let prepare_red (t, ps) = (t, List.hd ps) in
-      let is_pseudo t = Grammar.Terminal.kind (Terminal.to_g t) = `PSEUDO in
-      let handle_pseudo_or_accept = function
-        | [p, ts] when IndexSet.is_singleton ts && is_pseudo (IndexSet.choose ts) ->
-          if Production.kind p = `START then
-            None
-          else
-            Some [p, Terminal.all]
-        | otherwise ->
-          List.iter (fun (p, ts) ->
-              assert (Production.kind p <> `START);
-              if IndexSet.exists is_pseudo ts then (
-                Printf.eprintf
-                  "P: %s: %s\n\
-                   TS: %s\n"
-                  (Nonterminal.to_string (Production.lhs p))
-                  (string_concat_map " " Symbol.name (Array.to_list (Production.rhs p)))
-                  (string_of_indexset ~index:Terminal.to_string ts);
-                assert false
-              );
-            ) otherwise;
-          Some otherwise
-      in
       let import_red reds =
         reds
         |> List.map prepare_red
-        |> List.map (fun (t, p) -> (Production.of_g p, Terminal.of_g t))
+        |> List.filter_map (fun (t, p) ->
+            let p = Production.of_g p in
+            match Production.kind p with
+            | `START -> None
+            | `REGULAR -> Some (p, Terminal.of_g t)
+          )
         |> Misc.group_by
           ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
           ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
@@ -650,13 +618,8 @@ struct
       in
       let import_lr1 lr1 =
         let reds = import_red (Grammar.Lr1.reductions (Lr1.to_g lr1)) in
-        match handle_pseudo_or_accept reds with
-        | None ->
-          Boolvector.set is_accepting lr1;
-          []
-        | Some reds ->
-          n := !n + List.length reds;
-          reds
+        n := !n + List.length reds;
+        reds
       in
       Vector.init Lr1.n import_lr1
 
@@ -685,14 +648,6 @@ struct
     let production = Vector.get production
     let lookaheads = Vector.get lookaheads
     let from_lr1 = Vector.get from_lr1
-
-    let is_accepting = Boolvector.test is_accepting
-
-    let () =
-      Index.iter Lr1.n (fun lr1 ->
-          if is_accepting lr1 then
-            Printf.eprintf "accepting: %s\n" (Lr1.to_string lr1)
-        )
   end
 
   let () = Stopwatch.leave time

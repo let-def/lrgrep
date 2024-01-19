@@ -96,21 +96,15 @@ struct
 
   let nodes = Hashtbl.create 7
 
-  let lr1_of_source source =
-    match Source.prj source with
-    | L viable -> (Viable.get_config viable).top
-    | R lrc -> Lrc.lr1_of_lrc lrc
-
   let make_config ~accepted ~rejected lrcs source =
-    let lr1 = lr1_of_source source in
-    let shift_on =
-      if Lr1.is_accepting lr1
-      then Terminal.all
-      else Lr1.shift_on lr1
+    let lr1 =
+      match Source.prj source with
+      | L viable -> (Viable.get_config viable).top
+      | R lrc -> Lrc.lr1_of_lrc lrc
     in
     let a =
       IndexSet.union accepted
-        (IndexSet.diff shift_on rejected)
+        (IndexSet.diff (Lr1.shift_on lr1) rejected)
     and r =
       IndexSet.union rejected
         (IndexSet.diff (Lr1.reject lr1) accepted)
@@ -175,14 +169,13 @@ struct
   let initial =
     let process lrc =
       let lr1 = Lrc.lr1_of_lrc lrc in
-      let accepted = if Lr1.is_accepting lr1 then Terminal.all else Lr1.shift_on lr1 in
+      let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
       visit_config ~accepted ~rejected
         (IndexSet.singleton lrc)
         (Source.inj_r lrc)
     in
-    IndexMap.inflate process
-      (IndexSet.filter (fun lrc -> not (Lr1.is_accepting (Lrc.lr1_of_lrc lrc))) Lrc.idle)
+    IndexMap.inflate process Lrc.idle
 
   let states = IndexBuffer.Gen.freeze states
 
@@ -230,43 +223,6 @@ struct
 
   let () = Stopwatch.leave time
 
-  let () =
-    let rec print_path = function
-      | [_] | [] -> ()
-      | i :: ((j :: _) as path') ->
-        let desc = Vector.get states i in
-        let red = ref None in
-        iter_targets desc.transitions (fun (j', red') ->
-            if j = j' then red := Some red'
-          );
-        match !red with
-        | None -> assert false
-        | Some red ->
-          let prod = Reduction.production red in
-          let lookaheads = Reduction.lookaheads red in
-          Printf.eprintf "%s: %s %s\n"
-            (Nonterminal.to_string (Production.lhs prod))
-            (string_concat_map " " Symbol.name (Array.to_list (Production.rhs prod)))
-            (string_of_indexset ~index:Terminal.to_string lookaheads);
-          print_path path'
-    in
-    let rec expand_paths acc = function
-      | [] -> expand_paths [] acc
-      | path :: paths ->
-        let hd = List.hd path in
-        let pred = (Vector.get predecessors hd) in
-        if IndexSet.is_empty pred then
-          path
-        else
-          let acc = IndexSet.fold (fun hd' acc -> (hd' :: path) :: acc) pred acc in
-          expand_paths acc paths
-    in
-    Vector.iteri (fun i desc ->
-        let lr1 = lr1_of_source desc.config.source in
-        if Lr1.is_accepting lr1 then (
-          print_path (expand_paths [] [[i]])
-        )
-      ) states
 end
 
 module type FAILURE_NFA = sig
