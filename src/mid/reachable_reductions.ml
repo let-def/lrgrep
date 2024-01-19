@@ -96,15 +96,21 @@ struct
 
   let nodes = Hashtbl.create 7
 
+  let lr1_of_source source =
+    match Source.prj source with
+    | L viable -> (Viable.get_config viable).top
+    | R lrc -> Lrc.lr1_of_lrc lrc
+
   let make_config ~accepted ~rejected lrcs source =
-    let lr1 =
-      match Source.prj source with
-      | L viable -> (Viable.get_config viable).top
-      | R lrc -> Lrc.lr1_of_lrc lrc
+    let lr1 = lr1_of_source source in
+    let shift_on =
+      if IndexSet.mem lr1 Lr1.accepting
+      then Terminal.all
+      else Lr1.shift_on lr1
     in
     let a =
       IndexSet.union accepted
-        (IndexSet.diff (Lr1.shift_on lr1) rejected)
+        (IndexSet.diff shift_on rejected)
     and r =
       IndexSet.union rejected
         (IndexSet.diff (Lr1.reject lr1) accepted)
@@ -169,6 +175,7 @@ struct
   let initial =
     let process lrc =
       let lr1 = Lrc.lr1_of_lrc lrc in
+      assert (not (IndexSet.mem lr1 Lr1.accepting));
       let accepted = Lr1.shift_on lr1 in
       let rejected = Lr1.reject lr1 in
       visit_config ~accepted ~rejected
