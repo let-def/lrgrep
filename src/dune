@@ -1,5 +1,5 @@
 (executable
  (name main)
  (public_name lrgrep)
- (modules main)
+ (modules main enum)
  (libraries front mid fix cmon utils menhirSdk valmari support))
