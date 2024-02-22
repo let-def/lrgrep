@@ -100,7 +100,7 @@ positioned(X):
 ;
 
 lookaheads:
-| preceded("@", separated_nonempty_list(",", positioned(symbol))) { $1 }
+| preceded("@", separated_list(",", positioned(symbol))) { $1 }
 ;
 
 symbol:
