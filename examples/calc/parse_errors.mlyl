@@ -5,7 +5,7 @@
 }
 
 rule error_message = parse error (main)
-| / ... . INT { "Syntax error: expecting an integer" }
+| / . INT { "Syntax error: expecting an integer" }
 | lpos=LPAREN; [expr / ... . RPAREN]
   { "Syntax error: expecting a closing parenthesis (opened at " ^ print_loc $startloc(lpos) ^ ")" }
 (*| EOL { assert false }*)

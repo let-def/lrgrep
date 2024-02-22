@@ -103,17 +103,13 @@ struct
 
   let make_config ~accepted ~rejected lrcs source =
     let lr1 = lr1_of_source source in
-    let shift_on =
-      if IndexSet.mem lr1 Lr1.accepting
-      then Terminal.all
-      else Lr1.shift_on lr1
-    in
-    let a =
-      IndexSet.union accepted
-        (IndexSet.diff shift_on rejected)
-    and r =
-      IndexSet.union rejected
-        (IndexSet.diff (Lr1.reject lr1) accepted)
+    let a, r =
+      if IndexSet.mem lr1 Lr1.accepting then
+        IndexSet.union accepted (IndexSet.diff Terminal.all rejected),
+        rejected
+      else
+        IndexSet.union accepted (IndexSet.diff (Lr1.shift_on lr1) rejected),
+        IndexSet.union rejected (IndexSet.diff (Lr1.reject lr1) accepted)
     in
     {accepted=a; rejected=r; source; lrcs}
 

@@ -229,7 +229,7 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
 
     and process s1 k1 s2 k2 = function
       | Node (l, s3, k3, r, _) when Set.compare s2 s3 = 0 ->
-        process s1 k1 s2 (merge_uniq compare k2 k3) (merge l r)
+        process s1 k1 s2 (merge_uniq cmp k2 k3) (merge l r)
       | heap ->
         let sp, s1 = Set.extract_unique_prefix s1 s2 in
         let sc, (s1, s2) = Set.extract_shared_prefix s1 s2 in

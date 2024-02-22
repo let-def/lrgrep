@@ -293,16 +293,9 @@ struct
     let cmon_outer_candidate ?lookahead c =
       cmon_candidate ?lookahead c
         ~filter:(fun filter ->
-            if IndexSet.cardinal filter >= 10 then cmon_set_cardinal filter else (
-              (*Cmon.record [
-                "filter",*)
+            if IndexSet.cardinal filter >= 10 then cmon_set_cardinal filter else
               cmon_indexset filter
                 ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
-              (*"predecessors",
-                cmon_indexset (Lr1.set_predecessors filter)
-                ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
-                ]*)
-            )
           )
 
     let cmon_transitions ~candidate trs =

@@ -100,8 +100,15 @@ module type S = sig
 
   module Lr0 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr0
+
+    (* See [Lr1.incoming]. *)
     val incoming : t -> Symbol.t option
+
+    (* See [Lr1.items]. *)
     val items : t -> (Production.t * int) list
+
+    (* If the state is an initial state, returns the pseudo (start)
+       non-terminal that it recognizes. *)
     val entrypoint : t -> Nonterminal.t option
   end
 
@@ -109,9 +116,22 @@ module type S = sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr1
     val all : set
     val accepting : set
+
+    (* An LR(1) state is idle if the parser needs to look at more input
+       before knowing how to proceeds.
+       Idle states are the initial states and the targets of SHIFT transitions
+       (states with a terminal as incoming symbol), except the accepting ones
+       (after reading EOF, the only valid action is to reduce). *)
     val idle : set
+
+    (* Get the LR(0) "core" state *)
     val to_lr0 : t -> Lr0.t
+
+    (* The symbol annotating the incoming transitions of a state.
+       There is none for initial states, and at most one for others. *)
     val incoming : t -> Symbol.t option
+
+    (* Get the items in the kernel of a state (before closure). *)
     val items : t -> (Production.t * int) list
 
     (* Printing functions, for debug purposes.
@@ -137,9 +157,6 @@ module type S = sig
     (** [predecessors t] is the set of LR(1) states that have transition going
         to [t]. *)
     val predecessors : t -> set
-
-    (** [predecessors] but lifted to operate on a set of LR(1) states. *)
-    val set_predecessors : set -> set
 
     (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
     val intersect : set -> set -> set
@@ -205,10 +222,15 @@ module type S = sig
   module Reduction : sig
     include INDEXED
 
+    (* A reduction is a triple [(lr1, prod, lookaheads)], meaning that:
+       in state [lr1], when looking ahead at a terminal in [lookaheads], the
+       action is to reduce [prod]. *)
+
     val state: t -> Lr1.t
     val production: t -> Production.t
     val lookaheads: t -> Terminal.set
 
+    (* All reductions applicable to an lr1 state. *)
     val from_lr1: Lr1.t -> set
   end
 end
@@ -231,10 +253,13 @@ struct
 end
 
 let all n =
-  let acc = ref IndexSet.empty in
-  for i = cardinal n - 1 downto 0
-  do acc := IndexSet.add (Index.of_int n i) !acc done;
-  !acc
+  let i = cardinal n in
+  if i = 0 then
+    IndexSet.empty
+  else
+    let a = Index.of_int n 0 in
+    let b = Index.of_int n (i - 1) in
+    IndexSet.init_interval a b
 
 module Make(Grammar : GRAMMAR) : S with module Grammar = Grammar =
 struct
@@ -585,9 +610,6 @@ struct
           IndexSet.empty
           (Transition.predecessors lr1)
       )
-
-    let set_predecessors lr1s =
-      indexset_bind lr1s predecessors
 
     let intersect a b =
       if a == all then b
