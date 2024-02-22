@@ -161,11 +161,12 @@ let remap_candidate candidates ~(clause : clause) p1 p2 =
     if debug then eprintf "Remap applied\n";
     candidates := candidates'
 
-let interpret_last program bank candidates pc =
-  match program_step program.code (ref pc) with
+let rec interpret_last program bank candidates pc =
+  match program_step program.code pc with
   | Accept (clause, priority, registers) ->
     if debug then eprintf "Accept (%d,%s) (bottom)\n" clause (print_regs bank registers);
-    add_candidate candidates ~clause ~priority registers bank
+    add_candidate candidates ~clause ~priority registers bank;
+    interpret_last program bank candidates pc
   | _ -> ()
 
 type 'element candidate = clause * 'element register_values
@@ -227,7 +228,7 @@ struct
       | None -> ()
       | Some pc' ->
         match P.pop env with
-        | None -> interpret_last program bank candidates pc'
+        | None -> interpret_last program bank candidates (ref pc')
         | Some env -> loop env pc'
     in
     loop env program.initial;
