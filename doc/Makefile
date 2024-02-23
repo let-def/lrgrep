@@ -1,0 +1,2 @@
+all:
+	tectonic manual.tex
