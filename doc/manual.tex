@@ -1,0 +1,375 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{fontspec}
+\usepackage[a4paper, total={6in, 8in}]{geometry}
+\usepackage{tikz,verbatim,hyperref}
+%\usepackage{tikz-dependency}
+
+\input{index/ix-commands}
+\input{index/ix-data}
+
+\setmainfont{Optima}
+
+\title{LRGrep manual \\
+  Selecting error messages for LR(1) parsers}
+
+\newcommand{\gloss}[1]{#1}
+
+\author{Frédéric Bour}
+
+\begin{document}
+
+\maketitle
+
+\part{User manual}
+
+\section{Concrete syntax}
+
+The main purpose of LRGrep is to translate an "LRGrep" specification in an *.mlyl file into an OCaml module that realizes the specification. The syntax of a specification is similar to an OCamllex lexer. Rather than consuming plain text, the lexers produced by LRGrep operates on the stack of an LR parser. Their purpose is to identify situations in which a parser fails to produce an error message.
+
+The result is an expressive framework for defining error messages for LR parsers. The matching language of LRGrep is tailored for efficiently matching partially recognized grammatical constructions. After extracting information from the parser, arbitrary OCaml code is executed to provide a customized message. 
+
+In all generality LRGrep can be used to match the stack of any LR parser, though the main use case is failing parsers. They are represented by a pair of a parser's stack and an invalid lookahead token, called a \gloss{failing configuration}. The code generated is suitable for use with Menhir table backend parsers, compiled with the flags \verb|--inspection --table --cmly|.
+
+\subsection{A minimal specification}
+
+Figure \ref{spec-1} shows a sample error specification for an imaginary parser.
+
+\begin{figure}[h]
+\begin{verbatim}
+{ (* header: arbitrary ocaml code *) }
+
+rule main fname other = parse error
+| [_* / . RPAREN] 
+  { fname ^ ": I was expecting a closing parenthesis" }
+| MODULE
+  { fname ^ ": I was expecting a module name after seeing 'module'" }
+| { fname ^ ": Syntax error" }
+
+rule auxiliary = parse error
+| ...
+
+{ (* trailer: arbitrary ocaml code *) }
+\end{verbatim}
+\label{spec-1}
+\caption{Excerpt of a simple error specification}
+\end{figure}
+
+An error specification is compiled by LRgrep into an OCaml module that implements a pattern matcher for Menhir parser.
+It can start and end with optional heading and trailing codes. If provided, they should contain valid OCaml code that will be inserted before and after the code generated for matching patterns. The middle of the file is a list of {\em rules}, where each rule is translated to an independent matching function.
+
+The line \verb|rule main fname other = parse error| defines a function a \verb|main| taking two user-defined arguments \verb|fname| and \verb|other|. The keywords \verb|parse error| indicates that it will be used to analyse a failing configuration.
+
+The rest of the rule is defined by a list of clauses. A clause is made of a pattern and an action: if the parser's configuration matches the pattern, the action is executed. It begins with \texttt{|} followed by the pattern, written in a dialect of regular expressions, and ends with the action: plain OCaml code wrapped between \texttt{\{ \}}.
+
+The arguments \verb|fname| and \verb|other| can be referred to in the actions. This rule is made of three clauses. A second rule, \verb|auxiliary|, is defined in the specification.
+
+\subsection{The syntax}
+
+\paragraph{Notation}
+
+The syntax is given using an EBNF-like notation. 
+Terminals are written in a monospace font, like \texttt{this}, and non-terminals in an \textit{italic} font.
+Square brackets \verb|[| ... \verb|]| denotes an optional construction. 
+
+\let\t\texttt
+\let\nt\textit
+
+[ \t{\{action\}} ]
+
+\t{rule} \nt{entrypoint} [ arg_1\ldots arg_n ] \t{=}
+\nt{}
+
+% \part{Theoretical foundations}
+% 
+% Realizing the specification is done by producing a Deterministic-Finite-Transducer, a DFA which also outputs ``symbols'' when certain conditions are met. The symbols describe a small instruction set to be interpreted by the program. Instructions can:
+% \begin{itemize}
+%   \item manipulate (store, copy and clear) a set of registers for storing semantic values
+%   \item manipulate (reorder) a set of ``clause priorities'', used to order ambiguous matchings
+%   \item mark a clause as matching, at a certain priority and with a valuation
+%         for captured variables (a mapping from variable to register)
+% \end{itemize}
+% 
+% At runtime, interpration is done in two passes:
+% \begin{enumerate}
+%   \item The LR stack is scanned using the DFA, the instructions are interpreted as they are emitted to construct a list of all matchings.
+%   \item Once done scanning, the matching clauses are executed in order, stopping at the first successful match.
+% \end{enumerate}
+% 
+% Getting from an error specification to an automaton realizing it is done in multiple steps:
+% \begin{enumerate}
+%   \item Transforming the regular expression of each clause into an NFA.
+%         This process is done using Antimirov-derivative with a few notable extensions:
+%         \begin{itemize}
+%           \item The reduction operator cannot efficiently be expressed using the habitual regular expression constructions.
+%                 We have to define what it means to derive a reduction; doing that efficiently requires preprocessing the grammar.
+%           \item To implement captures, the transitions are augmented with actions.
+%           \item To implement lazy and greedy matching, the order of the transitions matter. They are considered as a sequence and not as a set.
+%           \item Because we are interesting in matching only the possible LR(1) stacks, it is likely that only a small part of the NFA will ever be reachable. Therefore this whole process is done lazily -- transitions are explored when we discover that they are reachable.
+%         \end{itemize}
+%   \item Determinizing the vector of NFAs. Once we have an NFA for each clause, we determinize the disjunction of all clauses.
+%         The order of the NFAs in the vector matter: to implement the ``first clause matching'' semantic, the earlier the NFA the higher the priority. However NFAs implementing partial clause do not prevent other clauses from matching.
+%         \begin{itemize}
+%           \item Because of the unusually large alphabets (the set of LR(1) states\footnote{This might not seem much compared to handling unicode characters, however normal regexes have rather sparse transitions, adressing a small part of a large alphabet. The transitions produced by simulating reductions are comparatively quite dense.}), care has to be taken when partitioning the transition targets. This step is currently the bottleneck, TODO: look for a less naive solution.
+%           \item It is done lazily because we don't yet know which parts of the DFA will be reachable.
+%           \item Reaching an accepting state in one of the NFA can impact the rest of the processing: a total clause of high priority matching makes other clauses unreachable.
+%         \end{itemize}
+%   \item Exploring the reachable parts of the DFA.
+%         Now that we have a DFA, we only wants to explore the reachable states and transitions. The DFA will only ever be used to match against an LR stack leading to a failure.
+%         \begin{itemize}
+%           \item This significantly the size of the DFA.
+%           \item This is done by starting from an initial state representing all the states a failing automaton can be in, and exploring all the valid transitions starting from them.
+%           \item This is a fixpoint.
+%         \end{itemize}
+% \end{enumerate}
+% 
+% Preprocessing steps:
+% \begin{itemize}
+%   \item Precomputing the ``reduction'' graph
+%   \item Precomputing the reachable stacks:
+%         \begin{enumerate}
+%           \item LR(0) stacks are immediate to compute
+%           \item we need to refine them taking conflict-resolution in account, starting from the ``LRijkstra'' partition of terminals for each state
+%           \item finally we are interested only in ``failing stacks''. A refinement of the ``reduction'' graph gives us the possible failures, we then intersect it with the conlict-aware stacks to give the exact set of possible stacks.
+%         \end{enumerate}
+% \end{itemize}
+% 
+% \newpage
+% 
+% \usetikzlibrary{positioning,arrows.meta,calc,fit}
+% \begin{tikzpicture}[%
+%   auto,
+%   block/.style={
+%     rectangle,
+%     draw=blue,
+%     thick,
+%     fill=blue!20,
+%     align=center,
+%     rounded corners,
+%     inner sep=2mm,
+%   },
+%   block1/.style={
+%     rectangle,
+%     draw=blue,
+%     thick,
+%     fill=blue!20,
+%     text width=5em,
+%     align=center,
+%     rounded corners,
+%     minimum height=2em
+%   },
+%   line/.style={
+%     draw,thick,
+%     -latex',
+%     shorten >=2pt
+%   },
+%   cloud/.style={
+%     draw=red,
+%     thick,
+%     ellipse,
+%     fill=red!20,
+%     minimum height=1em
+%   },
+%   dist/.style={
+%     node distance=2cm,
+%   },
+% ]
+%   \node (mlyl)
+%     [block,draw]
+%     {Specification \\ (.mlyl)}
+%   ;
+%   \node (ast)
+%     [block,dist,right=of mlyl,draw]
+%     {AST}
+%     edge[<-] node[swap] (parsing) {parsing} (mlyl)
+%   ;
+%   \node (cmly)
+%     [block]
+%     at ($(parsing.south)+(0,-2)$)
+%     {LR automaton \\ (.cmly)}
+%   ;
+%   \node (translation)
+%     [right=of ast]
+%     {translation}
+%     edge (ast)
+%     edge[out=180,in=0] (cmly)
+%   ;
+%   \node (re)
+%     [block,node distance=0.5cm, right=of translation,draw]
+%     {RE}
+%     edge[<-] (translation)
+%   ;
+%   \node (redanalysis)
+%     [align=center, right=of cmly]
+%     {reduction \\ analysis}
+%     edge (cmly)
+%   ;
+%   \node (gotograph)
+%     [block, node distance=0.5cm, right=of redanalysis]
+%     {Goto graph}
+%     edge[<-] (redanalysis)
+%   ;
+%   \node (failgraph)
+%     [block, below=of redanalysis]
+%     {Failure graph}
+%     edge[<-] (redanalysis)
+%   ;
+%   \node (lrstacks)
+%     [block,node distance=0.5cm, below=of cmly]
+%     {LR stacks}
+%     edge[<-] (cmly)
+%   ;
+%   \node (lrijkstra)
+%     [inner sep=0]
+%     at ($(lrstacks.west)+(-1.5cm,+0.2)$)
+%     {LRijkstra}
+%     edge (cmly)
+%   ;
+%   \node (partitions)
+%     [block,node distance=0.5cm,below=of lrijkstra]
+%     {Lookahead \\ partitions}
+%     edge[<-] (lrijkstra)
+%   ;
+%   \node (lrc_intersect)
+%     [node distance=0.5cm, inner sep=1, below=of lrstacks]
+%     {intersect}
+%     edge (lrstacks)
+%     edge (partitions)
+%   ;
+%   \node (lrcstacks)
+%     [block,node distance=0.5cm, below=of lrc_intersect]
+%     {LRC stacks}
+%     edge[<-] (lrc_intersect)
+%   ;
+%   \node (lrce_intersect)
+%     [node distance=0.5cm, inner sep=1, below=of failgraph]
+%     {intersect}
+%     edge[<-] (failgraph)
+%     edge[<-][bend right=5] (lrcstacks)
+%   ;
+%   \node (lrcestacks)
+%     [block,node distance=0.5cm, below=of lrce_intersect]
+%     {LRCE stacks}
+%     edge[<-] (lrce_intersect)
+%   ;
+%   \node (lnfa)
+%     [block, dist, right=of re]
+%     {LazyNFA}
+%     edge node[swap] {derivation} (re)
+%     edge[<-,out=180,in=0] (gotograph)
+%   ;
+%   \node (subset)
+%     [node distance=0.4cm, align=center,inner sep=2, below=of lnfa]
+%     {subset \\ construction}
+%     edge (lnfa)
+%   ;
+%   \node (ldfa)
+%     [block,node distance=0.4cm, below=of subset]
+%     {LazyDFA}
+%     edge[<-] (subset)
+%   ;
+%   \node (exploration)
+%     [node distance=1.5cm, below=of ldfa]
+%     {exploration}
+%     edge[<-] (ldfa)
+%     edge[<-][in=0,out=180] (lrcestacks)
+%   ;
+%   \node (dfa)
+%     [node distance=1.5cm, block,below=of exploration]
+%     {DFA}
+%     edge[<-] (exploration)
+%   ;
+%   \node (dataflow)
+%     [node distance=0.3cm, inner sep=0.2, align=center]
+%     at ($(dfa.west)+(-1.8,-0.5)$)
+%     {dataflow \\ analysis}
+%     edge (dfa)
+%   ;
+%   \node (registers)
+%     [node distance=1cm, block]
+%     at ($(dataflow.south)+(1,-1)$)
+%     {register \\ allocation}
+%     edge[<-,in=-90,out=110] (dataflow)
+%   ;
+%   \node (priority)
+%     [node distance=0.5cm, block, left=of registers]
+%     {priority \\ allocation}
+%     edge[<-,in=-90,out=70] (dataflow)
+%   ;
+%   \node (valmari)
+%     [inner sep=2]
+%     at ($(registers.east)+(0.5,-2)$)
+%     {valmari}
+%     edge[<-,in=-29, out=90] (priority)
+%     edge[in=-30, out=90] (registers)
+%     edge[in=-90, out=90] (dfa)
+%   ;
+%   \node (mindfa)
+%     [block, node distance=0.5cm, below=of valmari]
+%     {Minimized DFA}
+%     edge[<-] (valmari)
+%   ;
+%   \node (codegen)
+%     [node distance=0.2cm, inner sep=0, left=of mindfa, align=center]
+%     {code \\ generation}
+%     edge (mindfa)
+%   ;
+%   \node (bytecode)
+%     [block, align=center]
+%     at ($(codegen.west)+(-2,1.0)$)
+%     {Bytecode}
+%     edge[<-] (codegen)
+%   ;
+%   \node (sparsetable)
+%     [block, align=center, node distance=0.5cm, below=of bytecode]
+%     {Sparse table}
+%     edge[<-] (codegen)
+%   ;
+%   \node (interpreter)
+%     [node distance=5.0cm]
+%     at ($(codegen.west)+(-6,2)$)
+%     {interpreter}
+%     edge[<-] (bytecode)
+%     edge[<-] (sparsetable)
+%   ;
+%   \node (lrfail)
+%     [block,above=of interpreter]
+%     {Failing parser stack}
+%     edge[->] (interpreter)
+%   ;
+%   \node (message)
+%     [block,below=of interpreter]
+%     {Error message}
+%     edge[<-] (interpreter)
+%   ;
+% 
+%   \node (staticanalysis)
+%     [align=center]
+%     at ($(dfa.east)+(2.0,2.0)$)
+%     {static \\ analysis$^*$}
+%     edge[<-] (dfa)
+%     edge[<-,out=191,in=0] (lrcestacks)
+%   ;
+%   \node (coverage)
+%     [block, below=of staticanalysis]
+%     {Coverage report}
+%     edge[<-] (staticanalysis)
+%   ;
+% 
+%   \node (runtime) [rectangle, draw, thick, fit=(lrfail) (interpreter) (message)]  {};
+%   \node at ($(runtime.north west)+(,0.2)$) {Runtime};
+% 
+%   \node (preprocessing) [rectangle, draw, thick, fit=(cmly) (gotograph) (partitions) (lrcestacks)]  {};
+%   \node at ($(preprocessing.north west)+(,0.2)$) {Preprocessing};
+% 
+%   \node (static) [rectangle, draw, thick, fit=(staticanalysis) (coverage)]  {};
+%   \node at ($(static.north west)+(,0.2)$) {Static analysis};
+%   %\draw (mlyl) to node {Parsing} (ast);
+% 
+%   % \draw[red,thick,dotted] ($(J.north west)+(-0.3,0.6)$)  rectangle ($(L.south east)+(0.3,-0.6)$);
+%   % \draw[thick,dotted]     ($(I.north west)+(-0.5,0.15)$) rectangle ($(L.south east)+(0.5,-0.15)$);
+% \end{tikzpicture}
+% 
+% % \part{Developer manual}
+
+\end{document}
