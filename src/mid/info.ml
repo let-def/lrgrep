@@ -115,7 +115,6 @@ module type S = sig
   module Lr1 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr1
     val all : set
-    val accepting : set
 
     (* An LR(1) state is idle if the parser needs to look at more input
        before knowing how to proceeds.
@@ -530,6 +529,13 @@ struct
 
     let incoming lr1 = Lr0.incoming (to_lr0 lr1)
 
+    let idle = IndexSet.init_from_set n (fun lr1 ->
+        match Option.map Symbol.desc (incoming lr1) with
+        | Some (N _) -> false
+        | Some (T t) -> Grammar.Terminal.kind (Terminal.to_g t) = `REGULAR
+        | None -> true
+      )
+
     let items lr1 = Lr0.items (to_lr0 lr1)
 
     (** A somewhat informative string description of the Lr1 state, for debug
@@ -566,28 +572,34 @@ struct
     let set_to_string lr1s =
       string_concat_map ~wrap:("{","}") ", " to_string (IndexSet.elements lr1s)
 
-    let accepting = ref IndexSet.empty
-
     (** The set of terminals that will trigger a reduction *)
     let reduce_on = tabulate_finset n (fun lr1 ->
         List.fold_left
-          (fun acc (t, _) ->
-             if Grammar.Terminal.kind t = `PSEUDO then
-               accepting := IndexSet.add lr1 !accepting;
-             IndexSet.add (Terminal.of_g t) acc)
+          (fun acc (t, _) -> IndexSet.add (Terminal.of_g t) acc)
           IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
       )
 
-    let accepting = !accepting
-
     (** The set of terminals that will trigger a shift transition *)
     let shift_on = tabulate_finset n (fun lr1 ->
-        List.fold_left
-          (fun acc (sym, _raw) ->
-             match sym with
-             | Grammar.T t -> IndexSet.add (Terminal.of_g t) acc
-             | Grammar.N _ -> acc)
-          IndexSet.empty (Grammar.Lr1.transitions (to_g lr1))
+        let lr1 = to_g lr1 in
+        let acc = IndexSet.empty in
+        let acc =
+          List.fold_left
+            (fun acc (sym, _raw) ->
+               match sym with
+               | Grammar.T t -> IndexSet.add (Terminal.of_g t) acc
+               | Grammar.N _ -> acc)
+            acc (Grammar.Lr1.transitions lr1)
+        in
+        (*let acc =
+          List.fold_left (fun acc (term, prods) ->
+              match Grammar.Production.kind (List.hd prods) with
+              | `REGULAR -> acc
+              | `START -> IndexSet.add (Terminal.of_g term) acc
+            )
+            acc (Grammar.Lr1.reductions lr1)
+        in*)
+        acc
       )
 
     (** The set of terminals the state has no transition for *)
@@ -596,15 +608,6 @@ struct
         let result = IndexSet.diff result (reduce_on lr1) in
         let result = IndexSet.diff result (shift_on lr1) in
         result
-      )
-
-    let idle = IndexSet.init_from_set n (fun lr1 ->
-        match Option.map Symbol.desc (incoming lr1) with
-        | Some (N _) -> false
-        | Some (T t) ->
-          Grammar.Terminal.kind (Terminal.to_g t) = `REGULAR &&
-          not (IndexSet.mem lr1 accepting)
-        | None -> true
       )
 
     let predecessors = tabulate_finset n (fun lr1 ->
