@@ -10,10 +10,10 @@ rule error_message = parse error (main)
 | lpos=LPAREN; [expr / ... . RPAREN]
   { "Expecting a closing parenthesis (opened at " ^ print_loc $startloc(lpos) ^ ")" }
 | [expr / ... . EOL] @ LPAREN
-  { "There cannot be an opening parenthesis in this position. \
+  { "There; cannot be an opening parenthesis in this position. \
      Maybe you forgot to add an operator?" }
 | [_* / ... . EOL] @ INT
   { "There cannot be a number in this position. \
      Maybe you forgot to add an operator?" }
-| [_* / ... . EOL] @ RPAREN
-  { "This closing parenthesis does not match any opening parenthesis" }
+(*| [_* / ... . EOL] @ RPAREN
+  { "This closing parenthesis does not match any opening parenthesis" }*)
