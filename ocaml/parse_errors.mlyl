@@ -40,7 +40,7 @@ rule error_message = parse error
 
 (* A list of type parameters that is not followed by the path of a type constructore *)
 (* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
-| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); rp=RPAREN /atomic_type: LPAREN _ RPAREN . ...
+| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); rp=RPAREN /atomic_type: LPAREN _ RPAREN . _*
   %partial {
     match List.rev typs with
     | [] | [_] -> None
@@ -57,7 +57,7 @@ rule error_message = parse error
     )
   }
 
-| LIDENT / label_declaration: mutable_flag _ . COLON ... @ EQUAL
+| LIDENT / label_declaration: mutable_flag _ . COLON _* @ EQUAL
   { "Expecting ':' to declare the type of a record field, not '='" }
 
 (* let x = 5 ; let y = 6 let z = 7 *)
@@ -65,7 +65,7 @@ rule error_message = parse error
 | [structure_item]; semi=SEMI; [let_bindings(ext)]
   { "Might be due to the semicolon " ^ line_and_char $startloc(semi) }
 
-| loc=_ / expr : ... . expr; [let_bindings(ext)]
+| loc=_ / expr : _* . expr; [let_bindings(ext)]
   { "Expecting 'in' after let binding(s) in an expression. \n\
      This might be due to the unterminated expression at " ^
      line_and_char $endloc(loc) }
@@ -75,18 +75,18 @@ rule error_message = parse error
     This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endloc(item) }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
-| lp=LPAREN; [_* / ... . RPAREN ...]
+| lp=LPAREN; [_* / _* . RPAREN _*]
   { "Unclosed parenthesis at " ^ line_and_char $startloc(lp) }
 
-| pos=[_* / LET ... . IN ...]
-| pos=[_* / let_bindings(ext) ... . IN ...]
-| pos=[_* / let_bindings(no_ext) ... . IN ...]
+| pos=[_* / LET _* . IN _*]
+| pos=[_* / let_bindings(ext) _* . IN _*]
+| pos=[_* / let_bindings(no_ext) _* . IN _*]
   { "Expecting `in' to continue let-binding at " ^ line_and_char $startloc(pos) }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
-| [_* / ... _ . LIDENT ...]
+| [_* / _* _ . LIDENT _*]
   %partial { match Lexer_raw.as_keyword token with
     | None -> None
     | Some kw ->
@@ -94,12 +94,12 @@ rule error_message = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| [_*  / ... _ . UIDENT ... |  _* / ... _ . TYPE ... | _* / ... _ . REC ...]
+| [_*  / _* _ . UIDENT _* |  _* / _* _ . TYPE _* | _* / _* _ . REC _*]
   { "Expecting `type' or a module name beginning with an uppercase letter"
   }
 
 (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
-| [_* / ... . seq_expr ...] @ MODULE
+| [_* / _* . seq_expr _*] @ MODULE
   {  "`module' keyword cannot appear in an expression, \
        use `(module M)' to pack a first class-module \
        or `let module M = ... in ...' to define a local module"

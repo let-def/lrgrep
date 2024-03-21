@@ -42,7 +42,6 @@ let mk_re desc pos = {desc; position = make_position pos}
        PARTIAL     "%partial"
        SLASH       "/"
        AT          "@"
-       ELLIPSIS    "..."
        EOF
 
 %start <Syntax.lexer_definition> lexer_definition
@@ -139,7 +138,7 @@ regterm:
 
 filter_symbol:
 | "."         { Dot }
-| "..."       { Skip }
+| "_" "*"     { Skip }
 | wild_symbol { Find $1 }
 ;
 
