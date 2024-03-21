@@ -110,6 +110,55 @@ Now you are ready to iterate on [ocaml/parse_errors.mlyl]() to produce new rules
 
 Once you made sure your setup is working (`make` is (re-)building the frontend and `ocamlc` is using it), you can proceed to [DEVISING-RULES.md](DEVISING-RULES.md) to get started with the error DSL and the associated workflow.
 
+## LRgrep commands
+
+The binary offers three sub-commands: `compile`, `enumerate` and `interpret`. The sub-command that is selected is the first argument on the command line. It defaults to `compile` if the first argument is not a command.
+
+### Compile 
+
+`compile` is the default command and is used to generate an error matcher from a grammar and an error specification. It can also check grammar error coverage.
+
+### Enumerate
+
+The `enumerate` command produces a list of sentences that cover all local error situations. Use it to get intuitions about the failure paths of a grammar or to fuzz a parser.
+
+On the calc example:
+
+```shell
+$ dune build examples/calc/parser.cmly
+$ dune exec lrgrep enumerate -- -g _build/default/examples/calc/parser.cmly
+```
+
+### Interpret
+
+The `interpret` command takes a (compiled) grammar and a sample input and produces an annotated stack.
+
+It is useful to generalize a specific error to a class of error, by looking at the possible reductions and ignoring the parts of the input that are irrelevant to the error at hand.
+
+The input begins with the entrypoint of the grammar and is written as a list of terminals terminated by "." (or EOF).
+
+On the calc example:
+
+```shell
+$ dune build examples/calc/parser.cmly
+$ dune exec lrgrep interpret -- -g _build/default/examples/calc/parser.cmly -
+  main LPAREN INT PLUS INT .
+```
+
+Output:
+
+```shell
+Parser stack (most recent first):
+		  [expr: INT .]
+- line 1:21-24	INT
+		 ↱ expr
+- line 1:16-20	PLUS
+- line 1:5-15	expr
+		 ↱ expr
+- line 1:5-11	LPAREN
+- line 1:0-4	main
+```
+
 # Getting started with LRGrep codebase
 
 I am trying to document the code. Each of the [src](src), [lib](lib), [ocaml](ocaml), and [support](support) directories contain a README.md that briefly explains the purpose of this directory.
