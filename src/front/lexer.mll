@@ -199,7 +199,6 @@ rule main = parse
 | ':' { COLON }
 | ',' { COMMA }
 | ';' { SEMI }
-| "..." { ELLIPSIS }
 | '.' { DOT }
 | eof { EOF }
 | _
