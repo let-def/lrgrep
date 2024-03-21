@@ -160,6 +160,9 @@ module type S = sig
 
     (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
     val intersect : set -> set -> set
+
+    val entrypoints : (string, t) Hashtbl.t
+    val all_entrypoints : set
   end
 
   module Transition : sig
@@ -615,6 +618,29 @@ struct
       if a == all then b
       else if b == all then a
       else IndexSet.inter a b
+
+    let entrypoints =
+      let table = Hashtbl.create 7 in
+      Index.iter n (fun lr1 ->
+        match Lr0.entrypoint (to_lr0 lr1) with
+        | None -> ()
+        | Some nt ->
+          let name = Nonterminal.to_string nt in
+          (* When "n" is a non-terminal marked %start, Menhir generates a special
+             symbol "n'" that represents the use of "n" as a start symbol. "n" is
+             kept for uses as a normal non-terminal elsewhere in the grammar.
+             To refer to "n" as a start-symbol we have to look for "n'".
+             Here we do the converse, chopping of a "'" to find the source
+             nonterminal . *)
+          let name = String.sub name 0 (String.length name - 1) in
+          Hashtbl.add table name lr1
+      );
+      table
+
+    let all_entrypoints =
+      Hashtbl.fold
+        (fun _ lr1 acc -> IndexSet.add lr1 acc)
+        entrypoints IndexSet.empty
 
     let () = Stopwatch.step time "Lr1"
   end
