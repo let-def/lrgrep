@@ -142,7 +142,7 @@ On the calc example:
 ```shell
 $ dune build examples/calc/parser.cmly
 $ dune exec lrgrep interpret -- -g _build/default/examples/calc/parser.cmly -
-  main LPAREN INT PLUS INT .
+main LPAREN INT PLUS INT .
 ```
 
 Output:

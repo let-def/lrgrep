@@ -161,7 +161,7 @@ In the [dune](examples/calc/dune) file:
     (targets parse_errors.ml)
     (deps    parser.cmly parse_errors.mlyl)
     (action
-       (run lrgrep parse_errors.mlyl -g parser.cmly
+       (run lrgrep compile parse_errors.mlyl -g parser.cmly
             -o parse_errors.ml)))
   ```
 
@@ -175,50 +175,51 @@ In the [dune](examples/calc/dune) file:
    (libraries menhirLib lrgrep.runtime))
   ```
 
-  The other change is the custom loop in `main.ml`:
 
-  ```ocaml
-  let rec parse
-      (lexbuf : Lexing.lexbuf)
-      (last_token : Parser.token * Lexing.position * Lexing.position)
-      (last_env : _ Interpreter.env)
-      (checkpoint : 'a Interpreter.checkpoint)
-    : ('a, string) result
-    =
-    match checkpoint with
-    | InputNeeded _ -> consume lexbuf checkpoint
-    | Shifting (_, _, _) | AboutToReduce (_, _) as cp ->
-      parse lexbuf last_token last_env (Interpreter.resume cp)
-    | Accepted x -> Ok x
-    | Rejected -> assert false
-    | HandlingError _ ->
-      handle_error last_token last_env
+The other change is the custom loop in `main.ml`:
 
-  and handle_error last_token last_env =
-    match Parse_errors.error_message last_env Lexing.dummy_pos last_token with
-    | None -> Result.Error "Syntax error (no handler)"
-    | Some err -> Result.Error err
+```ocaml
+let rec parse
+    (lexbuf : Lexing.lexbuf)
+    (last_token : Parser.token * Lexing.position * Lexing.position)
+    (last_env : _ Interpreter.env)
+    (checkpoint : 'a Interpreter.checkpoint)
+  : ('a, string) result
+  =
+  match checkpoint with
+  | InputNeeded _ -> consume lexbuf checkpoint
+  | Shifting (_, _, _) | AboutToReduce (_, _) as cp ->
+    parse lexbuf last_token last_env (Interpreter.resume cp)
+  | Accepted x -> Ok x
+  | Rejected -> assert false
+  | HandlingError _ ->
+    handle_error last_token last_env
 
-  and consume lexbuf = function
-    | Interpreter.InputNeeded env as checkpoint ->
-      begin match Lexer.token lexbuf with
-      | raw_token ->
-        let token = (raw_token, lexbuf.lex_start_p, lexbuf.lex_curr_p) in
-        parse lexbuf token env (Interpreter.offer checkpoint token)
-      | exception Lexer.Error msg ->
-        Result.Error msg
-      end
-    | _ -> assert false
-  ```
+and handle_error last_token last_env =
+  match Parse_errors.error_message last_env Lexing.dummy_pos last_token with
+  | None -> Result.Error "Syntax error (no handler)"
+  | Some err -> Result.Error err
 
-  The structure of the loop is common for Menhir parser's, with two main changes:
+and consume lexbuf = function
+  | Interpreter.InputNeeded env as checkpoint ->
+    begin match Lexer.token lexbuf with
+    | raw_token ->
+      let token = (raw_token, lexbuf.lex_start_p, lexbuf.lex_curr_p) in
+      parse lexbuf token env (Interpreter.offer checkpoint token)
+    | exception Lexer.Error msg ->
+      Result.Error msg
+    end
+  | _ -> assert false
+```
 
-  - the `HandlingError _` case and `handle_error` function bypass the usual error handling strategy (inherited from good ol' Yacc !); instead, they pass the control to LRgrep handler `Parse_errors.error_message`
-  - the `last_token` and `last_env` are preserved. This is necessary for LRgrep to operate correctly: Menhir does not always detect an error after shifting but might delay the report after a few reductions. At this point it is too late for LRgrep to work properly.
+The structure of the loop is common for Menhir parser's, with two main changes:
 
-  The rest of the loop is concerned by feeding the parser with new tokens and advancing the analysis (shifting and reducing) between two tokens, until reaching a success or a failure.
+- the `HandlingError _` case and `handle_error` function bypass the usual error handling strategy (inherited from good ol' Yacc !); instead, they pass the control to LRgrep handler `Parse_errors.error_message`
+- the `last_token` and `last_env` are preserved. This is necessary for LRgrep to operate correctly: Menhir does not always detect an error after shifting but might delay the report after a few reductions. At this point it is too late for LRgrep to work properly.
 
-  TODO: this loop is generic and could be provided by LRgrep runtime library; this involves functor, not exciting >_<
+The rest of the loop is concerned by feeding the parser with new tokens and advancing the analysis (shifting and reducing) between two tokens, until reaching a success or a failure.
+
+TODO: this loop is generic and could be provided by LRgrep runtime library; this involves functor, not exciting >_<
 
 # Working out an error specification
 
@@ -226,7 +227,7 @@ There are three main tools provided to help understanding what does wrong with a
 
 The interpreter parses an input and provides an annotated stack dump when it fails.
 
-CAVE AT: the interpreter is only provided for the OCaml grammar at the moment, see [ocaml/interpreter.ml](ocaml/interpreter.ml), coverage checking is a rough proof-of-concept (FIXME!)
+CAVE AT: coverage checking is a rough proof-of-concept (FIXME!)
 
 The enumeration works by listing sentences that stresses the failure paths of the parser. The coverage compares a grammar and an error specification to find uncovered cases and unreachable messages.
 
@@ -286,6 +287,34 @@ which also covers all stacks which reduce to a stack expecting an expression.
 
 See the experience report on the design of error patterns for the [OCaml parser](https://github.com/let-def/phd-lrgrep/blob/main/notes/case-studies/ocaml-spec.md) for more information.
 
+### Generic interpreter
+
+LRgrep offers a generic interpreter that works for any compiled grammar, but you have to provide the entrypoint and the terminals by hand (since there is no lexer).
+
+The input is read from an input file specified on the command line or from the standard input if `-` is passed. The first word on the input should be the entrypoint, followed by a list of terminals. It ends and dumps the stack when reaching EOF, when reading a ".", or at the first syntax error.
+
+For instance, the calc grammar can be interpreted using `make interpret` in `examples/calc`, or by manually executing `dune exec lrgrep -- interpret -g ../../_build/default/examples/calc/parser.cmly -`.
+
+Sample input:
+
+```
+main LPAREN INT PLUS INT .
+```
+
+Expected output:
+
+```
+Parser stack (most recent first):
+		  [expr: INT .]
+- line 1:21-24	INT
+		 ↱ expr
+- line 1:16-20	PLUS
+- line 1:5-15	expr
+		 ↱ expr
+- line 1:5-11	LPAREN
+- line 1:0-4	main
+```
+
 ## Enumeration
 
 The enumeration works by listing sentences that exhaustively cover all the ways a parser can _locally_ fail.
@@ -299,7 +328,7 @@ With these two identifications, only a finite number of situations have to be co
 
 It is helpful to look at the sentences produced by enumeration to get an idea of the possible failures of a grammar.
 
-For instance, the calc grammar can be enumerated using `make enumerate`, or by manually executing `dune exec lrgrep -- -enumerate lr0 parse_errors.mlyl -g ../../_build/default/examples/calc/parser.cmly`. The `lr0` flag after specifies the precision of the enumeration; `lr0` is the correct value for 99% of cases (TODO: make it the default and add another flag for advanced use cases).
+For instance, the calc grammar can be enumerated using `make enumerate` in `examples/calc`, or by manually executing `dune exec lrgrep -- enumerate -g ../../_build/default/examples/calc/parser.cmly`.
 
 The first lines of output look like:
 
