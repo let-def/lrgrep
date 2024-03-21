@@ -3,5 +3,6 @@
  (public_name lrgrep)
  (modules main
           compile_command
-          enum_command enum)
+          enum_command enum
+          interpret_command)
  (libraries front mid fix cmon utils menhirSdk valmari support))

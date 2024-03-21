@@ -24,6 +24,7 @@ let print_version_string () =
 type command =
   | Compile
   | Enumerate
+  | Interpret
 
 let command =
   if Array.length Sys.argv < 2 then Compile
@@ -32,6 +33,7 @@ let command =
     match Sys.argv.(1) with
     | "compile" -> Compile
     | "enumerate" -> Enumerate
+    | "interpret" -> Interpret
     | _ ->
       decr Arg.current;
       Compile
@@ -62,3 +64,5 @@ let () = match command with
     parse_args Compile_command.specs "compile" Compile_command.run
   | Enumerate ->
     parse_args Enum_command.specs "enumerate" Enum_command.run
+  | Interpret ->
+    parse_args Interpret_command.specs "interpret" Interpret_command.run
