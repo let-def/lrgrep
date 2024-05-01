@@ -7,7 +7,7 @@
 rule error_message = parse error (main)
 | / . INT
   { "Expecting an integer" }
-| lpos=LPAREN; [expr / _* . RPAREN]
+(*| lpos=LPAREN; [expr / _* . RPAREN]
   { "Expecting a closing parenthesis (opened at " ^ print_loc $startloc(lpos) ^ ")" }
 | [expr / _* . EOL] @ LPAREN
   { "There cannot be an opening parenthesis in this position. \
@@ -16,4 +16,4 @@ rule error_message = parse error (main)
   { "There cannot be a number in this position. \
      Maybe you forgot to add an operator?" }
 | [_* / _* . EOL] @ RPAREN
-  { "This closing parenthesis does not match any opening parenthesis" }
+  { "This closing parenthesis does not match any opening parenthesis" }*)

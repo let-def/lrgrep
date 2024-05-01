@@ -511,6 +511,39 @@ struct
     Stopwatch.step time "Outer transitions";
     Stopwatch.leave time
 
+  let () =
+    let oc = open_out_bin "/tmp/failure_nfa.dot" in
+    let p fmt = Printf.fprintf oc fmt in
+    p "digraph {\n";
+    p "  node [shape=rect];\n";
+    let state i = "S" ^ string_of_index i in
+    let terminals ts = string_of_indexset ~index:Terminal.to_string ts in
+    let transition_label j =
+      match Vector.get states j with
+      | State _ -> ""
+      | Intermediate t ->
+        let lr1s = IndexSet.map Lrc.lr1_of_lrc t.lrcs in
+        Lr1.set_to_string lr1s
+    in
+    Vector.iteri (fun i desc ->
+        let rejected, next =
+          match desc with
+          | State t -> (t.rejected, t.epsilon)
+          | Intermediate t -> (t.rejected, t.next)
+        in
+        p " %s[label=\"%s\\n%s\\n-> %s\"];\n"
+          (state i)
+          (terminals rejected)
+          (terminals (potential i))
+          (Lr1.set_to_string (IndexSet.map Lrc.lr1_of_lrc (lrcs_of i)))
+        ;
+        IndexSet.iter (fun j ->
+            p " %s -> %s [label=%S];\n"
+              (state i) (state j) (transition_label j)
+          ) next
+      ) states;
+    p "}\n";
+    close_out oc
 end
 
 module Coverage_check
@@ -605,8 +638,13 @@ struct
                 lr1s'
               ) lr1s (DFA.successors dfa)
           in
-          if not (IndexSet.is_empty remainder) then
-            found_uncovered := true
+          if not (IndexSet.is_empty remainder) then (
+            Printf.eprintf "incomplete reducible transition for states
+              %s with lookaheads %s\n"
+              (Lr1.set_to_string remainder)
+              (string_of_indexset ~index:Terminal.to_string unhandled);
+            found_uncovered := true;
+          )
 
       let propagate (dfa, f) =
         Increasing.iter f (fun nfa unhandled ->
@@ -666,8 +704,14 @@ struct
         )
 
       let follow src lrc unhandled =
-        match successor src (Lrc.lr1_of_lrc lrc) with
-        | None -> found_uncovered := true
+        let lr1 = Lrc.lr1_of_lrc lrc in
+        match successor src lr1 with
+        | None ->
+          Printf.eprintf "incomplete reducible transition for states
+              %s with lookaheads %s\n"
+            (Lr1.to_string lr1)
+            (string_of_indexset ~index:Terminal.to_string unhandled);
+          found_uncovered := true
         | Some tgt ->
           update tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
 
@@ -972,6 +1016,54 @@ struct
       let states = IndexBuffer.Gen.freeze states
 
       let () = Stopwatch.step time "Uncovered NFA has %d states" (cardinal n)
+
+      let () =
+        let oc = open_out_bin "/tmp/nfa.dot" in
+        let get_tr cmp t =
+          let t = IndexMap.bindings t in
+          let t = List.sort (compare_snd cmp) t in
+          let t = List.map (fun (x, y) -> IndexSet.singleton x, y) t in
+          let rec group = function
+            | (xs, y1) :: (xs', y2) :: rest when cmp y1 y2 = 0 ->
+              group ((IndexSet.union xs xs', y1) :: rest)
+            | xs :: rest ->
+              xs :: group rest
+            | [] -> []
+          in
+          group t
+        in
+        let print_symset syms =
+          string_of_indexset ~index:(fun x ->
+              match Sym_or_lr1.prj x with
+              | L x -> Symbol.name x
+              | R x -> Lr1.to_string x
+            ) syms ^ " -> _"
+        in
+        Printf.fprintf oc "digraph {\n";
+        Vector.iter (fun {dfa; fg; transitions; uncovered} ->
+            let transitions = get_tr IndexSet.compare transitions in
+            let uncovered = get_tr FG.compare uncovered in
+            ignore fg;
+            let msg =
+              Printf.sprintf
+                "(S%d)\n%s"
+                (Index.to_int dfa)
+                (string_concat_map "\n"
+                   (fun (syms, _fg) -> print_symset syms ^ " -> _") uncovered)
+            in
+            Printf.fprintf oc
+              "  S%d [label=%S];\n"
+              (Index.to_int dfa)
+              msg;
+            List.iter (fun (_, ns) ->
+                IndexSet.iter (fun n ->
+                    Printf.fprintf oc "  S%d -> S%d;\n"
+                      (Index.to_int dfa) (Index.to_int n)
+                  ) ns
+              ) transitions
+          ) states;
+        Printf.fprintf oc "}\n";
+        close_out_noerr oc
     end
 
     module UncoveredDFA = struct
