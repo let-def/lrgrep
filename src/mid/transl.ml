@@ -451,6 +451,8 @@ struct
             immediate := IndexSet.union !immediate label.K.filter
           else
             reached := (
+              (* FIXME: Checking equality with Lr1.all is really just a hack.
+               * Maybe we need a proper nullability check! *)
               if IndexSet.equal Lr1.all label.filter then
                 IndexSet.union node.reached !reached
               else
