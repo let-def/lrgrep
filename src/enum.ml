@@ -12,10 +12,77 @@ module Make
       and module Lrc := Lrc)
 =
 struct
+  open Info
+
+  let output_raw =
+    let output_terminal oc t =
+      output_char oc ' ';
+      output_string oc (Terminal.to_string t)
+    in
+    let output_item oc (prod, dot) =
+      output_string oc " /";
+      output_string oc (Nonterminal.to_string (Production.lhs prod));
+      output_char oc ':';
+      let rhs = Production.rhs prod in
+      for i = 0 to dot - 1 do
+        output_char oc ' ';
+        output_string oc (Symbol.name rhs.(i));
+      done;
+      output_string oc " .";
+      for i = dot to Array.length rhs - 1 do
+        output_char oc ' ';
+        output_string oc (Symbol.name rhs.(i));
+      done
+    in
+    let output_items oc items =
+      output_string oc " [";
+      List.iter (output_item oc) items;
+      output_string oc " ]"
+    in
+    fun oc (entrypoint, terminals, lookaheads, items) ->
+      print_string entrypoint;
+      List.iter (output_terminal oc) terminals;
+      print_string " @";
+      IndexSet.iter (output_terminal oc) lookaheads;
+      List.iter (output_items oc) items;
+      print_newline ()
+
+  let output_json =
+    let output_symbol oc t =
+      output_char oc '"';
+      output_string oc (Symbol.name t);
+      output_char oc '"'
+    in
+    let output_list f oc xs =
+      output_char oc '[';
+      List.iteri (fun i x ->
+          if i <> 0 then output_char oc ',';
+          f oc x
+        ) xs;
+      output_char oc ']'
+    in
+    let output_item oc (prod, dot) =
+      Printf.fprintf oc
+        "{\"lhs\":%a,\"rhs\":%a,\"dot\":%d}"
+        output_symbol
+          (Symbol.inj_r (Production.lhs prod))
+        (output_list output_symbol)
+          (Array.to_list (Production.rhs prod))
+        dot
+    in
+    let output_terminal oc t =
+      output_symbol oc (Symbol.inj_l t)
+    in
+    fun oc (entrypoint, terminals, lookaheads, items) ->
+      Printf.fprintf oc
+        "{\"entrypoint\":%S,\"sentence\":%a,\"lookaheads\":%a,\"states\":%a}\n"
+        entrypoint
+        (output_list output_terminal) terminals
+        (output_list output_terminal) (IndexSet.elements lookaheads)
+        (output_list (output_list output_item))  items
+
   module Sentence_gen =
   struct
-    open Info
-
     let rec cells_of_lrc_list = function
       | [] -> assert false
       | [_] ->  []
@@ -47,8 +114,8 @@ struct
             0
           | _ -> Lrc.class_index x
         in
-        let yi = (Coercion.infix (Classes.post_transition tr) (Classes.for_lr1 yl)).backward.(yi)
-        in
+        let coercion = Coercion.infix (Classes.post_transition tr) (Classes.for_lr1 yl) in
+        let yi = coercion.backward.(yi) in
         Cells.encode (Tree.leaf tr) xi yi :: cells_of_lrc_list tail
 
     exception Break of Terminal.t list
@@ -192,81 +259,7 @@ struct
       else t.potential :: t.stack
   end
 
-  module Output_raw = struct
-    open Info
-
-    let output_terminal oc t =
-      output_char oc ' ';
-      output_string oc (Terminal.to_string t)
-
-    let output_item oc (prod, dot) =
-      output_string oc " /";
-      output_string oc (Nonterminal.to_string (Production.lhs prod));
-      output_char oc ':';
-      let rhs = Production.rhs prod in
-      for i = 0 to dot - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done;
-      output_string oc " .";
-      for i = dot to Array.length rhs - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done
-
-    let output_items oc items =
-      output_string oc " [";
-      List.iter (output_item oc) items;
-      output_string oc " ]"
-
-    let output_sentence oc (entrypoint, terminals, lookaheads, items) =
-      print_string entrypoint;
-      List.iter (output_terminal oc) terminals;
-      print_string " @";
-      IndexSet.iter (output_terminal oc) lookaheads;
-      List.iter (output_items oc) items;
-      print_newline ()
-  end
-
-  module Output_json = struct
-    open Info
-
-    let output_symbol oc t =
-      output_char oc '"';
-      output_string oc (Symbol.name t);
-      output_char oc '"'
-
-    let output_list f oc xs =
-      output_char oc '[';
-      List.iteri (fun i x ->
-          if i <> 0 then output_char oc ',';
-          f oc x
-        ) xs;
-      output_char oc ']'
-
-    let output_item oc (prod, dot) =
-      Printf.fprintf oc
-        "{\"lhs\":%a,\"rhs\":%a,\"dot\":%d}"
-        output_symbol
-          (Symbol.inj_r (Production.lhs prod))
-        (output_list output_symbol)
-          (Array.to_list (Production.rhs prod))
-        dot
-
-    let output_terminal oc t =
-      output_symbol oc (Symbol.inj_l t)
-
-    let output_sentence oc (entrypoint, terminals, lookaheads, items) =
-      Printf.fprintf oc
-        "{\"entrypoint\":%S,\"sentence\":%a,\"lookaheads\":%a,\"states\":%a}\n"
-        entrypoint
-        (output_list output_terminal) terminals
-        (output_list output_terminal) (IndexSet.elements lookaheads)
-        (output_list (output_list output_item))  items
-  end
-
   module Coverage = struct
-    open Info
     include Mid.Coverage_tree.Make (struct
       include Reach
       type terminal = Terminal.n

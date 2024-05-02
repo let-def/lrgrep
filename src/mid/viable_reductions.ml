@@ -122,11 +122,11 @@ struct
       in
       let process_goto red =
         let prod = Reduction.production red in
-        let top = Transition.find_goto_target config.top (Production.lhs prod) in
         let lookahead = Terminal.intersect (Reduction.lookaheads red) config.lookahead in
         if IndexSet.is_empty lookahead then
           None
         else
+          let top = Transition.find_goto_target config.top (Production.lhs prod) in
           let rest = config.top :: config.rest in
           let target = visit_config {top; rest; lookahead} in
           Some {target; lookahead; filter=(); reduction=red}

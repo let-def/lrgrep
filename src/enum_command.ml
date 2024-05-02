@@ -104,11 +104,11 @@ module Run(P : sig val grammar_file : string end)() = struct
     let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
       let initials = indexset_bind initials Lrc.lrcs_of_lr1
     end) in
-    let module Reachable = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+    let module Reachable = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
     let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable) in
     let output = match !opt_enumerate_format with
-      | Efmt_raw -> Enum.Output_raw.output_sentence
-      | Efmt_json -> Enum.Output_json.output_sentence
+      | Efmt_raw -> Enum.output_raw
+      | Efmt_json -> Enum.output_json
     in
     match !opt_precision with
     | Enum_lr0 ->
