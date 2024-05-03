@@ -34,6 +34,8 @@ module type S = sig
   val successors : (n, n indexset) vector
   val predecessors : (n, n indexset) vector
 
+  val reductions : n index -> n index -> Reduction.set
+
   val iter_targets : transitions -> (target -> unit) -> unit
   val rev_iter_targets : transitions -> (target -> unit) -> unit
   val fold_targets : ('a -> target -> 'a) -> 'a -> transitions -> 'a
@@ -184,88 +186,74 @@ struct
     let project (ts, edges) = (ts, IndexMap.bindings edges) in
     Vector.get (Vector.map project table)
 
+  let reductions src tgt =
+    fold_targets (fun acc (tgt', red) ->
+        if equal_index tgt tgt'
+        then IndexSet.add red acc
+        else acc
+      ) IndexSet.empty (Vector.get states src).transitions
+
   let () = Stopwatch.leave time
+end
 
-  (*module Brute = struct
-    type thread = {
-      node: n index;
-      rejected: Terminal.set;
-      visited: n indexset;
-    }
+module Covering_tree
+    (Info : Info.S)
+    (Viable: Viable_reductions.S with module Info := Info)
+    (Lrc: Lrc.S with module Info := Info)
+    (Reach : S with module Info := Info
+                and module Viable := Viable
+                and module Lrc := Lrc)
+    ()
+=
+struct
+  open Info
+  open Reach
 
-    let steps = ref 0
+  module Goto_star = struct
+    include IndexBuffer.Gen.Make()
 
-    let queue = ref []
+    let lr0_stack_of_source source =
+      match Source.prj source with
+      | L v -> List.rev_map Lr1.to_lr0 (Viable.get_stack v)
+      | R lr1 -> [Lr1.to_lr0 lr1]
 
-    let start_thread node =
-      {node; rejected = reject node; visited = IndexSet.singleton node}
+    let def = get_generator ()
 
-    let visit_node thread node =
-      if not (IndexSet.mem node thread.visited) then (
-        incr steps;
-        let rejected = IndexSet.union (reject node) thread.rejected in
-        let visited =
-          if IndexSet.equal rejected thread.rejected then
-            IndexSet.add node thread.visited
-          else
-            IndexSet.singleton node
-        in
-        push queue {node; rejected; visited}
-      )
+    let index_of =
+      let table = Hashtbl.create 7 in
+      let index_of lr0s =
+        match Hashtbl.find_opt table lr0s with
+        | Some i -> i
+        | None ->
+          let r = IndexBuffer.Gen.reserve def in
+          let i = IndexBuffer.Gen.index r in
+          Hashtbl.add table lr0s i;
+          IndexBuffer.Gen.commit def r lr0s;
+          i
+      in
+      let project desc = index_of (lr0_stack_of_source desc.config.source) in
+      Vector.get (Vector.map project states)
 
-    let () = IndexMap.iter (fun _ node -> push queue (start_thread node)) initial
+    let def = IndexBuffer.Gen.freeze def
 
-    let propagate thread =
-      IndexSet.iter
-        (visit_node thread)
-        (Vector.get successors thread.node)
+    let () =
+      Printf.eprintf "Goto*: found %d configurations to cover\n"
+        (cardinal (Vector.length def))
+  end
 
-    let rec fixpoint i = match !queue with
-      | [] -> ()
-      | todo' ->
-        Printf.eprintf "iteration %d: %d threads\n%!" i (List.length todo');
-        queue := [];
-        List.iter propagate todo';
-        fixpoint (i + 1)
+  type node = {
+    state: n index;
+    rejected: Terminal.set;
+    mutable handled: Terminal.set;
+    mutable children: node list;
+  }
 
-    let () = fixpoint 0
+  let reject_before = Vector.make n IndexSet.empty
 
-    let () = Printf.eprintf "Bruteforced in %d steps \n" !steps
-  end*)
-
-  (*let () =
-    Vector.iter (fun desc ->
-        match Source.prj desc.config.source with
-        | R _ -> ()
-        | L viable ->
-          let config = Viable.get_config viable in
-          let lr1 = List.fold_left (fun _ x -> x) config.top config.rest in
-          IndexSet.iter (fun lrc ->
-              assert (IndexSet.mem (Lrc.lr1_of_lrc lrc) (Lr1.predecessors lr1));
-              if Lrc.lr1_of_lrc lrc <> lr1 then
-                Printf.eprintf "Expecting to have state %s at the top of the stack but got %s\n"
-                  (Lr1.to_string lr1)
-                  (Lr1.to_string (Lrc.lr1_of_lrc lrc))
-            )
-            desc.config.lrcs
-      ) states
-    *)
-
-  module Arborescence = struct
-    let marked = Boolvector.make n false
-    let reject_before = Vector.make n IndexSet.empty
-
-    let nodes = ref 0
-
-    type node = {
-      state: n index;
-      rejected: Terminal.set;
-      mutable handle: Terminal.set;
-      mutable children: node list;
-    }
-
-    let queue = ref []
-
+  let make_arborescence roots =
+    let marked = Boolvector.make n false in
+    let nodes = ref 0 in
+    let queue = ref [] in
     let visit rejected state acc =
       let rejected = IndexSet.union (reject state) rejected in
       let continue, rejected' =
@@ -281,83 +269,37 @@ struct
       if continue then (
         incr nodes;
         Vector.set reject_before state rejected';
-        let node = {state; rejected; handle = IndexSet.empty; children = []} in
+        let node = {state; rejected; handled = IndexSet.empty; children = []} in
         push queue node;
         node :: acc
       ) else
         acc
-
-    let roots = IndexMap.fold (fun _ -> visit IndexSet.empty) initial []
-
+    in
+    let roots = IndexSet.fold (visit IndexSet.empty) roots [] in
     let propagate node =
       let next = Vector.get successors node.state in
       node.children <- IndexSet.fold (visit node.rejected) next node.children
+    in
+    fixpoint ~propagate queue;
+    Printf.eprintf "Arborescence has %d nodes\n" !nodes;
+    roots
 
-    let () = fixpoint ~propagate queue
-
-    let () = Printf.eprintf "Arborescence has %d nodes\n" !nodes
-  end
-
-  module Goal = struct
-    include IndexBuffer.Gen.Make()
-
-    let lr0_stack_of_source source =
-      match Source.prj source with
-      | L v -> List.rev_map Lr1.to_lr0 (Viable.get_stack v)
-      | R lr1 -> [Lr1.to_lr0 lr1]
-
-    let stack_def = get_generator ()
-
-    let stack_of_state =
-      let table = Hashtbl.create 7 in
-      let index_of lr0s =
-        match Hashtbl.find_opt table lr0s with
-        | Some i -> i
-        | None ->
-          let r = IndexBuffer.Gen.reserve stack_def in
-          let i = IndexBuffer.Gen.index r in
-          Hashtbl.add table lr0s i;
-          IndexBuffer.Gen.commit stack_def r lr0s;
-          i
-      in
-      let project desc = index_of (lr0_stack_of_source desc.config.source) in
-      Vector.get (Vector.map project states)
-
-    let _stack_def = IndexBuffer.Gen.freeze stack_def
-
-    let () = Printf.eprintf "Found %d configurations to cover\n" (cardinal n)
-
-    let goal = Vector.make n IndexSet.empty
-
-    let () = Index.iter (Vector.length states) (fun st ->
-        let ra = reject st in
-        let rb, _ = rejectable st in
-        let rc = Vector.get Arborescence.reject_before st in
-        let r = IndexSet.union ra (IndexSet.union rb rc) in
-        vector_set_union goal (stack_of_state st) r
-      )
-  end
-
-  module Enum = struct
-    let sentences = ref 0
-
-    let get_child (node : Arborescence.node) state =
-      let pred (node' : Arborescence.node) = equal_index node'.state state in
+  let complete_arborescence goals roots =
+    let sentences = ref 0 in
+    let get_child node state =
+      let pred node' = equal_index node'.state state in
       match List.find_opt pred node.children with
       | Some node' -> node'
       | None ->
         let rejected = IndexSet.union (reject state) node.rejected in
-        let node' =
-          {Arborescence. state; rejected; handle = IndexSet.empty; children = []}
-        in
-        incr Arborescence.nodes;
+        let node' = {state; rejected; handled = IndexSet.empty; children = []} in
         node.children <- node' :: node.children;
         node'
-
-    let rec visit_after (node : Arborescence.node) todo =
-      let stack = Goal.stack_of_state node.state in
-      Vector.set Goal.goal stack
-        (IndexSet.diff (Vector.get Goal.goal stack) todo);
+    in
+    let rec visit_after node todo =
+      let goal = Goto_star.index_of node.state in
+      Vector.set goals goal
+        (IndexSet.diff (Vector.get goals goal) todo);
       let todo = List.fold_left (fun todo (successor, terminals) ->
           let todo' = IndexSet.inter todo terminals in
           if IndexSet.is_empty todo' then todo else (
@@ -368,31 +310,54 @@ struct
       in
       if not (IndexSet.is_empty todo) then (
         assert (IndexSet.subset todo (reject node.state));
-        node.handle <- todo;
+        node.handled <- todo;
         incr sentences;
       )
-
+    in
     let rec visit_before node =
       let visited =
         List.fold_left
           (fun acc node' -> IndexSet.union (visit_before node') acc)
-          IndexSet.empty node.Arborescence.children
+          IndexSet.empty node.children
       in
-      let stack = Goal.stack_of_state node.state in
+      let goal = Goto_star.index_of node.state in
       let rejectable, _ = rejectable node.state in
-      let remaining = Vector.get Goal.goal stack in
+      let remaining = Vector.get goals goal in
       let remaining = IndexSet.diff remaining visited in
-      Vector.set Goal.goal stack remaining;
+      Vector.set goals goal remaining;
       let todo = IndexSet.inter rejectable remaining in
       visit_after node todo;
       IndexSet.union visited todo
+    in
+    List.iter (fun node -> ignore (visit_before node)) roots;
+    Printf.eprintf "Enumeration has %d sentences\n" !sentences
 
-    let () =
-      let process node = ignore (visit_before node) in
-      List.iter process Arborescence.roots
+  let goals =
+    let table = Vector.make Goto_star.n IndexSet.empty in
+    Index.iter (Vector.length states) (fun st ->
+        let ra = reject st in
+        let rb, _ = rejectable st in
+        let rc = Vector.get reject_before st in
+        let r = IndexSet.union ra (IndexSet.union rb rc) in
+        vector_set_union table (Goto_star.index_of st) r
+      );
+    table
 
-    let () = Printf.eprintf "Enumeration has %d sentences\n" !sentences
-  end
+  let roots =
+    let add _ = IndexSet.add in
+    let initial = IndexMap.fold add Reach.initial IndexSet.empty in
+    let roots = make_arborescence initial in
+    complete_arborescence goals roots;
+    roots
+
+  let enum_sentences f =
+    let rec visit path (node : node) =
+      let path = node.state :: path in
+      if not (IndexSet.is_empty node.handled) then
+        f path node.rejected;
+      List.iter (visit path) node.children
+    in
+    List.iter (visit []) roots
 
   (*module Enum = struct
     let () =
@@ -414,4 +379,6 @@ struct
         (fun node -> ignore (visit [] node))
         Arborescence.initial
   end*)
+
 end
+

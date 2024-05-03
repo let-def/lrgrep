@@ -6,10 +6,11 @@ module Make
     (Reachability : Mid.Reachability.S with module Info := Info)
     (Viable : Mid.Viable_reductions.S with module Info := Info)
     (Lrc : Mid.Lrc.S with module Info := Info)
-    (Reach : Mid.Reachable_reductions.S
+    (Reach : Mid.Reachable_reductions2.S
      with module Info := Info
       and module Viable := Viable
       and module Lrc := Lrc)
+    ()
 =
 struct
   open Info
@@ -259,40 +260,34 @@ struct
       else t.potential :: t.stack
   end
 
+  module Covering_tree =
+    Mid.Reachable_reductions2.Covering_tree
+      (Info)
+      (Viable)
+      (Lrc)
+      (Reach)
+      ()
+
   module Coverage = struct
-    include Mid.Coverage_tree.Make (struct
-      include Reach
-      type terminal = Terminal.n
-      type transition = Reduction.t
-      let initials f = IndexMap.iter (fun _ st -> f st) Reach.initial
-      let successors st f =
-        Reach.iter_targets
-          (Vector.get Reach.states st).transitions
-          (fun (st', red) -> f red st')
-    end)
 
     let lr1_of state =
       match Reach.Source.prj (Vector.get Reach.states state).config.source with
       | L viable -> (Viable.get_config viable).top
-      | R lrc -> Lrc.lr1_of_lrc lrc
+      | R lr1 -> lr1
 
     let items_from_suffix suffix =
       let items_of_state state = Lr1.items (lr1_of state) in
-      let rec loop acc = function
-        | Step (state, _, next) ->
-          loop (items_of_state state :: acc) next
-        | Init state ->
-          items_of_state state :: acc
-      in
-      loop [] suffix
+      List.rev_map items_of_state suffix
 
     let form_from_suffix suffix =
       let get_lrcs state = (Vector.get Reach.states state).config.lrcs in
       let rec loop = function
-        | Init state ->
+        | [] -> assert false
+        | [state] ->
           Form_generator.top
             (Lrc.first_lrc_of_lr1 (lr1_of state))
-        | Step (state, red, suffix) ->
+        | state :: (state' :: _ as suffix) ->
+          let red = IndexSet.choose (Reach.reductions state' state) in
           Form_generator.reduce (loop suffix)
             ~potential:(get_lrcs state)
             ~length:(Production.length (Reduction.production red))
@@ -320,8 +315,8 @@ struct
       (entrypoint, terminals, lookaheads, items_from_suffix suffix)
   end
 
-  let enumerate ~cover ~index output =
-    Coverage.enum_sentences ~cover ~index
+  let enumerate output =
+    Covering_tree.enum_sentences
       (fun suffix lookaheads ->
         output (Coverage.generate_sentence suffix lookaheads))
 end

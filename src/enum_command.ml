@@ -5,13 +5,6 @@ open Misc
 
 let opt_grammar_file = ref None
 
-type precision =
-  | Enum_lr0
-  | Enum_lr1
-  | Enum_goto
-
-let opt_precision = ref Enum_lr0
-
 type enumerate_format =
   | Efmt_raw
   | Efmt_json
@@ -23,21 +16,6 @@ let opt_enumerate_entrypoint = ref []
 let specs = [
   "-g", Arg.String (fun x -> opt_grammar_file := Some x),
   " <file.cmly>  Path to the Menhir compiled grammar to analyse (*.cmly)";
-  "-precision", Arg.String (function
-      | "lr0" -> opt_precision := Enum_lr0
-      | "lr1" -> opt_precision := Enum_lr1
-      | "goto" -> opt_precision := Enum_goto
-      | arg ->
-        Printf.eprintf
-          "-precision: invalid value %S\n\
-           Valid values, from least to most verbose:\n\
-           - lr0 (default): enumerate sentences to reach lr0 states\n\
-           - lr1: enumerate sentences to reach lr1 states\n\
-           - goto: enumerate sentences to follow all goto transitions\n"
-          arg;
-      exit 1
-  ),
-  " <lr0|lr1|goto> Precision of the failing configurations to cover";
   "-format", Arg.String (function
       | "raw" -> opt_enumerate_format := Efmt_raw
       | "json" -> opt_enumerate_format := Efmt_json
@@ -105,27 +83,12 @@ module Run(P : sig val grammar_file : string end)() = struct
       let initials = indexset_bind initials Lrc.lrcs_of_lr1
     end) in
     let module Reachable = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
-    let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable) in
+    let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable)() in
     let output = match !opt_enumerate_format with
       | Efmt_raw -> Enum.output_raw
       | Efmt_json -> Enum.output_json
     in
-    match !opt_precision with
-    | Enum_lr0 ->
-      Enum.enumerate
-        ~cover:Info.Lr0.n
-        ~index:(fun x -> Info.Lr1.to_lr0 (Enum.Coverage.lr1_of x))
-        (output stdout)
-    | Enum_lr1 ->
-      Enum.enumerate
-        ~cover:Info.Lr1.n
-        ~index:(fun x -> Enum.Coverage.lr1_of x)
-        (output stdout)
-    | Enum_goto ->
-      Enum.enumerate
-        ~cover:Reachable.n
-        ~index:(fun x -> x)
-        (output stdout)
+    Enum.enumerate (output stdout)
 end
 
 let run = function
