@@ -83,6 +83,7 @@ module Run(P : sig val grammar_file : string end)() = struct
       let initials = indexset_bind initials Lrc.lrcs_of_lr1
     end) in
     let module Reachable = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
+    let module Failure = Mid.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in
     let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable)() in
     let output = match !opt_enumerate_format with
       | Efmt_raw -> Enum.output_raw

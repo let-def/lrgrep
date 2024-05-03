@@ -389,6 +389,9 @@ module FailureNFA
                  and type reach = Reach.n
 =
 struct
+
+  let time = Stopwatch.enter Stopwatch.main "FailureNFA2"
+
   type reach = Reach.n
 
   module States = struct
@@ -415,11 +418,6 @@ struct
 
   type n = States.n
   let n = States.n
-
-  type desc = {
-    epsilon: States.n indexset;
-    next: States.n indexset;
-  }
 
   let epsilon_closure =
     let epsilon =
@@ -505,4 +503,5 @@ struct
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> Vector.get suffix_transitions i
 
+  let () = Stopwatch.leave time
 end
