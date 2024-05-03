@@ -358,27 +358,151 @@ struct
       List.iter (visit path) node.children
     in
     List.iter (visit []) roots
-
-  (*module Enum = struct
-    let () =
-      (* Now traverse arborescence ... *)
-      let rec visit path node =
-        let path = node :: path in
-        let visited =
-          List.fold_left
-            (fun acc node' -> IndexSet.union (visit path node') acc)
-            IndexSet.empty node.Arborescence.children
-        in
-        let stack = stack_of_state node.state in
-        if not (IndexSet.is_empty visited) then
-          assert (IndexSet.subset node.rejected visited);
-        let remaining = IndexSet.diff (Vector.get goal stack) visited in
-        if not (IndexSet.disjoint
-      in
-      List.iter
-        (fun node -> ignore (visit [] node))
-        Arborescence.initial
-  end*)
-
 end
 
+module type FAILURE_NFA = sig
+  type reach
+  type lr1
+  type lrc
+  type terminal
+  include CARDINAL
+  val initial : n indexset
+  (*val reject : n index -> terminal indexset*)
+  val rejectable : n index -> terminal indexset
+  val reach_incoming : (reach, lr1 indexset) vector
+  val incoming : n index -> lr1 indexset option
+  val incoming_lrc : n index -> lrc indexset option
+  val transitions : n index -> n indexset
+end
+
+module FailureNFA
+    (Info : Info.S)
+    (Viable: Viable_reductions.S with module Info := Info)
+    (Lrc: Lrc.S with module Info := Info)
+    (Reach : S with module Info := Info
+                and module Viable := Viable
+                and module Lrc := Lrc)
+    ()
+  : FAILURE_NFA with type terminal := Info.Terminal.n
+                 and type lr1 := Info.Lr1.n
+                 and type lrc := Lrc.n
+                 and type reach = Reach.n
+=
+struct
+  type reach = Reach.n
+
+  module States = struct
+    module Suffix = IndexBuffer.Gen.Make()
+    module Reach_or_suffix = Sum(Reach)(Suffix)
+    include Sum(Lrc)(Reach_or_suffix)
+
+    let prefix i = inj_l i
+    let suffix i = inj_r (Reach_or_suffix.inj_r i)
+    let reach i = inj_r (Reach_or_suffix.inj_l i)
+
+    type t =
+      | Prefix of Lrc.n index
+      | Suffix of Suffix.n index
+      | Reach  of Reach.n index
+
+    let prj i = match prj i with
+      | L i -> Prefix i
+      | R i ->
+        match Reach_or_suffix.prj i with
+        | L i -> Reach i
+        | R i -> Suffix i
+  end
+
+  type n = States.n
+  let n = States.n
+
+  type desc = {
+    epsilon: States.n indexset;
+    next: States.n indexset;
+  }
+
+  let epsilon_closure =
+    let epsilon =
+      Vector.mapi (fun st {Reach.transitions; _}  ->
+          match transitions with
+          | [] -> IndexSet.singleton st
+          | epsilon :: _ -> IndexSet.of_list (st :: List.map fst epsilon)
+        ) Reach.states
+    in
+    close_relation epsilon;
+    Vector.get (Vector.map (IndexSet.map States.reach) epsilon)
+
+  let suffix_transitions =
+    States.Suffix.get_generator ()
+
+  let reach_transitions =
+    let rec import = function
+      | [] -> IndexSet.empty
+      | targets :: next ->
+        let add set (reach, _) = IndexSet.union (epsilon_closure reach) set in
+        let targets = List.fold_left add IndexSet.empty targets in
+        let next = import next in
+        if IndexSet.is_empty next then
+          targets
+        else
+          let suffix = IndexBuffer.Gen.add suffix_transitions next in
+          IndexSet.add (States.suffix suffix) targets
+    in
+    Vector.map (fun (d : Reach.desc) ->
+        match d.transitions with
+        | _ :: rest -> import rest
+        | [] -> IndexSet.empty
+      ) Reach.states
+
+  let suffix_transitions =
+    IndexBuffer.Gen.freeze suffix_transitions
+
+  let initial =
+    let add _ st acc = IndexSet.union acc (epsilon_closure st) in
+    IndexMap.fold add Reach.initial IndexSet.empty
+
+  (* Incorrect: some rejections are missed because of epsilon-closure
+     (one should accumulate the rejected tokens during closure, meh) *)
+
+  (*let reject i =
+    match States.prj i with
+    | States.Prefix _ -> IndexSet.empty
+    | States.Reach  i -> fst (Reach.reject i)
+    | States.Suffix i -> IndexSet.empty
+     *)
+
+  let rejectable =
+    let table = Vector.make States.Suffix.n IndexSet.empty in
+    let get i =
+      match States.prj i with
+      | States.Prefix _ -> IndexSet.empty
+      | States.Reach  i -> fst (Reach.rejectable i)
+      | States.Suffix i -> Vector.get table i
+    in
+    let def suf targets = Vector.set table suf (indexset_bind targets get) in
+    Vector.rev_iteri def suffix_transitions;
+    get
+
+  let reach_incoming =
+    let incoming desc = IndexSet.map Lrc.lr1_of_lrc desc.Reach.config.lrcs in
+    Vector.map incoming Reach.states
+
+  let incoming i =
+    match States.prj i with
+    | States.Prefix lrc -> Some (IndexSet.singleton (Lrc.lr1_of_lrc lrc))
+    | States.Reach i -> Some (Vector.get reach_incoming i)
+    | States.Suffix _ -> None
+
+  let incoming_lrc i =
+    match States.prj i with
+    | States.Prefix lrc -> Some (IndexSet.singleton lrc)
+    | States.Reach i -> Some (Vector.get Reach.states i).config.lrcs
+    | States.Suffix _ -> None
+
+  let transitions i =
+    match States.prj i with
+    | States.Prefix lrc -> IndexSet.map States.prefix (Lrc.predecessors lrc)
+    | States.Reach i -> Vector.get reach_transitions i
+    | States.Suffix i -> Vector.get suffix_transitions i
+
+end

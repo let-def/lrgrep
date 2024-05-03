@@ -110,7 +110,7 @@ let index_fold n a f =
 (** [indexset_bind s f] returns the union of all sets [f i] for [i] in [s] *)
 let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
-  IndexSet.fold (fun lr1 acc -> IndexSet.union acc (f lr1)) s IndexSet.empty
+  IndexSet.fold (fun lr1 acc -> IndexSet.union (f lr1) acc) s IndexSet.empty
 
 (** [vector_set_add v i elt] adds element [elt] to the [i]'th set of [v],
     a vector of sets. *)
