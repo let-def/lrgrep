@@ -366,13 +366,13 @@ module type FAILURE_NFA = sig
   type lrc
   type terminal
   include CARDINAL
-  val initial : n indexset
+  val initial : (n, terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
   val reach_incoming : (reach, lr1 indexset) vector
   val incoming : n index -> lr1 indexset option
   val incoming_lrc : n index -> lrc indexset option
-  val transitions : n index -> n indexset
+  val transitions : n index -> (n, terminal indexset) indexmap
 end
 
 module FailureNFA
@@ -419,45 +419,59 @@ struct
   type n = States.n
   let n = States.n
 
+  let map_union m1 m2 =
+    let merge _ a0 a1 = Some (IndexSet.union a0 a1) in
+    let m3 = IndexMap.union merge m1 m2 in
+    if IndexMap.equal IndexSet.equal m2 m3
+    then m2
+    else m3
+
   let epsilon_closure =
-    let epsilon =
-      Vector.mapi (fun st {Reach.transitions; _}  ->
-          match transitions with
-          | [] -> IndexSet.singleton st
-          | epsilon :: _ -> IndexSet.of_list (st :: List.map fst epsilon)
-        ) Reach.states
+    let epsilon_predecessors = Vector.make Reach.n IndexSet.empty in
+    Vector.iteri (fun src {Reach.transitions; _} ->
+        match transitions with
+        | [] -> ()
+        | epsilon :: _ ->
+          List.iter
+            (fun (tgt, _) -> vector_set_add epsilon_predecessors tgt src)
+            epsilon
+      ) Reach.states;
+    let closure =
+      Vector.init Reach.n
+        (fun i -> IndexMap.singleton (States.reach i) (Reach.reject i))
     in
-    close_relation epsilon;
-    Vector.get (Vector.map (IndexSet.map States.reach) epsilon)
+    fix_relation epsilon_predecessors closure
+      ~propagate:(fun _ map _ map' -> map_union map map');
+    Vector.get closure
 
   let suffix_transitions =
     States.Suffix.get_generator ()
 
   let reach_transitions =
     let rec import = function
-      | [] -> IndexSet.empty
+      | [] -> IndexMap.empty
       | targets :: next ->
-        let add set (reach, _) = IndexSet.union (epsilon_closure reach) set in
-        let targets = List.fold_left add IndexSet.empty targets in
+        let add set (reach, _) = map_union (epsilon_closure reach) set in
+        let targets = List.fold_left add IndexMap.empty targets in
         let next = import next in
-        if IndexSet.is_empty next then
+        if IndexMap.is_empty next then
           targets
         else
           let suffix = IndexBuffer.Gen.add suffix_transitions next in
-          IndexSet.add (States.suffix suffix) targets
+          IndexMap.add (States.suffix suffix) IndexSet.empty targets
     in
     Vector.map (fun (d : Reach.desc) ->
         match d.transitions with
         | _ :: rest -> import rest
-        | [] -> IndexSet.empty
+        | [] -> IndexMap.empty
       ) Reach.states
 
   let suffix_transitions =
     IndexBuffer.Gen.freeze suffix_transitions
 
   let initial =
-    let add _ st acc = IndexSet.union acc (epsilon_closure st) in
-    IndexMap.fold add Reach.initial IndexSet.empty
+    let add _ st acc = map_union (epsilon_closure st) acc in
+    IndexMap.fold add Reach.initial IndexMap.empty
 
   (* Incorrect: some rejections are missed because of epsilon-closure
      (one should accumulate the rejected tokens during closure, meh) *)
@@ -477,7 +491,10 @@ struct
       | States.Reach  i -> fst (Reach.rejectable i)
       | States.Suffix i -> Vector.get table i
     in
-    let def suf targets = Vector.set table suf (indexset_bind targets get) in
+    let populate target _ set = IndexSet.union (get target) set in
+    let def suf targets =
+      Vector.set table suf (IndexMap.fold populate targets IndexSet.empty)
+    in
     Vector.rev_iteri def suffix_transitions;
     get
 
@@ -499,9 +516,77 @@ struct
 
   let transitions i =
     match States.prj i with
-    | States.Prefix lrc -> IndexSet.map States.prefix (Lrc.predecessors lrc)
+    | States.Prefix lrc ->
+      IndexMap.inflate (fun _ -> IndexSet.empty)
+        (IndexSet.map States.prefix (Lrc.predecessors lrc))
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> Vector.get suffix_transitions i
 
   let () = Stopwatch.leave time
 end
+
+
+(*module Coverage_check
+    (Info : Info.S)
+    (Lrc : Lrc.S with module Info := Info)
+    (NFA : FAILURE_NFA with type terminal := Info.Terminal.n
+                        and type lr1 := Info.Lr1.n
+                        and type lrc := Lrc.n)
+    (DFA : sig
+       open Info
+       type n
+       val n : n cardinal
+       val initial : n index
+       val successors : n index -> (Lr1.set * n index) list
+       val accept : n index -> Terminal.set
+     end)
+    ()
+=
+struct
+  open Info
+
+  module Domain = struct
+    type image = {
+      handled: Terminal.set;
+      rejected: Terminal.set;
+    }
+
+    let empty_image = {handled = IndexSet.empty; rejected = IndexSet.empty}
+
+    (* Invariants:
+     * - handled and rejected are disjoint
+     * - handled is a subset of rejectable
+     * - reject does not overlap accept
+     * - handled contains the subset of accept that overlaps rejectable
+     *)
+
+    type t = (NFA.n, image) indexmap
+
+    let empty = IndexMap.empty
+
+    let increase accept nfa image domain =
+      let rejectable = NFA.rejectable nfa in
+      let rejected = IndexSet.diff image.rejected accept in
+      let handled = IndexSet.inter (IndexSet.union accept image.handled) rejectable in
+      match IndexMap.find_opt nfa domain with
+      | None ->
+        let handled = IndexSet.diff handled rejected in
+        let addition = {rejected; handled} in
+        (IndexMap.add nfa addition domain, addition)
+      | Some image ->
+        let rejected' = IndexSet.union rejected image.rejected in
+        let handled' = IndexSet.diff (IndexSet.union handled image.handled) rejected in
+        if rejected' == image.rejected && handled' == image.handled then
+          domain, empty_image
+        else
+          (IndexMap.add nfa image domain,
+           {rejected = rejected'; handled = handled'})
+  end
+
+  (*let coverage = Vector.make DFA.n Domain.empty*)
+
+  (*let () =
+    IndexSet.fold
+      NFA.initial
+    Vector.set coverage DFA.initial*)
+end*)
