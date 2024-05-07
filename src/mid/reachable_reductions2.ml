@@ -370,7 +370,7 @@ module type FAILURE_NFA = sig
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
   val reach_incoming : (reach, lr1 indexset) vector
-  val incoming : n index -> lr1 indexset option
+  val incoming : n index -> lr1 indexset option (* FIXME: Should not be an option, we want an exact enumeration not an over-approximation *)
   val incoming_lrc : n index -> lrc indexset option
   val transitions : n index -> (n, terminal indexset) indexmap
 end
@@ -473,16 +473,6 @@ struct
     let add _ st acc = map_union (epsilon_closure st) acc in
     IndexMap.fold add Reach.initial IndexMap.empty
 
-  (* Incorrect: some rejections are missed because of epsilon-closure
-     (one should accumulate the rejected tokens during closure, meh) *)
-
-  (*let reject i =
-    match States.prj i with
-    | States.Prefix _ -> IndexSet.empty
-    | States.Reach  i -> fst (Reach.reject i)
-    | States.Suffix i -> IndexSet.empty
-     *)
-
   let rejectable =
     let table = Vector.make States.Suffix.n IndexSet.empty in
     let get i =
@@ -495,7 +485,11 @@ struct
     let def suf targets =
       Vector.set table suf (IndexMap.fold populate targets IndexSet.empty)
     in
-    Vector.rev_iteri def suffix_transitions;
+    (* A suffix state comes always before its predecessors, and rejectables are
+       propagated from a state to its predecessors, so:
+       - a forward pass should initialize them correctly,
+       - there is no need to look for a fixed point. *)
+    Vector.iteri def suffix_transitions;
     get
 
   let reach_incoming =
@@ -526,7 +520,7 @@ struct
 end
 
 
-(*module Coverage_check
+module Coverage_check
     (Info : Info.S)
     (Lrc : Lrc.S with module Info := Info)
     (NFA : FAILURE_NFA with type terminal := Info.Terminal.n
@@ -544,14 +538,13 @@ end
 =
 struct
   open Info
+  let time = Stopwatch.enter Stopwatch.main "Coverage check"
 
   module Domain = struct
     type image = {
       handled: Terminal.set;
       rejected: Terminal.set;
     }
-
-    let empty_image = {handled = IndexSet.empty; rejected = IndexSet.empty}
 
     (* Invariants:
      * - handled and rejected are disjoint
@@ -564,29 +557,115 @@ struct
 
     let empty = IndexMap.empty
 
-    let increase accept nfa image domain =
+    let empty_image = {rejected=IndexSet.empty; handled=IndexSet.empty}
+
+    let increase ~accept nfa {rejected; handled} rejected' domain =
       let rejectable = NFA.rejectable nfa in
-      let rejected = IndexSet.diff image.rejected accept in
-      let handled = IndexSet.inter (IndexSet.union accept image.handled) rejectable in
+      let rejected = IndexSet.diff (IndexSet.union rejected' rejected) accept in
+      let handled = IndexSet.union accept handled in
       match IndexMap.find_opt nfa domain with
       | None ->
-        let handled = IndexSet.diff handled rejected in
+        let handled = IndexSet.inter (IndexSet.diff handled rejected) rejectable in
         let addition = {rejected; handled} in
-        (IndexMap.add nfa addition domain, addition)
+        if IndexSet.subset rejectable handled && IndexSet.is_empty rejected then
+          (domain, None)
+        else
+          (IndexMap.add nfa addition domain, Some addition)
       | Some image ->
         let rejected' = IndexSet.union rejected image.rejected in
-        let handled' = IndexSet.diff (IndexSet.union handled image.handled) rejected in
+        let handled' = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
         if rejected' == image.rejected && handled' == image.handled then
-          domain, empty_image
+          domain, None
         else
           (IndexMap.add nfa image domain,
-           {rejected = rejected'; handled = handled'})
+           Some {rejected = IndexSet.diff rejected image.rejected; handled = handled'})
+
+    let refine i1 i2 =
+      {handled = IndexSet.inter i1.handled i2.handled;
+       rejected = IndexSet.union i1.rejected i2.rejected}
   end
 
-  (*let coverage = Vector.make DFA.n Domain.empty*)
+  let coverage = Vector.make DFA.n Domain.empty
 
-  (*let () =
-    IndexSet.fold
-      NFA.initial
-    Vector.set coverage DFA.initial*)
-end*)
+  let delta = ref []
+
+  let add_delta dfa nfa = function
+    | None -> ()
+    | Some img ->
+    match !delta with
+    | (dfa', dom) :: rest when dfa == dfa' ->
+      let update = function
+        | None -> Some img
+        | Some img' -> Some (Domain.refine img img')
+      in
+      let dom = IndexMap.update nfa update dom in
+      delta := (dfa, dom) :: rest
+    | rest ->
+      delta := (dfa, IndexMap.singleton nfa img) :: rest
+
+  let () =
+    let accept = DFA.accept DFA.initial in
+    let grow nfa rejected domain =
+      fst (Domain.increase ~accept nfa
+             Domain.empty_image rejected domain)
+    in
+    let domain = IndexMap.fold grow NFA.initial Domain.empty in
+    push delta (DFA.initial, domain);
+    Vector.set coverage DFA.initial domain
+
+  let propagations = ref 0
+
+  let propagate (dfa0, delta) =
+    incr propagations;
+    List.iter (fun (lr1s, dfa) ->
+        let accept = DFA.accept dfa in
+        let dom = Vector.get coverage dfa in
+        let dom' =
+          IndexMap.fold (fun nfa img dom ->
+              let matching =
+                match NFA.incoming nfa with
+                | None -> true
+                | Some lr1s' -> not (IndexSet.disjoint lr1s lr1s')
+              in
+              if not matching then dom else (
+                IndexMap.fold (fun nfa' rejected dom ->
+                    let dom, delta = Domain.increase ~accept nfa img rejected dom in
+                    add_delta dfa nfa' delta;
+                    dom
+                  ) (NFA.transitions nfa) dom
+              )
+            ) delta dom
+        in
+        if dom != dom' then
+          Vector.set coverage dfa dom';
+      ) (DFA.successors dfa0)
+
+  let () = fixpoint ~propagate delta
+
+  let () =
+    let reached = ref 0 in
+    let intersections = ref 0 in
+    let uncovered = ref 0 in
+    Vector.iteri (fun dfa dom ->
+        let size = IndexMap.cardinal dom in
+        if size <> 0 then (
+          incr reached;
+          intersections := !intersections + size;
+        );
+        IndexMap.iter (fun nfa _ ->
+            match NFA.incoming nfa with
+            | None -> () (*FIXME: TODO*)
+            | Some lr1s ->
+              let rem =
+                List.fold_left (fun lr1s (label, _) -> IndexSet.diff lr1s label)
+                  lr1s
+                  (DFA.successors dfa)
+              in
+              if not (IndexSet.is_empty rem) then
+                incr uncovered
+          ) dom;
+      ) coverage;
+    Stopwatch.step time "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions)\n" !propagations !reached !intersections !uncovered
+
+  let () = Stopwatch.leave time
+end

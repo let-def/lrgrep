@@ -143,10 +143,10 @@ end)() = struct
     Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
     if !opt_coverage || !opt_coverage_silent || !opt_coverage_fatal then (
-      let open Info in
-      let module Reach = Mid.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
-      let module Failure = Mid.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-      let module Check = Mid.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
+      (*let open Info in*)
+      let module Reach = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
+      let module Failure = Mid.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+      let module Check = Mid.Reachable_reductions2.Coverage_check(Info)(Lrc)(Failure)(struct
           type n = OutDFA.states
           let n = OutDFA.states
           let initial = OutDFA.initial
@@ -167,7 +167,7 @@ end)() = struct
                 ) IndexSet.empty m
             )
         end)() in
-      if !Check.Forward.found_uncovered then (
+      (*if !Check.Forward.found_uncovered then (
         Printf.eprintf "rule %s: coverage is not exhaustive\n"
           entry.Front.Syntax.name;
         if not !opt_coverage_silent then (
@@ -194,7 +194,8 @@ end)() = struct
         );
         if !opt_coverage_fatal then
           exit 2
-      );
+      );*)
+      ()
     );
     let get_state_for_compaction index =
       let add_match (clause, priority, regs) =
