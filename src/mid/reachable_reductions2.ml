@@ -2,6 +2,8 @@ open Utils
 open Misc
 open Fix.Indexing
 
+let build_with_expensive_assertions = false
+
 module type S = sig
   module Info : Info.S
   module Viable: Viable_reductions.S with module Info := Info
@@ -370,8 +372,8 @@ module type FAILURE_NFA = sig
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
   val reach_incoming : (reach, lr1 indexset) vector
-  val incoming : n index -> lr1 indexset option (* FIXME: Should not be an option, we want an exact enumeration not an over-approximation *)
-  val incoming_lrc : n index -> lrc indexset option
+  val incoming : n index -> lr1 indexset
+  val incoming_lrc : n index -> lrc indexset
   val transitions : n index -> (n, terminal indexset) indexmap
 end
 
@@ -448,21 +450,27 @@ struct
     States.Suffix.get_generator ()
 
   let reach_transitions =
-    let rec import = function
-      | [] -> IndexMap.empty
+    let rec import lrcs0 = function
+      | [] -> (IndexMap.empty, IndexSet.empty)
       | targets :: next ->
-        let add set (reach, _) = map_union (epsilon_closure reach) set in
-        let targets = List.fold_left add IndexMap.empty targets in
-        let next = import next in
-        if IndexMap.is_empty next then
-          targets
-        else
-          let suffix = IndexBuffer.Gen.add suffix_transitions next in
-          IndexMap.add (States.suffix suffix) IndexSet.empty targets
+        let add (set, lrcs) (reach, _) =
+          (map_union (epsilon_closure reach) set,
+           IndexSet.union (Vector.get Reach.states reach).config.lrcs lrcs)
+        in
+        let targets, lrcs = List.fold_left add (IndexMap.empty, IndexSet.empty) targets in
+        match next with
+        | [] -> (targets, lrcs)
+        | next ->
+          let next, lrcs' = import (indexset_bind lrcs0 Lrc.predecessors) next in
+          let lrcs' = IndexSet.inter (indexset_bind lrcs' Lrc.successors) lrcs0 in
+          let lrcs = IndexSet.inter (indexset_bind lrcs Lrc.successors) lrcs0 in
+          let suffix = IndexBuffer.Gen.add suffix_transitions (next, lrcs') in
+          (IndexMap.add (States.suffix suffix) IndexSet.empty targets,
+           IndexSet.union lrcs lrcs')
     in
     Vector.map (fun (d : Reach.desc) ->
         match d.transitions with
-        | _ :: rest -> import rest
+        | _ :: rest -> fst (import d.config.lrcs rest)
         | [] -> IndexMap.empty
       ) Reach.states
 
@@ -482,31 +490,42 @@ struct
       | States.Suffix i -> Vector.get table i
     in
     let populate target _ set = IndexSet.union (get target) set in
-    let def suf targets =
-      Vector.set table suf (IndexMap.fold populate targets IndexSet.empty)
+    let def targets = IndexMap.fold populate targets IndexSet.empty in
+    let initialize suf (targets, _) =
+      Vector.set table suf (def targets)
     in
     (* A suffix state comes always before its predecessors, and rejectables are
        propagated from a state to its predecessors, so:
        - a forward pass should initialize them correctly,
        - there is no need to look for a fixed point. *)
-    Vector.iteri def suffix_transitions;
+    Vector.iteri initialize suffix_transitions;
+    if build_with_expensive_assertions then (
+      let validate st (targets, _) =
+        assert (IndexSet.equal (Vector.get table st) (def targets))
+      in
+      Vector.iteri validate suffix_transitions
+    );
     get
+
+  let incoming_lrc i =
+    match States.prj i with
+    | States.Prefix lrc -> IndexSet.singleton lrc
+    | States.Reach i -> (Vector.get Reach.states i).config.lrcs
+    | States.Suffix i -> snd (Vector.get suffix_transitions i)
 
   let reach_incoming =
     let incoming desc = IndexSet.map Lrc.lr1_of_lrc desc.Reach.config.lrcs in
     Vector.map incoming Reach.states
 
+  let suffix_incoming =
+    let incoming (_, lrcs) = IndexSet.map Lrc.lr1_of_lrc lrcs in
+    Vector.map incoming suffix_transitions
+
   let incoming i =
     match States.prj i with
-    | States.Prefix lrc -> Some (IndexSet.singleton (Lrc.lr1_of_lrc lrc))
-    | States.Reach i -> Some (Vector.get reach_incoming i)
-    | States.Suffix _ -> None
-
-  let incoming_lrc i =
-    match States.prj i with
-    | States.Prefix lrc -> Some (IndexSet.singleton lrc)
-    | States.Reach i -> Some (Vector.get Reach.states i).config.lrcs
-    | States.Suffix _ -> None
+    | States.Prefix lrc -> IndexSet.singleton (Lrc.lr1_of_lrc lrc)
+    | States.Reach i -> Vector.get reach_incoming i
+    | States.Suffix i -> Vector.get suffix_incoming i
 
   let transitions i =
     match States.prj i with
@@ -514,11 +533,10 @@ struct
       IndexMap.inflate (fun _ -> IndexSet.empty)
         (IndexSet.map States.prefix (Lrc.predecessors lrc))
     | States.Reach i -> Vector.get reach_transitions i
-    | States.Suffix i -> Vector.get suffix_transitions i
+    | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
   let () = Stopwatch.leave time
 end
-
 
 module Coverage_check
     (Info : Info.S)
@@ -547,10 +565,10 @@ struct
     }
 
     (* Invariants:
-     * - handled and rejected are disjoint
-     * - handled is a subset of rejectable
-     * - reject does not overlap accept
-     * - handled contains the subset of accept that overlaps rejectable
+       - handled and rejected are disjoint
+       - handled is a subset of rejectable
+       - reject does not overlap accept
+       - handled contains the subset of accept that overlaps rejectable
      *)
 
     type t = (NFA.n, image) indexmap
@@ -622,12 +640,7 @@ struct
         let dom = Vector.get coverage dfa in
         let dom' =
           IndexMap.fold (fun nfa img dom ->
-              let matching =
-                match NFA.incoming nfa with
-                | None -> true
-                | Some lr1s' -> not (IndexSet.disjoint lr1s lr1s')
-              in
-              if not matching then dom else (
+              if IndexSet.disjoint lr1s (NFA.incoming nfa) then dom else (
                 IndexMap.fold (fun nfa' rejected dom ->
                     let dom, delta = Domain.increase ~accept nfa img rejected dom in
                     add_delta dfa nfa' delta;
@@ -653,19 +666,18 @@ struct
           intersections := !intersections + size;
         );
         IndexMap.iter (fun nfa _ ->
-            match NFA.incoming nfa with
-            | None -> () (*FIXME: TODO*)
-            | Some lr1s ->
-              let rem =
-                List.fold_left (fun lr1s (label, _) -> IndexSet.diff lr1s label)
-                  lr1s
-                  (DFA.successors dfa)
-              in
-              if not (IndexSet.is_empty rem) then
-                incr uncovered
+            let rem =
+              List.fold_left (fun lr1s (label, _) -> IndexSet.diff lr1s label)
+                (NFA.incoming nfa)
+                (DFA.successors dfa)
+            in
+            if not (IndexSet.is_empty rem) then
+              incr uncovered
           ) dom;
       ) coverage;
-    Stopwatch.step time "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions)\n" !propagations !reached !intersections !uncovered
+    Stopwatch.step time
+      "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions)\n"
+      !propagations !reached !intersections !uncovered
 
   let () = Stopwatch.leave time
 end
