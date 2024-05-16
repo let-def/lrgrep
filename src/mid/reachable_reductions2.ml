@@ -558,12 +558,44 @@ struct
   open Info
   let time = Stopwatch.enter Stopwatch.main "Coverage check"
 
+  let style = "\
+    bgcolor=black;\
+    color=white;\
+    fontcolor=white;\
+    node [color=white fontcolor=white shape=rectangle];\
+    edge [color=white fontcolor=white];\
+    compound=true;\
+  "
+
+  let pts ts = string_of_indexset ~index:Terminal.to_string ts
+
+  let () =
+    let oc = open_out_bin "dfa.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    Index.iter DFA.n (fun src ->
+        let accept = pts (DFA.accept src) in
+        p "  st%d [label=%S]" (Index.to_int src)
+          (if src = DFA.initial then "initial " ^ accept else accept)
+        ;
+        List.iter (fun (lbl, tgt) ->
+            p "  st%d -> st%d [label=%S]"
+              (Index.to_int src) (Index.to_int tgt)
+              (Lr1.set_to_string lbl)
+        ) (DFA.successors src);
+      );
+    p "}";
+    close_out_noerr oc
+
   module Domain = struct
     type image = {
       handled: Terminal.set;
       rejected: Terminal.set;
     }
 
+    let p {handled; rejected} =
+      Printf.sprintf "handled:%s\nrejected:%s" (pts handled) (pts rejected)
 
     type t = (NFA.n, image) indexmap
 
@@ -689,4 +721,37 @@ struct
       !propagations !reached !intersections !uncovered !unreachable
 
   let () = Stopwatch.leave time
+
+  let () =
+    let oc = open_out_bin "dfa-coverage.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    p "  compound=true;";
+    Vector.iteri (fun src cover ->
+        let isrc = Index.to_int src in
+        let accept =
+          "accept:" ^ string_of_indexset ~index:Terminal.to_string (DFA.accept src)
+        in
+        p "  subgraph cluster%d {" isrc;
+        p "    label=%S;" (if src = DFA.initial then "initial " ^ accept else accept);
+        p "    st%d [shape=point style=invis];" isrc;
+        IndexMap.iter (fun nfa dom ->
+            let infa = Index.to_int nfa in
+            p "    st%d_%d [label=%S];" isrc infa
+              (Printf.sprintf "transition:\\l%s\\l%s\\lrejectable:\\l%s\\l"
+                 (Lr1.set_to_string (NFA.incoming nfa))
+                 (Domain.p dom)
+                 (pts (NFA.rejectable nfa)));
+          ) cover;
+        p "  }";
+        List.iter (fun (lbl, tgt) ->
+            let itgt = Index.to_int tgt in
+            p "  st%d -> st%d [label=%S ltail=cluster%d lhead=cluster%d]"
+              isrc itgt (Lr1.set_to_string lbl) isrc itgt
+        ) (DFA.successors src);
+      ) coverage;
+    p "}";
+    close_out_noerr oc
+
 end
