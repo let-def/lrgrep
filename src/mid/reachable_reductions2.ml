@@ -375,6 +375,7 @@ module type FAILURE_NFA = sig
   val incoming : n index -> lr1 indexset
   val incoming_lrc : n index -> lrc indexset
   val transitions : n index -> (n, terminal indexset) indexmap
+  val kind : n index -> string
 end
 
 module FailureNFA
@@ -450,28 +451,34 @@ struct
     States.Suffix.get_generator ()
 
   let reach_transitions =
-    let rec import lrcs0 = function
+    let preds lrcs = indexset_bind lrcs Lrc.predecessors in
+    let succs lrcs = indexset_bind lrcs Lrc.successors in
+    let rec import lrcs = function
       | [] -> (IndexMap.empty, IndexSet.empty)
       | targets :: next ->
-        let add (set, lrcs) (reach, _) =
-          (map_union (epsilon_closure reach) set,
-           IndexSet.union (Vector.get Reach.states reach).config.lrcs lrcs)
+        let targets, lrcs1 =
+          let add (set, lrcs) (reach, _) =
+            let set = map_union (epsilon_closure reach) set in
+            let desc =Vector.get Reach.states reach in
+            let lrcs = IndexSet.union desc.config.lrcs lrcs in
+            (set, lrcs)
+          in
+          List.fold_left add (IndexMap.empty, IndexSet.empty) targets
         in
-        let targets, lrcs = List.fold_left add (IndexMap.empty, IndexSet.empty) targets in
+        (*assert (IndexSet.subset lrcs1 lrcs);*)
         match next with
-        | [] -> (targets, lrcs)
+        | [] -> (targets, lrcs1)
         | next ->
-          let next, lrcs' = import (indexset_bind lrcs0 Lrc.predecessors) next in
-          let lrcs' = IndexSet.inter (indexset_bind lrcs' Lrc.successors) lrcs0 in
-          let lrcs = IndexSet.inter (indexset_bind lrcs Lrc.successors) lrcs0 in
-          let suffix = IndexBuffer.Gen.add suffix_transitions (next, lrcs') in
+          let next, lrcs2 = import (preds lrcs) next in
+          let lrcs2 = IndexSet.inter (succs lrcs2) lrcs in
+          let suffix = IndexBuffer.Gen.add suffix_transitions (next, lrcs2) in
           (IndexMap.add (States.suffix suffix) IndexSet.empty targets,
-           IndexSet.union lrcs lrcs')
+           IndexSet.union lrcs1 lrcs2)
     in
     Vector.map (fun (d : Reach.desc) ->
         match d.transitions with
-        | _ :: rest -> fst (import d.config.lrcs rest)
-        | [] -> IndexMap.empty
+        | [] | [_] -> IndexMap.empty
+        | _ :: rest -> fst (import (preds d.config.lrcs) rest)
       ) Reach.states
 
   let suffix_transitions =
@@ -534,6 +541,11 @@ struct
         (IndexSet.map States.prefix (Lrc.predecessors lrc))
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
+
+  let kind i = match States.prj i with
+    | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
+    | States.Reach i  -> Printf.sprintf "reach(%d)"  (Index.to_int i)
+    | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () = Stopwatch.leave time
 end
@@ -671,7 +683,7 @@ struct
           IndexMap.fold (fun nfa img dom ->
               if IndexSet.disjoint lr1s (NFA.incoming nfa) then dom else (
                 IndexMap.fold (fun nfa' rejected dom ->
-                    let dom, delta = Domain.increase ~accept nfa img rejected dom in
+                    let dom, delta = Domain.increase ~accept nfa' img rejected dom in
                     add_delta dfa nfa' delta;
                     dom
                   ) (NFA.transitions nfa) dom
@@ -733,11 +745,20 @@ struct
         p "  st%d [label=%S];" isrc (if src = DFA.initial then "initial\n" ^ accept else accept);
         let covered = ref IndexSet.empty in
         let pcover nfa (dom : Domain.image) =
-          Printf.sprintf "%s/%s"
-            (pts dom.rejected)
-            (pts (IndexSet.diff
-                    (NFA.rejectable nfa)
-                    (IndexSet.union dom.rejected dom.handled)))
+          if false then
+            Printf.sprintf "%s:%s/%s"
+              (NFA.kind nfa)
+              (pts dom.rejected)
+              (pts (IndexSet.diff
+                      (NFA.rejectable nfa)
+                      (IndexSet.union dom.rejected dom.handled)))
+          else
+            Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
+              (NFA.kind nfa)
+              (pts dom.handled)
+              (pts dom.rejected)
+              (pts (NFA.rejectable nfa))
+
         in
         List.iter (fun (lbl, tgt) ->
             covered := IndexSet.union lbl !covered;
@@ -749,6 +770,7 @@ struct
                     pcover nfa dom :: acc
                 ) cover []
             in
+            let cover = if cover = [] then [] else ""::cover in
             let itgt = Index.to_int tgt in
             p "  st%d -> st%d [label=%S]"
               isrc itgt (String.concat "\n" (Lr1.set_to_string lbl :: cover))
@@ -756,7 +778,7 @@ struct
         IndexMap.iter (fun nfa dom ->
             if not (IndexSet.subset (NFA.incoming nfa) !covered) then (
               p " st%d -> uncovered [label=%S];" isrc
-                (Lr1.set_to_string (NFA.incoming nfa) ^ "\n" ^ pcover nfa dom)
+                (Lr1.set_to_string (NFA.incoming nfa) ^"\n"^ pcover nfa dom)
             )
           ) cover
       ) coverage;
