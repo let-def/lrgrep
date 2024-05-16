@@ -612,32 +612,36 @@ struct
 
     let empty_image = {rejected=IndexSet.empty; handled=IndexSet.empty}
 
-    let increase ~accept nfa {rejected; handled} rejected' domain =
-      (* Invariants:
-         - handled and rejected are disjoint
-         - handled is a subset of rejectable
-         - rejected does not overlap accept
-         - handled contains the subset of accept that overlaps rejectable
+    let increase dfa nfa image rejected domain =
+      (* This function increase the image at the intersection of an nfa state
+         and a dfa state.
+         Everything in dfa.accept and image.handled is handled.
+
+         Everything rejected by the transition is added to the image,
+         but everything handled is removed from the image.
+
+         Finally, only the terminals still rejectable are kept in handled.
       *)
+      let handled = IndexSet.union image.handled (DFA.accept dfa) in
+      let rejected = IndexSet.diff (IndexSet.union rejected image.rejected) handled in
       let rejectable = NFA.rejectable nfa in
-      let rejected = IndexSet.diff (IndexSet.union rejected' rejected) accept in
-      let handled = IndexSet.union accept handled in
-      match IndexMap.find_opt nfa domain with
-      | None ->
-        let handled = IndexSet.inter (IndexSet.diff handled rejected) rejectable in
-        let addition = {rejected; handled} in
-        if IndexSet.subset rejectable handled && IndexSet.is_empty rejected then
-          (domain, None)
-        else
+      let handled = IndexSet.inter handled rejectable in
+      if IndexSet.is_empty rejected && IndexSet.equal handled rejectable then
+        (domain, None)
+      else
+        match IndexMap.find_opt nfa domain with
+        | None ->
+          let addition = {rejected; handled} in
           (IndexMap.add nfa addition domain, Some addition)
-      | Some image ->
-        let rejected' = IndexSet.union rejected image.rejected in
-        let handled' = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
-        if rejected' == image.rejected && handled' == image.handled then
-          domain, None
-        else
-          (IndexMap.add nfa image domain,
-           Some {rejected = IndexSet.diff rejected image.rejected; handled = handled'})
+        | Some image ->
+          (* rejected grows, handled shrinks *)
+          let rejected = IndexSet.union rejected image.rejected in
+          let handled = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
+          if rejected == image.rejected && handled == image.handled then
+            (domain, None)
+          else
+            let rejected = IndexSet.diff rejected image.rejected in
+            (IndexMap.add nfa image domain, Some {rejected; handled})
 
     let refine i1 i2 =
       {handled = IndexSet.inter i1.handled i2.handled;
@@ -648,24 +652,28 @@ struct
 
   let delta = ref []
 
+  let safe = true
+
   let add_delta dfa nfa = function
     | None -> ()
     | Some img ->
-    match !delta with
-    | (dfa', dom) :: rest when dfa == dfa' ->
-      let update = function
-        | None -> Some img
-        | Some img' -> Some (Domain.refine img img')
-      in
-      let dom = IndexMap.update nfa update dom in
-      delta := (dfa, dom) :: rest
-    | rest ->
-      delta := (dfa, IndexMap.singleton nfa img) :: rest
+      if safe then
+        delta := (dfa, IndexMap.singleton nfa img) :: !delta
+      else
+        match !delta with
+        | (dfa', dom) :: rest when dfa == dfa' ->
+          let update = function
+            | None -> Some img
+            | Some img' -> Some (Domain.refine img img')
+          in
+          let dom = IndexMap.update nfa update dom in
+          delta := (dfa, dom) :: rest
+        | rest ->
+          delta := (dfa, IndexMap.singleton nfa img) :: rest
 
   let () =
-    let accept = DFA.accept DFA.initial in
     let grow nfa rejected domain =
-      fst (Domain.increase ~accept nfa
+      fst (Domain.increase DFA.initial nfa
              Domain.empty_image rejected domain)
     in
     let domain = IndexMap.fold grow NFA.initial Domain.empty in
@@ -677,16 +685,17 @@ struct
   let propagate (dfa0, delta) =
     incr propagations;
     List.iter (fun (lr1s, dfa) ->
-        let accept = DFA.accept dfa in
         let dom = Vector.get coverage dfa in
         let dom' =
-          IndexMap.fold (fun nfa img dom ->
-              if IndexSet.disjoint lr1s (NFA.incoming nfa) then dom else (
-                IndexMap.fold (fun nfa' rejected dom ->
-                    let dom, delta = Domain.increase ~accept nfa' img rejected dom in
-                    add_delta dfa nfa' delta;
+          IndexMap.fold (fun nfa0 img dom ->
+              if IndexSet.disjoint lr1s (NFA.incoming nfa0) then dom else (
+                IndexMap.fold (fun nfa rejected dom ->
+                    let dom, delta =
+                      Domain.increase dfa nfa img rejected dom
+                    in
+                    add_delta dfa nfa delta;
                     dom
-                  ) (NFA.transitions nfa) dom
+                  ) (NFA.transitions nfa0) dom
               )
             ) delta dom
         in
