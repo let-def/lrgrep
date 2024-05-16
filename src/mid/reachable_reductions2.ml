@@ -726,7 +726,8 @@ struct
           ) dom;
       ) coverage;
     Stopwatch.step time
-      "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions, %d unreachable transition)\n"
+      "Propagated coverage (%d steps, %d reached states, %d intersections, \
+       %d uncovered transitions, %d unreachable transition)\n"
       !propagations !reached !intersections !uncovered !unreachable
 
   let () = Stopwatch.leave time
@@ -736,6 +737,7 @@ struct
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
     p "digraph G {";
     p "  %s" style;
+    p "  rankdir=LR;";
     p "  compound=true;";
     p "  uncovered [shape=circle];";
     Vector.iteri (fun src cover ->
@@ -745,8 +747,8 @@ struct
         p "  st%d [label=%S];" isrc (if src = DFA.initial then "initial\n" ^ accept else accept);
         let covered = ref IndexSet.empty in
         let pcover nfa (dom : Domain.image) =
-          if false then
-            Printf.sprintf "%s:%s/%s"
+          if true then
+            Printf.sprintf "%s:\n%s/%s"
               (NFA.kind nfa)
               (pts dom.rejected)
               (pts (IndexSet.diff
@@ -758,16 +760,14 @@ struct
               (pts dom.handled)
               (pts dom.rejected)
               (pts (NFA.rejectable nfa))
-
         in
         List.iter (fun (lbl, tgt) ->
             covered := IndexSet.union lbl !covered;
             let cover =
               IndexMap.fold (fun nfa dom acc ->
-                  if IndexSet.disjoint (NFA.incoming nfa) lbl then
-                    acc
-                  else
-                    pcover nfa dom :: acc
+                  if IndexSet.disjoint (NFA.incoming nfa) lbl
+                  then acc
+                  else pcover nfa dom :: acc
                 ) cover []
             in
             let cover = if cover = [] then [] else ""::cover in
