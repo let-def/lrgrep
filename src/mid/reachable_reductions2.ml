@@ -594,9 +594,6 @@ struct
       rejected: Terminal.set;
     }
 
-    let p {handled; rejected} =
-      Printf.sprintf "handled:%s\nrejected:%s" (pts handled) (pts rejected)
-
     type t = (NFA.n, image) indexmap
 
     let empty = IndexMap.empty
@@ -728,28 +725,40 @@ struct
     p "digraph G {";
     p "  %s" style;
     p "  compound=true;";
+    p "  uncovered [shape=circle];";
     Vector.iteri (fun src cover ->
         let isrc = Index.to_int src in
-        let accept =
-          "accept:" ^ string_of_indexset ~index:Terminal.to_string (DFA.accept src)
+        let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept src) in
+        let accept = if accept = "[]" then "" else accept in
+        p "  st%d [label=%S];" isrc (if src = DFA.initial then "initial\n" ^ accept else accept);
+        let covered = ref IndexSet.empty in
+        let pcover nfa (dom : Domain.image) =
+          Printf.sprintf "%s/%s"
+            (pts dom.rejected)
+            (pts (IndexSet.diff
+                    (NFA.rejectable nfa)
+                    (IndexSet.union dom.rejected dom.handled)))
         in
-        p "  subgraph cluster%d {" isrc;
-        p "    label=%S;" (if src = DFA.initial then "initial " ^ accept else accept);
-        p "    st%d [shape=point style=invis];" isrc;
-        IndexMap.iter (fun nfa dom ->
-            let infa = Index.to_int nfa in
-            p "    st%d_%d [label=%S];" isrc infa
-              (Printf.sprintf "transition:\\l%s\\l%s\\lrejectable:\\l%s\\l"
-                 (Lr1.set_to_string (NFA.incoming nfa))
-                 (Domain.p dom)
-                 (pts (NFA.rejectable nfa)));
-          ) cover;
-        p "  }";
         List.iter (fun (lbl, tgt) ->
+            covered := IndexSet.union lbl !covered;
+            let cover =
+              IndexMap.fold (fun nfa dom acc ->
+                  if IndexSet.disjoint (NFA.incoming nfa) lbl then
+                    acc
+                  else
+                    pcover nfa dom :: acc
+                ) cover []
+            in
             let itgt = Index.to_int tgt in
-            p "  st%d -> st%d [label=%S ltail=cluster%d lhead=cluster%d]"
-              isrc itgt (Lr1.set_to_string lbl) isrc itgt
-        ) (DFA.successors src);
+            p "  st%d -> st%d [label=%S]"
+              isrc itgt (String.concat "\n" (Lr1.set_to_string lbl :: cover))
+          ) (DFA.successors src);
+        IndexMap.iter (fun nfa dom ->
+            if not (IndexSet.subset (NFA.incoming nfa) !covered) then (
+              p " st%d -> uncovered [label=%S];" isrc
+                (Lr1.set_to_string (NFA.incoming nfa) ^ "\n" ^ pcover nfa dom)
+            )
+          ) cover
       ) coverage;
     p "}";
     close_out_noerr oc
