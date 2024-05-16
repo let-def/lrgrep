@@ -564,12 +564,6 @@ struct
       rejected: Terminal.set;
     }
 
-    (* Invariants:
-       - handled and rejected are disjoint
-       - handled is a subset of rejectable
-       - reject does not overlap accept
-       - handled contains the subset of accept that overlaps rejectable
-     *)
 
     type t = (NFA.n, image) indexmap
 
@@ -578,6 +572,12 @@ struct
     let empty_image = {rejected=IndexSet.empty; handled=IndexSet.empty}
 
     let increase ~accept nfa {rejected; handled} rejected' domain =
+      (* Invariants:
+         - handled and rejected are disjoint
+         - handled is a subset of rejectable
+         - rejected does not overlap accept
+         - handled contains the subset of accept that overlaps rejectable
+      *)
       let rejectable = NFA.rejectable nfa in
       let rejected = IndexSet.diff (IndexSet.union rejected' rejected) accept in
       let handled = IndexSet.union accept handled in
@@ -659,11 +659,20 @@ struct
     let reached = ref 0 in
     let intersections = ref 0 in
     let uncovered = ref 0 in
+    let unreachable = ref 0 in
     Vector.iteri (fun dfa dom ->
         let size = IndexMap.cardinal dom in
         if size <> 0 then (
           incr reached;
           intersections := !intersections + size;
+          List.iter (fun (lr1s, _) ->
+              if not (
+                  IndexMap.exists
+                    (fun nfa _ -> not (IndexSet.disjoint lr1s (NFA.incoming nfa)))
+                    dom
+                ) then incr unreachable
+            )
+            (DFA.successors dfa);
         );
         IndexMap.iter (fun nfa _ ->
             let rem =
@@ -676,8 +685,8 @@ struct
           ) dom;
       ) coverage;
     Stopwatch.step time
-      "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions)\n"
-      !propagations !reached !intersections !uncovered
+      "Propagated coverage (%d steps, %d reached states, %d intersections, %d uncovered transitions, %d unreachable transition)\n"
+      !propagations !reached !intersections !uncovered !unreachable
 
   let () = Stopwatch.leave time
 end
