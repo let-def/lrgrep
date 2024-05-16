@@ -450,6 +450,19 @@ struct
   let suffix_transitions =
     States.Suffix.get_generator ()
 
+  let lrc_initials =
+    IndexSet.filter
+      (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
+      Lrc.idle
+
+  let sink =
+    let r = IndexBuffer.Gen.reserve suffix_transitions in
+    let i = IndexBuffer.Gen.index r in
+    let sink = IndexMap.singleton (States.suffix i) IndexSet.empty in
+    IndexBuffer.Gen.commit suffix_transitions r
+      (sink, lrc_initials);
+    States.suffix i
+
   let reach_transitions =
     let preds lrcs = indexset_bind lrcs Lrc.predecessors in
     let succs lrcs = indexset_bind lrcs Lrc.successors in
@@ -476,9 +489,15 @@ struct
            IndexSet.union lrcs1 lrcs2)
     in
     Vector.map (fun (d : Reach.desc) ->
-        match d.transitions with
-        | [] | [_] -> IndexMap.empty
-        | _ :: rest -> fst (import (preds d.config.lrcs) rest)
+        let regular =
+          match d.transitions with
+          | [] | [_] -> IndexMap.empty
+          | _ :: rest -> fst (import (preds d.config.lrcs) rest)
+        in
+        if IndexSet.disjoint lrc_initials d.config.lrcs then
+          regular
+        else
+          IndexMap.add sink IndexSet.empty regular
       ) Reach.states
 
   let suffix_transitions =
@@ -542,10 +561,13 @@ struct
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
-  let kind i = match States.prj i with
-    | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
-    | States.Reach i  -> Printf.sprintf "reach(%d)"  (Index.to_int i)
-    | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
+  let kind i =
+    if i = sink then "sink" else
+      match States.prj i with
+      | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
+      | States.Reach i  -> Printf.sprintf "reach(%d)"  (Index.to_int i)
+      | States.Suffix i ->
+        Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () = Stopwatch.leave time
 end
@@ -748,7 +770,7 @@ struct
     p "  %s" style;
     p "  rankdir=LR;";
     p "  compound=true;";
-    p "  uncovered [shape=circle];";
+    p "  uncovered [shape=doubleoctagon];";
     Vector.iteri (fun src cover ->
         let isrc = Index.to_int src in
         let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept src) in
