@@ -664,123 +664,116 @@ struct
        rejected = IndexSet.union i1.rejected i2.rejected}
   end
 
-  module Domain = struct
+  module State = Prod(DFA)(NFA)
 
-    type t = (NFA.n, Image.t) indexmap
+  type desc = {
+    index: State.n index;
+    mutable initialized: bool;
+    mutable successors: (Lr1.set * Terminal.set * desc) list;
+    mutable predecessors: desc list;
+    mutable image: Image.t;
+    mutable todo: Image.t;
+    mutable uncovered: Lr1.set;
+  }
 
-    let empty = IndexMap.empty
+  let coverage = IndexTable.create 7
 
+  let get_state dfa nfa =
+    let index = State.inj dfa nfa in
+    match IndexTable.find_opt coverage index with
+    | Some desc -> desc
+    | None ->
+      let desc = {index; initialized = false;
+                  successors = []; predecessors = [];
+                  image = Image.empty; todo = Image.empty;
+                  uncovered = NFA.incoming nfa} in
+      IndexTable.add coverage index desc;
+      desc
 
-    let increase dfa nfa image ~reject domain =
-      (* This function increase the image at the intersection of an nfa state
-         and a dfa state.
-         Everything in dfa.accept and image.handled is handled.
+  let get_successors desc =
+    if not desc.initialized then (
+      desc.initialized <- true;
+      let dfa, nfa = State.prj desc.index in
+      desc.uncovered <-
+        List.fold_left (fun uncovered (lbl, dfa') ->
+            let uncovered' = IndexSet.diff uncovered lbl in
+            if uncovered != uncovered' then (
+              let lbl' = IndexSet.inter uncovered lbl in
+              desc.successors <-
+                IndexMap.fold
+                  (fun nfa' reject acc -> (lbl', reject, get_state dfa' nfa') :: acc)
+                  (NFA.transitions nfa) desc.successors
+            );
+            uncovered'
+          ) desc.uncovered (DFA.successors dfa)
+    );
+    desc.successors
 
-         Everything rejected by the transition is added to the image,
-         but everything handled is removed from the image.
+  let worklist = ref []
 
-         Finally, only the terminals still rejectable are kept in handled.
-      *)
-      match
-        Image.normalize
-              ~accept:(DFA.accept dfa)
-              ~rejectable:(NFA.rejectable nfa)
-              ~reject image
-      with
-      | None -> (domain, None)
-      | Some delta ->
-        match IndexMap.find_opt nfa domain with
-        | None -> (IndexMap.add nfa delta domain, Some delta)
-        | Some image ->
-          match Image.increase ~delta image with
-          | None -> (domain, None)
-          | Some (image', delta) ->
-            (IndexMap.add nfa image' domain, Some delta)
-  end
-
-  let coverage = Vector.make DFA.n Domain.empty
-
-  let delta = ref []
-
-  let add_delta dfa nfa = function
+  let add_delta desc = function
     | None -> ()
-    | Some img ->
-      if build_safe then
-        delta := (dfa, IndexMap.singleton nfa img) :: !delta
-      else
-        match !delta with
-        | (dfa', dom) :: rest when dfa == dfa' ->
-          let update = function
-            | None -> Some img
-            | Some img' -> Some (Image.refine img img')
-          in
-          let dom = IndexMap.update nfa update dom in
-          delta := (dfa, dom) :: rest
-        | rest ->
-          delta := (dfa, IndexMap.singleton nfa img) :: rest
+    | Some delta ->
+      match Image.increase ~delta desc.image with
+      | None -> ()
+      | Some (image', delta') ->
+        desc.image <- image';
+        if desc.todo == Image.empty then (
+          push worklist desc;
+          desc.todo <- delta'
+        ) else (
+          desc.todo <- Image.refine delta' desc.todo
+        )
 
-  let () =
-    let grow nfa reject domain =
-      fst (Domain.increase DFA.initial nfa
-             Image.empty ~reject domain)
+  let initial =
+    let initialize nfa reject acc =
+      let desc = get_state DFA.initial nfa in
+      add_delta desc (
+        Image.normalize
+          ~accept:(DFA.accept DFA.initial)
+          ~rejectable:(NFA.rejectable nfa)
+          ~reject Image.empty
+      );
+      desc :: acc
     in
-    let domain = IndexMap.fold grow NFA.initial Domain.empty in
-    push delta (DFA.initial, domain);
-    Vector.set coverage DFA.initial domain
+    IndexMap.fold initialize NFA.initial []
 
   let propagations = ref 0
 
-  let propagate (dfa0, delta) =
-    incr propagations;
-    List.iter (fun (lr1s, dfa) ->
-        let dom = Vector.get coverage dfa in
-        let dom' =
-          IndexMap.fold (fun nfa0 img dom ->
-              if IndexSet.disjoint lr1s (NFA.incoming nfa0) then dom else (
-                IndexMap.fold (fun nfa reject dom ->
-                    let dom, delta =
-                      Domain.increase dfa nfa img ~reject dom
-                    in
-                    add_delta dfa nfa delta;
-                    dom
-                  ) (NFA.transitions nfa0) dom
-              )
-            ) delta dom
-        in
-        if dom != dom' then
-          Vector.set coverage dfa dom';
-      ) (DFA.successors dfa0)
-
-  let () = fixpoint ~propagate delta
+  let () =
+    let propagate desc =
+      incr propagations;
+      let img = desc.todo in
+      desc.todo <- Image.empty;
+      List.iter (fun (_, reject, desc') ->
+          let dfa, nfa = State.prj desc'.index in
+          add_delta desc' (
+            Image.normalize
+              ~accept:(DFA.accept dfa)
+              ~rejectable:(NFA.rejectable nfa)
+              ~reject img
+          )
+        ) (get_successors desc)
+    in
+    fixpoint ~propagate worklist
 
   let () =
+    let reached_mark = Boolvector.make DFA.n false in
     let reached = ref 0 in
     let intersections = ref 0 in
     let uncovered = ref 0 in
     let unreachable = ref 0 in
-    Vector.iteri (fun dfa dom ->
-        let size = IndexMap.cardinal dom in
-        if size <> 0 then (
-          incr reached;
-          intersections := !intersections + size;
-          List.iter (fun (lr1s, _) ->
-              if not (
-                  IndexMap.exists
-                    (fun nfa _ -> not (IndexSet.disjoint lr1s (NFA.incoming nfa)))
-                    dom
-                ) then incr unreachable
-            )
-            (DFA.successors dfa);
+    IndexTable.iter (fun _ desc ->
+        if desc.image != Image.empty then (
+          let dfa, _nfa = State.prj desc.index in
+          if not (Boolvector.test reached_mark dfa) then (
+            Boolvector.set reached_mark dfa;
+            incr reached
+          );
+          incr intersections;
+          if not (IndexSet.is_empty desc.uncovered) then
+            incr uncovered
         );
-        IndexMap.iter (fun nfa _ ->
-            let rem =
-              List.fold_left (fun lr1s (label, _) -> IndexSet.diff lr1s label)
-                (NFA.incoming nfa)
-                (DFA.successors dfa)
-            in
-            if not (IndexSet.is_empty rem) then
-              incr uncovered
-          ) dom;
       ) coverage;
     Stopwatch.step time
       "Propagated coverage (%d steps, %d reached states, %d intersections, \
@@ -789,7 +782,7 @@ struct
 
   let () = Stopwatch.leave time
 
-  let final_uncovered = Vector.make DFA.n IndexSet.empty
+  (*let final_uncovered = Vector.make DFA.n IndexSet.empty
 
   let () =
     let entrypoints = IndexSet.map Lrc.lr1_of_lrc Lrc.entrypoints in
@@ -813,7 +806,7 @@ struct
                 ) (DFA.successors dfa)
             )
           ) dom
-      ) coverage
+      ) coverage*)
 
   let () =
     let oc = open_out_bin "dfa-coverage.dot" in
@@ -822,52 +815,74 @@ struct
     p "  %s" style;
     p "  rankdir=LR;";
     p "  compound=true;";
-    p "  uncovered [shape=doubleoctagon];";
-    Vector.iteri (fun src cover ->
-        let isrc = Index.to_int src in
-        let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept src) in
+    let uncovered = ref false in
+    let uncovered () =
+      if not !uncovered then (
+        p "  uncovered [shape=doubleoctagon];";
+        uncovered := true
+      )
+    in
+    let printed = Vector.make DFA.n IndexSet.empty in
+    let reached = Boolvector.make DFA.n false in
+    let print_dfa dfa =
+      if not (Boolvector.test reached dfa) then (
+        Boolvector.set reached dfa;
+        let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept dfa) in
         let accept = if accept = "[]" then "" else accept in
-        p "  st%d [label=%S];" isrc (if src = DFA.initial then "initial\n" ^ accept else accept);
-        let covered = ref IndexSet.empty in
-        let pcover nfa {Image. handled; rejected} =
-          if true then
-            Printf.sprintf "%s:\n%s/%s"
-              (NFA.kind nfa)
-              (pts rejected)
-              (pts (IndexSet.diff
-                      (NFA.rejectable nfa)
-                      (IndexSet.union rejected handled)))
-          else
-            Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
-              (NFA.kind nfa)
-              (pts handled)
-              (pts rejected)
-              (pts (NFA.rejectable nfa))
-        in
-        List.iter (fun (lbl, tgt) ->
-            covered := IndexSet.union lbl !covered;
-            let cover =
-              IndexMap.fold (fun nfa dom acc ->
-                  if IndexSet.disjoint (NFA.incoming nfa) lbl
-                  then acc
-                  else pcover nfa dom :: acc
-                ) cover []
-            in
-            let cover = if cover = [] then [] else ""::cover in
-            let itgt = Index.to_int tgt in
-            p "  st%d -> st%d [label=%S]"
-              isrc itgt (String.concat "\n" (Lr1.set_to_string lbl :: cover))
-          ) (DFA.successors src);
-        IndexMap.iter (fun nfa dom ->
-            if not (IndexSet.subset (NFA.incoming nfa) !covered) then (
-              p " st%d -> uncovered [label=%S];" isrc
-                (Lr1.set_to_string (NFA.incoming nfa) ^"\n"^ pcover nfa dom)
-            )
-          ) cover;
-        let final = Vector.get final_uncovered src in
-        if not (IndexSet.is_empty final) then (
-          p " st%d -> uncovered [label=%S];" isrc
-            (pts final)
+        p "  st%d [label=%S];" (dfa :> int)
+          (if dfa = DFA.initial then "initial\n" ^ accept else accept);
+      )
+    in
+    IndexTable.iter (fun _ desc ->
+        if desc.initialized then (
+          let dfa, nfa = State.prj desc.index in
+          print_dfa dfa;
+          let pcover {Image. handled; rejected} =
+            if true then
+              Printf.sprintf "%s:\n%s/%s"
+                (NFA.kind nfa)
+                (pts rejected)
+                (pts (IndexSet.diff
+                        (NFA.rejectable nfa)
+                        (IndexSet.union rejected handled)))
+            else
+              Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
+                (NFA.kind nfa)
+                (pts handled)
+                (pts rejected)
+                (pts (NFA.rejectable nfa))
+          in
+          List.iter (fun (lbl, reject, desc') ->
+              let dfa', nfa' = State.prj desc'.index in
+              match
+                Image.normalize
+                  ~accept:(DFA.accept dfa')
+                  ~rejectable:(NFA.rejectable nfa')
+                  ~reject desc.image
+              with
+              | Some img when not (IndexSet.mem desc.index (Vector.get printed dfa')) ->
+                vector_set_add printed dfa' desc.index;
+                p "  st%d -> st%d [label=%S]"
+                  (dfa :> int) (dfa' :> int)
+                  (Lr1.set_to_string lbl ^"\n"^ pcover img)
+              | None when not (IndexSet.mem desc.index (Vector.get printed dfa')) ->
+                vector_set_add printed dfa' desc.index;
+                p "  st%d -> st%d [label=%S]"
+                  (dfa :> int) (dfa' :> int)
+                  (Lr1.set_to_string lbl);
+                print_dfa dfa';
+              | _ -> ()
+            ) desc.successors;
+          if not (IndexSet.is_empty desc.uncovered) then (
+            uncovered ();
+            p " st%d -> uncovered [label=%S];" (dfa :> int)
+              (Lr1.set_to_string desc.uncovered ^ "\n" ^ pcover desc.image)
+          )
+          (*let final = Vector.get final_uncovered src in
+            if not (IndexSet.is_empty final) then (
+            p " st%d -> uncovered [label=%S];" isrc
+              (pts final)
+            )*)
         )
       ) coverage;
     p "}";
