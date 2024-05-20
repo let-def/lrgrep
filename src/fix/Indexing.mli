@@ -127,6 +127,20 @@ module Sum (L : CARDINAL)(R : CARDINAL) :
 val sum : 'l cardinal -> 'r cardinal ->
   (module SUM with type l = 'l and type r = 'r)
 
+module type PROD = sig
+  type l and r
+  include CARDINAL
+  val inj : l index -> r index -> n index
+  val prj : n index -> l index * r index
+end
+
+module Prod (L : CARDINAL)(R : CARDINAL) :
+  PROD with type l := L.n
+       and type r := R.n
+
+val prod : 'l cardinal -> 'r cardinal ->
+  (module PROD with type l = 'l and type r = 'r)
+
 (**The submodule {!Index} allows safely manipulating indices
    into a finite set. *)
 module Index : sig

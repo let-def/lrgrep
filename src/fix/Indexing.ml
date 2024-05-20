@@ -126,6 +126,49 @@ let sum (type l r) (l : l cardinal) (r : r cardinal) =
   let module R = struct type n = r let n = r end in
   (module Sum(L)(R) : SUM with type l = l and type r = r)
 
+module type PROD = sig
+  type l and r
+  include CARDINAL
+  val inj : l index -> r index -> n index
+  val prj : n index -> l index * r index
+end
+
+module Prod (L : CARDINAL)(R : CARDINAL) = struct
+
+  type n = unit
+
+  type l = L.n
+  type r = R.n
+
+  (* The cardinal [l] of the left-hand set becomes fixed now (if it
+     wasn't already). We need it to be fixed for our injections and
+     projections to make sense. *)
+  let l : int = cardinal L.n
+  (* The right-hand set can remain open-ended. *)
+  let r : r cardinal = R.n
+
+  let n : n cardinal =
+    (* We optimize the case where [r] is fixed already, but the code
+       in the [else] branch would work always. *)
+    if is_val r then
+      let n = l * cardinal r in
+      Cardinal (lazy n)
+    else
+      Cardinal (lazy (l * cardinal r))
+
+  (* Injections. The two sets are numbered side by side. *)
+  let inj x y = y * l + x
+
+  (* Projection. *)
+  let prj x = (x mod l, x / l)
+
+end
+
+let prod (type l r) (l : l cardinal) (r : r cardinal) =
+  let module L = struct type n = l let n = l end in
+  let module R = struct type n = r let n = r end in
+  (module Prod(L)(R) : PROD with type l = l and type r = r)
+
 module Index = struct
 
   type 'n t = 'n index
