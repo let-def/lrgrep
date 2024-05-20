@@ -24,6 +24,7 @@ module type S = sig
   include RAW
   val reachable : n indexset
   val idle : n indexset
+  val entrypoints : n indexset
   val predecessors : n index -> n indexset
   val successors : n index -> n indexset
   val some_prefix : n index -> n index list
@@ -35,6 +36,7 @@ module Close(Info : Info.S)
   : S with module Info := Info and type n = Lrc.n =
 struct
   include Lrc
+  include For
 
   type n = Lrc.n
   let n = Lrc.n
@@ -43,7 +45,7 @@ struct
 
   let successors =
     let table = Vector.make Lrc.n IndexSet.empty in
-    let todo = ref For.entrypoints in
+    let todo = ref entrypoints in
     let populate i =
       reachable := IndexSet.add i !reachable;
       if IndexSet.is_empty (Vector.get table i) then (

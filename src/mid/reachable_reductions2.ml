@@ -3,6 +3,8 @@ open Misc
 open Fix.Indexing
 
 let build_with_expensive_assertions = false
+let build_safe = true
+
 
 module type S = sig
   module Info : Info.S
@@ -450,19 +452,6 @@ struct
   let suffix_transitions =
     States.Suffix.get_generator ()
 
-  let lrc_initials =
-    IndexSet.filter
-      (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
-      Lrc.idle
-
-  let sink =
-    let r = IndexBuffer.Gen.reserve suffix_transitions in
-    let i = IndexBuffer.Gen.index r in
-    let sink = IndexMap.singleton (States.suffix i) IndexSet.empty in
-    IndexBuffer.Gen.commit suffix_transitions r
-      (sink, lrc_initials);
-    States.suffix i
-
   let reach_transitions =
     let preds lrcs = indexset_bind lrcs Lrc.predecessors in
     let succs lrcs = indexset_bind lrcs Lrc.successors in
@@ -478,7 +467,17 @@ struct
           in
           List.fold_left add (IndexMap.empty, IndexSet.empty) targets
         in
-        (*assert (IndexSet.subset lrcs1 lrcs);*)
+        let lrcs1 = IndexSet.inter lrcs1 lrcs in
+        if not (IndexSet.subset lrcs1 lrcs) then (
+          let print_lrc lrc =
+            Printf.sprintf "%s/%d"
+              (Info.Lr1.to_string (Lrc.lr1_of_lrc lrc))
+              (Lrc.class_index lrc)
+          in
+          Printf.eprintf "expected: %s in %s\n"
+            (string_of_indexset ~index:print_lrc lrcs1)
+            (string_of_indexset ~index:print_lrc lrcs)
+        );
         match next with
         | [] -> (targets, lrcs1)
         | next ->
@@ -489,15 +488,9 @@ struct
            IndexSet.union lrcs1 lrcs2)
     in
     Vector.map (fun (d : Reach.desc) ->
-        let regular =
-          match d.transitions with
-          | [] | [_] -> IndexMap.empty
-          | _ :: rest -> fst (import (preds d.config.lrcs) rest)
-        in
-        if IndexSet.disjoint lrc_initials d.config.lrcs then
-          regular
-        else
-          IndexMap.add sink IndexSet.empty regular
+        match d.transitions with
+        | [] | [_] -> IndexMap.empty
+        | _ :: rest -> fst (import (preds d.config.lrcs) rest)
       ) Reach.states
 
   let suffix_transitions =
@@ -562,12 +555,10 @@ struct
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
   let kind i =
-    if i = sink then "sink" else
-      match States.prj i with
-      | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
-      | States.Reach i  -> Printf.sprintf "reach(%d)"  (Index.to_int i)
-      | States.Suffix i ->
-        Printf.sprintf "suffix(%d)" (Index.to_int i)
+    match States.prj i with
+    | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
+    | States.Reach  i -> Printf.sprintf "reach(%d)"  (Index.to_int i)
+    | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () = Stopwatch.leave time
 end
@@ -634,7 +625,36 @@ struct
 
     let empty_image = {rejected=IndexSet.empty; handled=IndexSet.empty}
 
-    let increase dfa nfa image rejected domain =
+    let normalize ~accept ~rejectable ~rejected delta =
+      let handled = IndexSet.union delta.handled accept in
+      let rejected = IndexSet.diff (IndexSet.union rejected delta.rejected) handled in
+      let handled = IndexSet.inter handled rejectable in
+      if IndexSet.is_empty rejected && IndexSet.equal handled rejectable then
+        None
+      else
+        Some {rejected; handled}
+
+    let increase_image ~delta image =
+      (* This function increase the image at the intersection of an nfa state
+         and a dfa state.
+         Everything in dfa.accept and delta.handled is handled.
+
+         Everything rejected by the transition is added to the image,
+         but everything handled is removed from the image.
+
+         Finally, only the terminals still rejectable are kept in handled.
+      *)
+      let {rejected; handled} = delta in
+      let rejected = IndexSet.union rejected image.rejected in
+      let handled = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
+      if rejected == image.rejected && handled == image.handled then
+        None
+      else
+        let image' = {rejected; handled} in
+        let rejected = IndexSet.diff rejected image.rejected in
+        Some (image', {rejected; handled})
+
+    let increase dfa nfa delta ~rejected domain =
       (* This function increase the image at the intersection of an nfa state
          and a dfa state.
          Everything in dfa.accept and image.handled is handled.
@@ -644,26 +664,21 @@ struct
 
          Finally, only the terminals still rejectable are kept in handled.
       *)
-      let handled = IndexSet.union image.handled (DFA.accept dfa) in
-      let rejected = IndexSet.diff (IndexSet.union rejected image.rejected) handled in
-      let rejectable = NFA.rejectable nfa in
-      let handled = IndexSet.inter handled rejectable in
-      if IndexSet.is_empty rejected && IndexSet.equal handled rejectable then
-        (domain, None)
-      else
+      match
+        normalize
+              ~accept:(DFA.accept dfa)
+              ~rejectable:(NFA.rejectable nfa)
+              ~rejected delta
+      with
+      | None -> (domain, None)
+      | Some delta ->
         match IndexMap.find_opt nfa domain with
-        | None ->
-          let addition = {rejected; handled} in
-          (IndexMap.add nfa addition domain, Some addition)
+        | None -> (IndexMap.add nfa delta domain, Some delta)
         | Some image ->
-          (* rejected grows, handled shrinks *)
-          let rejected = IndexSet.union rejected image.rejected in
-          let handled = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
-          if rejected == image.rejected && handled == image.handled then
-            (domain, None)
-          else
-            let rejected = IndexSet.diff rejected image.rejected in
-            (IndexMap.add nfa image domain, Some {rejected; handled})
+          match increase_image ~delta image with
+          | None -> (domain, None)
+          | Some (image', delta) ->
+            (IndexMap.add nfa image' domain, Some delta)
 
     let refine i1 i2 =
       {handled = IndexSet.inter i1.handled i2.handled;
@@ -674,12 +689,10 @@ struct
 
   let delta = ref []
 
-  let safe = true
-
   let add_delta dfa nfa = function
     | None -> ()
     | Some img ->
-      if safe then
+      if build_safe then
         delta := (dfa, IndexMap.singleton nfa img) :: !delta
       else
         match !delta with
@@ -696,7 +709,7 @@ struct
   let () =
     let grow nfa rejected domain =
       fst (Domain.increase DFA.initial nfa
-             Domain.empty_image rejected domain)
+             Domain.empty_image ~rejected domain)
     in
     let domain = IndexMap.fold grow NFA.initial Domain.empty in
     push delta (DFA.initial, domain);
@@ -713,7 +726,7 @@ struct
               if IndexSet.disjoint lr1s (NFA.incoming nfa0) then dom else (
                 IndexMap.fold (fun nfa rejected dom ->
                     let dom, delta =
-                      Domain.increase dfa nfa img rejected dom
+                      Domain.increase dfa nfa img ~rejected dom
                     in
                     add_delta dfa nfa delta;
                     dom
@@ -763,6 +776,32 @@ struct
 
   let () = Stopwatch.leave time
 
+  let final_uncovered = Vector.make DFA.n IndexSet.empty
+
+  let () =
+    let entrypoints = IndexSet.map Lrc.lr1_of_lrc Lrc.entrypoints in
+    Vector.iteri (fun dfa dom ->
+        IndexMap.iter (fun nfa img ->
+            let lbl = IndexSet.inter entrypoints (NFA.incoming nfa) in
+            if not (IndexSet.is_empty lbl) then (
+              List.iter (fun (lbl', dfa') ->
+                  if not (IndexSet.disjoint lbl lbl') then (
+                    match
+                      Domain.normalize
+                        ~accept:(DFA.accept dfa')
+                        ~rejectable:IndexSet.empty
+                        ~rejected:IndexSet.empty
+                        img
+                    with
+                    | None -> ()
+                    | Some img' ->
+                      vector_set_union final_uncovered dfa' img'.rejected
+                  )
+                ) (DFA.successors dfa)
+            )
+          ) dom
+      ) coverage
+
   let () =
     let oc = open_out_bin "dfa-coverage.dot" in
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
@@ -811,7 +850,12 @@ struct
               p " st%d -> uncovered [label=%S];" isrc
                 (Lr1.set_to_string (NFA.incoming nfa) ^"\n"^ pcover nfa dom)
             )
-          ) cover
+          ) cover;
+        let final = Vector.get final_uncovered src in
+        if not (IndexSet.is_empty final) then (
+          p " st%d -> uncovered [label=%S];" isrc
+            (pts final)
+        )
       ) coverage;
     p "}";
     close_out_noerr oc
