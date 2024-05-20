@@ -69,7 +69,7 @@ module Run(P : sig val grammar_file : string end)() = struct
             (Hashtbl.fold (fun key _ acc -> key :: acc) Info.Lr1.entrypoints [])))
 
   let () =
-    let initials =
+    let entrypoints =
       match List.rev !opt_enumerate_entrypoint with
       | [] -> Info.Lr1.all_entrypoints
       | syms ->
@@ -80,7 +80,7 @@ module Run(P : sig val grammar_file : string end)() = struct
           syms
     in
     let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
-      let initials = indexset_bind initials Lrc.lrcs_of_lr1
+      let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1
     end) in
     let module Reachable = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
     let module Failure = Mid.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in

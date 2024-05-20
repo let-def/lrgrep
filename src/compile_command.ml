@@ -108,7 +108,7 @@ end)() = struct
 
   let process_entry oc (entry : Front.Syntax.entry) = (
     let open Fix.Indexing in
-    let initials =
+    let entrypoints =
       match entry.startsymbols with
       | [] -> Info.Lr1.all_entrypoints
       | syms ->
@@ -117,7 +117,7 @@ end)() = struct
           syms
     in
     let module Lrc = Mid.Lrc.Close(Info)(Lrc)
-        (struct let initials = indexset_bind initials Lrc.lrcs_of_lr1 end)
+        (struct let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1 end)
     in
     let open Mid.Automata.Entry
         (Transl)

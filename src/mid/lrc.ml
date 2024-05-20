@@ -31,7 +31,7 @@ end
 
 module Close(Info : Info.S)
     (Lrc : RAW with module Info := Info)
-    (For : sig val initials : Lrc.set end)
+    (For : sig val entrypoints : Lrc.set end)
   : S with module Info := Info and type n = Lrc.n =
 struct
   include Lrc
@@ -43,7 +43,7 @@ struct
 
   let successors =
     let table = Vector.make Lrc.n IndexSet.empty in
-    let todo = ref For.initials in
+    let todo = ref For.entrypoints in
     let populate i =
       reachable := IndexSet.add i !reachable;
       if IndexSet.is_empty (Vector.get table i) then (
