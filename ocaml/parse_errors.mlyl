@@ -25,7 +25,7 @@
   let line_and_char pos = "line " ^ str_line pos ^ ", character " ^ str_col pos
 }
 
-rule error_message = parse error
+rule error_message = parse error (implementation)
 
 | e=expr; SEMI @ ELSE
   %partial {
