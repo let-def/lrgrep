@@ -107,7 +107,9 @@ struct
             acc candidates
         ) [] inner
     in
-    inner :: visit_outer lrcs outer
+    match visit_outer lrcs outer with
+    | [] -> [inner]
+    | x :: xs -> (inner @ x) :: xs
 
   and visit_outer lrcs = function
     | [] -> []
