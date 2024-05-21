@@ -373,11 +373,10 @@ module type FAILURE_NFA = sig
   val initial : (n, terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
-  val reach_incoming : (reach, lr1 indexset) vector
   val incoming : n index -> lr1 indexset
   val incoming_lrc : n index -> lrc indexset
   val transitions : n index -> (n, terminal indexset) indexmap
-  val kind : n index -> string
+  val to_string : n index -> string
 end
 
 module FailureNFA
@@ -574,7 +573,7 @@ struct
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
-  let kind i =
+  let to_string i =
     if i = sink then "sink" else
       match States.prj i with
       | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
@@ -962,11 +961,34 @@ struct
           ) succ
       ) cov_succ
 
-  (*let () =
-    match Index.of_int Lr1.n 880 with
+  let () =
+    match Index.of_int Lr1.n 995 with
     | exception _ -> ()
     | lr1 ->
       Printf.eprintf "lr1 state %s predecessors: %s\n"
         (Lr1.to_string lr1)
-        (Lr1.set_to_string (Lr1.predecessors lr1))*)
+        (Lr1.set_to_string (Lr1.predecessors lr1));
+      let lrc_to_string lrc =
+        Printf.sprintf "%d/%d"
+          (Lrc.lr1_of_lrc lrc :> int) (Lrc.class_index lrc)
+      in
+      IndexSet.iter (fun lrc ->
+          Printf.eprintf "Lrc %s has predecessors:\n"
+            (lrc_to_string lrc);
+          IndexSet.iter (fun lrc' ->
+              Printf.eprintf "- %s\n" (lrc_to_string lrc')
+            ) (Lrc.predecessors lrc)
+        ) (Lrc.lrcs_of_lr1 lr1);
+      Index.iter NFA.n (fun nfa ->
+          if IndexSet.mem lr1 (NFA.incoming nfa) then (
+            Printf.eprintf "NFA %s has transitions on LR1#995 (%s) targetting:\n"
+              (NFA.to_string nfa) (Lr1.to_string lr1);
+            IndexMap.iter (fun nfa' _ ->
+                Printf.eprintf "- %s / %s\n" (NFA.to_string nfa') (Lr1.set_to_string (NFA.incoming nfa'))
+              ) (NFA.transitions nfa)
+      (* Printf.eprintf "lr1 state %s predecessors: %s\n"
+           (Lr1.to_string lr1)
+           (Lr1.set_to_string (Lr1.predecessors lr1)) *)
+          )
+        )
 end
