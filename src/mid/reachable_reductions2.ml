@@ -867,6 +867,57 @@ struct
       ) coverage;
     !visited
 
+  module DFA2 = Prod(DFA)(DFA)
+
+  let to_print, to_print_uncovered =
+    let table = IndexTable.create 7 in
+    let uncovered = IndexTable.create 7 in
+    let get_default table index  =
+      match IndexTable.find_opt table index with
+      | Some r -> r
+      | None ->
+        let r = ref [] in
+        IndexTable.add table index r;
+        r
+    in
+    let get dfa dfa' = get_default table (DFA2.inj dfa dfa') in
+    let get_uncovered dfa = get_default uncovered dfa in
+    let prepare_cover nfa {Image. rejected; handled} =
+      (rejected, IndexSet.diff (NFA.rejectable nfa) (IndexSet.union rejected handled))
+    in
+    IndexTable.iter (fun index desc ->
+        if IndexSet.mem index uncovered_states then (
+          let dfa, nfa = State.prj index in
+          if not (IndexSet.is_empty desc.uncovered || desc.image = Image.empty) then
+            push (get_uncovered dfa) (desc.uncovered, prepare_cover nfa desc.image);
+          List.iter (fun (lbl, reject, index') ->
+              if IndexSet.mem index' uncovered_states then (
+                let dfa', nfa' = State.prj index' in
+                match
+                  Image.normalize
+                    ~accept:(DFA.accept dfa')
+                    ~rejectable:(NFA.rejectable nfa')
+                    ~reject desc.image
+                with
+                | None -> ()
+                | Some img -> push (get dfa dfa') (lbl, prepare_cover nfa' img)
+              )
+            ) desc.successors;
+        )
+      ) coverage;
+    table, uncovered
+
+  let pts ts =
+    let acc = ref [] in
+    begin try
+        IndexSet.iter (fun i ->
+            if List.length !acc > 3 then raise Exit;
+            push acc (Terminal.to_string i)
+          ) ts;
+      with Exit -> push acc "..."
+    end;
+    "[" ^ String.concat "," (List.rev !acc) ^ "]"
+
   let () =
     let oc = open_out_bin "dfa-coverage.dot" in
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
@@ -874,75 +925,52 @@ struct
     p "  %s" style;
     p "  rankdir=LR;";
     p "  compound=true;";
-    let uncovered = ref false in
-    let uncovered () =
-      if not !uncovered then (
-        p "  uncovered [shape=doubleoctagon];";
-        uncovered := true
-      )
-    in
-    let printed = Vector.make DFA.n IndexSet.empty in
-    let reached = Boolvector.make DFA.n false in
-    let print_dfa dfa =
-      if not (Boolvector.test reached dfa) then (
-        Boolvector.set reached dfa;
-        let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept dfa) in
-        let accept = if accept = "[]" then "" else accept in
-        p "  st%d [label=%S];" (dfa :> int)
-          (if dfa = DFA.initial then "initial\n" ^ accept else accept);
-      )
-    in
-    IndexTable.iter (fun index desc ->
-        if IndexSet.mem index uncovered_states then (
-          let dfa, nfa = State.prj index in
-          print_dfa dfa;
-          let pcover {Image. handled; rejected} =
-            if true then
-              Printf.sprintf "%s:\n%s/%s"
-                (NFA.kind nfa)
-                (pts rejected)
-                (pts (IndexSet.diff
-                        (NFA.rejectable nfa)
-                        (IndexSet.union rejected handled)))
-            else
-              Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
-                (NFA.kind nfa)
-                (pts handled)
-                (pts rejected)
-                (pts (NFA.rejectable nfa))
-          in
-          List.iter (fun (lbl, reject, index') ->
-              let dfa', nfa' = State.prj index' in
-              if IndexSet.mem index' uncovered_states &&
-                 not (IndexSet.mem index (Vector.get printed dfa')) then (
-                vector_set_add printed dfa' index;
-                let label = Lr1.set_to_string lbl in
-                let label =
-                  match
-                    Image.normalize
-                      ~accept:(DFA.accept dfa')
-                      ~rejectable:(NFA.rejectable nfa')
-                      ~reject desc.image
-                  with
-                  | None -> label
-                  | Some img -> label ^"\n"^ pcover img
-                in
-                p "  st%d -> st%d [label=%S]" (dfa :> int) (dfa' :> int) label;
-                print_dfa dfa';
-              )
-            ) desc.successors;
-          if not (IndexSet.is_empty desc.uncovered) then (
-            uncovered ();
-            p " st%d -> uncovered [label=%S];" (dfa :> int)
-              (Lr1.set_to_string desc.uncovered ^ "\n" ^ pcover desc.image)
-          )
-          (*let final = Vector.get final_uncovered src in
-            if not (IndexSet.is_empty final) then (
-            p " st%d -> uncovered [label=%S];" isrc
-              (pts final)
-            )*)
+    p "  uncovered [shape=doubleoctagon];";
+    let print_dfa =
+      let printed = Boolvector.make DFA.n false in
+      fun dfa ->
+        if not (Boolvector.test printed dfa) then (
+          Boolvector.set printed dfa;
+          let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept dfa) in
+          let accept = if accept = "[]" then "" else accept in
+          p "  st%d [label=%S];" (dfa :> int)
+            (if dfa = DFA.initial then "initial\n" ^ accept else accept);
         )
-      ) coverage;
+    in
+    let group_transitions trs =
+      let compare_cover (rj1, ra1) (rj2, ra2) =
+        let c = IndexSet.compare rj1 rj2 in
+        if c <> 0 then c else
+          IndexSet.compare ra1 ra2
+      in
+      group_by
+        ~compare:(fun (_, r1) (_, r2) -> compare_cover r1 r2)
+        ~group:(fun (lbl, r) lbls ->
+            let union lbl (lbl', _) = IndexSet.union lbl lbl' in
+            (List.fold_left union lbl lbls, r)
+          ) trs
+    in
+    let print_group src tgt tr =
+      p "  %s -> %s [label=%S]" src tgt
+        (string_concat_map "\n"
+           (fun (lbl, (rejected, rejectable)) ->
+              Printf.sprintf "%s\n%s/%s"
+                (Lr1.set_to_string lbl)
+                (pts rejected)
+                (pts rejectable))
+           tr)
+    in
+    let pst st = "st" ^ string_of_index st in
+    IndexTable.iter (fun dfa2 tr ->
+        let src, tgt = DFA2.prj dfa2 in
+        print_dfa src;
+        print_dfa tgt;
+        print_group (pst src) (pst tgt) (group_transitions !tr)
+      ) to_print;
+    IndexTable.iter (fun src tr ->
+        print_dfa src;
+        print_group (pst src) "uncovered" (group_transitions !tr)
+      ) to_print_uncovered;
     p "}";
     close_out_noerr oc
 
