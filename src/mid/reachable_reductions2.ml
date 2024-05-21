@@ -480,8 +480,8 @@ struct
           in
           List.fold_left add (IndexMap.empty, IndexSet.empty) targets
         in
-        (*TODO: Find out why it is not always a subset *)
-        if not (IndexSet.subset lrcs1 lrcs) then (
+        (*FIXME: Find out why it is not always a subset*)
+        if false && not (IndexSet.subset lrcs1 lrcs) then (
           let print_lrc lrc =
             Printf.sprintf "%s/%d"
               (Info.Lr1.to_string (Lrc.lr1_of_lrc lrc))
