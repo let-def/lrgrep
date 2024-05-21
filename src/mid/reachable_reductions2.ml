@@ -688,7 +688,8 @@ struct
   module State = Prod(DFA)(NFA)
 
   type desc = {
-    successors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable successors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
     uncovered: Lr1.set;
     mutable image: Image.t;
     mutable todo: Image.t;
@@ -716,7 +717,12 @@ struct
             (successors', uncovered')
           ) ([], NFA.incoming nfa) (DFA.successors dfa)
       in
-      let desc = {successors; uncovered; image = Image.empty; todo = Image.empty} in
+      let desc = {
+        successors; uncovered;
+        predecessors = [];
+        image = Image.empty;
+        todo = Image.empty;
+      } in
       IndexTable.add coverage index desc;
       desc
 
@@ -820,6 +826,47 @@ struct
           ) dom
       ) coverage*)
 
+  (* Compute predecessors *)
+  let () =
+    IndexTable.iter (fun index desc ->
+        let check_successor (_lbl, reject, index') =
+          let dfa', nfa' = State.prj index' in
+          Option.is_some (
+            Image.normalize
+              ~accept:(DFA.accept dfa')
+              ~rejectable:(NFA.rejectable nfa')
+              ~reject desc.image
+          )
+        in
+        desc.successors <- List.filter check_successor desc.successors;
+        List.iter (fun (lbl, reject, index') ->
+            let desc' = get_state index' in
+            desc'.predecessors <- (lbl, reject, index) :: desc'.predecessors
+          ) desc.successors
+      ) coverage
+
+  (* States with uncovered and reachable transitions *)
+  let uncovered_states =
+    let visited = ref IndexSet.empty in
+    let rec propagate index =
+      let visited' = IndexSet.add index !visited in
+      if visited' != !visited then (
+        visited := visited';
+        List.iter
+          (fun (_, _, index') -> propagate index')
+          (get_state index).predecessors
+      )
+    in
+    let count = ref 0 in
+    IndexTable.iter (fun index desc ->
+        if desc.image != Image.empty &&
+           not (IndexSet.is_empty desc.uncovered) then (
+          incr count;
+          if !count = 1 then propagate index
+        )
+      ) coverage;
+    !visited
+
   let () =
     let oc = open_out_bin "dfa-coverage.dot" in
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
@@ -846,54 +893,55 @@ struct
       )
     in
     IndexTable.iter (fun index desc ->
-        let dfa, nfa = State.prj index in
-        print_dfa dfa;
-        let pcover {Image. handled; rejected} =
-          if true then
-            Printf.sprintf "%s:\n%s/%s"
-              (NFA.kind nfa)
-              (pts rejected)
-              (pts (IndexSet.diff
-                      (NFA.rejectable nfa)
-                      (IndexSet.union rejected handled)))
-          else
-            Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
-              (NFA.kind nfa)
-              (pts handled)
-              (pts rejected)
-              (pts (NFA.rejectable nfa))
-        in
-        List.iter (fun (lbl, reject, index') ->
-            let dfa', nfa' = State.prj index' in
-            match
-              Image.normalize
-                ~accept:(DFA.accept dfa')
-                ~rejectable:(NFA.rejectable nfa')
-                ~reject desc.image
-            with
-            | Some img when not (IndexSet.mem index (Vector.get printed dfa')) ->
-              vector_set_add printed dfa' index;
-              p "  st%d -> st%d [label=%S]"
-                (dfa :> int) (dfa' :> int)
-                (Lr1.set_to_string lbl ^"\n"^ pcover img)
-            | None when not (IndexSet.mem index (Vector.get printed dfa')) ->
-              vector_set_add printed dfa' index;
-              p "  st%d -> st%d [label=%S]"
-                (dfa :> int) (dfa' :> int)
-                (Lr1.set_to_string lbl);
-              print_dfa dfa';
-            | _ -> ()
-          ) desc.successors;
-        if not (IndexSet.is_empty desc.uncovered) then (
-          uncovered ();
-          p " st%d -> uncovered [label=%S];" (dfa :> int)
-            (Lr1.set_to_string desc.uncovered ^ "\n" ^ pcover desc.image)
+        if IndexSet.mem index uncovered_states then (
+          let dfa, nfa = State.prj index in
+          print_dfa dfa;
+          let pcover {Image. handled; rejected} =
+            if true then
+              Printf.sprintf "%s:\n%s/%s"
+                (NFA.kind nfa)
+                (pts rejected)
+                (pts (IndexSet.diff
+                        (NFA.rejectable nfa)
+                        (IndexSet.union rejected handled)))
+            else
+              Printf.sprintf "%s:\nhandled:%s\nrejected:%s\nrejectable:%s"
+                (NFA.kind nfa)
+                (pts handled)
+                (pts rejected)
+                (pts (NFA.rejectable nfa))
+          in
+          List.iter (fun (lbl, reject, index') ->
+              let dfa', nfa' = State.prj index' in
+              if IndexSet.mem index' uncovered_states &&
+                 not (IndexSet.mem index (Vector.get printed dfa')) then (
+                vector_set_add printed dfa' index;
+                let label = Lr1.set_to_string lbl in
+                let label =
+                  match
+                    Image.normalize
+                      ~accept:(DFA.accept dfa')
+                      ~rejectable:(NFA.rejectable nfa')
+                      ~reject desc.image
+                  with
+                  | None -> label
+                  | Some img -> label ^"\n"^ pcover img
+                in
+                p "  st%d -> st%d [label=%S]" (dfa :> int) (dfa' :> int) label;
+                print_dfa dfa';
+              )
+            ) desc.successors;
+          if not (IndexSet.is_empty desc.uncovered) then (
+            uncovered ();
+            p " st%d -> uncovered [label=%S];" (dfa :> int)
+              (Lr1.set_to_string desc.uncovered ^ "\n" ^ pcover desc.image)
+          )
+          (*let final = Vector.get final_uncovered src in
+            if not (IndexSet.is_empty final) then (
+            p " st%d -> uncovered [label=%S];" isrc
+              (pts final)
+            )*)
         )
-        (*let final = Vector.get final_uncovered src in
-          if not (IndexSet.is_empty final) then (
-          p " st%d -> uncovered [label=%S];" isrc
-            (pts final)
-          )*)
       ) coverage;
     p "}";
     close_out_noerr oc
