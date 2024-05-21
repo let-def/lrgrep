@@ -400,6 +400,35 @@ struct
 
   type reach = Reach.n
 
+  let () =
+    if build_with_expensive_assertions then (
+      Index.iter Lrc.n (fun lrc ->
+          let lr1 = Lrc.lr1_of_lrc lrc in
+          let lr1s' = Info.Lr1.predecessors lr1 in
+          IndexSet.iter (fun lrc' ->
+              assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s')
+            ) (Lrc.predecessors lrc)
+        );
+      let validate {Reach. config; transitions} =
+        let rec validate lrcs = function
+          | [] -> ()
+          | x :: xs ->
+            List.iter (fun (reach', _) ->
+                let lrcs' = (Vector.get Reach.states reach').config.lrcs in
+                if not (IndexSet.subset lrcs' lrcs) then (
+                  Printf.eprintf "%s not included in %s\n"
+                    (Lrc.set_to_string lrcs')
+                    (Lrc.set_to_string lrcs);
+                  assert false
+                )
+              ) x;
+            validate (indexset_bind lrcs Lrc.predecessors) xs
+        in
+        validate config.lrcs transitions
+      in
+      Vector.iter validate Reach.states
+    )
+
   module States = struct
     module Suffix = IndexBuffer.Gen.Make()
     module Reach_or_suffix = Sum(Reach)(Suffix)
@@ -442,13 +471,13 @@ struct
             (fun (tgt, _) -> vector_set_add epsilon_predecessors tgt src)
             epsilon
       ) Reach.states;
-    let closure =
+    let table =
       Vector.init Reach.n
         (fun i -> IndexMap.singleton (States.reach i) (Reach.reject i))
     in
-    fix_relation epsilon_predecessors closure
+    fix_relation epsilon_predecessors table
       ~propagate:(fun _ map _ map' -> map_union map map');
-    Vector.get closure
+    Vector.get table
 
   let suffix_transitions =
     States.Suffix.get_generator ()
@@ -482,17 +511,12 @@ struct
           List.fold_left add (IndexMap.empty, IndexSet.empty) targets
         in
         (*FIXME: Find out why it is not always a subset*)
-        if false && not (IndexSet.subset lrcs1 lrcs) then (
-          let print_lrc lrc =
-            Printf.sprintf "%s/%d"
-              (Info.Lr1.to_string (Lrc.lr1_of_lrc lrc))
-              (Lrc.class_index lrc)
-          in
+        if not (IndexSet.subset lrcs1 lrcs) then (
           Printf.eprintf "expected: %s in %s\n"
-            (string_of_indexset ~index:print_lrc lrcs1)
-            (string_of_indexset ~index:print_lrc lrcs)
+            (Lrc.set_to_string lrcs1)
+            (Lrc.set_to_string lrcs);
+          assert false
         );
-        let lrcs1 = IndexSet.inter lrcs1 lrcs in
         match next with
         | [] -> (targets, lrcs1)
         | next ->
@@ -815,12 +839,10 @@ struct
           (get_state index).predecessors
       )
     in
-    let count = ref 0 in
     IndexTable.iter (fun index desc ->
         if desc.image != Image.empty &&
            not (IndexSet.is_empty desc.uncovered) then (
-          incr count;
-          if !count = 1 then propagate index
+          propagate index
         )
       ) coverage;
     !visited
@@ -964,6 +986,7 @@ struct
       ) cov_succ
 
   let () =
+    if false then
     match Index.of_int Lr1.n 995 with
     | exception _ -> ()
     | lr1 ->

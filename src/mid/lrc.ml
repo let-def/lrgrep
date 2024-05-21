@@ -18,6 +18,8 @@ module type RAW = sig
   include RAW0
   val lookahead : n index -> Info.Terminal.set
   val class_index : n index -> int
+  val to_string : n index -> string
+  val set_to_string : n indexset -> string
 end
 
 module type S = sig
@@ -217,6 +219,14 @@ struct
     in
     Index.iter Lr1.n process;
     Vector.get (Misc.relation_reverse table)
+
+  let to_string lrc =
+    Printf.sprintf "%s/%d"
+      (Lr1.to_string (lr1_of_lrc lrc))
+      (class_index lrc)
+
+  let set_to_string lrcs =
+    string_of_indexset ~index:to_string lrcs
 
   let () = Stopwatch.leave time
 end
