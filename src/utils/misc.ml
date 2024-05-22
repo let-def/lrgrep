@@ -312,10 +312,11 @@ let rec list_drop n = function
   | _ :: xs when n > 0 -> list_drop (n - 1) xs
   | xs -> xs
 
-let rec fixpoint ~propagate todo = match !todo with
+let rec fixpoint ?counter ~propagate todo = match !todo with
   | [] -> ()
   | todo' ->
+    Option.iter incr counter;
     todo := [];
     List.iter propagate todo';
-    fixpoint ~propagate todo
+    fixpoint ?counter ~propagate todo
 
