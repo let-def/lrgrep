@@ -5,6 +5,15 @@ open Fix.Indexing
 let build_with_expensive_assertions = false
 let build_safe = true
 
+let style = "\
+    bgcolor=black;\
+    color=white;\
+    fontcolor=white;\
+    node [color=white fontcolor=white shape=rectangle];\
+    edge [color=white fontcolor=white];\
+    compound=true;\
+  "
+
 
 module type S = sig
   module Info : Info.S
@@ -532,9 +541,9 @@ struct
           | [] | [_] -> IndexMap.empty
           | _ :: rest -> fst (import (preds d.config.lrcs) rest)
         in
-        if IndexSet.disjoint lrc_initials d.config.lrcs
-        then regular
-        else IndexMap.add sink IndexSet.empty regular
+        if IndexSet.subset d.config.lrcs lrc_initials
+        then IndexMap.add sink IndexSet.empty regular
+        else regular
       ) Reach.states
 
   let suffix_transitions =
@@ -602,8 +611,26 @@ struct
     if i = sink then "sink" else
       match States.prj i with
       | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
-      | States.Reach  i -> Printf.sprintf "reach(%d)"  (Index.to_int i)
+      | States.Reach  i ->
+        let desc = Vector.get Reach.states i in
+        Printf.sprintf "reach(%d, %s)"
+          (Index.to_int i)
+          (Lrc.set_to_string desc.config.lrcs)
       | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
+
+  let () =
+    let oc = open_out_bin "nfa.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    Index.iter n (fun i ->
+        p "  st%d[label=%S];\n" (i :> int) (to_string i);
+        IndexMap.iter (fun j _ ->
+            p "  st%d -> st%d;\n" (i :> int) (Index.to_int j);
+          ) (transitions i)
+      );
+    p "}";
+    close_out oc
 
   let () = Stopwatch.leave time
 end
@@ -627,15 +654,6 @@ module Coverage_check
 struct
   open Info
   let time = Stopwatch.enter Stopwatch.main "Coverage check"
-
-  let style = "\
-    bgcolor=black;\
-    color=white;\
-    fontcolor=white;\
-    node [color=white fontcolor=white shape=rectangle];\
-    edge [color=white fontcolor=white];\
-    compound=true;\
-  "
 
   let pts ts = string_of_indexset ~index:Terminal.to_string ts
 
@@ -722,6 +740,21 @@ struct
 
   let coverage = IndexTable.create 7
 
+  let predecessors = IndexTable.create 7
+
+  let add_predecessor src lbl tgt =
+    let r = match IndexTable.find_opt predecessors tgt with
+      | Some r -> r
+      | None ->
+        let r = ref [] in
+        IndexTable.add predecessors tgt r;
+        r
+    in
+    push r (src, lbl)
+
+  let get_predecessors tgt =
+    Option.fold (IndexTable.find_opt predecessors tgt) ~none:[] ~some:(!)
+
   let step_counter = ref 1
 
   let get_state index =
@@ -736,7 +769,10 @@ struct
               if uncovered != uncovered' then (
                 let lbl' = IndexSet.inter uncovered lbl in
                 IndexMap.fold
-                  (fun nfa' reject acc -> (lbl', reject, State.inj dfa' nfa') :: acc)
+                  (fun nfa' reject acc ->
+                     let index' = State.inj dfa' nfa' in
+                     add_predecessor index (lbl', reject) index';
+                     (lbl', reject, index') :: acc)
                   (NFA.transitions nfa) successors
               ) else
                 successors
@@ -756,6 +792,33 @@ struct
 
   let worklist = ref []
 
+  let find_path index =
+    let found = ref None in
+    let rec loop acc = function
+      | [] -> loop [] acc
+      | (x, xs) :: xxs ->
+        let acc =
+          List.fold_left
+            (fun acc (src, lbl) ->
+               let dfa, _ = State.prj src in
+               let state = (src, (lbl, x) :: xs) in
+               if dfa = DFA.initial then (
+                 found := Some state;
+                 raise Exit
+               )
+               else
+                 state :: acc)
+            acc (get_predecessors x)
+        in
+        loop acc xxs
+    in
+    let dfa, _ = State.prj index in
+    if dfa = DFA.initial then
+      (index, [])
+    else
+      try loop [] [index, []]
+      with Exit -> Option.get !found
+
   let add_delta index = function
     | None -> ()
     | Some delta ->
@@ -765,12 +828,28 @@ struct
       | Some (image', delta') ->
         if not (IndexSet.is_empty desc.uncovered) then (
           let _, nfa = State.prj index in
+          let index0, path = find_path index in
           Printf.eprintf
-            "Found uncovered case in %d steps, for transitions %s and lookaheads %s\n"
+            "Found uncovered case in %d steps:\n\
+             - for transitions %s\n\
+             - lookaheads %s\n"
             !step_counter
             (Lr1.set_to_string desc.uncovered)
             (pts (IndexSet.union delta'.rejected
-              (IndexSet.diff (NFA.rejectable nfa) delta'.handled)));
+                    (IndexSet.diff (NFA.rejectable nfa) delta'.handled)));
+          let print_index index =
+            let dfa, nfa = State.prj index in
+            Printf.eprintf "state (%d,%d)\n" (dfa :> int) (nfa :> int);
+            Printf.eprintf "- accept %s\n" (pts (DFA.accept dfa));
+          in
+          print_index index0;
+          List.iter (fun ((lbl, reject), index) ->
+              Printf.eprintf "- reject %s\n" (pts reject);
+              prerr_string (Lr1.set_to_string lbl);
+              print_index index;
+            ) path;
+          prerr_newline ();
+          flush stderr;
         );
         desc.image <- image';
         let delta' =
