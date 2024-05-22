@@ -532,10 +532,9 @@ struct
           | [] | [_] -> IndexMap.empty
           | _ :: rest -> fst (import (preds d.config.lrcs) rest)
         in
-        if IndexSet.disjoint lrc_initials d.config.lrcs then
-          regular
-        else
-          IndexMap.add sink IndexSet.empty regular
+        if IndexSet.disjoint lrc_initials d.config.lrcs
+        then regular
+        else IndexMap.add sink IndexSet.empty regular
       ) Reach.states
 
   let suffix_transitions =
@@ -717,6 +716,7 @@ struct
     mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
     uncovered: Lr1.set;
     mutable image: Image.t;
+    mutable mark: bool;
     mutable todo: Image.t;
   }
 
@@ -746,6 +746,7 @@ struct
         successors; uncovered;
         predecessors = [];
         image = Image.empty;
+        mark = false;
         todo = Image.empty;
       } in
       IndexTable.add coverage index desc;
@@ -761,12 +762,16 @@ struct
       | None -> ()
       | Some (image', delta') ->
         desc.image <- image';
-        if desc.todo == Image.empty then (
-          push worklist desc;
-          desc.todo <- delta'
-        ) else (
-          desc.todo <- Image.refine delta' desc.todo
-        )
+        let delta' =
+          if desc.mark then
+            Image.refine delta' desc.todo
+          else (
+            push worklist desc;
+            desc.mark <- true;
+            delta'
+          )
+        in
+        desc.todo <- delta'
 
   let initial =
     let initialize nfa reject acc =
@@ -787,6 +792,7 @@ struct
     let propagate desc =
       incr propagations;
       let img = desc.todo in
+      desc.mark <- false;
       desc.todo <- Image.empty;
       List.iter (fun (_, reject, index') ->
           let dfa, nfa = State.prj index' in
@@ -808,7 +814,7 @@ struct
     let uncovered = inj_r (Index.of_int Uncovered_index.n 0)
   end
 
-  (* Compute predecessors *)
+  (* Normalize successors & compute predecessors *)
   let () =
     IndexTable.iter (fun index desc ->
         let check_successor (_lbl, reject, index') =
@@ -827,6 +833,70 @@ struct
           ) desc.successors
       ) coverage
 
+  let pts ts =
+    let acc = ref [] in
+    begin try
+        IndexSet.iter (fun i ->
+            if List.length !acc > 3 then raise Exit;
+            push acc (Terminal.to_string i)
+          ) ts;
+      with Exit -> push acc "..."
+    end;
+    "[" ^ String.concat "," (List.rev !acc) ^ "]"
+
+  let lr1_set_to_string s =
+    let count = ref 0 in
+    let f _ = incr count; !count < 4 in
+    Lr1.set_to_string (IndexSet.filter f s)
+
+  (* Enumerate sentences *)
+  let () =
+    let marks = IndexTable.create 7 in
+    let todo = ref [] in
+    let print_sentence path lookaheads =
+      match path with
+      | [] -> assert false
+      | (x, _) :: _ ->
+        let lrcs = Lrc.some_prefix (Lrc.first_lrc_of_lr1 (IndexSet.choose x)) in
+        let _, lrc = List.hd (List.rev path) in
+        let path =
+          List.rev_append
+          (List.map (fun lrc -> IndexSet.singleton (Lrc.lr1_of_lrc lrc)) lrcs)
+          (List.map fst path)
+        in
+        Printf.printf "%s @ %s=%d / %s\n"
+          (string_concat_map " " Lr1.set_to_string path)
+          (Lrc.set_to_string lrc)
+          (IndexSet.choose lrc :> int)
+          (string_of_indexset ~index:Terminal.to_string lookaheads)
+    in
+    let propagate (index, path) =
+      if not (IndexTable.mem marks index) then (
+        IndexTable.add marks index ();
+        match IndexTable.find_opt coverage index with
+        | None -> ()
+        | Some desc ->
+          let _, nfa = State.prj index in
+          if not (IndexSet.is_empty desc.uncovered) then (
+            let {Image. rejected; handled} = desc.image in
+            let rejectable =
+              IndexSet.diff (NFA.rejectable nfa) (IndexSet.union rejected handled)
+            in
+            print_sentence ((NFA.incoming nfa, NFA.incoming_lrc nfa) :: path) (IndexSet.union rejected rejectable)
+          );
+          List.iter
+            (fun (lbl, _, index') ->
+               push todo (index', (lbl, NFA.incoming_lrc nfa) :: path))
+            desc.successors
+      )
+    in
+    IndexTable.iter (fun index _ ->
+        let dfa, _ = State.prj index in
+        if dfa = DFA.initial then
+          propagate (index, [])
+      ) coverage;
+    fixpoint ~propagate todo
+
   (* States with uncovered and reachable transitions *)
   let uncovered_states =
     let visited = ref IndexSet.empty in
@@ -839,10 +909,11 @@ struct
           (get_state index).predecessors
       )
     in
+    let count = ref 0 in
     IndexTable.iter (fun index desc ->
-        if desc.image != Image.empty &&
-           not (IndexSet.is_empty desc.uncovered) then (
-          propagate index
+        if not (IndexSet.is_empty desc.uncovered) then (
+          if !count = 0 then propagate index;
+          incr count
         )
       ) coverage;
     !visited
@@ -877,7 +948,7 @@ struct
                 | None -> ()
                 | Some img -> add_target nfa' label img (UDFA.inj_l dfa')
             ) desc.successors;
-          if not (IndexSet.is_empty desc.uncovered || desc.image = Image.empty) then
+          if not (IndexSet.is_empty desc.uncovered) then
             add_target nfa desc.uncovered desc.image UDFA.uncovered
         )
       ) coverage
@@ -920,18 +991,7 @@ struct
         )
       ) cov_succ
 
-  let pts ts =
-    let acc = ref [] in
-    begin try
-        IndexSet.iter (fun i ->
-            if List.length !acc > 3 then raise Exit;
-            push acc (Terminal.to_string i)
-          ) ts;
-      with Exit -> push acc "..."
-    end;
-    "[" ^ String.concat "," (List.rev !acc) ^ "]"
-
-  let () =
+  (*let () =
     let oc = open_out_bin "dfa-coverage.dot" in
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
     p "digraph G {";
@@ -963,7 +1023,7 @@ struct
         string_concat_map "\n"
           (fun edge ->
              Printf.sprintf "%s\n%s/%s"
-               (Lr1.set_to_string edge.label)
+               (lr1_set_to_string edge.label)
                (pts edge.rejected)
                (pts edge.rejectable))
           edges
@@ -1015,5 +1075,5 @@ struct
            (Lr1.to_string lr1)
            (Lr1.set_to_string (Lr1.predecessors lr1)) *)
           )
-        )
+        )*)
 end
