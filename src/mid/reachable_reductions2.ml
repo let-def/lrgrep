@@ -722,6 +722,8 @@ struct
 
   let coverage = IndexTable.create 7
 
+  let step_counter = ref 0
+
   let get_state index =
     match IndexTable.find_opt coverage index with
     | Some desc -> desc
@@ -742,6 +744,8 @@ struct
             (successors', uncovered')
           ) ([], NFA.incoming nfa) (DFA.successors dfa)
       in
+      if not (IndexSet.is_empty uncovered) then
+        Printf.eprintf "Found uncovered case in %d steps\n" !step_counter;
       let desc = {
         successors; uncovered;
         predecessors = [];
@@ -804,276 +808,68 @@ struct
           )
         ) desc.successors
     in
-    fixpoint ~propagate worklist
+    fixpoint ~counter:step_counter ~propagate worklist
 
   let () = Stopwatch.leave time
 
-  module Uncovered_index = Const(struct let cardinal = 1 end)
-  module UDFA = struct
-    include Sum(DFA)(Uncovered_index)
-    let uncovered = inj_r (Index.of_int Uncovered_index.n 0)
-  end
-
-  (* Normalize successors & compute predecessors *)
-  let () =
-    IndexTable.iter (fun index desc ->
-        let check_successor (_lbl, reject, index') =
-          let dfa', nfa' = State.prj index' in
-          Option.is_some (
-            Image.normalize
-              ~accept:(DFA.accept dfa')
-              ~rejectable:(NFA.rejectable nfa')
-              ~reject desc.image
-          )
-        in
-        List.iter (fun (lbl, reject, index' as succ) ->
-            if check_successor succ then
-              let desc' = get_state index' in
-              desc'.predecessors <- (lbl, reject, index) :: desc'.predecessors
-          ) desc.successors
-      ) coverage
-
-  let pts ts =
-    let acc = ref [] in
-    begin try
-        IndexSet.iter (fun i ->
-            if List.length !acc > 3 then raise Exit;
-            push acc (Terminal.to_string i)
-          ) ts;
-      with Exit -> push acc "..."
-    end;
-    "[" ^ String.concat "," (List.rev !acc) ^ "]"
-
-  let lr1_set_to_string s =
-    let count = ref 0 in
-    let f _ = incr count; !count < 4 in
-    Lr1.set_to_string (IndexSet.filter f s)
-
   (* Enumerate sentences *)
   let () =
-    let marks = IndexTable.create 7 in
+    if false then
     let todo = ref [] in
-    let print_sentence path lookaheads =
-      match path with
-      | [] -> assert false
-      | (x, _) :: _ ->
-        let lrcs = Lrc.some_prefix (Lrc.first_lrc_of_lr1 (IndexSet.choose x)) in
-        let _, lrc = List.hd (List.rev path) in
-        let path =
-          List.rev_append
-          (List.map (fun lrc -> IndexSet.singleton (Lrc.lr1_of_lrc lrc)) lrcs)
-          (List.map fst path)
-        in
-        Printf.printf "%s @ %s=%d / %s\n"
-          (string_concat_map " " Lr1.set_to_string path)
-          (Lrc.set_to_string lrc)
-          (IndexSet.choose lrc :> int)
-          (string_of_indexset ~index:Terminal.to_string lookaheads)
+    let print_sentence path uncovered =
+      List.iteri (fun i (index, reject, lbl, image) ->
+          let dfa, nfa = State.prj index in
+          if not (IndexSet.is_empty lbl) then
+            Printf.printf "\nfollowing transition on %s\n\n" (Lr1.set_to_string lbl);
+          Printf.printf "step %d reached:\n" i;
+          Printf.printf "- dfa accepting: %s\n" (pts (DFA.accept dfa));
+          Printf.printf "- nfa rejectable: %s\n" (pts (NFA.rejectable nfa));
+          if not (IndexSet.is_empty reject) then
+            Printf.printf "- rejecting: %s\n" (pts reject);
+          if not (IndexSet.is_empty image.Image.rejected) then
+            Printf.printf "- rejected: %s\n" (pts image.Image.rejected);
+          if not (IndexSet.is_empty image.Image.handled) then
+            Printf.printf "- handled: %s\n" (pts image.Image.handled);
+        ) (List.rev path);
+      Printf.printf "Uncovered transition on %s\n%!" (Lr1.set_to_string uncovered)
     in
-    let propagate (index, path) =
-      if not (IndexTable.mem marks index) then (
-        IndexTable.add marks index ();
-        match IndexTable.find_opt coverage index with
-        | None -> ()
-        | Some desc ->
-          let _, nfa = State.prj index in
-          if not (IndexSet.is_empty desc.uncovered) then (
-            let {Image. rejected; handled} = desc.image in
-            let rejectable =
-              IndexSet.diff (NFA.rejectable nfa) (IndexSet.union rejected handled)
-            in
-            print_sentence ((NFA.incoming nfa, NFA.incoming_lrc nfa) :: path) (IndexSet.union rejected rejectable)
-          );
-          List.iter
-            (fun (lbl, _, index') ->
-               push todo (index', (lbl, NFA.incoming_lrc nfa) :: path))
-            desc.successors
-      )
+    let visit path index image =
+      match IndexTable.find_opt coverage index with
+      | None -> assert false
+      | Some desc ->
+        let dfa, nfa = State.prj index in
+        if not (IndexSet.is_empty desc.uncovered) then
+          print_sentence path desc.uncovered;
+        List.iter
+          (fun (lbl, reject, index') ->
+             match Image.normalize
+                     ~accept:(DFA.accept dfa)
+                     ~rejectable:(NFA.rejectable nfa)
+                     ~reject image
+             with
+             | None -> ()
+             | Some image' ->
+               let path = (index', reject, lbl, image') :: path in
+               push todo (path, index, image')
+          ) desc.successors
+    in
+    let propagate (path, index, image) =
+        visit path index image
     in
     IndexTable.iter (fun index _ ->
-        let dfa, _ = State.prj index in
+        let dfa, nfa = State.prj index in
         if dfa = DFA.initial then
-          propagate (index, [])
+          let reject = IndexMap.find nfa NFA.initial in
+          match
+            Image.normalize
+              ~accept:(DFA.accept DFA.initial)
+              ~rejectable:(NFA.rejectable nfa)
+              ~reject Image.empty
+          with
+          | None -> ()
+          | Some image ->
+            let path = [index, reject, IndexSet.empty, image] in
+            propagate (path, index, image)
       ) coverage;
     fixpoint ~propagate todo
-
-  (* States with uncovered and reachable transitions *)
-  let uncovered_states =
-    let visited = ref IndexSet.empty in
-    let rec propagate index =
-      let visited' = IndexSet.add index !visited in
-      if visited' != !visited then (
-        visited := visited';
-        List.iter
-          (fun (_, _, index') -> propagate index')
-          (get_state index).predecessors
-      )
-    in
-    let count = ref 0 in
-    IndexTable.iter (fun index desc ->
-        if not (IndexSet.is_empty desc.uncovered) then (
-          if !count = 0 then propagate index;
-          incr count
-        )
-      ) coverage;
-    !visited
-
-  type covedge = {
-    label: Lr1.set;
-    rejected: Terminal.set;
-    rejectable: Terminal.set;
-  }
-
-  let cov_succ = Vector.make DFA.n []
-
-  let () =
-    IndexTable.iter (fun index desc ->
-        if IndexSet.mem index uncovered_states then (
-          let dfa, nfa = State.prj index in
-          let add_target nfa label {Image. rejected; handled} target =
-            let rejectable =
-              IndexSet.diff (NFA.rejectable nfa) (IndexSet.union rejected handled)
-            in
-            Vector.set_cons cov_succ dfa ([{label; rejected; rejectable}], target)
-          in
-          List.iter (fun (label, reject, index')  ->
-              if IndexSet.mem index' uncovered_states then
-                let dfa', nfa' = State.prj index' in
-                match
-                  Image.normalize
-                    ~accept:(DFA.accept dfa')
-                    ~rejectable:(NFA.rejectable nfa')
-                    ~reject desc.image
-                with
-                | None -> ()
-                | Some img -> add_target nfa' label img (UDFA.inj_l dfa')
-            ) desc.successors;
-          if not (IndexSet.is_empty desc.uncovered) then
-            add_target nfa desc.uncovered desc.image UDFA.uncovered
-        )
-      ) coverage
-
-  let () =
-    Vector.iteri (fun dfa succ ->
-        Vector.set cov_succ dfa (
-          group_by succ
-            ~compare:(compare_pair (fun _ _ -> 0) compare_index)
-            ~group:(fun x xs ->
-                let edges =
-                  List.concat_map fst (x :: xs)
-                  |> group_by
-                    ~compare:(fun e1 e2 -> IndexSet.compare e1.label e2.label)
-                    ~group:(fun e es ->
-                        let rejected =
-                          let f s e = IndexSet.union s e.rejected in
-                          List.fold_left f e.rejected es
-                        in
-                        let rejectable =
-                          let f s e = IndexSet.union s e.rejectable in
-                          IndexSet.diff (List.fold_left f e.rejectable es) rejected
-                        in
-                        {label = e.label; rejected; rejectable}
-                      )
-                  |> group_by
-                    ~compare:(fun e1 e2 ->
-                        let c = IndexSet.compare e1.rejected e2.rejected in
-                        if c <> 0 then c else
-                          IndexSet.compare e1.rejectable e2.rejectable
-                      )
-                    ~group:(fun e es ->
-                        let f s e = IndexSet.union s e.label in
-                        let label = List.fold_left f e.label es in
-                        {e with label}
-                      )
-                in
-                (edges, snd x)
-              )
-        )
-      ) cov_succ
-
-  (*let () =
-    let oc = open_out_bin "dfa-coverage.dot" in
-    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
-    p "digraph G {";
-    p "  %s" style;
-    (*p "  rankdir=LR;";*)
-    p "  compound=true;";
-    let intro_node =
-      let printed = Boolvector.make UDFA.n false in
-      fun udfa -> if not (Boolvector.test printed udfa) then (
-          Boolvector.set printed udfa;
-          match UDFA.prj udfa with
-          | L dfa ->
-            let accept = string_of_indexset ~index:Terminal.to_string (DFA.accept dfa) in
-            let accept = if accept = "[]" then "" else accept in
-            p "  st%d [label=%S];" (dfa :> int)
-              (if dfa = DFA.initial then "initial\n" ^ accept else accept);
-          | R _ -> p "  uncovered [shape=doubleoctagon];"
-        )
-    in
-    let node_name udfa =
-      match UDFA.prj udfa with
-      | L i -> "st" ^ string_of_index i
-      | R _ -> "uncovered"
-    in
-    let print_transition src (edges, tgt) =
-      intro_node src;
-      intro_node tgt;
-      p "  %s -> %s [label=%S]" (node_name src) (node_name tgt) (
-        string_concat_map "\n"
-          (fun edge ->
-             Printf.sprintf "%s\n%s/%s"
-               (lr1_set_to_string edge.label)
-               (pts edge.rejected)
-               (pts edge.rejectable))
-          edges
-      )
-    in
-    let print_transitions src trs =
-      List.iter (print_transition (UDFA.inj_l src)) trs
-    in
-    Vector.iteri print_transitions cov_succ;
-    p "}";
-    close_out_noerr oc
-
-  let cov_pred = Vector.make UDFA.n []
-
-  let () =
-    Vector.iteri (fun src succ ->
-        List.iter (fun (lbl, tgt) ->
-            Vector.set_cons cov_pred tgt (lbl, src)
-          ) succ
-      ) cov_succ
-
-  let () =
-    if false then
-    match Index.of_int Lr1.n 995 with
-    | exception _ -> ()
-    | lr1 ->
-      Printf.eprintf "lr1 state %s predecessors: %s\n"
-        (Lr1.to_string lr1)
-        (Lr1.set_to_string (Lr1.predecessors lr1));
-      let lrc_to_string lrc =
-        Printf.sprintf "%d/%d"
-          (Lrc.lr1_of_lrc lrc :> int) (Lrc.class_index lrc)
-      in
-      IndexSet.iter (fun lrc ->
-          Printf.eprintf "Lrc %s has predecessors:\n"
-            (lrc_to_string lrc);
-          IndexSet.iter (fun lrc' ->
-              Printf.eprintf "- %s\n" (lrc_to_string lrc')
-            ) (Lrc.predecessors lrc)
-        ) (Lrc.lrcs_of_lr1 lr1);
-      Index.iter NFA.n (fun nfa ->
-          if IndexSet.mem lr1 (NFA.incoming nfa) then (
-            Printf.eprintf "NFA %s has transitions on LR1#995 (%s) targetting:\n"
-              (NFA.to_string nfa) (Lr1.to_string lr1);
-            IndexMap.iter (fun nfa' _ ->
-                Printf.eprintf "- %s / %s\n" (NFA.to_string nfa') (Lr1.set_to_string (NFA.incoming nfa'))
-              ) (NFA.transitions nfa)
-      (* Printf.eprintf "lr1 state %s predecessors: %s\n"
-           (Lr1.to_string lr1)
-           (Lr1.set_to_string (Lr1.predecessors lr1)) *)
-          )
-        )*)
 end
