@@ -172,7 +172,7 @@ struct
       | L viable -> (Viable.get_config viable).top
       | R lr1 -> lr1
     in
-    Lr1.reject lr1
+    IndexSet.inter (Lr1.reject lr1) Terminal.regular
 
   let rejectable =
     let table = Vector.init n (fun st -> (reject st, IndexMap.empty)) in

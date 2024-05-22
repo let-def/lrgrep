@@ -46,6 +46,7 @@ module type S = sig
     include GRAMMAR_INDEXED with type raw = Grammar.terminal
     val to_string : t -> string
     val all : set
+    val regular : set
 
     (** [semantic_value term] is [Some typ] if terminal [term] has a semantic
         value of type [typ], or [None] for unparameterized terminals. *)
@@ -274,6 +275,12 @@ struct
     include Indexed(Grammar.Terminal)
     let to_string i = Grammar.Terminal.name (to_g i)
     let all = all n
+
+    let regular = IndexSet.init_from_set n (fun t ->
+      match Grammar.Terminal.kind (to_g t) with
+        | `EOF | `REGULAR -> true
+        | `PSEUDO | `ERROR -> false
+    )
 
     let intersect a b =
       if a == all then b
