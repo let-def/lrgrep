@@ -722,7 +722,7 @@ struct
 
   let coverage = IndexTable.create 7
 
-  let step_counter = ref 0
+  let step_counter = ref 1
 
   let get_state index =
     match IndexTable.find_opt coverage index with
@@ -744,8 +744,6 @@ struct
             (successors', uncovered')
           ) ([], NFA.incoming nfa) (DFA.successors dfa)
       in
-      if not (IndexSet.is_empty uncovered) then
-        Printf.eprintf "Found uncovered case in %d steps\n" !step_counter;
       let desc = {
         successors; uncovered;
         predecessors = [];
@@ -765,6 +763,15 @@ struct
       match Image.increase ~delta desc.image with
       | None -> ()
       | Some (image', delta') ->
+        if not (IndexSet.is_empty desc.uncovered) then (
+          let _, nfa = State.prj index in
+          Printf.eprintf
+            "Found uncovered case in %d steps, for transitions %s and lookaheads %s\n"
+            !step_counter
+            (Lr1.set_to_string desc.uncovered)
+            (pts (IndexSet.union delta'.rejected
+              (IndexSet.diff (NFA.rejectable nfa) delta'.handled)));
+        );
         desc.image <- image';
         let delta' =
           if desc.mark then
