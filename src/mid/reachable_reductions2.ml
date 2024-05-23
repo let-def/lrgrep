@@ -731,9 +731,10 @@ struct
 
   type desc = {
     successors: (Lr1.set * Terminal.set * State.n index) list;
-    mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
     uncovered: Lr1.set;
     mutable image: Image.t;
+    mutable failing: Terminal.set;
+
     mutable mark: bool;
     mutable todo: Image.t;
   }
@@ -782,8 +783,8 @@ struct
       in
       let desc = {
         successors; uncovered;
-        predecessors = [];
         image = Image.empty;
+        failing = IndexSet.empty;
         mark = false;
         todo = Image.empty;
       } in
@@ -898,64 +899,54 @@ struct
 
   let () = Stopwatch.leave time
 
-  (* Enumerate sentences *)
+  (* Propagate failing lookaheads backward *)
   let () =
-    if false then
-    let todo = ref [] in
-    let print_sentence path uncovered =
-      List.iteri (fun i (index, reject, lbl, image) ->
-          let dfa, nfa = State.prj index in
-          if not (IndexSet.is_empty lbl) then
-            Printf.printf "\nfollowing transition on %s\n\n" (Lr1.set_to_string lbl);
-          Printf.printf "step %d reached:\n" i;
-          Printf.printf "- dfa accepting: %s\n" (pts (DFA.accept dfa));
-          Printf.printf "- nfa rejectable: %s\n" (pts (NFA.rejectable nfa));
-          if not (IndexSet.is_empty reject) then
-            Printf.printf "- rejecting: %s\n" (pts reject);
-          if not (IndexSet.is_empty image.Image.rejected) then
-            Printf.printf "- rejected: %s\n" (pts image.Image.rejected);
-          if not (IndexSet.is_empty image.Image.handled) then
-            Printf.printf "- handled: %s\n" (pts image.Image.handled);
-        ) (List.rev path);
-      Printf.printf "Uncovered transition on %s\n%!" (Lr1.set_to_string uncovered)
+    let counter = ref 0 in
+    let worklist = ref [] in
+    let schedule index desc =
+      if not desc.mark then (
+        desc.mark <- true;
+        push worklist index;
+      )
     in
-    let visit path index image =
-      match IndexTable.find_opt coverage index with
-      | None -> assert false
-      | Some desc ->
-        let dfa, nfa = State.prj index in
-        if not (IndexSet.is_empty desc.uncovered) then
-          print_sentence path desc.uncovered;
-        List.iter
-          (fun (lbl, reject, index') ->
-             match Image.normalize
-                     ~accept:(DFA.accept dfa)
-                     ~rejectable:(NFA.rejectable nfa)
-                     ~reject image
-             with
-             | None -> ()
-             | Some image' ->
-               let path = (index', reject, lbl, image') :: path in
-               push todo (path, index, image')
-          ) desc.successors
+    let update index failing =
+      let _, nfa = State.prj index in
+      let desc = IndexTable.find coverage index in
+      let failing =
+        let f1 = IndexSet.inter failing desc.image.rejected in
+        let f2 = IndexSet.inter failing (NFA.rejectable nfa) in
+        IndexSet.union f1 (IndexSet.diff f2 desc.image.handled)
+      in
+      let failing = IndexSet.union failing desc.failing in
+      if failing != desc.failing then (
+        desc.failing <- failing;
+        schedule index desc
+      )
     in
-    let propagate (path, index, image) =
-        visit path index image
+    let propagate index =
+      let desc = get_state index in
+      assert desc.mark;
+      desc.mark <- false;
+      List.iter
+        (fun (index', _) -> update index' desc.failing)
+        (get_predecessors index)
     in
-    IndexTable.iter (fun index _ ->
-        let dfa, nfa = State.prj index in
-        if dfa = DFA.initial then
-          let reject = IndexMap.find nfa NFA.initial in
-          match
-            Image.normalize
-              ~accept:(DFA.accept DFA.initial)
-              ~rejectable:(NFA.rejectable nfa)
-              ~reject Image.empty
-          with
-          | None -> ()
-          | Some image ->
-            let path = [index, reject, IndexSet.empty, image] in
-            propagate (path, index, image)
+    IndexTable.iter (fun index desc ->
+        if not (IndexSet.is_empty desc.uncovered) then (
+          let _, nfa = State.prj index in
+          desc.failing <- IndexSet.union desc.image.rejected (NFA.rejectable nfa);
+          schedule index desc
+        )
       ) coverage;
-    fixpoint ~propagate todo
+    fixpoint ~counter ~propagate worklist;
+    let initial_failing =
+      IndexMap.fold (fun nfa _ acc ->
+          match IndexTable.find_opt coverage (State.inj DFA.initial nfa) with
+          | None -> acc
+          | Some desc -> IndexSet.union desc.failing acc
+        ) NFA.initial IndexSet.empty
+    in
+    Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
+    Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing);
+
 end
