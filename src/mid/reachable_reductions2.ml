@@ -784,6 +784,7 @@ struct
     uncovered: Lr1.set;
     mutable image: Image.t;
     mutable failing: Terminal.set;
+    mutable failing_successors: (Terminal.set * Lr1.set * Terminal.set * State.n index) list;
 
     mutable mark: bool;
     mutable todo: Image.t;
@@ -818,6 +819,7 @@ struct
         predecessors = [];
         image = Image.empty;
         failing = IndexSet.empty;
+        failing_successors = [];
         mark = false;
         todo = Image.empty;
       } in
@@ -906,7 +908,7 @@ struct
         push worklist index;
       )
     in
-    let update index failing =
+    let update index' failing (lbl, reject, index) =
       let _, nfa = State.prj index in
       let desc = IndexTable.find coverage index in
       let failing =
@@ -914,9 +916,11 @@ struct
         let f2 = IndexSet.inter failing (NFA.rejectable nfa) in
         IndexSet.union f1 (IndexSet.diff f2 desc.image.handled)
       in
-      let failing = IndexSet.union failing desc.failing in
-      if failing != desc.failing then (
-        desc.failing <- failing;
+      let delta = IndexSet.diff failing desc.failing in
+      if not (IndexSet.is_empty delta) then (
+        desc.failing <- IndexSet.union failing desc.failing;
+        desc.failing_successors <-
+          (delta, lbl, reject, index') :: desc.failing_successors;
         schedule index desc
       )
     in
@@ -924,9 +928,7 @@ struct
       let desc = get_state index in
       assert desc.mark;
       desc.mark <- false;
-      List.iter
-        (fun (_, _, index') -> update index' desc.failing)
-        desc.predecessors
+      List.iter (update index desc.failing) desc.predecessors
     in
     IndexTable.iter (fun index desc ->
         if not (IndexSet.is_empty desc.uncovered) then (
@@ -959,13 +961,11 @@ struct
           let dfa, _nfa = State.prj index in
           p "  st%d[label=%S];\n" (index :> int)
             (pts (DFA.accept dfa) (*^ "\n" ^ NFA.to_string nfa*));
-          List.iter (fun (lbl, _ts, index') ->
-              let desc' = get_state index' in
-              if not (IndexSet.is_empty desc'.failing) then
-                p "  st%d -> st%d [label=%S];\n"
-                  (index :> int) (index' :> int)
-                  (Lr1.set_to_string lbl)
-            ) desc.successors
+          List.iter (fun (failing, lbl, _ts, index') ->
+              p "  st%d -> st%d [label=%S];\n"
+                (index :> int) (index' : _ index :> int)
+                (pts failing ^"\n"^ Lr1.set_to_string lbl)
+            ) desc.failing_successors
         )
       ) coverage;
     Printf.eprintf "Coverage graph has %d states, failing sub-graph has %d states.\n"
