@@ -778,7 +778,9 @@ struct
   module State = Prod(DFA)(NFA)
 
   type desc = {
-    successors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable successors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
+
     uncovered: Lr1.set;
     mutable image: Image.t;
     mutable failing: Terminal.set;
@@ -788,23 +790,6 @@ struct
   }
 
   let coverage = IndexTable.create 7
-
-  let predecessors = IndexTable.create 7
-
-  let add_predecessor src lbl tgt =
-    let r = match IndexTable.find_opt predecessors tgt with
-      | Some r -> r
-      | None ->
-        let r = ref [] in
-        IndexTable.add predecessors tgt r;
-        r
-    in
-    push r (src, lbl)
-
-  let get_predecessors tgt =
-    Option.fold (IndexTable.find_opt predecessors tgt) ~none:[] ~some:(!)
-
-  let step_counter = ref 1
 
   let get_state index =
     match IndexTable.find_opt coverage index with
@@ -820,7 +805,6 @@ struct
                 IndexMap.fold
                   (fun nfa' reject acc ->
                      let index' = State.inj dfa' nfa' in
-                     add_predecessor index (lbl', reject) index';
                      (lbl', reject, index') :: acc)
                   (NFA.transitions nfa) successors
               ) else
@@ -831,6 +815,7 @@ struct
       in
       let desc = {
         successors; uncovered;
+        predecessors = [];
         image = Image.empty;
         failing = IndexSet.empty;
         mark = false;
@@ -841,33 +826,6 @@ struct
 
   let worklist = ref []
 
-  let find_path index =
-    let found = ref None in
-    let rec loop acc = function
-      | [] -> loop [] acc
-      | (x, xs) :: xxs ->
-        let acc =
-          List.fold_left
-            (fun acc (src, lbl) ->
-               let dfa, _ = State.prj src in
-               let state = (src, (lbl, x) :: xs) in
-               if dfa = DFA.initial then (
-                 found := Some state;
-                 raise Exit
-               )
-               else
-                 state :: acc)
-            acc (get_predecessors x)
-        in
-        loop acc xxs
-    in
-    let dfa, _ = State.prj index in
-    if dfa = DFA.initial then
-      (index, [])
-    else
-      try loop [] [index, []]
-      with Exit -> Option.get !found
-
   let add_delta index = function
     | None -> ()
     | Some delta ->
@@ -875,31 +833,6 @@ struct
       match Image.increase ~delta desc.image with
       | None -> ()
       | Some (image', delta') ->
-        if not (IndexSet.is_empty desc.uncovered) then (
-          let _, nfa = State.prj index in
-          let index0, path = find_path index in
-          Printf.eprintf
-            "Found uncovered case in %d steps:\n\
-             - for transitions %s\n\
-             - lookaheads %s\n"
-            !step_counter
-            (Lr1.set_to_string desc.uncovered)
-            (pts (IndexSet.union delta'.rejected
-                    (IndexSet.diff (NFA.rejectable nfa) delta'.handled)));
-          let print_index index =
-            let dfa, nfa = State.prj index in
-            Printf.eprintf "state (%d,%d)\n" (dfa :> int) (nfa :> int);
-            Printf.eprintf "- accept %s\n" (pts (DFA.accept dfa));
-          in
-          print_index index0;
-          List.iter (fun ((lbl, reject), index) ->
-              Printf.eprintf "- reject %s\n" (pts reject);
-              prerr_string (Lr1.set_to_string lbl);
-              print_index index;
-            ) path;
-          prerr_newline ();
-          flush stderr;
-        );
         desc.image <- image';
         let delta' =
           if desc.mark then
@@ -925,11 +858,8 @@ struct
     in
     IndexMap.fold initialize NFA.initial []
 
-  let propagations = ref 0
-
   let () =
     let propagate desc =
-      incr propagations;
       let img = desc.todo in
       desc.mark <- false;
       desc.todo <- Image.empty;
@@ -943,9 +873,28 @@ struct
           )
         ) desc.successors
     in
-    fixpoint ~counter:step_counter ~propagate worklist
+    fixpoint ~propagate worklist
 
   let () = Stopwatch.leave time
+
+  (* Normalize successors & compute predecessors *)
+  let () =
+    IndexTable.iter (fun index desc ->
+        let check_successor (_lbl, reject, index') =
+          let dfa', nfa' = State.prj index' in
+          Option.is_some (
+            Image.normalize
+              ~accept:(DFA.accept dfa')
+              ~rejectable:(NFA.rejectable nfa')
+              ~reject desc.image
+          )
+        in
+        List.iter (fun (lbl, reject, index' as succ) ->
+            if check_successor succ then
+              let desc' = get_state index' in
+              desc'.predecessors <- (lbl, reject, index) :: desc'.predecessors
+          ) desc.successors
+      ) coverage
 
   (* Propagate failing lookaheads backward *)
   let () =
@@ -976,8 +925,8 @@ struct
       assert desc.mark;
       desc.mark <- false;
       List.iter
-        (fun (index', _) -> update index' desc.failing)
-        (get_predecessors index)
+        (fun (_, _, index') -> update index' desc.failing)
+        desc.predecessors
     in
     IndexTable.iter (fun index desc ->
         if not (IndexSet.is_empty desc.uncovered) then (
@@ -995,6 +944,33 @@ struct
         ) NFA.initial IndexSet.empty
     in
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
-    Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing);
+    Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing)
 
+  (* *)
+  let () =
+    let oc = open_out_bin "failing.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    let count = ref 0 in
+    IndexTable.iter (fun index desc ->
+        if not (IndexSet.is_empty desc.failing) then (
+          incr count;
+          let dfa, _nfa = State.prj index in
+          p "  st%d[label=%S];\n" (index :> int)
+            (pts (DFA.accept dfa) (*^ "\n" ^ NFA.to_string nfa*));
+          List.iter (fun (lbl, _ts, index') ->
+              let desc' = get_state index' in
+              if not (IndexSet.is_empty desc'.failing) then
+                p "  st%d -> st%d [label=%S];\n"
+                  (index :> int) (index' :> int)
+                  (Lr1.set_to_string lbl)
+            ) desc.successors
+        )
+      ) coverage;
+    Printf.eprintf "Coverage graph has %d states, failing sub-graph has %d states.\n"
+      (IndexTable.length coverage)
+      !count;
+    p "}";
+    close_out oc
 end
