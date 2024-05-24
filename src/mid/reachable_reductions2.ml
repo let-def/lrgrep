@@ -655,6 +655,54 @@ struct
   open Info
   let time = Stopwatch.enter Stopwatch.main "Coverage check"
 
+  module FDFA = struct
+    let table = Hashtbl.create 7
+
+    let todo = ref []
+
+    let explore_transitions trs =
+      let sets =
+        List.fold_left (fun acc tr ->
+            IndexMap.fold
+              (fun state reject acc ->
+                 (NFA.incoming state, (reject, state)) :: acc)
+              tr acc
+          )
+          [] trs
+      in
+      List.map (fun (lbl, clss) ->
+          let reject, states =
+            List.fold_left (fun (rejects, states) (reject, state) ->
+              (IndexSet.union reject rejects, IndexSet.add state states))
+              (IndexSet.empty, IndexSet.empty)
+              clss
+          in
+          push todo states;
+          (lbl, reject, states)
+        )
+        (IndexRefine.annotated_partition sets)
+
+    let propagate states =
+      if not (Hashtbl.mem table states) then (
+        Hashtbl.add table states (
+          explore_transitions (
+            IndexSet.fold (fun state acc -> NFA.transitions state :: acc)
+              states []
+          )
+        )
+      )
+
+    let initial = explore_transitions [NFA.initial]
+
+    let () =
+      fixpoint ~propagate todo
+
+    let () =
+      Stopwatch.step time
+        "Determinized Failure NFA, %d states\n"
+        (Hashtbl.length table)
+  end
+
   let pts ts = string_of_indexset ~index:Terminal.to_string ts
 
   let () =
