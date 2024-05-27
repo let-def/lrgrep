@@ -579,6 +579,17 @@ struct
     );
     get
 
+  let top i =
+    match States.prj i with
+    | States.Prefix _ -> None
+    | States.Suffix _ -> None
+    | States.Reach r ->
+      let desc = Vector.get Reach.states r in
+      let source = desc.config.source in
+      match Reach.Source.prj source with
+      | L v -> Some (Viable.get_config v).top
+      | R lr1 -> Some lr1
+
   let incoming_lrc i =
     match States.prj i with
     | States.Prefix lrc -> IndexSet.singleton lrc
@@ -965,28 +976,44 @@ struct
     goto: Lr1.set;
   }
 
+  let union_all l =
+    List.fold_left IndexSet.union IndexSet.empty l
+
   let enum_uncovered ~f =
     let rec visit path states =
       let transitions =
         List.fold_left (fun acc (reject, desc) ->
             List.fold_left (fun acc (lbl, (reject', desc')) ->
-                (lbl, (IndexSet.union reject reject', desc')) :: acc
+                let _, nfa = State.prj desc.state in
+                let top = match NFA.top nfa with
+                  | None -> IndexSet.empty
+                  | Some i -> IndexSet.singleton i
+                in
+                (lbl, (top, (IndexSet.union reject reject', desc'))) :: acc
               ) acc desc.failing_successors
           ) [] states
       in
-      List.iter (fun (lbl, states') -> visit (lbl :: path) states')
+      List.iter (fun (label, states') ->
+          let goto, states' = List.split states' in
+          let goto = union_all goto in
+          visit ({label; goto} :: path) states')
         (IndexRefine.annotated_partition transitions);
       let uncovered =
           List.filter_map (fun (reject, desc) ->
               if IndexSet.is_empty desc.uncovered then None else
                 let _, nfa = State.prj desc.state in
-                Some (desc.uncovered, IndexSet.union reject (NFA.rejectable nfa))
+                let top = match NFA.top nfa with
+                  | None -> IndexSet.empty
+                  | Some i -> IndexSet.singleton i
+                in
+                Some (desc.uncovered, (top, IndexSet.union reject (NFA.rejectable nfa)))
             ) states
       in
       List.iter
-        (fun (lbl, rejects) ->
-           f (lbl :: path)
-             (List.fold_left IndexSet.union IndexSet.empty rejects))
+        (fun (label, rejects) ->
+           let goto, rejects = List.split rejects in
+           let goto = union_all goto in
+           f ({label; goto} :: path) (union_all rejects))
         (IndexRefine.annotated_partition uncovered);
       begin match List.filter (fun (_, desc) -> is_bottom desc) states with
         | [] -> ()
@@ -1016,8 +1043,31 @@ struct
 
   let _ =
     enum_uncovered ~f:(fun path _failing ->
+        let print_step step =
+          let lr1 = Lr1.symbol_to_string (IndexSet.choose step.label) in
+          if IndexSet.is_empty step.goto then
+            lr1
+          else
+            let pitem (prod, dot) =
+              let components = ref [] in
+              let rhs = Production.rhs prod in
+              for i = Array.length rhs - 1 downto dot do
+                push components (Symbol.name rhs.(i));
+              done;
+              push components ".";
+              for i = dot - 1 downto 0 do
+                push components (Symbol.name rhs.(i));
+              done;
+              !components
+            in
+            lr1 ^ string_concat_map " " (fun lr1' ->
+                string_concat_map ~wrap:("[","]") " "
+                  (fun item -> String.concat " " ("/" :: pitem item))
+                  (Lr1.items lr1')
+              ) (IndexSet.elements step.goto)
+        in
         Printf.eprintf "%s\n"
-          (Lr1.list_to_string (List.map IndexSet.choose path))
+          (string_concat_map " " print_step path)
           (*(pts failing)*)
       )
 
