@@ -784,7 +784,7 @@ struct
     uncovered: Lr1.set;
     mutable image: Image.t;
     mutable failing: Terminal.set;
-    mutable failing_successors: (Terminal.set * Lr1.set * Terminal.set * State.n index) list;
+    mutable failing_successors: (Lr1.set * desc) list;
 
     mutable mark: bool;
     mutable todo: Image.t;
@@ -908,27 +908,26 @@ struct
         push worklist index;
       )
     in
-    let update index' failing (lbl, reject, index) =
+    let update desc (lbl, _reject, index) =
       let _, nfa = State.prj index in
-      let desc = IndexTable.find coverage index in
+      let desc' = IndexTable.find coverage index in
       let failing =
-        let f1 = IndexSet.inter failing desc.image.rejected in
-        let f2 = IndexSet.inter failing (NFA.rejectable nfa) in
-        IndexSet.union f1 (IndexSet.diff f2 desc.image.handled)
+        let f1 = IndexSet.inter desc.failing desc'.image.rejected in
+        let f2 = IndexSet.inter desc.failing (NFA.rejectable nfa) in
+        IndexSet.union f1 (IndexSet.diff f2 desc'.image.handled)
       in
-      let delta = IndexSet.diff failing desc.failing in
+      let delta = IndexSet.diff failing desc'.failing in
       if not (IndexSet.is_empty delta) then (
-        desc.failing <- IndexSet.union failing desc.failing;
-        desc.failing_successors <-
-          (delta, lbl, reject, index') :: desc.failing_successors;
-        schedule index desc
+        desc'.failing <- IndexSet.union failing desc'.failing;
+        desc'.failing_successors <- (lbl, desc) :: desc'.failing_successors;
+        schedule index desc'
       )
     in
     let propagate index =
       let desc = get_state index in
       assert desc.mark;
       desc.mark <- false;
-      List.iter (update index desc.failing) desc.predecessors
+      List.iter (update desc) desc.predecessors
     in
     IndexTable.iter (fun index desc ->
         if not (IndexSet.is_empty desc.uncovered) then (
@@ -948,8 +947,8 @@ struct
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
     Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing)
 
-  (* *)
-  let () =
+  (* Output failing sub-graph *)
+  (*let () =
     let oc = open_out_bin "failing.dot" in
     let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
     p "digraph G {";
@@ -972,5 +971,49 @@ struct
       (IndexTable.length coverage)
       !count;
     p "}";
-    close_out oc
+    close_out oc*)
+
+  (* Generate sentences and determinize on the fly *)
+  let enum_uncovered ~f =
+    let initials =
+      IndexMap.fold (fun nfa _ acc ->
+          let index = State.inj DFA.initial nfa in
+          match IndexTable.find_opt coverage index with
+          | None -> acc
+          | Some desc ->
+            if IndexSet.is_empty desc.failing
+            then acc
+            else desc :: acc
+        ) NFA.initial []
+    in
+    let rec visit path states =
+      let failing =
+        List.fold_left
+          (fun acc desc -> IndexSet.union desc.failing acc)
+          IndexSet.empty states
+      in
+      let transitions =
+        List.concat_map (fun desc -> desc.failing_successors) states
+        |> IndexRefine.annotated_partition
+      in
+      let covered =
+        List.fold_left
+          (fun covered (lbl, states') ->
+             IndexSet.union (visit (lbl :: path) states') covered)
+          IndexSet.empty transitions
+      in
+      let uncovered =
+        IndexSet.diff failing covered
+      in
+      if not (IndexSet.is_empty uncovered) then
+        f path uncovered failing;
+      failing
+    in
+    visit [] initials
+
+  let _ =
+    enum_uncovered ~f:(fun path _uncovered _failing ->
+        Printf.eprintf "%s\n"
+          (Lr1.list_to_string (List.map IndexSet.choose path))
+      )
 end
