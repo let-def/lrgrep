@@ -384,6 +384,7 @@ module type FAILURE_NFA = sig
   val initial : (n, terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
+  val top : n index -> lr1 index option
   val is_bottom : n index -> bool
   val incoming : n index -> lr1 indexset
   val incoming_lrc : n index -> lrc indexset
@@ -786,7 +787,7 @@ struct
     uncovered: Lr1.set;
     mutable image: Image.t;
     mutable failing: Terminal.set;
-    mutable failing_successors: (Lr1.set * desc) list;
+    mutable failing_successors: (Lr1.set * (Terminal.set * desc)) list;
 
     mutable mark: bool;
     mutable todo: Image.t;
@@ -901,10 +902,12 @@ struct
           ) desc.successors
       ) coverage
 
-  let is_immediate_failure desc =
-    not (IndexSet.is_empty desc.uncovered) ||
+  let is_bottom desc =
     let _, nfa = State.prj desc.state in
     NFA.is_bottom nfa
+
+  let is_immediate_failure desc =
+    not (IndexSet.is_empty desc.uncovered) || is_bottom desc
 
   (* Propagate failing lookaheads backward *)
   let () =
@@ -916,7 +919,7 @@ struct
         push worklist index;
       )
     in
-    let update desc (lbl, _reject, index') =
+    let update desc (lbl, reject, index') =
       let _, nfa' = State.prj index' in
       let desc' = IndexTable.find coverage index' in
       let failing =
@@ -924,10 +927,9 @@ struct
         let f2 = IndexSet.inter desc.failing (NFA.rejectable nfa') in
         IndexSet.union f1 (IndexSet.diff f2 desc'.image.handled)
       in
-      let delta = IndexSet.diff failing desc'.failing in
-      if not (IndexSet.is_empty delta) then (
+      if not (IndexSet.subset failing desc'.failing) then (
         desc'.failing <- IndexSet.union failing desc'.failing;
-        desc'.failing_successors <- (lbl, desc) :: desc'.failing_successors;
+        desc'.failing_successors <- (lbl, (reject, desc)) :: desc'.failing_successors;
         schedule index' desc'
       )
     in
@@ -956,73 +958,67 @@ struct
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
     Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing)
 
-  (* Output failing sub-graph *)
-  (*let () =
-    let oc = open_out_bin "failing.dot" in
-    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
-    p "digraph G {";
-    p "  %s" style;
-    let count = ref 0 in
-    IndexTable.iter (fun index desc ->
-        if not (IndexSet.is_empty desc.failing) then (
-          incr count;
-          let dfa, _nfa = State.prj index in
-          p "  st%d[label=%S];\n" (index :> int)
-            (pts (DFA.accept dfa) (*^ "\n" ^ NFA.to_string nfa*));
-          List.iter (fun (failing, lbl, _ts, index') ->
-              p "  st%d -> st%d [label=%S];\n"
-                (index :> int) (index' : _ index :> int)
-                (pts failing ^"\n"^ Lr1.set_to_string lbl)
-            ) desc.failing_successors
-        )
-      ) coverage;
-    Printf.eprintf "Coverage graph has %d states, failing sub-graph has %d states.\n"
-      (IndexTable.length coverage)
-      !count;
-    p "}";
-    close_out oc*)
-
   (* Generate sentences and determinize on the fly *)
+
+  type step = {
+    label: Lr1.set;
+    goto: Lr1.set;
+  }
+
   let enum_uncovered ~f =
+    let rec visit path states =
+      let transitions =
+        List.fold_left (fun acc (reject, desc) ->
+            List.fold_left (fun acc (lbl, (reject', desc')) ->
+                (lbl, (IndexSet.union reject reject', desc')) :: acc
+              ) acc desc.failing_successors
+          ) [] states
+      in
+      List.iter (fun (lbl, states') -> visit (lbl :: path) states')
+        (IndexRefine.annotated_partition transitions);
+      let uncovered =
+          List.filter_map (fun (reject, desc) ->
+              if IndexSet.is_empty desc.uncovered then None else
+                let _, nfa = State.prj desc.state in
+                Some (desc.uncovered, IndexSet.union reject (NFA.rejectable nfa))
+            ) states
+      in
+      List.iter
+        (fun (lbl, rejects) ->
+           f (lbl :: path)
+             (List.fold_left IndexSet.union IndexSet.empty rejects))
+        (IndexRefine.annotated_partition uncovered);
+      begin match List.filter (fun (_, desc) -> is_bottom desc) states with
+        | [] -> ()
+        | immediate ->
+          let failing =
+            List.fold_left (fun acc (reject, desc) ->
+                let _, nfa = State.prj desc.state in
+                IndexSet.union acc
+                  (IndexSet.union reject (NFA.rejectable nfa))
+              ) IndexSet.empty immediate
+          in
+          f path failing;
+      end
+    in
     let initials =
-      IndexMap.fold (fun nfa _ acc ->
+      IndexMap.fold (fun nfa reject acc ->
           let index = State.inj DFA.initial nfa in
           match IndexTable.find_opt coverage index with
           | None -> acc
           | Some desc ->
             if IndexSet.is_empty desc.failing
             then acc
-            else desc :: acc
+            else (reject, desc) :: acc
         ) NFA.initial []
-    in
-    let rec visit path states =
-      let failing =
-        List.fold_left
-          (fun acc desc -> IndexSet.union desc.failing acc)
-          IndexSet.empty states
-      in
-      let transitions =
-        List.concat_map (fun desc -> desc.failing_successors) states
-        |> IndexRefine.annotated_partition
-      in
-      let covered =
-        List.fold_left
-          (fun covered (lbl, states') ->
-             IndexSet.union (visit (lbl :: path) states') covered)
-          IndexSet.empty transitions
-      in
-      let uncovered =
-        IndexSet.diff failing covered
-      in
-      if not (IndexSet.is_empty uncovered) then
-        f path uncovered failing;
-      failing
     in
     visit [] initials
 
   let _ =
-    enum_uncovered ~f:(fun path _uncovered _failing ->
+    enum_uncovered ~f:(fun path _failing ->
         Printf.eprintf "%s\n"
           (Lr1.list_to_string (List.map IndexSet.choose path))
+          (*(pts failing)*)
       )
+
 end
