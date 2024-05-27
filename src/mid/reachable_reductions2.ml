@@ -384,6 +384,7 @@ module type FAILURE_NFA = sig
   val initial : (n, terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
+  val is_bottom : n index -> bool
   val incoming : n index -> lr1 indexset
   val incoming_lrc : n index -> lrc indexset
   val transitions : n index -> (n, terminal indexset) indexmap
@@ -496,13 +497,9 @@ struct
       (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
       Lrc.idle
 
-  let sink =
-    let r = IndexBuffer.Gen.reserve suffix_transitions in
-    let i = IndexBuffer.Gen.index r in
-    let sink = IndexMap.singleton (States.suffix i) IndexSet.empty in
-    IndexBuffer.Gen.commit suffix_transitions r
-      (sink, lrc_initials);
-    States.suffix i
+  let bottom =
+    States.suffix
+      (IndexBuffer.Gen.add suffix_transitions (IndexMap.empty, IndexSet.empty))
 
   let reach_transitions =
     let preds lrcs = indexset_bind lrcs Lrc.predecessors in
@@ -541,9 +538,11 @@ struct
           | [] | [_] -> IndexMap.empty
           | _ :: rest -> fst (import (preds d.config.lrcs) rest)
         in
-        if IndexSet.subset d.config.lrcs lrc_initials
-        then IndexMap.add sink IndexSet.empty regular
-        else regular
+        if IndexSet.subset d.config.lrcs lrc_initials then (
+          assert (IndexMap.is_empty regular);
+          IndexMap.singleton bottom IndexSet.empty
+        ) else
+          regular
       ) Reach.states
 
   let suffix_transitions =
@@ -607,8 +606,10 @@ struct
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
+  let is_bottom i = i = bottom
+
   let to_string i =
-    if i = sink then "sink" else
+    if is_bottom i then "bottom" else
       match States.prj i with
       | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
       | States.Reach  i ->
@@ -778,6 +779,7 @@ struct
   module State = Prod(DFA)(NFA)
 
   type desc = {
+    state: State.n index;
     mutable successors: (Lr1.set * Terminal.set * State.n index) list;
     mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
 
@@ -815,6 +817,7 @@ struct
           ) ([], NFA.incoming nfa) (DFA.successors dfa)
       in
       let desc = {
+        state = index;
         successors; uncovered;
         predecessors = [];
         image = Image.empty;
@@ -898,6 +901,11 @@ struct
           ) desc.successors
       ) coverage
 
+  let is_immediate_failure desc =
+    not (IndexSet.is_empty desc.uncovered) ||
+    let _, nfa = State.prj desc.state in
+    NFA.is_bottom nfa
+
   (* Propagate failing lookaheads backward *)
   let () =
     let counter = ref 0 in
@@ -908,19 +916,19 @@ struct
         push worklist index;
       )
     in
-    let update desc (lbl, _reject, index) =
-      let _, nfa = State.prj index in
-      let desc' = IndexTable.find coverage index in
+    let update desc (lbl, _reject, index') =
+      let _, nfa' = State.prj index' in
+      let desc' = IndexTable.find coverage index' in
       let failing =
         let f1 = IndexSet.inter desc.failing desc'.image.rejected in
-        let f2 = IndexSet.inter desc.failing (NFA.rejectable nfa) in
+        let f2 = IndexSet.inter desc.failing (NFA.rejectable nfa') in
         IndexSet.union f1 (IndexSet.diff f2 desc'.image.handled)
       in
       let delta = IndexSet.diff failing desc'.failing in
       if not (IndexSet.is_empty delta) then (
         desc'.failing <- IndexSet.union failing desc'.failing;
         desc'.failing_successors <- (lbl, desc) :: desc'.failing_successors;
-        schedule index desc'
+        schedule index' desc'
       )
     in
     let propagate index =
@@ -930,9 +938,10 @@ struct
       List.iter (update desc) desc.predecessors
     in
     IndexTable.iter (fun index desc ->
-        if not (IndexSet.is_empty desc.uncovered) then (
+        if is_immediate_failure desc then (
           let _, nfa = State.prj index in
           desc.failing <- IndexSet.union desc.image.rejected (NFA.rejectable nfa);
+          assert (not (IndexSet.is_empty desc.failing));
           schedule index desc
         )
       ) coverage;
