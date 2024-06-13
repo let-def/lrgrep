@@ -6,9 +6,8 @@ open Fix.Indexing
 let opt_infile = ref None
 let opt_parse_intf = ref false
 let opt_stack_items = ref false
-let opt_no_reductions = ref false
-let opt_no_reductions_items = ref false
 let opt_dump_states = ref false
+let opt_no_reduce_filter = ref false
 
 let usage =
   Printf.sprintf
@@ -31,10 +30,8 @@ let specs = [
   " Read input from stdin";
   "-intf", Arg.Set opt_parse_intf,
   " Parse an interface (by default: use extension or parse an implementation)";
-  "-no-reductions", Arg.Set opt_no_reductions,
-  " Do not simulate reductions";
-  "-no-reduction-items", Arg.Set opt_no_reductions_items,
-  " Do not print items when simulating reductions";
+  "-no-reduce-filter", Arg.Set opt_no_reduce_filter,
+  " Do not print reachable reduce-filter patterns";
   "-stack-items", Arg.Set opt_stack_items,
   " Print items of all states on stack";
   "-v",  Arg.Unit print_version_string,
@@ -87,8 +84,15 @@ let print_item (prod, pos) =
   path := (Nonterminal.to_string (Production.lhs prod) ^ ":") :: !path;
   String.concat " " !path
 
-let print_items lr1 =
-  List.map (fun item -> "\t\t  [" ^ print_item item ^ "]") (Info.Lr1.items lr1)
+let print_items indent suffix items =
+  Printf.printf "\t\t%s\x1b[0;32m[%s" (String.make indent ' ') suffix;
+  let pad = String.make (indent + 1 + String.length suffix) ' ' in
+  List.iteri (fun i item ->
+    if i > 0 then
+      Printf.printf "\n\t\t%s" pad;
+    Printf.printf " / %s" (print_item item);
+  ) items;
+  Printf.printf "]\n"
 
 let get_token =
   let state = Lexer_raw.make Lexer_raw.keyword_table in
@@ -170,8 +174,20 @@ and display_candidate
     in
     let acc = display_steps la (n + 1) acc inner in
     let config = Viable.get_config target in
-    Printf.printf "\x1b[1;33m\t\t%s↱ %s\n"
+    Printf.printf "\t\t%s\x1b[1;33m↱ %s\n"
       (String.make n ' ') (Option.get (print_lr1 config.top));
+    if not !opt_no_reduce_filter then (
+      let suffix = match config.rest with
+        | [] | [_] -> [config.top]
+        | _ :: rest -> config.top :: rest
+      in
+      let suffix =
+        Utils.Misc.string_concat_map "; "
+          (fun lr1 -> Option.get (print_lr1 lr1))
+          suffix
+      in
+      print_items (n + 2) suffix (Lr1.items config.top);
+    );
     acc
 
 let process_result lexbuf = function
@@ -204,9 +220,14 @@ let process_result lexbuf = function
             process_threads (process_steps acc thread) threads
         in
         outer := process_threads [] !outer;
-        if i = 0 || !opt_stack_items then (
+        let items = Info.Lr1.items state in
+        if (i = 0 && not !opt_no_reduce_filter) then (
+          print_items 0 "" items;
+        ) else if !opt_stack_items then (
           print_string "\x1b[0;36m";
-          List.iter print_endline (print_items state);
+          List.iter
+            (fun item -> print_endline ("\t\t  [" ^ print_item item ^ "]"))
+            items;
         );
         print_string "\x1b[0m- ";
         print_string (
