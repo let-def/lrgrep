@@ -32,7 +32,11 @@ module F(X : Index.Unsafe.T) = struct
   module type S = S with type 'a index = 'a X.t
 end
 
-module RawIntTable = Hashtbl.Make(Int)
+module RawIntTable = Hashtbl.Make(struct
+  type t = int
+  let hash x = x
+  let equal = Int.equal
+end)
 
 module IntTable : S with type 'n index = int = struct
   type 'n index = int
