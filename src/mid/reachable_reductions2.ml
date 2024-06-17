@@ -385,6 +385,7 @@ module type FAILURE_NFA = sig
   (*val reject : n index -> terminal indexset*)
   val rejectable : n index -> terminal indexset
   val top : n index -> lr1 index option
+  val goto : n index -> lr1 index list
   val is_bottom : n index -> bool
   val incoming : n index -> lr1 indexset
   val incoming_lrc : n index -> lrc indexset
@@ -589,6 +590,17 @@ struct
       match Reach.Source.prj source with
       | L v -> Some (Viable.get_config v).top
       | R lr1 -> Some lr1
+
+  let goto i =
+    match States.prj i with
+    | States.Prefix _ -> []
+    | States.Suffix _ -> []
+    | States.Reach r ->
+      let desc = Vector.get Reach.states r in
+      let source = desc.config.source in
+      match Reach.Source.prj source with
+      | L v -> Viable.get_stack v
+      | R _ -> []
 
   let incoming_lrc i =
     match States.prj i with
@@ -967,13 +979,15 @@ struct
         ) NFA.initial IndexSet.empty
     in
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
-    Printf.eprintf "Unhandled lookaheads: %s.\n" (pts initial_failing)
+    Printf.eprintf "Unhandled lookaheads: %s.\n"
+      (string_concat_map ", " Terminal.to_string
+         (IndexSet.elements initial_failing))
 
   (* Generate sentences and determinize on the fly *)
 
   type step = {
     label: Lr1.set;
-    goto: Lr1.set;
+    goto: Lr1.t list list;
   }
 
   let union_all l =
@@ -985,34 +999,36 @@ struct
         List.fold_left (fun acc (reject, desc) ->
             List.fold_left (fun acc (lbl, (reject', desc')) ->
                 let _, nfa = State.prj desc.state in
-                let top = match NFA.top nfa with
-                  | None -> IndexSet.empty
-                  | Some i -> IndexSet.singleton i
+                let goto = match NFA.goto nfa with
+                  | [] -> []
+                  | other -> [other]
                 in
-                (lbl, (top, (IndexSet.union reject reject', desc'))) :: acc
+                (lbl, (goto, (IndexSet.union reject reject', desc'))) :: acc
               ) acc desc.failing_successors
           ) [] states
       in
       List.iter (fun (label, states') ->
           let goto, states' = List.split states' in
-          let goto = union_all goto in
+          let goto = List.concat goto in
           visit ({label; goto} :: path) states')
         (IndexRefine.annotated_partition transitions);
       let uncovered =
           List.filter_map (fun (reject, desc) ->
-              if IndexSet.is_empty desc.uncovered then None else
+              if IndexSet.is_empty desc.uncovered then
+                None
+              else
                 let _, nfa = State.prj desc.state in
-                let top = match NFA.top nfa with
-                  | None -> IndexSet.empty
-                  | Some i -> IndexSet.singleton i
+                let goto = match NFA.goto nfa with
+                  | [] -> []
+                  | other -> [other]
                 in
-                Some (desc.uncovered, (top, IndexSet.union reject (NFA.rejectable nfa)))
+                Some (desc.uncovered, (goto, IndexSet.union reject (NFA.rejectable nfa)))
             ) states
       in
       List.iter
         (fun (label, rejects) ->
            let goto, rejects = List.split rejects in
-           let goto = union_all goto in
+           let goto = List.concat goto in
            f ({label; goto} :: path) (union_all rejects))
         (IndexRefine.annotated_partition uncovered);
       begin match List.filter (fun (_, desc) -> is_bottom desc) states with
@@ -1042,33 +1058,47 @@ struct
     visit [] initials
 
   let _ =
-    enum_uncovered ~f:(fun path _failing ->
-        let print_step step =
-          let lr1 = Lr1.symbol_to_string (IndexSet.choose step.label) in
-          if IndexSet.is_empty step.goto then
-            lr1
-          else
-            let pitem (prod, dot) =
-              let components = ref [] in
-              let rhs = Production.rhs prod in
-              for i = Array.length rhs - 1 downto dot do
-                push components (Symbol.name rhs.(i));
-              done;
-              push components ".";
-              for i = dot - 1 downto 0 do
-                push components (Symbol.name rhs.(i));
-              done;
-              !components
-            in
-            lr1 ^ string_concat_map " " (fun lr1' ->
-                string_concat_map ~wrap:("[","]") " "
-                  (fun item -> String.concat " " ("/" :: pitem item))
-                  (Lr1.items lr1')
-              ) (IndexSet.elements step.goto)
+    let count = ref 0 in
+    enum_uncovered ~f:(fun path failing ->
+        incr count;
+        Printf.eprintf "Sentential form %d, failing when looking ahead at %s:\n"
+          !count (string_concat_map ", " Terminal.to_string (IndexSet.elements failing));
+        let print_step i step =
+          let plr1 lr1 = Lr1.symbol_to_string lr1 in
+          let pitem (prod, dot) =
+            let components = ref [] in
+            let rhs = Production.rhs prod in
+            for i = Array.length rhs - 1 downto dot do
+              push components (Symbol.name rhs.(i));
+            done;
+            push components ".";
+            for i = dot - 1 downto 0 do
+              push components (Symbol.name rhs.(i));
+            done;
+            push components ("/" ^ Nonterminal.to_string (Production.lhs prod) ^ ":");
+            String.concat " " !components
+          in
+          let lr1 = IndexSet.choose step.label in
+          Printf.eprintf "- %s\n" (plr1 lr1);
+          match step.goto with
+          | [] ->
+            if i = 0 then
+              Printf.eprintf "  [%s]\n"
+              (string_concat_map " " pitem (Lr1.items lr1))
+          | goto ->
+            List.iter (fun goto ->
+                let lr1' = List.hd goto in
+                let suff = string_concat_map ";" plr1 (List.rev goto) in
+                let pad = String.make (String.length suff) ' ' in
+                Printf.eprintf "  [%s " suff;
+                List.iteri (fun i item ->
+                    if i > 0 then Printf.eprintf "\n    %s" pad;
+                    Printf.eprintf "%s" (pitem item);
+                  ) (Lr1.items lr1');
+                Printf.eprintf "]\n";
+              ) goto
         in
-        Printf.eprintf "%s\n"
-          (string_concat_map " " print_step path)
-          (*(pts failing)*)
+        List.iteri print_step (List.rev path)
       )
 
 end
