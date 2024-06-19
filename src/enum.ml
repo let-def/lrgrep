@@ -21,7 +21,7 @@ struct
       output_string oc (Terminal.to_string t)
     in
     let output_item oc (prod, dot) =
-      output_string oc " /";
+      output_string oc "/";
       output_string oc (Nonterminal.to_string (Production.lhs prod));
       output_char oc ':';
       let rhs = Production.rhs prod in
@@ -35,17 +35,29 @@ struct
         output_string oc (Symbol.name rhs.(i));
       done
     in
-    let output_items oc items =
-      output_string oc " [";
-      List.iter (output_item oc) items;
-      output_string oc " ]"
+    let output_suffix oc suffix =
+      let top = List.hd suffix in
+      match List.rev suffix with
+      | [] -> assert false
+      | _ :: rest ->
+        output_string oc " [";
+        List.iteri (fun i lr1 ->
+            if i > 0 then output_char oc ';';
+            output_string oc (Lr1.symbol_to_string lr1);
+          ) rest;
+        List.iteri (fun i item ->
+            if i > 0 || rest <> [] then
+              output_char oc ' ';
+            output_item oc item
+          ) (Lr1.items top);
+        output_string oc "]"
     in
-    fun oc (entrypoint, terminals, lookaheads, items) ->
+    fun oc (entrypoint, terminals, lookaheads, suffixes) ->
       print_string entrypoint;
       List.iter (output_terminal oc) terminals;
       print_string " @";
       IndexSet.iter (output_terminal oc) lookaheads;
-      List.iter (output_items oc) items;
+      List.iter (output_suffix oc) suffixes;
       print_newline ()
 
   let output_json =
@@ -71,16 +83,29 @@ struct
           (Array.to_list (Production.rhs prod))
         dot
     in
+    let output_state oc st =
+      output_string oc (Lr1.symbol_to_string st)
+    in
+    let output_suffix oc suffix =
+      let top = List.hd suffix in
+      match List.rev suffix with
+      | [] -> assert false
+      | _ :: rest ->
+        Printf.fprintf oc
+          "{\"reduce\": %a, \"filter\": %a}"
+          (output_list output_state) rest
+          (output_list output_item) (Lr1.items top)
+    in
     let output_terminal oc t =
       output_symbol oc (Symbol.inj_l t)
     in
-    fun oc (entrypoint, terminals, lookaheads, items) ->
+    fun oc (entrypoint, terminals, lookaheads, suffixes) ->
       Printf.fprintf oc
         "{\"entrypoint\":%S,\"sentence\":%a,\"lookaheads\":%a,\"states\":%a}\n"
         entrypoint
         (output_list output_terminal) terminals
         (output_list output_terminal) (IndexSet.elements lookaheads)
-        (output_list (output_list output_item))  items
+        (output_list output_suffix) suffixes
 
   module Sentence_gen =
   struct
@@ -270,29 +295,25 @@ struct
 
   module Coverage = struct
 
-    let lr1_of state =
+    let suffix_of state =
       match Reach.Source.prj (Vector.get Reach.states state).config.source with
-      | L viable -> (Viable.get_config viable).top
-      | R lr1 -> lr1
+      | L viable -> Viable.get_stack viable
+      | R lr1 -> [lr1]
 
-    let items_from_suffix suffix =
-      let items_of_state state = Lr1.items (lr1_of state) in
-      List.rev_map items_of_state suffix
-
-    let form_from_suffix suffix =
+    let form_from_reductions reds =
       let get_lrcs state = (Vector.get Reach.states state).config.lrcs in
       let rec loop = function
         | [] -> assert false
         | [state] ->
           Form_generator.top
-            (Lrc.first_lrc_of_lr1 (lr1_of state))
-        | state :: (state' :: _ as suffix) ->
+            (Lrc.first_lrc_of_lr1 (List.hd (suffix_of state)))
+        | state :: (state' :: _ as reds) ->
           let red = IndexSet.choose (Reach.reductions state' state) in
-          Form_generator.reduce (loop suffix)
+          Form_generator.reduce (loop reds)
             ~potential:(get_lrcs state)
             ~length:(Production.length (Reduction.production red))
       in
-      Form_generator.finish (loop suffix)
+      Form_generator.finish (loop reds)
 
     let get_entrypoint lrc =
       Nonterminal.to_string
@@ -305,14 +326,14 @@ struct
         let x = IndexSet.choose x in
         x :: select_one (IndexSet.inter (Lrc.successors x) y :: ys)
 
-    let generate_sentence suffix lookaheads =
-      let lrcs = select_one (form_from_suffix suffix) in
+    let generate_sentence reds lookaheads =
+      let lrcs = select_one (form_from_reductions reds) in
       let lrcs = List.rev_append (Lrc.some_prefix (List.hd lrcs)) lrcs in
       let entrypoint = get_entrypoint (List.hd lrcs) in
       let entrypoint = String.sub entrypoint 0 (String.length entrypoint - 1) in
       let cells = Sentence_gen.cells_of_lrc_list lrcs in
       let terminals = List.fold_right Sentence_gen.prepend_word cells [] in
-      (entrypoint, terminals, lookaheads, items_from_suffix suffix)
+      (entrypoint, terminals, lookaheads, List.rev_map suffix_of reds)
   end
 
   let enumerate output =
