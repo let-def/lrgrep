@@ -35,22 +35,19 @@ struct
         output_string oc (Symbol.name rhs.(i));
       done
     in
-    let output_suffix oc suffix =
-      let top = List.hd suffix in
-      match List.rev suffix with
-      | [] -> assert false
-      | _ :: rest ->
-        output_string oc " [";
-        List.iteri (fun i lr1 ->
-            if i > 0 then output_char oc ';';
-            output_string oc (Lr1.symbol_to_string lr1);
-          ) rest;
-        List.iteri (fun i item ->
-            if i > 0 || rest <> [] then
-              output_char oc ' ';
-            output_item oc item
-          ) (Lr1.items top);
-        output_string oc "]"
+    let output_suffix oc (top, suffix) =
+      output_string oc " [";
+      let suffix = List.rev suffix in
+      List.iteri (fun i lr1 ->
+          if i > 0 then output_string oc "; ";
+          output_string oc (Lr1.symbol_to_string lr1);
+        ) suffix;
+      List.iteri (fun i item ->
+          if i > 0 || suffix <> [] then
+            output_char oc ' ';
+          output_item oc item
+        ) (Lr1.items top);
+      output_string oc "]"
     in
     fun oc (entrypoint, terminals, lookaheads, suffixes) ->
       print_string entrypoint;
@@ -86,15 +83,11 @@ struct
     let output_state oc st =
       output_string oc (Lr1.symbol_to_string st)
     in
-    let output_suffix oc suffix =
-      let top = List.hd suffix in
-      match List.rev suffix with
-      | [] -> assert false
-      | _ :: rest ->
-        Printf.fprintf oc
-          "{\"reduce\": %a, \"filter\": %a}"
-          (output_list output_state) rest
-          (output_list output_item) (Lr1.items top)
+    let output_suffix oc (top, suffix) =
+      Printf.fprintf oc
+        "{\"reduce\": %a, \"filter\": %a}"
+        (output_list output_state) (List.rev suffix)
+        (output_list output_item) (Lr1.items top)
     in
     let output_terminal oc t =
       output_symbol oc (Symbol.inj_l t)
@@ -297,8 +290,10 @@ struct
 
     let suffix_of state =
       match Reach.Source.prj (Vector.get Reach.states state).config.source with
-      | L viable -> Viable.get_stack viable
-      | R lr1 -> [lr1]
+      | L viable ->
+        let st = Viable.get_stack viable in
+        (List.hd st, st)
+      | R lr1 -> (lr1, [])
 
     let form_from_reductions reds =
       let get_lrcs state = (Vector.get Reach.states state).config.lrcs in
@@ -306,7 +301,7 @@ struct
         | [] -> assert false
         | [state] ->
           Form_generator.top
-            (Lrc.first_lrc_of_lr1 (List.hd (suffix_of state)))
+            (Lrc.first_lrc_of_lr1 (fst (suffix_of state)))
         | state :: (state' :: _ as reds) ->
           let red = IndexSet.choose (Reach.reductions state' state) in
           Form_generator.reduce (loop reds)
