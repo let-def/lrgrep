@@ -175,7 +175,7 @@ struct
       match Vector.get reductions lr1 with
       | [] -> []
       | gotos :: next ->
-        visit_outer Terminal.all (IndexSet.singleton lr1) gotos next
+        visit_outer Terminal.regular (IndexSet.singleton lr1) gotos next
     )
 
   let states = IndexBuffer.Gen.freeze states
