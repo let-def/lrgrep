@@ -177,11 +177,11 @@ struct
 
   let reject st =
     let {config; _} = Vector.get states st in
-    let lr1 = match Source.prj config.source with
-      | L viable -> (Viable.get_config viable).top
-      | R lr1 -> lr1
-    in
-    IndexSet.inter (Lr1.reject lr1) Terminal.regular
+    match Source.prj config.source with
+    | L viable ->
+      let config = Viable.get_config viable in
+      IndexSet.inter (Lr1.reject config.top) config.lookahead
+    | R lr1 -> IndexSet.inter (Lr1.reject lr1) Terminal.regular
 
   let rejectable =
     let table = Vector.init n (fun st -> (reject st, IndexMap.empty)) in
