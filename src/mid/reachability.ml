@@ -137,8 +137,7 @@ struct
           ) states
       end
 
-    let lr1_reductions lr1 =
-      List.map (fun (t, ps) -> (t, List.hd ps)) (Grammar.Lr1.reductions lr1)
+    let lr1_reductions = Grammar.Lr1.get_reductions
 
     let has_default_reduction lr1 =
       match Grammar.Lr1.transitions lr1 with
