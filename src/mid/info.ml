@@ -582,7 +582,7 @@ struct
              if Grammar.Terminal.kind t = `PSEUDO then
                accepting := IndexSet.add lr1 !accepting;
              IndexSet.add (Terminal.of_g t) acc)
-          IndexSet.empty (Grammar.Lr1.reductions (to_g lr1))
+          IndexSet.empty (Grammar.Lr1.get_reductions (to_g lr1))
       )
 
     let accepting = !accepting
@@ -660,10 +660,8 @@ struct
   module Reduction = struct
     let n = ref 0
     let raw =
-      let prepare_red (t, ps) = (t, List.hd ps) in
       let import_red reds =
         reds
-        |> List.map prepare_red
         |> List.filter_map (fun (t, p) ->
             let p = Production.of_g p in
             match Production.kind p with
@@ -682,7 +680,7 @@ struct
           )
       in
       let import_lr1 lr1 =
-        let reds = import_red (Grammar.Lr1.reductions (Lr1.to_g lr1)) in
+        let reds = import_red (Grammar.Lr1.get_reductions (Lr1.to_g lr1)) in
         n := !n + List.length reds;
         reds
       in
