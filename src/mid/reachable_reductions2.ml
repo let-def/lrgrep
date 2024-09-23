@@ -1061,8 +1061,8 @@ struct
     let count = ref 0 in
     enum_uncovered ~f:(fun path failing ->
         incr count;
-        Printf.eprintf "Sentential form %d, failing when looking ahead at %s:\n"
-          !count (string_concat_map ", " Terminal.to_string (IndexSet.elements failing));
+        Printf.eprintf "Sentence %d, failing when looking ahead at %s:\n"
+          !count (string_of_indexset ~index:Terminal.to_string failing);
         let print_step i step =
           let plr1 lr1 = Lr1.symbol_to_string lr1 in
           let pitem (prod, dot) =
@@ -1083,7 +1083,7 @@ struct
           match step.goto with
           | [] ->
             if i = 0 then
-              Printf.eprintf "  [%s]\n"
+              Printf.eprintf "  [ %s]\n"
               (string_concat_map " " pitem (Lr1.items lr1))
           | goto ->
             List.iter (fun goto ->
