@@ -25,3 +25,6 @@ let clear b n =
   let bit = n land 7 in
   Bytes.unsafe_set b cell
     (Char.unsafe_chr (Char.code (Bytes.unsafe_get b cell) land lnot (1 lsl bit)))
+
+let fill t b =
+  Bytes.fill t 0 (Bytes.length t) (if b then '\xFF' else '\x00')
