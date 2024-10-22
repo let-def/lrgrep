@@ -22,7 +22,9 @@
 
 (library
   (name ocaml_parser)
-  (modules lexer_raw parser_raw parser_def)
+  (modules lexer_raw parser_raw parser_types parsetree docstrings ast_helper location warnings asttypes builtin_attributes syntaxerr ast_iterator jane_syntax jane_syntax_parsing 
+           language_extension language_extension_kernel printast)
+  (modules_without_implementation parsetree asttypes)
   (wrapped false)
   (libraries compiler-libs.common menhirLib lrgrep.runtime))
 

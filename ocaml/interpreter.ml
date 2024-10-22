@@ -1,6 +1,7 @@
 open Utils
 open Fix.Indexing
 
+
 (* The lexer generator. Command-line parsing. *)
 
 let opt_infile = ref None
