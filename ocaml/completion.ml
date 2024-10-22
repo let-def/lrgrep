@@ -9,19 +9,166 @@ let grammar_filename =
   filename
 
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
+let () = Sys.remove grammar_filename
+
 module Info = Mid.Info.Make(Grammar)
 open Info
 
+let shift_transitions = Vector.make Lr1.n IndexSet.empty
 
-let () = Sys.remove grammar_filename
+let () =
+  Index.rev_iter Transition.shift @@ fun tr ->
+  vector_set_add shift_transitions Transition.(source (of_shift tr)) tr
+
+let reductions_at =
+  tabulate_finset Lr1.n @@ fun lr1 ->
+  IndexSet.filter
+    (fun red ->
+       let prod = Reduction.production red in
+       match Production.kind prod with
+       | `START -> false
+       | `REGULAR -> true)
+    (Reduction.from_lr1 lr1)
+
+type stack =
+  | Con of Lr1.n indexset * stack
+  | Abs of Lr1.n indexset
 
 let rec pred_n states = function
   | 0 -> states
   | n ->
     assert (n >= 0);
-    pred_n (indexset_bind states Lr1.predecessors) (n - 1)
+    let n = n - 1 in
+    match states with
+    | Con (_, stack) -> pred_n stack n
+    | Abs states -> pred_n (Abs (indexset_bind states Lr1.predecessors)) n
 
-let reduce_to =
+let states (Con (s, _) | Abs s) = s
+
+let table = Hashtbl.create 7
+
+let populate path =
+  match Hashtbl.find_opt table path with
+  | Some r -> r
+  | None ->
+    let r = ref IndexSet.empty in
+    Hashtbl.add table path r;
+    r
+
+let count = ref 0
+
+let register path _stack =
+  incr count;
+  let r = populate path in
+  let source = Index.of_int Lr1.n 0 in
+  r := IndexSet.add source !r;
+  Printf.eprintf "path %d: %s %s\n"
+    !count
+    (Lr1.to_string source)
+    (string_concat_map " " Terminal.to_string path)
+  (*Printf.eprintf "stack: %s\n"
+    (Lr1.list_to_string (List.rev stack))*)
+
+let rec explore path stack = function
+  | 0 -> register path stack
+  | n ->
+    explore_state path stack (n - 1) (ref IndexSet.empty) Terminal.all
+
+and explore_state path stack n visited lookaheads =
+  let states = states stack in
+  let targets =
+    IndexSet.fold (fun st map ->
+        IndexSet.fold (fun tr map ->
+            let sym = Transition.shift_symbol tr in
+            if lookaheads == Terminal.all || IndexSet.mem sym lookaheads then
+              IndexMap.update sym (function
+                  | None -> Some (IndexSet.singleton Transition.(target (of_shift tr)))
+                  | Some s -> Some (IndexSet.add Transition.(target (of_shift tr)) s)
+                ) map
+            else
+              map
+          ) (Vector.get shift_transitions st) map
+      ) states IndexMap.empty
+  in
+  IndexMap.iter (fun sym set ->
+      explore (sym :: path) (Con (set, stack)) n
+    ) targets;
+  let reductions = indexset_bind states reductions_at in
+  let cache = Array.make 8 IndexSet.empty in
+  let rec naive depth states =
+    if depth = 0 then
+      states
+    else
+      naive (depth - 1) (indexset_bind states Lr1.predecessors)
+  in
+  let rec get_cache depth states =
+    if cache.(depth) != IndexSet.empty then
+      cache.(depth)
+    else
+      let states = if depth = 0 then states else get_cache (depth - 1) states in
+      let states = indexset_bind states Lr1.predecessors in
+      cache.(depth) <- states;
+      states
+  in
+  let rec get_stack depth = function
+    | stack when depth = 0 -> stack
+    | Con (_, stack) -> get_stack (depth - 1) stack
+    | Abs states ->
+      if depth >= 8 then
+        let states = get_cache 7 states in
+        Abs (naive (depth - 8) states)
+      else
+        Abs (get_cache depth states)
+  in
+  let stack depth = get_stack depth stack in
+  IndexSet.iter (reduce path stack n visited lookaheads) reductions
+
+and reduce path stack n visited lookaheads red =
+  let lookaheads' = IndexSet.inter lookaheads (Reduction.lookaheads red) in
+  if not (IndexSet.is_empty lookaheads') then (
+    let stack = stack (Production.length (Reduction.production red)) in
+    let states' =
+      IndexSet.filter_map (fun source ->
+          try
+            Some (Transition.find_goto_target source
+                  (Production.lhs (Reduction.production red)))
+          with Not_found -> None
+        ) (states stack)
+    in
+    let states'' = IndexSet.diff states' !visited in
+    if not (IndexSet.is_empty states'') then (
+      visited := IndexSet.union states'' !visited;
+      explore_state path (Con (states'', stack)) n visited lookaheads'
+    )
+  )
+
+let () =
+  Vector.iter (fun trs ->
+      IndexSet.iter (fun tr ->
+          let source, target =
+            let tr = Transition.of_shift tr in
+            Transition.(source tr, target tr)
+          in
+          explore [Transition.shift_symbol tr] (Con (IndexSet.singleton target, Abs (IndexSet.singleton source))) 1
+        ) trs
+    ) shift_transitions
+
+
+let () =
+  let total = cardinal Lr1.n * cardinal Terminal.n * cardinal Terminal.n in
+  Printf.eprintf "Found %d paths with three terminals out of %d (%.02f%%)\n" !count total
+    (float !count /. float total *. 100.0);
+  let sets = Hashtbl.fold (fun _ v acc -> !v :: acc) table [] in
+  let sets = List.sort_uniq IndexSet.compare sets in
+  Printf.eprintf "%d possible sequences out of %d (%.02f%%), %d classifying set of states\n"
+    (Hashtbl.length table)
+    (cardinal Terminal.n * cardinal Terminal.n)
+    (float (Hashtbl.length table) /. float (cardinal Terminal.n * cardinal Terminal.n) *. 100.0)
+    (List.length sets);
+
+
+
+(*let reduce_to =
   Vector.init Lr1.n (fun lr1 ->
       let reductions =
         IndexSet.fold (fun red acc ->
@@ -208,4 +355,4 @@ let () =
   let sets = List.sort_uniq IndexSet.compare sets in
   Printf.eprintf
     "At depth 3: %d sets, %d unique\n" (Hashtbl.length population) (List.length sets)
-
+*)
