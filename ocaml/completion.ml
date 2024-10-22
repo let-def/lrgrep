@@ -14,7 +14,7 @@ let () = Sys.remove grammar_filename
 module Info = Mid.Info.Make(Grammar)
 open Info
 
-let shift_transitions = Vector.make Lr1.n IndexSet.empty
+(*let shift_transitions = Vector.make Lr1.n IndexSet.empty
 
 let () =
   Index.rev_iter Transition.shift @@ fun tr ->
@@ -165,10 +165,19 @@ let () =
     (cardinal Terminal.n * cardinal Terminal.n)
     (float (Hashtbl.length table) /. float (cardinal Terminal.n * cardinal Terminal.n) *. 100.0)
     (List.length sets);
+*)
 
+let time = Stopwatch.create ()
 
+let pred_n states rdepth depth =
+  assert (!rdepth <= depth);
+  while !rdepth < depth do
+    states := indexset_bind !states Lr1.predecessors;
+    incr rdepth;
+  done;
+  !states
 
-(*let reduce_to =
+let reduce_to =
   Vector.init Lr1.n (fun lr1 ->
       let reductions =
         IndexSet.fold (fun red acc ->
@@ -178,14 +187,7 @@ let () =
           ) (Reduction.from_lr1 lr1) []
         |> List.sort (fun (d1, _) (d2, _) -> Int.compare d1 d2)
       in
-      let states_at =
-        let states = ref (IndexSet.singleton lr1) in
-        let rdepth = ref 0 in
-        fun depth ->
-          states := pred_n !states (depth - !rdepth);
-          rdepth := depth;
-          !states
-      in
+      let states_at = pred_n (ref (IndexSet.singleton lr1)) (ref 0) in
       List.fold_left (fun acc (depth, r) ->
           let nt = Production.lhs (Reduction.production r) in
           let lookaheads = Reduction.lookaheads r in
@@ -251,108 +253,128 @@ let () =
   done;
   Printf.eprintf "Converged after %d iterations\n" !iter
 
-let shift_to = Vector.make Lr1.n IndexSet.empty
-
-let () = Index.iter Transition.shift (fun tr ->
-    let tr = Transition.of_shift tr in
-    vector_set_add shift_to
-      (Transition.source tr)
-      (Transition.target tr)
-  )
-
-let group_by_terminal set =
-  IndexSet.fold (fun lr1 acc ->
-      match Lr1.incoming lr1 with
-      | None -> acc
-      | Some sym ->
-        match Symbol.desc sym with
-        | N _ -> acc
-        | T t ->
-          IndexMap.update t (function
-              | None -> Some (IndexSet.singleton lr1)
-              | Some targets -> Some (IndexSet.add lr1 targets)
-            ) acc
-    ) set IndexMap.empty
+let shift_to =
+  let table = Vector.make Lr1.n IndexSet.empty in
+  Index.iter Transition.shift
+    (fun tr -> vector_set_add table Transition.(source (of_shift tr)) tr);
+  table
 
 let shift_closure =
-  Vector.init Lr1.n (fun lr1 ->
+  Vector.init Transition.shift (fun tr ->
+      let lr1 = Transition.(target (of_shift tr)) in
       IndexMap.fold (fun lr1' lookaheads targets ->
           let targets' = Vector.get shift_to lr1' in
-          IndexSet.fold (fun target targets ->
-              match Lr1.incoming target with
-              | None -> targets
-              | Some sym ->
-                match Symbol.desc sym with
-                | T t when IndexSet.mem t lookaheads ->
-                  IndexSet.add target targets
-                | T _ | N _ -> targets
-            ) targets' targets
+          let targets' =
+            IndexSet.filter
+              (fun tr -> IndexSet.mem (Transition.shift_symbol tr) lookaheads)
+              targets'
+          in
+          IndexSet.union targets' targets
         )
         (Vector.get reduce_to lr1)
         (Vector.get shift_to lr1)
-      |> group_by_terminal
+      (*|> group_by_terminal*)
     )
 
-let get targets =
-  IndexSet.fold (fun target acc ->
-    IndexMap.union
-    (fun _ a b -> Some (IndexSet.union a b))
-    (Vector.get shift_closure target) acc
-  ) targets IndexMap.empty
-
+let rev_shift_closure = relation_reverse shift_closure
 
 let () =
-  let total = ref 0 in
-  let rec check states n =
-    if IndexSet.is_empty states then  ()
-    else if n = 0 then
-      incr total
-    else
-      IndexMap.iter
-        (fun _ states' -> check states' (n - 1))
-        (get states)
-  in
-  let maximum = cardinal Lr1.n in
-  let terminals = ref 1 in
-  for depth = 0 to 3 do
-    Printf.eprintf "Depth %d\n" depth;
-    total := 0;
-    Index.iter Lr1.n (fun lr1 -> check (IndexSet.singleton lr1) depth);
-    let maximum = maximum * !terminals in
-    Printf.eprintf "Efficiency: %d/%d = %.02f%%\n"
-      !total maximum (float !total /. float maximum *. 100.0);
-    total := 0;
-    check Lr1.all depth;
-    Printf.eprintf "Valid sequences: %d/%d = %.02f%%\n"
-      !total !terminals (float !total /. float !terminals *. 100.0);
-    terminals := !terminals * (cardinal Terminal.n);
-  done
+  Stopwatch.step time "Precomputed data structures for fast enumeration"
 
-let () = flush_all ()
+let fast_enum tr =
+  let terminals =
+    IndexSet.map Transition.shift_symbol (Vector.get shift_closure tr)
+  in
+  let pred = Vector.get rev_shift_closure tr in
+  let group =
+    IndexSet.fold (fun tr acc ->
+        let src = Transition.(source (of_shift tr)) in
+        IndexMap.update (Transition.shift_symbol tr) (function
+            | None -> Some (IndexSet.singleton src)
+            | Some targets -> Some (IndexSet.add src targets)
+          ) acc
+      ) pred IndexMap.empty
+  in
+  (group, terminals)
+
+let cons t i = cardinal Terminal.n * i + Index.to_int t
 
 let () =
-  let population = Hashtbl.create 7 in
-  let populate path =
-    match Hashtbl.find_opt population path with
-    | Some r -> r
-    | None ->
-      let r = ref IndexSet.empty in
-      Hashtbl.add population path r;
-      r
+  let seq_max = cardinal Terminal.n * cardinal Terminal.n * cardinal Terminal.n in
+  let paths = Array.make seq_max IndexSet.empty in
+  Index.iter Transition.shift (fun tr ->
+      let (pred, succ) = fast_enum tr in
+      let path = Index.to_int (Transition.shift_symbol tr) in
+      IndexSet.iter (fun s ->
+          let path = cons s path in
+          IndexMap.iter (fun t img ->
+              let path = cons t path in
+              paths.(path) <- IndexSet.union img paths.(path)
+            ) pred
+        ) succ;
+    );
+  let seq_count = ref 0 in
+  for i = 0 to seq_max - 1 do
+    if not (IndexSet.is_empty paths.(i)) then
+      incr seq_count;
+  done;
+  Printf.eprintf "Sequence efficiency: %d/%d = %.02f%%\n%!"
+    !seq_count seq_max (float !seq_count /. float seq_max *. 100.0);
+  let index = Hashtbl.create 7 in
+  let index_of st =
+    if IndexSet.is_empty st then -1 else
+      match Hashtbl.find_opt index st with
+      | Some x -> x
+      | None ->
+        let x = Hashtbl.length index in
+        Hashtbl.add index st x;
+        x
   in
-  let rec check initial path states n =
-    if IndexSet.is_empty states then  ()
-    else if n = 0 then
-      let r = populate path in
-      r := IndexSet.add initial !r
-    else
-      IndexMap.iter
-        (fun t states' -> check initial (t :: path) states' (n - 1))
-        (get states)
+  let indexes = Array.map index_of paths in
+  (*let sets = Hashtbl.fold (fun x _ acc -> x :: acc) index [] in
+  let tolerance = 2 in (* one tenth of elements can differ *)
+  let rec visit = function
+    | [] -> []
+    | set :: sets ->
+      let c = IndexSet.cardinal set in
+      let sets =
+        List.filter (fun set' ->
+            let c' = IndexSet.cardinal set' in
+            if c * tolerance < c' * (tolerance + 1) && c' * tolerance < c * (tolerance + 1) then (
+              let diff = IndexSet.cardinal (IndexSet.diff set set') in
+              let diff' = IndexSet.cardinal (IndexSet.diff set' set) in
+              if (diff + diff') < c / tolerance then (
+                Printf.eprintf "found sets of size %d and %d differing by %d elements\n"
+                  c c' (diff + diff');
+                false
+              ) else true
+            ) else true
+          ) sets
+      in
+      set :: visit sets;
   in
-  Index.iter Lr1.n (fun lr1 -> check lr1 [] (IndexSet.singleton lr1) 3);
-  let sets = Hashtbl.fold (fun _ v acc -> !v :: acc) population [] in
-  let sets = List.sort_uniq IndexSet.compare sets in
-  Printf.eprintf
-    "At depth 3: %d sets, %d unique\n" (Hashtbl.length population) (List.length sets)
-*)
+  let sets' = visit sets in*)
+  let card = Array.make (Hashtbl.length index) 0 in
+  Hashtbl.iter (fun st i -> card.(i) <- IndexSet.cardinal st) index;
+  let st_count = Array.fold_left (fun sum i -> if i = -1 then sum else sum + card.(i)) 0 indexes in
+  let st_max = seq_max * cardinal Lr1.n in
+  Printf.eprintf "State efficiency: %d/%d = %.02f%%, %d groups\n%!" (* (or %d with %.02f%% error)\n%! *)
+    st_count st_max (float st_count /. float st_max *. 100.0) (Hashtbl.length index) (*(List.length sets') (100. /. float tolerance)*);
+  let output_b16 i =
+    let b0 = i land 0xFF in
+    let b1 = (i lsr 8) land 0xFF in
+    output_byte stdout b1;
+    output_byte stdout b0;
+  in
+  Array.iter (fun i -> output_b16 (i + 1)) indexes;
+  Hashtbl.iter (fun st _ ->
+      let c = IndexSet.cardinal st in
+      output_b16 c;
+      let last = ref 0 in
+      IndexSet.iter (fun i ->
+          let i = Index.to_int i in
+          output_b16 (i - !last);
+          last := i
+        ) st;
+    ) index;
+  Stopwatch.step time "Enumerated paths"
