@@ -117,9 +117,12 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       in
       merge [] [s1] k1 rest
 
-  let partition xs = union_parts (compute_parts xs)
+  let partition xs =
+    let xs = List.sort_uniq Set.compare xs in
+    union_parts (compute_parts xs)
 
   let partition_and_total xs =
+    let xs = List.sort_uniq Set.compare xs in
     let parts = compute_parts xs in
     let total = Set.sorted_union (List.rev_map fst parts) in
     let union = union_parts parts in
