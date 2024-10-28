@@ -96,7 +96,7 @@ end)() = struct
     | [] -> IndexSet.of_list result
     | first :: rest as all ->
       Printf.ksprintf (fun msg -> err (loc first) msg)
-        "Unknown start symbol%s %s.\nValid start symbols are %s."
+        "Unknown start symbol%s %s.\nValid start symbols are: %s.\n"
         (if rest = [] then "" else "s")
         (string_concat_map ", " prj all)
         (string_concat_map ", " Fun.id
