@@ -69,6 +69,27 @@ module Run(P : sig val grammar_file : string end)() = struct
             (Hashtbl.fold (fun key _ acc -> key :: acc) Info.Lr1.entrypoints [])))
 
   let () =
+    let open Info in
+    Fix.Indexing.Index.iter Lr1.n (fun lr1 ->
+        if IndexSet.is_empty (Lr1.reduce_on lr1) then (
+          Printf.eprintf "State %s:\n"
+            (Lr1.to_string lr1);
+          List.iter (fun (p, pos) ->
+              Printf.eprintf "%s:" (Nonterminal.to_string (Production.lhs p));
+              let rhs = Production.rhs p in
+              for i = 0 to pos - 1 do
+                Printf.eprintf " %s" (Symbol.name rhs.(i));
+              done;
+              Printf.eprintf " .";
+              for i = pos to Array.length rhs - 1 do
+                Printf.eprintf " %s" (Symbol.name rhs.(i));
+              done;
+              Printf.eprintf "\n%!";
+            ) (Lr1.items lr1)
+        )
+      )
+
+  let () =
     let entrypoints =
       match List.rev !opt_enumerate_entrypoint with
       | [] -> Info.Lr1.all_entrypoints
