@@ -17,7 +17,6 @@ open Asttypes
 open Parsetree
 open Ast_helper
 
-[@@@ocaml.warning "-9"]
 
 module Attribute_table = Hashtbl.Make (struct
   type t = string with_loc
@@ -34,7 +33,12 @@ let mark_used t = Attribute_table.remove unused_attrs t
 let attr_order a1 a2 = Location.compare a1.loc a2.loc
 
 let compiler_stops_before_attributes_consumed () =
-  !Clflags.print_types
+  let stops_before_lambda =
+    match !Clflags.stop_after with
+    | None -> false
+    | Some pass -> Clflags.Compiler_pass.(compare pass Lambda) < 0
+  in
+  stops_before_lambda || !Clflags.print_types
 
 let unchecked_zero_alloc_attributes = Attribute_table.create 1
 let mark_zero_alloc_attribute_checked txt loc =
@@ -168,7 +172,7 @@ let register_attr current_phase name =
       Attribute_table.replace unused_attrs name ()
 
 let ident_of_payload = function
-  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_ident {txt=Lident id; _}; _},_); _}] ->
+  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_ident {txt=Lident id}},_)}] ->
      Some id
   | _ -> None
 
@@ -181,12 +185,12 @@ let int_of_cst = function
   | _ -> None
 
 let string_of_payload = function
-  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_constant c; _},_); _}] ->
+  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_constant c},_)}] ->
       string_of_cst c
   | _ -> None
 
 let int_of_payload = function
-  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_constant c; _},_); _}] ->
+  | PStr[{pstr_desc=Pstr_eval({pexp_desc=Pexp_constant c},_)}] ->
       int_of_cst c
   | _ -> None
 
@@ -198,10 +202,10 @@ let string_of_opt_payload p =
 let error_of_extension ext =
   let submessage_from main_loc main_txt = function
     | {pstr_desc=Pstr_extension
-           (({txt = ("ocaml.error"|"error"); loc}, p), _); _} ->
+           (({txt = ("ocaml.error"|"error"); loc}, p), _)} ->
         begin match p with
         | PStr([{pstr_desc=Pstr_eval
-                     ({pexp_desc=Pexp_constant(Pconst_string(msg,_,_)); _}, _); _}
+                     ({pexp_desc=Pexp_constant(Pconst_string(msg,_,_))}, _)}
                ]) ->
             { Location.loc; txt = fun ppf -> Format.pp_print_text ppf msg }
         | _ ->
@@ -209,7 +213,7 @@ let error_of_extension ext =
                 Format.fprintf ppf
                   "Invalid syntax for sub-message of extension '%s'." main_txt }
         end
-    | {pstr_desc=Pstr_extension (({txt; loc; _}, _), _); _} ->
+    | {pstr_desc=Pstr_extension (({txt; loc}, _), _)} ->
         { Location.loc; txt = fun ppf ->
             Format.fprintf ppf "Uninterpreted extension '%s'." txt }
     | _ ->
@@ -222,7 +226,7 @@ let error_of_extension ext =
       begin match p with
       | PStr [] -> raise Location.Already_displayed_error
       | PStr({pstr_desc=Pstr_eval
-                  ({pexp_desc=Pexp_constant(Pconst_string(msg,_,_)); _}, _); _}::
+                  ({pexp_desc=Pexp_constant(Pconst_string(msg,_,_))}, _)}::
              inner) ->
           let sub = List.map (submessage_from loc txt) inner in
           Location.error_of_printer ~loc ~sub Format.pp_print_text msg
@@ -616,11 +620,12 @@ let parse_attribute_with_ident_payload attr ~name ~f =
 let zero_alloc_attribute (attr : Parsetree.attribute)  =
   parse_attribute_with_ident_payload attr
     ~name:"zero_alloc" ~f:(function
-      | "check" -> ()
-      | "check_opt" -> ()
-      | "check_all" -> ()
-      | "check_none" -> ()
-      | "all" -> ()
+      | "check" -> Clflags.zero_alloc_check := Zero_alloc_annotations.Check_default
+      | "check_opt" -> Clflags.zero_alloc_check := Zero_alloc_annotations.Check_opt_only
+      | "check_all" -> Clflags.zero_alloc_check := Zero_alloc_annotations.Check_all
+      | "check_none" -> Clflags.zero_alloc_check := Zero_alloc_annotations.No_check
+      | "all" ->
+        Clflags.zero_alloc_check_assert_all := true
       | _ ->
         warn_payload attr.attr_loc attr.attr_name.txt
           "Only 'all', 'check', 'check_opt', 'check_all', and 'check_none' are supported")
@@ -656,7 +661,8 @@ let has_layout_poly attrs =
   has_attribute "layout_poly" attrs
 
 let has_curry attrs =
-  has_attribute "curry" attrs
+  has_attribute Jane_syntax.Arrow_curry.curry_attr_name attrs
+  || has_attribute "curry" attrs
 
 let has_or_null_reexport attrs =
   has_attribute "or_null_reexport" attrs
@@ -715,8 +721,12 @@ type zero_alloc_attribute =
   | Check of zero_alloc_check
   | Assume of zero_alloc_assume
 
-let is_zero_alloc_check_enabled ~opt:_ =
-  false
+let is_zero_alloc_check_enabled ~opt =
+  match !Clflags.zero_alloc_check with
+  | No_check -> false
+  | Check_all -> true
+  | Check_default -> not opt
+  | Check_opt_only -> opt
 
 let is_zero_alloc_attribute =
   [ "zero_alloc", Return ]
@@ -954,6 +964,11 @@ let zero_alloc_attribute_only_assume_allowed za =
     Location.prerr_warning loc (Warnings.Attribute_payload (name, msg));
     None
 
+let assume_zero_alloc ~inferred assume : Zero_alloc_utils.Assume_info.t =
+  match assume with
+  | { strict; never_returns_normally; never_raises; } ->
+    Zero_alloc_utils.Assume_info.create ~strict ~never_returns_normally ~never_raises ~inferred
+
 type tracing_probe =
   { name : string;
     name_loc : Location.t;
@@ -976,7 +991,7 @@ let get_tracing_probe_payload (payload : Parsetree.payload) =
                             _ }
                         , args))
                   ; _ }
-                , _); _}]) -> Ok (name, name_loc, args)
+                , _)}]) -> Ok (name, name_loc, args)
     | _ -> Error ()
   in
   let bool_of_string = function

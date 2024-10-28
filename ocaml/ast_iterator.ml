@@ -15,7 +15,11 @@
 
 (* A generic Parsetree mapping class *)
 
-[@@@ocaml.warning "-9"]
+(*
+[@@@ocaml.warning "+9"]
+  (* Ensure that record patterns don't miss any field. *)
+*)
+
 
 open Parsetree
 open Location

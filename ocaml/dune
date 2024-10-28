@@ -22,11 +22,13 @@
 
 (library
   (name ocaml_parser)
-  (modules lexer_raw parser_raw parser_types parsetree docstrings ast_helper location warnings asttypes builtin_attributes syntaxerr ast_iterator jane_syntax jane_syntax_parsing 
-           language_extension language_extension_kernel printast)
+  (modules lexer_raw parser_raw parser_types docstrings ast_helper builtin_attributes syntaxerr ast_iterator 
+           location warnings misc parsetree asttypes longident build_path_prefix_map terminfo clflags
+           jane_syntax jane_syntax_parsing language_extension language_extension_kernel printast
+           zero_alloc_annotations zero_alloc_utils numbers identifiable arg_helper)
   (modules_without_implementation parsetree asttypes)
   (wrapped false)
-  (libraries compiler-libs.common menhirLib lrgrep.runtime))
+  (libraries menhirLib lrgrep.runtime))
 
 (ocamllex lexer_raw)
 
@@ -40,3 +42,7 @@
   (action
      (run lrgrep parse_errors.mlyl -g parser_raw.cmly
           -o parse_errors.ml)))
+
+(env
+  (dev
+    (flags (:standard -w -9))))

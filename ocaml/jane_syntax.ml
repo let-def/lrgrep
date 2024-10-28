@@ -2,8 +2,6 @@ open Asttypes
 open Parsetree
 open Jane_syntax_parsing
 
-[@@@ocaml.warning "-9"]
-
 (** We carefully regulate which bindings we import from [Language_extension]
     to ensure that we can import this file into the Jane Street internal
     repo with no changes.

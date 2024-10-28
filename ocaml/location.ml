@@ -138,9 +138,9 @@ type 'a loc = {
 
 let mkloc txt loc = { txt ; loc }
 let mknoloc txt = mkloc txt none
-let get_txt {txt; _} = txt
-let map f {txt; loc} = {txt = f txt; loc}
-let compare_txt f {txt=t1; _} {txt=t2; _} = f t1 t2
+let get_txt { txt } = txt
+let map f { txt; loc} = {txt = f txt; loc}
+let compare_txt f { txt=t1 } { txt=t2 } = f t1 t2
 
 (******************************************************************************)
 (* Input info *)
@@ -215,7 +215,8 @@ let print_updating_num_loc_lines ppf f arg =
   pp_print_flush ppf ();
   pp_set_formatter_out_functions ppf out_functions
 
-let setup_tags () = ()
+let setup_tags () =
+  Misc.Style.setup !Clflags.color
 
 (******************************************************************************)
 (* Printing locations, e.g. 'File "foo.ml", line 3, characters 10-12' *)
@@ -226,13 +227,33 @@ let rewrite_absolute_path path =
   | Some map -> Build_path_prefix_map.rewrite map path
 
 let rewrite_find_first_existing path =
-  if Sys.file_exists path then Some path
-  else None
+  match Misc.get_build_path_prefix_map () with
+  | None ->
+      if Sys.file_exists path then Some path
+      else None
+  | Some prefix_map ->
+    match Build_path_prefix_map.rewrite_all prefix_map path with
+    | [] ->
+      if Sys.file_exists path then Some path
+      else None
+    | matches ->
+      Some (List.find Sys.file_exists matches)
 
 let rewrite_find_all_existing_dirs path =
   let ok path = Sys.file_exists path && Sys.is_directory path in
-  if ok path then [path]
-  else []
+  match Misc.get_build_path_prefix_map () with
+  | None ->
+      if ok path then [path]
+      else []
+  | Some prefix_map ->
+    match Build_path_prefix_map.rewrite_all prefix_map path with
+    | [] ->
+        if ok path then [path]
+        else []
+    | matches ->
+      match (List.filter ok matches) with
+      | [] -> raise Not_found
+      | results -> results
 
 let absolute_path s = (* This function could go into Filename *)
   let open Filename in
@@ -989,7 +1010,7 @@ let alert ?(def = none) ?(use = none) ~kind loc message =
 let deprecated ?def ?use loc message =
   alert ?def ?use ~kind:"deprecated" loc message
 
-module Style = struct let inline_code _ _ = () end
+module Style = Misc.Style
 
 let auto_include_alert lib =
   let message = Format.asprintf "\
