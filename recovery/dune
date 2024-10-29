@@ -1,0 +1,9 @@
+(executable
+  (name completion)
+  (modules completion)
+  (libraries interpreter_data ocaml_parser mid fix utils menhirSdk))
+
+(executable
+  (name recovery)
+  (modules recovery)
+  (libraries interpreter_data ocaml_parser mid fix utils menhirSdk))
