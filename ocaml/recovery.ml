@@ -118,6 +118,8 @@ type config = {
   lookaheads: Terminal.set;
 }
 
+let ignore_lookaheads = true
+
 type state = {
   config: config;
   mutable epsilon: state list;
@@ -129,7 +131,9 @@ let table = Hashtbl.create 7
 let rec explore states la n = function
   | [] -> []
   | (it, la') :: xs when Item.position it = n ->
-    let la' = IndexSet.inter la la' in
+    let la' =
+      if ignore_lookaheads then Terminal.all else IndexSet.inter la la'
+    in
     if IndexSet.is_empty la' then
       explore states la n xs
     else
