@@ -115,6 +115,7 @@ let time = Stopwatch.create ()
 type config = {
   goto: Lr1.t;
   base: Lr1.t;
+  lookaheads: Terminal.set;
 }
 
 type state = {
@@ -125,22 +126,26 @@ type state = {
 
 let table = Hashtbl.create 7
 
-let rec explore states n = function
+let rec explore states la n = function
   | [] -> []
-  | (it, _) :: xs when Item.position it = n ->
-    let x', xs' = match explore states n xs with
-      | [] -> ([], [])
-      | x' :: xs' -> (x', xs')
-    in
-    let p = Item.production it in
-    let nt = Production.lhs p in
-    IndexSet.fold (fun base acc ->
-        let goto = Transition.find_goto_target base nt in
-        let config = {base; goto} in
-        get_state config :: acc
-      ) states x' :: xs'
+  | (it, la') :: xs when Item.position it = n ->
+    let la' = IndexSet.inter la la' in
+    if IndexSet.is_empty la' then
+      explore states la n xs
+    else
+      let x', xs' = match explore states la n xs with
+        | [] -> ([], [])
+        | x' :: xs' -> (x', xs')
+      in
+      let p = Item.production it in
+      let nt = Production.lhs p in
+      IndexSet.fold (fun base acc ->
+          let goto = Transition.find_goto_target base nt in
+          let config = {base; goto; lookaheads = la'} in
+          get_state config :: acc
+        ) states x' :: xs'
   | xs ->
-    [] :: explore (indexset_bind states Lr1.predecessors) (n + 1) xs
+    [] :: explore (indexset_bind states Lr1.predecessors) la (n + 1) xs
 
 and get_state config =
   match Hashtbl.find_opt table config with
@@ -151,7 +156,7 @@ and get_state config =
     begin match
         explore
           (IndexSet.singleton st.config.base)
-          1
+          config.lookaheads 1
           (positive_items st.config.goto)
       with
       | [] -> ()
@@ -169,7 +174,7 @@ let initial =
       | _ ->
         let states = IndexSet.singleton lr1 in
         let items = positive_items lr1 in
-        push acc (lr1, explore states 0 items)
+        push acc (lr1, explore states Terminal.all 0 items)
     );
   !acc
 
