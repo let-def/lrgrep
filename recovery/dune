@@ -5,5 +5,5 @@
 
 (executable
   (name recovery)
-  (modules recovery)
+  (modules recovery synthesis recover_attrib)
   (libraries interpreter_data ocaml_parser mid fix utils menhirSdk support))

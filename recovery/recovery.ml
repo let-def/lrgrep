@@ -2,6 +2,8 @@ open Fix.Indexing
 open Utils
 open Misc
 
+open Synthesis
+
 let grammar_filename =
   let filename, oc = Filename.open_temp_file "lrgrep-interpreter" "cmly" in
   output_string oc Interpreter_data.grammar;

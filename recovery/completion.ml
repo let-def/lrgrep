@@ -300,19 +300,84 @@ let fast_enum tr =
 let cons t i = cardinal Terminal.n * i + Index.to_int t
 
 let () =
-  let seq_max = cardinal Terminal.n * cardinal Terminal.n * cardinal Terminal.n in
+  let term_max = cardinal Terminal.n in
+  let seq_max = term_max * term_max * term_max in
+  let path3 =
+    Array.init term_max (fun _ ->
+        Array.init term_max (fun _ ->
+            Array.make term_max IndexSet.empty))
+  in
   let paths = Array.make seq_max IndexSet.empty in
   Index.iter Transition.shift (fun tr ->
       let (pred, succ) = fast_enum tr in
-      let path = Index.to_int (Transition.shift_symbol tr) in
+      let p0 = Index.to_int (Transition.shift_symbol tr) in
+      let path = p0 in
       IndexSet.iter (fun s ->
+          let p1 = Index.to_int s in
           let path = cons s path in
           IndexMap.iter (fun t img ->
+              let p2 = Index.to_int t in
               let path = cons t path in
-              paths.(path) <- IndexSet.union img paths.(path)
+              paths.(path) <- IndexSet.union img paths.(path);
+              path3.(p0).(p1).(p2) <- IndexSet.union img path3.(p0).(p1).(p2);
             ) pred
         ) succ;
     );
+  let uniq_last = Hashtbl.create 7 in
+  Array.iter (Array.iter (fun a ->
+      if not (Hashtbl.mem uniq_last a) then
+        Hashtbl.add uniq_last a (Hashtbl.length uniq_last);
+    )) path3;
+  let uniq_mid = Hashtbl.create 7 in
+  Array.iter (fun a ->
+      let a' = Array.map (Hashtbl.find uniq_last) a in
+      if not (Hashtbl.mem uniq_mid a') then
+        Hashtbl.add uniq_mid a' (Hashtbl.length uniq_mid);
+    ) path3;
+  Printf.eprintf "Last images: %d/%d = %.02f%%\n%!"
+    (Hashtbl.length uniq_last) (term_max * term_max)
+    (float (Hashtbl.length uniq_last) /. float (term_max * term_max) *. 100.0)
+  ;
+  let empty = ref 0 in
+  let non_empty = ref 0 in
+  Hashtbl.iter (fun a _ ->
+      Array.iter (fun s ->
+          if IndexSet.is_empty s then incr empty else incr non_empty
+        ) a
+    ) uniq_last;
+  let diff_sets = ref 0 in
+  let max_sets = ref 0 in
+  let count = ref 0 in
+  let all_sets = Hashtbl.create 7 in
+  let shared_sets = Hashtbl.create 7 in
+  Hashtbl.iter (fun a _ ->
+      let sets = Hashtbl.create 7 in
+      Array.iter (fun s ->
+          if not (Hashtbl.mem sets s) then (
+            if Hashtbl.mem all_sets s then
+              Hashtbl.replace shared_sets s ()
+            else
+              Hashtbl.add all_sets s ();
+            Hashtbl.add sets s ()
+          )
+        ) a;
+      diff_sets := !diff_sets + Hashtbl.length sets;
+      max_sets := max !max_sets (Hashtbl.length sets);
+      incr count
+    ) uniq_last;
+  Printf.eprintf "Filled: %d/%d = %.02f%%\n%!"
+    !non_empty (!non_empty + !empty)
+    (float !non_empty /. float (!non_empty + !empty) *. 100.0)
+  ;
+  Printf.eprintf "Different sets: average:%.02f shared:%d max:%d\n"
+    (float !diff_sets /. float !count)
+    (Hashtbl.length shared_sets)
+    !max_sets
+  ;
+  Printf.eprintf "Mid images: %d/%d = %.02f%%\n%!"
+    (Hashtbl.length uniq_mid) term_max
+    (float (Hashtbl.length uniq_mid) /. float term_max *. 100.0)
+  ;
   let seq_count = ref 0 in
   for i = 0 to seq_max - 1 do
     if not (IndexSet.is_empty paths.(i)) then
@@ -368,18 +433,29 @@ let () =
   in
   let unused = ref 0 in
   Array.iter (fun i ->
-      if i = -1 then incr unused;
-      output_b16 (i + 1)
+      if i = -1 then incr unused
+      (*else output_b16 (i + 1)*)
     ) indexes;
+  let bits = ref 0 in
   Hashtbl.iter (fun st _ ->
       let c = IndexSet.cardinal st in
       output_b16 c;
       let last = ref 0 in
       IndexSet.iter (fun i ->
           let i = Index.to_int i in
-          output_b16 (i - !last);
+          let d = i - !last - 1 in
+          if d < 8 then
+            bits := !bits + 4
+          else if d < 128 then
+            bits := !bits + 8
+          else
+            bits := !bits + 16;
+          (*output_b16 (i - !last);*)
           last := i
         ) st;
     ) index;
-  Printf.eprintf "Unused cells: %d / %d (%.02f%%)\n" !unused (Array.length indexes) (100. *. float !unused /. float (Array.length indexes));
+  Printf.eprintf "Sets: %d bits, %d bytes\n" !bits ((!bits + 7) / 8);
+  Printf.eprintf "Unused cells: %d / %d (%.02f%%)\n" !unused
+    (Array.length indexes)
+    (100. *. float !unused /. float (Array.length indexes));
   Stopwatch.step time "Enumerated paths"
