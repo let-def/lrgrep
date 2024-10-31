@@ -36,7 +36,8 @@ end = struct
 
   type 'a cell =
     | Unused
-    | Used of RT.lr1 * 'a
+    | Used0 of RT.lr1 * 'a
+    | Used1 of RT.lr1 * 'a
 
   type 'a t = {
     mutable table: 'a cell array;
@@ -69,11 +70,12 @@ end = struct
       packer.table <- table;
     );
     match packer.table.(index) with
-    | Unused -> packer.table.(index) <- Used (k, v)
-    | Used _ ->
+    | Unused ->
+      packer.table.(index) <- Used0 (k, v)
+    | _ ->
       match packer.table.(index+1) with
-      | Unused -> packer.table.(index+1) <- Used (k, v)
-      | Used _ -> assert false
+      | Unused -> packer.table.(index+1) <- Used1 (k, v)
+      | _ -> assert false
 
   let add_vector packer = function
     | [] -> 0
@@ -123,16 +125,29 @@ end = struct
       Array.init !length begin fun i ->
         match packer.table.(i) with
         | Unused -> Unused
-        | Used (k, v) ->
+        | Used0 (k, v) ->
           let v = value_repr v in
           assert (v >= 0);
           if k > !max_k then max_k := k;
           if v > !max_v then max_v := v;
-          Used (k, v)
+          Used0 (k, v)
+        | Used1 (k, v) ->
+          let v = value_repr v in
+          assert (v >= 0);
+          if k > !max_k then max_k := k;
+          if v > !max_v then max_v := v;
+          Used1 (k, v)
       end
     in
     incr max_k;
-    let k_size = int_size !max_k in
+    let k_size = int_size (!max_k * 2) in
+    let sign_bit =
+      if k_size = 1 then 0x80 else
+      if k_size = 2 then 0x8000 else
+      if k_size = 3 then 0x800000 else
+      if k_size = 4 then 0x80000000 else
+        assert false
+    in
     let v_size = int_size !max_v in
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
@@ -151,9 +166,13 @@ end = struct
       | Unused ->
         incr consec_unused;
         set_int repr ~offset ~value:0 k_size
-      | Used (k, v) ->
+      | Used0 (k, v) ->
         register_unused();
         set_int repr ~offset ~value:(k + 1) k_size;
+        set_int repr ~offset:(offset + k_size) ~value:v v_size;
+      | Used1 (k, v) ->
+        register_unused();
+        set_int repr ~offset ~value:(sign_bit lor (k + 1)) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
     register_unused();
