@@ -53,7 +53,9 @@ end = struct
     assert (index >= 0);
     index >= Array.length packer.table || (
       match packer.table.(index) with
-      | Unused | Used1 _ | Used2 _ -> true
+      | Unused -> true
+      | Used1 (k', _) -> k <> k'
+      | Used2 (k', _, k'', _) -> k <> k' && k <> k''
       | _ -> false
     )
 
