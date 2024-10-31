@@ -11,6 +11,21 @@ let grammar_filename =
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
 let () = Sys.remove grammar_filename
 
+let get_list tbl key =
+  match Hashtbl.find_opt tbl key with
+  | None ->
+    let r = ref [] in
+    Hashtbl.add tbl key r;
+    r
+  | Some r -> r
+
+let append_list tbl key v =
+  match Hashtbl.find_opt tbl key with
+  | None ->
+    let r = ref [v] in
+    Hashtbl.add tbl key r
+  | Some r -> push r v
+
 module Info = Mid.Info.Make(Grammar)
 open Info
 
@@ -404,6 +419,52 @@ module MDFA = struct
   include Valmari.Minimize(Label)(Input)
 
   let () =
-    Printf.eprintf "Minimized to: %d states\n" (cardinal states)
+    Printf.eprintf "Minimized to: %d states and %d transitions\n"
+      (cardinal states)
+      (cardinal transitions)
+end
 
+module Pack = struct
+  module Packer = Lrgrep_support.Sparse_packer
+
+  let packer = Packer.make ()
+
+  let outgoing = Vector.make MDFA.states []
+
+  let () =
+    Index.iter MDFA.transitions (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
+    let trs =
+      Vector.fold_left (fun acc trs ->
+          let by_target = Hashtbl.create 7 in
+          List.iter (fun tr -> match MDFA.label tr with
+              | None -> ()
+              | Some lr1 ->
+                let target = MDFA.target tr in
+                append_list by_target target ((lr1 :> int), target)
+            ) trs;
+          let longest = ref 0 in
+          Hashtbl.iter
+            (fun _target labels -> longest := Int.max !longest (List.length !labels))
+            by_target;
+          let trs =
+            Hashtbl.fold (fun _target labels acc ->
+                if List.length !labels = !longest then
+                  (longest := -1; acc)
+                else
+                  List.rev_append !labels acc
+              ) by_target []
+          in
+          trs :: acc
+        ) [] outgoing
+    in
+    let trs = List.sort List.compare_lengths trs in
+    List.iter (fun x -> ignore (Packer.add_vector packer x)) (List.rev trs)
+
+  let table = Packer.pack packer Index.to_int
+
+  let () =
+    Printf.eprintf "Transitions packed to a %d bytes table\n"
+      (String.length table)
+
+  let () = output_string stdout table
 end

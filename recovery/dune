@@ -6,4 +6,4 @@
 (executable
   (name recovery)
   (modules recovery)
-  (libraries interpreter_data ocaml_parser mid fix utils menhirSdk))
+  (libraries interpreter_data ocaml_parser mid fix utils menhirSdk support))
