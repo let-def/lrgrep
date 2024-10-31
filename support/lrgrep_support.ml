@@ -40,12 +40,11 @@ end = struct
 
   type 'a t = {
     mutable table: 'a cell array;
-    mutable free: int list;
   }
 
   type 'a vector = (RT.lr1 * 'a) list
 
-  let make () = { table = Array.make 16 Unused; free = [1] }
+  let make () = { table = Array.make 16 Unused }
 
   let cell_unused packer index =
     assert (index >= 0);
@@ -76,24 +75,21 @@ end = struct
       packer.table.(index) <- value
     )
 
-  let add_vector packer cells =
-    let rec start rev_free free =
-      match free with
-      | [] -> assert false
-      | [i] -> loop rev_free [i + 1] i cells
-      | i :: is -> loop rev_free is i cells
-    and loop rev_free free index = function
-      | [] -> List.rev_append rev_free free, index
-      | (k, _) :: cells' ->
-        if cell_unused packer (index + k)
-        then loop rev_free free index cells'
-        else start (index :: rev_free) free
-    in
-    let free, index = start [] packer.free in
-    packer.free <- free;
-    List.iter (fun (k, v) ->
-        set_cell packer (index + k) (Used (k, v))) cells;
-    index
+  let add_vector packer = function
+    | [] -> 0
+    | (ofs, _) :: _ as cells ->
+      let fit index =
+        let unused (k, _v) = cell_unused packer (index + k) in
+        List.for_all unused cells
+      in
+      let i = ref 0 in
+      let l = Array.length packer.table - ofs in
+      while !i < l && not (fit (!i - ofs)) do
+        incr i
+      done;
+      let index = !i - ofs in
+      List.iter (fun (k, v) -> set_cell packer (index + k) (Used (k, v))) cells;
+      index
 
   let int_size i =
     assert (i >= 0);
@@ -136,10 +132,13 @@ end = struct
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
+    let unused = ref 0 in
     Array.iteri begin fun i cell ->
       let offset = 2 + i * (k_size + v_size) in
       match cell with
-      | Unused -> set_int repr ~offset ~value:0 k_size
+      | Unused ->
+        incr unused;
+        set_int repr ~offset ~value:0 k_size
       | Used (k, v) ->
         set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
@@ -148,6 +147,7 @@ end = struct
     Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
     Printf.eprintf "table size: %d\nrepr size: %d\n"
       (Array.length table) (Bytes.length repr);
+    Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float (Array.length table));
     Bytes.unsafe_to_string repr
 end
 
