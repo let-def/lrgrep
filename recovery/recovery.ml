@@ -11,6 +11,14 @@ let grammar_filename =
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
 let () = Sys.remove grammar_filename
 
+let get_default tbl key default =
+  match Hashtbl.find_opt tbl key with
+  | None ->
+    let r = ref default in
+    Hashtbl.add tbl key r;
+    r
+  | Some r -> r
+
 let get_list tbl key =
   match Hashtbl.find_opt tbl key with
   | None ->
@@ -331,8 +339,26 @@ module DFA = struct
     Hashtbl.iter (fun _ ds -> Vector.set states ds.index ds) table
 
   let () =
-    Printf.eprintf "Deterministic full reduction graph: %d states\n"
-      (cardinal n)
+    let direct = ref 0 in
+    let wildcard = ref 0 in
+    let mixed = ref 0 in
+    let none = ref 0 in
+    Vector.iter (fun ds ->
+        begin match ds.transitions, ds.wildcard with
+          | [], None -> incr none
+          | [], Some _ -> incr wildcard
+          | (_ :: _), Some _ -> incr mixed
+          | (_ :: _), None -> ()
+        end;
+        direct := !direct + List.length ds.transitions
+      ) states;
+    Printf.eprintf "Deterministic full reduction graph:\n\
+                    - %d states\n\
+                    - %d labelled transitions\n\
+                    - %d states with only a wildcard transition\n\
+                    - %d states with both wildcard and labelled transitions\n\
+                    - %d states without transitions\n"
+      (cardinal n) !direct !wildcard !mixed !none
 end
 
 module MDFA = struct
@@ -433,6 +459,29 @@ module Pack = struct
 
   let () =
     Index.iter MDFA.transitions (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
+    let unique_dom = Hashtbl.create 7 in
+    let unique_map = Hashtbl.create 7 in
+    Vector.iter (function
+        | [] | [_] -> ()
+        | trs ->
+          let dom = List.filter_map MDFA.label trs in
+          let dom = List.sort compare dom in
+          incr (get_default unique_dom dom 0);
+          let map = List.filter_map (fun tr -> match MDFA.label tr with None -> None | Some x -> Some (x, MDFA.target tr)) trs in
+          let map = List.sort compare map in
+          incr (get_default unique_map map 0);
+      ) outgoing;
+    Printf.eprintf "%d unique domains, %d unique maps\n" (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
+    Printf.eprintf "%d unique transition\n" (Hashtbl.fold (fun map _ sum ->
+        sum + List.length map
+      ) unique_map 0);
+    (*let doms = Array.of_seq (Hashtbl.to_seq unique_dom) in
+    Array.fast_sort (fun (y,_) (z,_) -> List.compare_lengths y z) doms;
+    Array.iter (fun (dom,c) ->
+        Printf.eprintf "%d: [%s]\n"
+          !c
+          (string_concat_map "," string_of_index dom)
+      ) doms;*)
     let trs =
       Vector.fold_left (fun acc trs ->
           let by_target = Hashtbl.create 7 in
@@ -457,6 +506,10 @@ module Pack = struct
           trs :: acc
         ) [] outgoing
     in
+    let trs = List.filter_map (function
+        (*| [] | [_] -> None*)
+        | x -> Some (List.sort compare x)) trs in
+    let trs = List.sort_uniq (List.compare (compare_pair Int.compare Index.compare)) trs in
     let trs = List.sort List.compare_lengths trs in
     List.iter (fun x -> ignore (Packer.add_vector packer x)) (List.rev trs)
 
@@ -468,3 +521,11 @@ module Pack = struct
 
   let () = output_string stdout table
 end
+
+let () =
+  if false then
+  Index.iter Lr1.n (fun lr1 ->
+      let lr1s = Info.Lr1.predecessors lr1 in
+      if not (IndexSet.is_singleton lr1s || IndexSet.is_empty lr1s) then
+      Printf.eprintf "%s: %s\n" (string_of_index lr1) (string_of_indexset lr1s)
+    )

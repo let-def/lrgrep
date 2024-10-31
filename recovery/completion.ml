@@ -366,7 +366,11 @@ let () =
     output_byte stdout b1;
     output_byte stdout b0;
   in
-  Array.iter (fun i -> output_b16 (i + 1)) indexes;
+  let unused = ref 0 in
+  Array.iter (fun i ->
+      if i = -1 then incr unused;
+      output_b16 (i + 1)
+    ) indexes;
   Hashtbl.iter (fun st _ ->
       let c = IndexSet.cardinal st in
       output_b16 c;
@@ -377,4 +381,5 @@ let () =
           last := i
         ) st;
     ) index;
+  Printf.eprintf "Unused cells: %d / %d (%.02f%%)\n" !unused (Array.length indexes) (100. *. float !unused /. float (Array.length indexes));
   Stopwatch.step time "Enumerated paths"
