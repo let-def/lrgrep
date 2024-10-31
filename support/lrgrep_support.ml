@@ -47,13 +47,9 @@ end = struct
   let make () = { table = Array.make 16 Unused }
 
   let cell_unused packer index k =
-    let index = index + k in
-    assert (index >= 0);
-    index >= Array.length packer.table || (
-      match packer.table.(index) with
-      | Unused -> true
-      | _ -> false
-    )
+    match packer.table.(index + k) with
+    | Unused -> true
+    | _ -> false
 
   (*
   let get_cell packer index =
@@ -72,21 +68,28 @@ end = struct
       Array.blit packer.table 0 table 0 length;
       packer.table <- table;
     );
-    packer.table.(index) <-
-      match packer.table.(index) with
-      | Unused -> Used (k, v)
+    match packer.table.(index) with
+    | Unused -> packer.table.(index) <- Used (k, v)
+    | Used _ ->
+      match packer.table.(index+1) with
+      | Unused -> packer.table.(index+1) <- Used (k, v)
       | Used _ -> assert false
 
   let add_vector packer = function
     | [] -> 0
     | (ofs, _) :: _ as cells ->
       let fit index =
-        let unused (k, _v) = cell_unused packer index k in
-        List.for_all unused cells
+        let rec loop k' = function
+          | [] -> true
+          | (k, _) :: _ when index + k >= Array.length packer.table - 1 -> true
+          | (k, _) :: xs ->
+            if k' < k && cell_unused packer index k then loop k xs
+            else (cell_unused packer index (k + 1) && loop (k + 1) xs)
+        in
+        loop (-1) cells
       in
       let i = ref 0 in
-      let l = Array.length packer.table - ofs in
-      while !i < l && not (fit (!i - ofs)) do
+      while not (fit (!i - ofs)) do
         incr i
       done;
       let index = !i - ofs in
