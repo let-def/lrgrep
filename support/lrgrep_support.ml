@@ -133,21 +133,34 @@ end = struct
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
     let unused = ref 0 in
+    let hist_unused = Array.make 1000 0 in
+    let consec_unused = ref 0 in
+    let register_unused () =
+      hist_unused.(!consec_unused) <- hist_unused.(!consec_unused) + 1;
+      unused := !unused + !consec_unused;
+      consec_unused := 0
+    in
     Array.iteri begin fun i cell ->
       let offset = 2 + i * (k_size + v_size) in
       match cell with
       | Unused ->
-        incr unused;
+        incr consec_unused;
         set_int repr ~offset ~value:0 k_size
       | Used (k, v) ->
+        register_unused();
         set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
+    register_unused();
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
     Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
     Printf.eprintf "table size: %d\nrepr size: %d\n"
       (Array.length table) (Bytes.length repr);
     Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float (Array.length table));
+    for i = 0 to 999 do
+      if hist_unused.(i) > 0 then
+        Printf.eprintf "%d consecutive unused appeared %d times\n" i hist_unused.(i)
+    done;
     Bytes.unsafe_to_string repr
 end
 
