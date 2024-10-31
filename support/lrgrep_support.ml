@@ -36,7 +36,8 @@ end = struct
 
   type 'a cell =
     | Unused
-    | Used of RT.lr1 * 'a
+    | Used1 of RT.lr1 * 'a
+    | Used2 of RT.lr1 * 'a * RT.lr1 * 'a
 
   type 'a t = {
     mutable table: 'a cell array;
@@ -50,7 +51,7 @@ end = struct
     assert (index >= 0);
     index >= Array.length packer.table || (
       match packer.table.(index) with
-      | Unused -> true
+      | Unused | Used1 _ -> true
       | _ -> false
     )
 
@@ -62,18 +63,20 @@ end = struct
     else Unused
   *)
 
-  let set_cell packer index value =
+  let set_cell packer index k v =
     assert (index >= 0);
     let length = Array.length packer.table in
-    if index < length then
-      packer.table.(index) <- value
-    else (
+    if index >= length then (
       let length' = max (index + 1) (length * 2) in
       let table = Array.make length' Unused in
       Array.blit packer.table 0 table 0 length;
       packer.table <- table;
-      packer.table.(index) <- value
-    )
+    );
+    packer.table.(index) <-
+      match packer.table.(index) with
+      | Unused -> Used1 (k, v)
+      | Used1 (k', v') -> Used2 (k', v', k, v)
+      | Used2 _ -> assert false
 
   let add_vector packer = function
     | [] -> 0
@@ -88,7 +91,7 @@ end = struct
         incr i
       done;
       let index = !i - ofs in
-      List.iter (fun (k, v) -> set_cell packer (index + k) (Used (k, v))) cells;
+      List.iter (fun (k, v) -> set_cell packer (index + k) k v) cells;
       index
 
   let int_size i =
@@ -118,18 +121,27 @@ end = struct
       Array.init !length begin fun i ->
         match packer.table.(i) with
         | Unused -> Unused
-        | Used (k, v) ->
+        | Used1 (k, v) ->
           let v = value_repr v in
           assert (v >= 0);
           if k > !max_k then max_k := k;
           if v > !max_v then max_v := v;
-          Used (k, v)
+          Used1 (k, v)
+        | Used2 (k', v', k, v) ->
+          let v' = value_repr v' in
+          let v = value_repr v in
+          assert (v >= 0);
+          if k > !max_k then max_k := k;
+          if k' > !max_k then max_k := k;
+          if v > !max_v then max_v := v;
+          if v' > !max_v then max_v := v;
+          Used2 (k', v', k, v)
       end
     in
     incr max_k;
     let k_size = int_size !max_k in
     let v_size = int_size !max_v in
-    let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
+    let repr = Bytes.make (2 + Array.length table * 2 * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
     let unused = ref 0 in
@@ -141,22 +153,31 @@ end = struct
       consec_unused := 0
     in
     Array.iteri begin fun i cell ->
-      let offset = 2 + i * (k_size + v_size) in
+      let offset = 2 + i * 2 * (k_size + v_size) in
       match cell with
       | Unused ->
+        incr unused;
+        incr unused;
         incr consec_unused;
         set_int repr ~offset ~value:0 k_size
-      | Used (k, v) ->
+      | Used1 (k, v) ->
+        incr unused;
         register_unused();
         set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
+      | Used2 (k', v', k, v) ->
+        register_unused();
+        set_int repr ~offset ~value:(k' + 1) k_size;
+        set_int repr ~offset:(offset + k_size) ~value:v' v_size;
+        set_int repr ~offset:(offset + k_size + v_size) ~value:(k + 1) k_size;
+        set_int repr ~offset:(offset + k_size + v_size + k_size) ~value:v v_size;
     end table;
     register_unused();
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
     Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
     Printf.eprintf "table size: %d\nrepr size: %d\n"
       (Array.length table) (Bytes.length repr);
-    Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float (Array.length table));
+    Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float (2 * Array.length table));
     for i = 0 to 999 do
       if hist_unused.(i) > 0 then
         Printf.eprintf "%d consecutive unused appeared %d times\n" i hist_unused.(i)
