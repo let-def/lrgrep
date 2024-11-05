@@ -2,7 +2,7 @@ open Fix.Indexing
 open Utils
 open Misc
 
-open Synthesis
+(*open Synthesis*)
 
 let grammar_filename =
   let filename, oc = Filename.open_temp_file "lrgrep-interpreter" "cmly" in
@@ -91,7 +91,7 @@ end = struct
 
 end
 
-let effective_items : (Lr1.n, (Item.t * Terminal.set) list) vector =
+let effective_items : Lr1.t -> (Item.t * Terminal.set) list =
   let table = Vector.make Lr1.n IndexMap.empty in
   let rec populate states items =
     let map = IndexMap.of_seq (List.to_seq items) in
@@ -100,25 +100,25 @@ let effective_items : (Lr1.n, (Item.t * Terminal.set) list) vector =
         let union _k v v' = Some (IndexSet.union v v') in
         Vector.set table lr1 (IndexMap.union union map map')
       ) states;
-    match List.filter_map (fun (it, la) -> match Item.pred it with
-        | None -> None
-        | Some it' -> Some (it', la)
-      ) items
-    with
+    let previous_item (it, la) = match Item.pred it with
+      | None -> None
+      | Some it' -> Some (it', la)
+    in
+    match List.filter_map previous_item items with
     | [] -> ()
     | items' ->
       populate (indexset_bind states Lr1.predecessors) items'
   in
-  Index.iter Lr1.n (fun lr1 ->
-      let initial_items =
-        IndexSet.fold (fun red acc ->
-            let prod = Reduction.production red in
-            let lookaheads = Reduction.lookaheads red in
-            (Item.inj prod (Production.length prod), lookaheads) :: acc
-          ) (Reduction.from_lr1 lr1) []
-      in
-      populate (IndexSet.singleton lr1) initial_items
-    );
+  Index.iter Lr1.n begin fun lr1 ->
+    let initial_items =
+      IndexSet.fold (fun red acc ->
+          let prod = Reduction.production red in
+          let lookaheads = Reduction.lookaheads red in
+          (Item.inj prod (Production.length prod), lookaheads) :: acc
+        ) (Reduction.from_lr1 lr1) []
+    in
+    populate (IndexSet.singleton lr1) initial_items
+  end;
   let bindings_by_length map =
     List.sort (fun (it1, _) (it2, _) ->
         let _, n1 = Item.prj it1 in
@@ -126,14 +126,14 @@ let effective_items : (Lr1.n, (Item.t * Terminal.set) list) vector =
         Int.compare n1 n2
       ) (IndexMap.bindings map)
   in
-  Vector.map bindings_by_length table
+  Vector.get (Vector.map bindings_by_length table)
 
-let positive_items st =
+let productive_items st =
   let rec loop = function
     | (it, _) :: rest when Item.position it = 0 -> loop rest
     | otherwise -> otherwise
   in
-  loop (Vector.get effective_items st)
+  loop (effective_items st)
 
 let time = Stopwatch.create ()
 
@@ -194,7 +194,7 @@ module NFA = struct
           explore
             (IndexSet.singleton st.config.base)
             config.lookaheads 1
-            (positive_items st.config.goto)
+            (productive_items st.config.goto)
         with
         | [] -> ()
         | eps :: rest ->
@@ -210,7 +210,7 @@ module NFA = struct
         | Some s when Symbol.is_nonterminal s -> ()
         | _ ->
           let states = IndexSet.singleton lr1 in
-          let items = positive_items lr1 in
+          let items = productive_items lr1 in
           push acc (lr1, explore states Terminal.all 0 items)
       );
     !acc
@@ -363,171 +363,173 @@ module DFA = struct
       (cardinal n) !direct !wildcard !mixed !none
 end
 
-module MDFA = struct
+module Output = struct
+  module MDFA = struct
 
-  module Label = struct
-    type t = Lr1.t option
-    let compare t1 t2 =
-      match t1, t2 with
-      | None, None -> 0
-      | Some _, None -> +1
-      | None, Some _ -> -1
-      | Some l1, Some l2 -> Index.compare l1 l2
-  end
+    module Label = struct
+      type t = Lr1.t option
+      let compare t1 t2 =
+        match t1, t2 with
+        | None, None -> 0
+        | Some _, None -> +1
+        | None, Some _ -> -1
+        | Some l1, Some l2 -> Index.compare l1 l2
+    end
 
-  module Transitions = struct
-    include IndexBuffer.Gen.Make()
+    module Transitions = struct
+      include IndexBuffer.Gen.Make()
 
-    let table = get_generator ()
+      let table = get_generator ()
+
+      let () =
+        Vector.iter (fun ds ->
+            begin match ds.DFA.wildcard with
+              | None -> ()
+              | Some ds' ->
+                let _ = IndexBuffer.Gen.add table (ds.index, None, ds'.index) in
+                ()
+            end;
+            List.iter (fun (lr1, ds') ->
+                let _ = IndexBuffer.Gen.add table (ds.index, Some lr1, ds'.DFA.index) in
+                ()
+              ) ds.transitions
+          ) DFA.states
+
+      let table = IndexBuffer.Gen.freeze table
+    end
+
+    module Input = struct
+      type states = DFA.n
+      let states = DFA.n
+
+      type transitions = Transitions.n
+      let transitions = Transitions.n
+
+      let label tr =
+        let _, x, _ = Vector.get Transitions.table tr in
+        x
+
+      let source tr =
+        let x, _, _ = Vector.get Transitions.table tr in
+        x
+
+      let target tr =
+        let _, _, x = Vector.get Transitions.table tr in
+        x
+
+      let initials f =
+        f DFA.initial.index
+
+      let finals f =
+        Hashtbl.iter
+          (fun _ ds -> if not (IndexSet.is_empty ds.DFA.reached) then f ds.index)
+          DFA.table
+
+      let refinements f =
+        let by_reached = Hashtbl.create 7 in
+        let get_key ds =
+          IndexSet.map
+            (fun ns -> (Vector.get NFA.states ns).config.goto)
+            ds.DFA.reached
+        in
+        let register ds =
+          if not (IndexSet.is_empty ds.DFA.reached) then
+            let key = get_key ds in
+            match Hashtbl.find_opt by_reached key with
+            | Some r -> push r ds.index
+            | None ->
+              let r = ref [ds.index] in
+              Hashtbl.add by_reached key r
+        in
+        Hashtbl.iter (fun _ ds -> register ds) DFA.table;
+        Hashtbl.iter (fun _ r -> f (fun ~add -> List.iter add !r)) by_reached
+    end
+
+    include Valmari.Minimize(Label)(Input)
 
     let () =
-      Vector.iter (fun ds ->
-          begin match ds.DFA.wildcard with
-            | None -> ()
-            | Some ds' ->
-              let _ = IndexBuffer.Gen.add table (ds.index, None, ds'.index) in
-              ()
-          end;
-          List.iter (fun (lr1, ds') ->
-              let _ = IndexBuffer.Gen.add table (ds.index, Some lr1, ds'.DFA.index) in
-              ()
-            ) ds.transitions
-        ) DFA.states
-
-    let table = IndexBuffer.Gen.freeze table
+      Printf.eprintf "Minimized to: %d states and %d transitions\n"
+        (cardinal states)
+        (cardinal transitions)
   end
 
-  module Input = struct
-    type states = DFA.n
-    let states = DFA.n
+  module Pack = struct
+    module Packer = Lrgrep_support.Sparse_packer
 
-    type transitions = Transitions.n
-    let transitions = Transitions.n
+    let packer = Packer.make ()
 
-    let label tr =
-      let _, x, _ = Vector.get Transitions.table tr in
-      x
+    let outgoing = Vector.make MDFA.states []
 
-    let source tr =
-      let x, _, _ = Vector.get Transitions.table tr in
-      x
-
-    let target tr =
-      let _, _, x = Vector.get Transitions.table tr in
-      x
-
-    let initials f =
-      f DFA.initial.index
-
-    let finals f =
-      Hashtbl.iter
-        (fun _ ds -> if not (IndexSet.is_empty ds.DFA.reached) then f ds.index)
-        DFA.table
-
-    let refinements f =
-      let by_reached = Hashtbl.create 7 in
-      let get_key ds =
-        IndexSet.map
-          (fun ns -> (Vector.get NFA.states ns).config.goto)
-          ds.DFA.reached
+    let () =
+      Index.iter MDFA.transitions (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
+      let unique_dom = Hashtbl.create 7 in
+      let unique_map = Hashtbl.create 7 in
+      Vector.iter (function
+          | [] | [_] -> ()
+          | trs ->
+            let dom = List.filter_map MDFA.label trs in
+            let dom = List.sort compare dom in
+            incr (get_default unique_dom dom 0);
+            let map = List.filter_map (fun tr -> match MDFA.label tr with None -> None | Some x -> Some (x, MDFA.target tr)) trs in
+            let map = List.sort compare map in
+            incr (get_default unique_map map 0);
+        ) outgoing;
+      Printf.eprintf "%d unique domains, %d unique maps\n" (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
+      Printf.eprintf "%d unique transition\n" (Hashtbl.fold (fun map _ sum ->
+          sum + List.length map
+        ) unique_map 0);
+      (*let doms = Array.of_seq (Hashtbl.to_seq unique_dom) in
+        Array.fast_sort (fun (y,_) (z,_) -> List.compare_lengths y z) doms;
+        Array.iter (fun (dom,c) ->
+          Printf.eprintf "%d: [%s]\n"
+            !c
+            (string_concat_map "," string_of_index dom)
+        ) doms;*)
+      let trs =
+        Vector.fold_left (fun acc trs ->
+            let by_target = Hashtbl.create 7 in
+            List.iter (fun tr -> match MDFA.label tr with
+                | None -> ()
+                | Some lr1 ->
+                  let target = MDFA.target tr in
+                  append_list by_target target ((lr1 :> int), target)
+              ) trs;
+            let longest = ref 0 in
+            Hashtbl.iter
+              (fun _target labels -> longest := Int.max !longest (List.length !labels))
+              by_target;
+            let trs =
+              Hashtbl.fold (fun _target labels acc ->
+                  if List.length !labels = !longest then
+                    (longest := -1; acc)
+                  else
+                    List.rev_append !labels acc
+                ) by_target []
+            in
+            trs :: acc
+          ) [] outgoing
       in
-      let register ds =
-        if not (IndexSet.is_empty ds.DFA.reached) then
-          let key = get_key ds in
-          match Hashtbl.find_opt by_reached key with
-          | Some r -> push r ds.index
-          | None ->
-            let r = ref [ds.index] in
-            Hashtbl.add by_reached key r
-      in
-      Hashtbl.iter (fun _ ds -> register ds) DFA.table;
-      Hashtbl.iter (fun _ r -> f (fun ~add -> List.iter add !r)) by_reached
+      let trs = List.filter_map (function
+          (*| [] | [_] -> None*)
+          | x -> Some (List.sort compare x)) trs in
+      let trs = List.sort_uniq (List.compare (compare_pair Int.compare Index.compare)) trs in
+      let trs = List.sort List.compare_lengths trs in
+      List.iter (fun x -> ignore (Packer.add_vector packer x)) (List.rev trs)
+
+    let table = Packer.pack packer Index.to_int
+
+    let () =
+      Printf.eprintf "Transitions packed to a %d bytes table\n"
+        (String.length table)
+
+    let () = output_string stdout table
   end
 
-  include Valmari.Minimize(Label)(Input)
-
   let () =
-    Printf.eprintf "Minimized to: %d states and %d transitions\n"
-      (cardinal states)
-      (cardinal transitions)
+    if false then
+      Index.iter Lr1.n (fun lr1 ->
+          let lr1s = Info.Lr1.predecessors lr1 in
+          if not (IndexSet.is_singleton lr1s || IndexSet.is_empty lr1s) then
+            Printf.eprintf "%s: %s\n" (string_of_index lr1) (string_of_indexset lr1s)
+        )
 end
-
-module Pack = struct
-  module Packer = Lrgrep_support.Sparse_packer
-
-  let packer = Packer.make ()
-
-  let outgoing = Vector.make MDFA.states []
-
-  let () =
-    Index.iter MDFA.transitions (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
-    let unique_dom = Hashtbl.create 7 in
-    let unique_map = Hashtbl.create 7 in
-    Vector.iter (function
-        | [] | [_] -> ()
-        | trs ->
-          let dom = List.filter_map MDFA.label trs in
-          let dom = List.sort compare dom in
-          incr (get_default unique_dom dom 0);
-          let map = List.filter_map (fun tr -> match MDFA.label tr with None -> None | Some x -> Some (x, MDFA.target tr)) trs in
-          let map = List.sort compare map in
-          incr (get_default unique_map map 0);
-      ) outgoing;
-    Printf.eprintf "%d unique domains, %d unique maps\n" (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
-    Printf.eprintf "%d unique transition\n" (Hashtbl.fold (fun map _ sum ->
-        sum + List.length map
-      ) unique_map 0);
-    (*let doms = Array.of_seq (Hashtbl.to_seq unique_dom) in
-    Array.fast_sort (fun (y,_) (z,_) -> List.compare_lengths y z) doms;
-    Array.iter (fun (dom,c) ->
-        Printf.eprintf "%d: [%s]\n"
-          !c
-          (string_concat_map "," string_of_index dom)
-      ) doms;*)
-    let trs =
-      Vector.fold_left (fun acc trs ->
-          let by_target = Hashtbl.create 7 in
-          List.iter (fun tr -> match MDFA.label tr with
-              | None -> ()
-              | Some lr1 ->
-                let target = MDFA.target tr in
-                append_list by_target target ((lr1 :> int), target)
-            ) trs;
-          let longest = ref 0 in
-          Hashtbl.iter
-            (fun _target labels -> longest := Int.max !longest (List.length !labels))
-            by_target;
-          let trs =
-            Hashtbl.fold (fun _target labels acc ->
-                if List.length !labels = !longest then
-                  (longest := -1; acc)
-                else
-                  List.rev_append !labels acc
-              ) by_target []
-          in
-          trs :: acc
-        ) [] outgoing
-    in
-    let trs = List.filter_map (function
-        (*| [] | [_] -> None*)
-        | x -> Some (List.sort compare x)) trs in
-    let trs = List.sort_uniq (List.compare (compare_pair Int.compare Index.compare)) trs in
-    let trs = List.sort List.compare_lengths trs in
-    List.iter (fun x -> ignore (Packer.add_vector packer x)) (List.rev trs)
-
-  let table = Packer.pack packer Index.to_int
-
-  let () =
-    Printf.eprintf "Transitions packed to a %d bytes table\n"
-      (String.length table)
-
-  let () = output_string stdout table
-end
-
-let () =
-  if false then
-  Index.iter Lr1.n (fun lr1 ->
-      let lr1s = Info.Lr1.predecessors lr1 in
-      if not (IndexSet.is_singleton lr1s || IndexSet.is_empty lr1s) then
-      Printf.eprintf "%s: %s\n" (string_of_index lr1) (string_of_indexset lr1s)
-    )

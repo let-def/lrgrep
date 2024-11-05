@@ -1,4 +1,4 @@
 all:
-	dune build
+	dune exec ./recovery.exe
 
 .PHONY: all
