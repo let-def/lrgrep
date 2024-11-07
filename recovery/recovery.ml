@@ -367,6 +367,57 @@ module DFA = struct
   let () =
     Hashtbl.iter (fun _ ds -> Vector.set states ds.index ds) table
 
+  type stuck_item = {
+    item: Item.t;
+    symbols: Symbol.set;
+  }
+
+  let dead_ends = Hashtbl.create 7
+
+  let print_stuck_item sitem =
+    let prod, pos = Item.prj sitem.item in
+    let lhs = Production.lhs prod in
+    let rhs = Production.rhs prod in
+    prerr_string "- ";
+    prerr_string (Nonterminal.to_string lhs);
+    prerr_char ':';
+    for i = 0 to pos - 1 do
+      prerr_char ' ';
+      prerr_string (Symbol.name rhs.(i));
+    done;
+    prerr_string " .";
+    for i = pos to Array.length rhs - 1 do
+      prerr_char ' ';
+      prerr_string (Symbol.name rhs.(i));
+    done;
+    prerr_string "\n  stuck because ";
+    let first = ref true in
+    IndexSet.iter (fun sym ->
+        if !first then first := false else prerr_string ", ";
+        prerr_string (Symbol.name sym);
+      ) sitem.symbols;
+    if not !first then
+      prerr_string " cannot be synthesized";
+    if Attr.cost_of_prod prod = infinity then (
+      if not !first then prerr_string ", and ";
+      prerr_string "production has an infinite cost"
+    );
+    prerr_char '\n'
+
+  let print_dead_ends () =
+    Hashtbl.iter (fun stucks stacks ->
+        prerr_endline "Cannot recover from stacks ending in:";
+        List.iter (fun stack ->
+            Printf.eprintf "- %s\n"
+              (string_concat_map " " (function
+                   | None -> "_"
+                   | Some lr1 -> Lr1.to_string lr1) stack);
+          ) !stacks;
+        prerr_endline "At least one of these items has to be completed:";
+        List.iter print_stuck_item stucks;
+        prerr_newline ();
+      ) dead_ends
+
   (* Look for dead-ends *)
   let () =
     let visited = Boolvector.make n false in
@@ -383,34 +434,14 @@ module DFA = struct
             Lr1.incoming (Vector.get NFA.states nfa).config.goto)
           st.reached
       in
-      Printf.eprintf "Cannot recover from a stack ending with symbols:\n\
-                     \  %s\n\
-                      At least one of these items has to be completed:\n"
-        (string_concat_map " " (fun (label, _) ->
-             match label with
-             | None -> "_"
-             | Some lr1 -> Lr1.to_string lr1)
-            path);
-      List.iter (fun (lr1, it, _) ->
-          let prod, pos = Item.prj it in
-          let nt = Production.lhs prod in
-          if pos > 1 || not (IndexSet.mem (Symbol.inj_r nt) reached_lhs) then (
-            let rhs = Production.rhs prod in
-            prerr_string "- ";
-            prerr_string (Nonterminal.to_string nt);
-            prerr_char ':';
-            for i = 0 to pos - 1 do
-              prerr_char ' ';
-              prerr_string (Symbol.name rhs.(i));
-            done;
-            prerr_string " .";
-            for i = pos to Array.length rhs - 1 do
-              prerr_char ' ';
-              prerr_string (Symbol.name rhs.(i));
-            done;
-            prerr_string "\n  stuck because ";
+      let reasons = ref [] in
+      List.iter (fun (lr1, item, _) ->
+          let prod, pos = Item.prj item in
+          let lhs = Production.lhs prod in
+          let rhs = Production.rhs prod in
+          let stuck_symbols = ref IndexSet.empty in
+          if pos > 1 || not (IndexSet.mem (Symbol.inj_r lhs) reached_lhs) then (
             let lr1 = ref lr1 in
-            let first = ref true in
             for i = pos to Array.length rhs - 1 do
               let tr = List.find
                   (fun tr -> Transition.symbol tr = rhs.(i))
@@ -420,21 +451,21 @@ module DFA = struct
                  match Transition.split tr with
                  | L gt -> Synth.cost_of (Goto gt) = infinity
                  | R _ -> Attr.cost_of_symbol (Transition.symbol tr) = infinity
-              then (
-                if !first then first := false else prerr_string ", ";
-                prerr_string (Symbol.name rhs.(i));
-              );
+              then
+                stuck_symbols := IndexSet.add rhs.(i) !stuck_symbols;
               lr1 := Transition.target tr;
             done;
-            prerr_string " cannot be synthesized";
-            if Attr.cost_of_prod prod = infinity then (
-              if not !first then prerr_string ", and ";
-              prerr_string "production has an infinite cost"
-            );
-            prerr_char '\n';
+            push reasons {item; symbols = !stuck_symbols}
           )
         ) items;
-      prerr_char '\n';
+      let paths = match Hashtbl.find_opt dead_ends !reasons with
+        | Some r -> r
+        | None ->
+          let r = ref [] in
+          Hashtbl.add dead_ends !reasons r;
+          r
+      in
+      push paths (List.map fst path)
     in
     let visit (st, path) =
         match st.transitions with
@@ -499,6 +530,8 @@ module DFA = struct
                     - %d states with a wildcard transition\n\
                     - %d states without transitions\n"
       (cardinal n) !labelled !wildcard !none
+
+  let () = print_dead_ends ()
 end
 
 module Output = struct
@@ -653,7 +686,7 @@ module Output = struct
     let table = Packer.pack packer Index.to_int
 
     let () =
-      Printf.eprintf "Transitions packed to a %d bytes table\n"
+      Printf.eprintf "Transitions packed to a %d bytes table\n%!"
         (String.length table)
 
     let () = output_string stdout table

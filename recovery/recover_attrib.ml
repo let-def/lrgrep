@@ -19,43 +19,49 @@ module Make (Info : Mid.Info.S) : S with module Info := Info = struct
 
   module Attribute = Grammar.Attribute
 
-  let cost_of_attributes prj attrs =
+  let cost_of_attributes attrs =
     List.fold_left
       (fun total attr ->
          if Attribute.has_label "cost" attr then
            total +. float_of_string (Attribute.payload attr)
          else total)
-      0. (prj attrs)
+      (-0.0) attrs
 
-  let terminal_attributes t = Grammar.Terminal.attributes (Terminal.to_g t)
-  let nonterminal_attributes t = Grammar.Nonterminal.attributes (Nonterminal.to_g t)
-  let production_attributes t = Grammar.Production.attributes (Production.to_g t)
+  let symbol_attributes sym =
+    match Symbol.desc sym with
+    | T t -> Grammar.Terminal.attributes (Terminal.to_g t)
+    | N n -> Grammar.Nonterminal.attributes (Nonterminal.to_g n)
+
+  let production_attributes t =
+    Grammar.Production.attributes (Production.to_g t)
 
   let cost_of_symbol =
-    let measure ~has_default prj attrs =
-      if List.exists (Attribute.has_label "recovery") (prj attrs) || has_default
-      then cost_of_attributes prj attrs
-      else infinity
-    in
-    let ft = tabulate_finset Terminal.n (fun t ->
-      if Option.is_none (Terminal.semantic_value t)
-      then measure ~has_default:true terminal_attributes t
-      else measure ~has_default:false terminal_attributes t
-    ) in
-    let fn =
-      tabulate_finset Nonterminal.n (measure ~has_default:false nonterminal_attributes)
-    in
-    fun s ->
-    match Symbol.desc s with
-    | Symbol.T t -> ft t
-    | Symbol.N n -> fn n
+    tabulate_finset Symbol.n (fun sym ->
+        let default = match Symbol.desc sym with
+          | T t -> Option.is_none (Terminal.semantic_value t)
+          | N _ -> false
+        in
+        let attrs = symbol_attributes sym in
+        let cost = cost_of_attributes attrs in
+        if default || List.exists (Attribute.has_label "recovery") attrs then
+          cost
+        else (
+          if not (Float.sign_bit cost) && cost < infinity then (
+            Printf.eprintf "Warning: ignoring cost %.02f for symbol %s because no recovery value was provided\n"
+              cost (Symbol.name sym);
+            Printf.eprintf "         add attribute [%%recovery <ocaml code>] to enable recovery for this symbol\n";
+          );
+          infinity
+        )
+    )
 
   let cost_of_prod =
-    tabulate_finset Production.n (cost_of_attributes production_attributes)
+    tabulate_finset Production.n (fun p -> cost_of_attributes (production_attributes p))
 
   let penalty_of_item =
     let f = tabulate_finset Production.n @@ fun p ->
-      Array.map (cost_of_attributes (fun (_,_,a) -> a))
+      Array.map
+        (fun (_,_,a) -> cost_of_attributes a)
         (Grammar.Production.rhs (Production.to_g p))
     in
     fun (p,i) ->
@@ -81,11 +87,11 @@ module Make (Info : Mid.Info.S) : S with module Info := Info = struct
           | None -> Some "()"
           | Some _ -> None
         in
-        Some (default_printer ?fallback (terminal_attributes t))
+        Some (default_printer ?fallback (symbol_attributes (Symbol.inj_l t)))
     | `PSEUDO -> None
 
   let default_nonterminal n =
     match Nonterminal.kind n with
-    | `REGULAR -> Some (default_printer (nonterminal_attributes n))
+    | `REGULAR -> Some (default_printer (symbol_attributes (Symbol.inj_r n)))
     | `START -> None
 end
