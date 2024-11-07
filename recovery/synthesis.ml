@@ -138,7 +138,24 @@ struct
           with
           | tr -> var (Tail (Transition.target tr, prod, pos + 1))
           | exception Not_found ->
-            Printf.eprintf "no transition: #%d (%d,%d)\n" (Index.to_int st) (Index.to_int prod) pos;
+            (* A missing transition has been removed
+               by conflict resolution *)
+            if false then (
+              let lhs = Production.lhs prod in
+              let rhs = Production.rhs prod in
+              Printf.eprintf "no transition in #%d for %s:"
+                (Index.to_int st) (Nonterminal.to_string lhs);
+              for i = 0 to pos - 1 do
+                prerr_char ' ';
+                prerr_string (Symbol.name rhs.(i));
+              done;
+              prerr_string " .";
+              for i = pos to Array.length rhs - 1 do
+                prerr_char ' ';
+                prerr_string (Symbol.name rhs.(i));
+              done;
+              prerr_char '\n';
+            );
             Fun.const infinity
         in
         (fun v -> head v +. tail v)

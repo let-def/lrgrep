@@ -2,8 +2,6 @@ open Fix.Indexing
 open Utils
 open Misc
 
-(*open Synthesis*)
-
 let grammar_filename =
   let filename, oc = Filename.open_temp_file "lrgrep-interpreter" "cmly" in
   output_string oc Interpreter_data.grammar;
@@ -37,6 +35,10 @@ let append_list tbl key v =
   | Some r -> push r v
 
 module Info = Mid.Info.Make(Grammar)
+
+module Attr = Recover_attrib.Make(Info)
+module Synth = Synthesis.Make(Info)(Attr)
+
 open Info
 
 module Item : sig
@@ -128,12 +130,27 @@ let effective_items : Lr1.t -> (Item.t * Terminal.set) list =
   in
   Vector.get (Vector.map bindings_by_length table)
 
-let productive_items st =
+let productive_items =
   let rec loop = function
     | (it, _) :: rest when Item.position it = 0 -> loop rest
     | otherwise -> otherwise
   in
-  loop (effective_items st)
+  let add_cost st (it, la) =
+    let prod, pos = Item.prj it in
+    (Synth.cost_of (Tail (st, prod, pos)), it, la)
+  in
+  let with_cost st =
+    List.map (add_cost st) (loop (effective_items st))
+  in
+  tabulate_finset Lr1.n with_cost
+
+let synthesizable_items st =
+  List.filter_map (fun (cost, it, la) ->
+      if cost < infinity then
+        Some (it, la)
+      else
+        None
+    ) (productive_items st)
 
 let time = Stopwatch.create ()
 
@@ -194,7 +211,7 @@ module NFA = struct
           explore
             (IndexSet.singleton st.config.base)
             config.lookaheads 1
-            (productive_items st.config.goto)
+            (synthesizable_items st.config.goto)
         with
         | [] -> ()
         | eps :: rest ->
@@ -205,14 +222,14 @@ module NFA = struct
 
   let initial =
     let acc = ref [] in
-    Index.iter Lr1.n (fun lr1 ->
-        match Lr1.incoming lr1 with
-        | Some s when Symbol.is_nonterminal s -> ()
-        | _ ->
-          let states = IndexSet.singleton lr1 in
-          let items = productive_items lr1 in
-          push acc (lr1, explore states Terminal.all 0 items)
-      );
+    Index.iter Lr1.n begin fun lr1 ->
+      match Lr1.incoming lr1 with
+      | Some s when Symbol.is_nonterminal s -> ()
+      | _ ->
+        let states = IndexSet.singleton lr1 in
+        let items = synthesizable_items lr1 in
+        push acc (lr1, explore states Terminal.all 0 items)
+    end;
     !acc
 
   let states = Vector.make' n (fun () ->
@@ -262,9 +279,11 @@ module DFA = struct
   type state = {
     index: n index;
     mutable reached: NFA.n indexset;
-    mutable wildcard: state option;
-    mutable transitions: (Lr1.t * state) list;
+    mutable transitions: transitions
   }
+  and transitions =
+    | Wildcard of state
+    | Labelled of (Lr1.t * state) list
 
   let accumulate_trs ss trs =
     let rec add_one state (reached, trs) =
@@ -296,28 +315,32 @@ module DFA = struct
     match Hashtbl.find_opt table key with
     | Some ds -> ds
     | None ->
-      let ds = {index = fresh(); reached; wildcard = None; transitions = []} in
+      let ds = {index = fresh(); reached; transitions = Labelled []} in
       Hashtbl.add table key ds;
       begin match Tr_merge.pop trs with
         | None -> ()
-        | Some (states, next) when IndexSet.is_empty states ->
-          assert (Option.is_none ds.wildcard);
-          ds.wildcard <- Some (follow_transitions (IndexSet.empty, next))
         | Some (states, next) ->
-          IndexMap.iter (fun lr1 states ->
-              push todo (ds, lr1, (accumulate_trs states next))
-            ) (group states)
+          if IndexSet.is_empty states then
+            match ds.transitions with
+            | Labelled [] ->
+              ds.transitions <- Wildcard (follow_transitions (IndexSet.empty, next))
+            | _ -> assert false
+          else
+            IndexMap.iter (fun lr1 states ->
+                push todo (ds, lr1, (accumulate_trs states next))
+              ) (group states)
       end;
       ds
 
   let initial = {
     index = fresh ();
     reached = IndexSet.empty;
-    wildcard = None;
-    transitions = List.map (fun (lr1, tr) ->
-        let tr = Tr_merge.add tr Tr_merge.empty in
-        (lr1, follow_transitions (IndexSet.empty, tr))
-      ) NFA.initial;
+    transitions = Labelled (
+        List.map (fun (lr1, tr) ->
+            let tr = Tr_merge.add tr Tr_merge.empty in
+            (lr1, follow_transitions (IndexSet.empty, tr))
+          ) NFA.initial
+      );
   }
 
   let () =
@@ -330,8 +353,12 @@ module DFA = struct
             loop todo'
         end
       | (ds, lr1, key) :: xs ->
-        ds.transitions <- (lr1, follow_transitions key) :: ds.transitions;
-        loop xs
+        begin match ds.transitions with
+        | Wildcard _ -> assert false
+        | Labelled trs ->
+          ds.transitions <- Labelled ((lr1, follow_transitions key) :: trs);
+          loop xs
+        end
     in
     loop []
 
@@ -340,27 +367,138 @@ module DFA = struct
   let () =
     Hashtbl.iter (fun _ ds -> Vector.set states ds.index ds) table
 
+  (* Look for dead-ends *)
   let () =
-    let direct = ref 0 in
+    let visited = Boolvector.make n false in
+    let todo = ref [(initial, [])] in
+    let schedule st path =
+      if not (Boolvector.test visited st.index) then (
+        Boolvector.set visited st.index;
+        push todo (st, path)
+      )
+    in
+    let dead_end st path items =
+      let reached_lhs =
+        IndexSet.filter_map (fun nfa ->
+            Lr1.incoming (Vector.get NFA.states nfa).config.goto)
+          st.reached
+      in
+      Printf.eprintf "Cannot recover from a stack ending with symbols:\n\
+                     \  %s\n\
+                      At least one of these items has to be completed:\n"
+        (string_concat_map " " (fun (label, _) ->
+             match label with
+             | None -> "_"
+             | Some lr1 -> Lr1.to_string lr1)
+            path);
+      List.iter (fun (lr1, it, _) ->
+          let prod, pos = Item.prj it in
+          let nt = Production.lhs prod in
+          if pos > 1 || not (IndexSet.mem (Symbol.inj_r nt) reached_lhs) then (
+            let rhs = Production.rhs prod in
+            prerr_string "- ";
+            prerr_string (Nonterminal.to_string nt);
+            prerr_char ':';
+            for i = 0 to pos - 1 do
+              prerr_char ' ';
+              prerr_string (Symbol.name rhs.(i));
+            done;
+            prerr_string " .";
+            for i = pos to Array.length rhs - 1 do
+              prerr_char ' ';
+              prerr_string (Symbol.name rhs.(i));
+            done;
+            prerr_string "\n  stuck because ";
+            let lr1 = ref lr1 in
+            let first = ref true in
+            for i = pos to Array.length rhs - 1 do
+              let tr = List.find
+                  (fun tr -> Transition.symbol tr = rhs.(i))
+                  (Transition.successors !lr1)
+              in
+              if Attr.penalty_of_item (prod, i) = infinity ||
+                 match Transition.split tr with
+                 | L gt -> Synth.cost_of (Goto gt) = infinity
+                 | R _ -> Attr.cost_of_symbol (Transition.symbol tr) = infinity
+              then (
+                if !first then first := false else prerr_string ", ";
+                prerr_string (Symbol.name rhs.(i));
+              );
+              lr1 := Transition.target tr;
+            done;
+            prerr_string " cannot be synthesized";
+            if Attr.cost_of_prod prod = infinity then (
+              if not !first then prerr_string ", and ";
+              prerr_string "production has an infinite cost"
+            );
+            prerr_char '\n';
+          )
+        ) items;
+      prerr_char '\n';
+    in
+    let visit (st, path) =
+        match st.transitions with
+        | Wildcard st' -> schedule st' ((None, st) :: path)
+        | Labelled [] ->
+          let prepare_items lr1 items =
+            List.map (fun (_cost, it, la) -> (lr1, it, la)) items
+          in
+          if IndexSet.is_empty st.reached then (
+            match path with
+            | [Some lr1, _initial] ->
+              (* Initial state without transition *)
+              dead_end st path (prepare_items lr1 (productive_items lr1))
+            | _ ->
+              (* Analysis really succeeded *)
+              ()
+          ) else (
+            (* Inner state: some NFA states were reached, but none of them had
+             * a transition with finite synthesis cost *)
+            match
+              List.concat_map
+                (fun nfa ->
+                   let lr1 = (Vector.get NFA.states nfa).config.goto in
+                   let items = productive_items lr1 in
+                   if List.exists (fun (cost, _, _) -> cost < infinity) items then
+                     raise Exit;
+                   prepare_items lr1 items
+                ) (IndexSet.elements st.reached)
+            with
+            | [] -> ()
+            | exception Exit -> ()
+            | items -> dead_end st path items
+          )
+        | Labelled trs ->
+          List.iter
+            (fun (lr1, st') -> schedule st' ((Some lr1, st) :: path))
+            trs
+    in
+    let rec loop () = match !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter visit todo';
+        loop ()
+    in
+    loop ()
+
+  let () =
+    let labelled = ref 0 in
     let wildcard = ref 0 in
-    let mixed = ref 0 in
     let none = ref 0 in
     Vector.iter (fun ds ->
-        begin match ds.transitions, ds.wildcard with
-          | [], None -> incr none
-          | [], Some _ -> incr wildcard
-          | (_ :: _), Some _ -> incr mixed
-          | (_ :: _), None -> ()
+        begin match ds.transitions with
+          | Wildcard _ -> incr wildcard
+          | Labelled [] -> incr none
+          | Labelled l -> labelled := !labelled + List.length l
         end;
-        direct := !direct + List.length ds.transitions
       ) states;
     Printf.eprintf "Deterministic full reduction graph:\n\
                     - %d states\n\
                     - %d labelled transitions\n\
-                    - %d states with only a wildcard transition\n\
-                    - %d states with both wildcard and labelled transitions\n\
+                    - %d states with a wildcard transition\n\
                     - %d states without transitions\n"
-      (cardinal n) !direct !wildcard !mixed !none
+      (cardinal n) !labelled !wildcard !none
 end
 
 module Output = struct
@@ -382,17 +520,15 @@ module Output = struct
       let table = get_generator ()
 
       let () =
+        let add_tr ds label ds' =
+          ignore (IndexBuffer.Gen.add table
+                    (ds.DFA.index, label, ds'.DFA.index) : _ index)
+        in
         Vector.iter (fun ds ->
-            begin match ds.DFA.wildcard with
-              | None -> ()
-              | Some ds' ->
-                let _ = IndexBuffer.Gen.add table (ds.index, None, ds'.index) in
-                ()
-            end;
-            List.iter (fun (lr1, ds') ->
-                let _ = IndexBuffer.Gen.add table (ds.index, Some lr1, ds'.DFA.index) in
-                ()
-              ) ds.transitions
+            match ds.DFA.transitions with
+            | Wildcard ds' -> add_tr ds None ds'
+            | Labelled trs ->
+              List.iter (fun (lr1, ds') -> add_tr ds (Some lr1) ds') trs
           ) DFA.states
 
       let table = IndexBuffer.Gen.freeze table
@@ -509,9 +645,7 @@ module Output = struct
             trs :: acc
           ) [] outgoing
       in
-      let trs = List.filter_map (function
-          (*| [] | [_] -> None*)
-          | x -> Some (List.sort compare x)) trs in
+      let trs = List.map (List.sort compare) trs in
       let trs = List.sort_uniq (List.compare (compare_pair Int.compare Index.compare)) trs in
       let trs = List.sort List.compare_lengths trs in
       List.iter (fun x -> ignore (Packer.add_vector packer x)) (List.rev trs)
