@@ -27,6 +27,9 @@ module type S = sig
   val cost_of_actions : action list -> float
   val solution : variable -> action list
   val report   : Format.formatter -> unit
+
+  module SymbolsSet : Set.S with type elt = Symbol.set
+  val minimal_placeholders : variable -> SymbolsSet.t
 end
 
 module Make

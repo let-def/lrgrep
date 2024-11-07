@@ -44,7 +44,10 @@ module Make (Info : Mid.Info.S) : S with module Info := Info = struct
         let attrs = symbol_attributes sym in
         let cost = cost_of_attributes attrs in
         if default || List.exists (Attribute.has_label "recovery") attrs then
-          cost
+          if Float.sign_bit cost then
+            1.0
+          else
+            cost
         else (
           if not (Float.sign_bit cost) && cost < infinity then (
             Printf.eprintf "Warning: ignoring cost %.02f for symbol %s because no recovery value was provided\n"

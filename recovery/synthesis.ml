@@ -29,6 +29,9 @@ module type S = sig
   val cost_of_actions : action list -> float
   val solution : variable -> action list
   val report   : Format.formatter -> unit
+
+  module SymbolsSet : Set.S with type elt = Symbol.set
+  val minimal_placeholders : variable -> SymbolsSet.t
 end
 
 module Make
@@ -92,19 +95,21 @@ struct
 
   let cost_of = function
     | Goto gt ->
-      let src, nt, tgt = decompose_goto gt in
+      let src, nt, _ = decompose_goto gt in
       let acc =
-        List.filter_map (fun (prod, pos) ->
-            if pos = 1 && Production.lhs prod = nt
-            then Some (var (Tail (src, prod, 0)))
-            else None
-          ) (Lr1.items tgt)
+        List.concat_map (fun tr ->
+            List.filter_map (fun (prod, pos) ->
+                if pos = 1 && Production.lhs prod = nt
+                then Some (var (Tail (src, prod, 0)))
+                else None
+              ) (Lr1.items (Transition.target tr))
+          ) (Transition.successors src)
       in
       let cost =
         let visit_reduction red acc =
           let prod = Reduction.production red in
-          if Production.length prod = 0 && Production.lhs prod = nt then
-            Float.min (cost_of_prod prod) acc
+          if Production.length prod = 0 && Production.lhs prod = nt
+          then Float.min (cost_of_prod prod) acc
           else acc
         in
         IndexSet.fold visit_reduction (Reduction.from_lr1 src) infinity
@@ -118,7 +123,7 @@ struct
       if penalty = infinity then
         Fun.const infinity
       else
-      if pos >= Array.length (Production.rhs prod) then
+      if pos = Array.length (Production.rhs prod) then
         Fun.const (cost_of_prod prod)
       else
         let head =
@@ -158,18 +163,20 @@ struct
             );
             Fun.const infinity
         in
-        (fun v -> head v +. tail v)
+        (fun v -> penalty +. head v +. tail v)
+
+  module Table = struct
+    type key = variable
+    type 'a t = (key, 'a) Hashtbl.t
+    let create () = Hashtbl.create 7
+    let find k tbl = Hashtbl.find tbl k
+    let add k v tbl = Hashtbl.add tbl k v
+    let iter f tbl = Hashtbl.iter f tbl
+    let clear = Hashtbl.clear
+  end
 
   let cost_of =
-    let module Solver = Fix.Make (struct
-        type key = variable
-        type 'a t = (key, 'a) Hashtbl.t
-        let create () = Hashtbl.create 7
-        let find k tbl = Hashtbl.find tbl k
-        let add k v tbl = Hashtbl.add tbl k v
-        let iter f tbl = Hashtbl.iter f tbl
-        let clear = Hashtbl.clear
-      end) (struct
+    let module Solver = Fix.Make(Table)(struct
         type property = float
         let bottom = infinity
         let equal : float -> float -> bool = (=)
@@ -194,13 +201,15 @@ struct
 
   let solution = function
     | Goto gt ->
-      let src, nt, tgt = decompose_goto gt in
+      let src, nt, _ = decompose_goto gt in
       let acc =
-        List.fold_left (fun acc (prod, pos) ->
-            if pos = 1 && Production.lhs prod = nt then
-              select (Var (Tail (src, prod, 0))) acc
-            else acc
-          ) Abort (Lr1.items tgt)
+        List.fold_left (fun acc tr ->
+            List.fold_left (fun acc (prod, pos) ->
+                if pos = 1 && Production.lhs prod = nt then
+                  select (Var (Tail (src, prod, 0))) acc
+                else acc
+              ) acc (Lr1.items (Transition.target tr))
+          ) Abort (Transition.successors src)
       in
       let visit_reduction red acc =
         let prod = Reduction.production red in
@@ -280,4 +289,106 @@ struct
           )
           (group_assoc states)
       ) (group_assoc !solutions)
+
+  module SymbolsSet = Set.Make(struct
+    type t = Symbol.set
+    let compare = IndexSet.compare
+  end)
+
+  let epsilon = SymbolsSet.singleton IndexSet.empty
+
+  let add t ts = SymbolsSet.map (IndexSet.add t) ts
+
+  let join t1 t2 =
+    if SymbolsSet.is_empty t1 || SymbolsSet.is_empty t2 then
+      SymbolsSet.empty
+    else if SymbolsSet.equal t1 epsilon then
+      t2
+    else if SymbolsSet.equal t2 epsilon then
+      t1
+    else
+      SymbolsSet.fold (fun s1 acc ->
+          SymbolsSet.fold (fun s2 acc ->
+              SymbolsSet.add (IndexSet.union s1 s2) acc
+            ) t2 acc
+        ) t1 SymbolsSet.empty
+
+  let minimal_placeholders =
+    let module Solver = Fix.Make(Table)(struct
+        type property = SymbolsSet.t
+        let bottom = SymbolsSet.empty
+        let equal = SymbolsSet.equal
+        let is_maximal _ = false
+      end)
+    in
+    Solver.lfp (fun var ->
+        if cost_of var < infinity then
+          fun _ -> epsilon
+        else
+          match var with
+          | Goto gt ->
+            (fun vals ->
+               let src, nt, _ = decompose_goto gt in
+               let null_reduction red =
+                 let prod = Reduction.production red in
+                 Production.length prod = 0 &&
+                 Production.lhs prod = nt
+               in
+               if IndexSet.exists null_reduction (Reduction.from_lr1 src) then
+                 epsilon
+               else
+                 let acc =
+                   List.fold_left (fun acc tr ->
+                       List.fold_left (fun acc (prod, pos) ->
+                           if SymbolsSet.mem IndexSet.empty acc then
+                             epsilon
+                           else if pos = 1 && Production.lhs prod = nt then
+                             SymbolsSet.union acc (vals (Tail (src, prod, 0)))
+                           else acc
+                         ) acc (Lr1.items (Transition.target tr))
+                     ) SymbolsSet.empty (Transition.successors src)
+                 in
+                 if SymbolsSet.mem IndexSet.empty acc
+                 then epsilon
+                 else acc
+            )
+          | Tail (lr1, prod, pos) ->
+            if A.penalty_of_item (prod, pos) = infinity then
+              (fun _ -> SymbolsSet.empty)
+            else if pos = Production.length prod then
+              if A.cost_of_prod prod = infinity then
+                (fun _ -> SymbolsSet.empty)
+              else
+                (fun _ -> epsilon)
+            else (
+              let sym = (Production.rhs prod).(pos) in
+              match
+                List.find_opt
+                  (fun tr -> Transition.symbol tr = sym)
+                  (Transition.successors lr1)
+              with
+              | None -> (fun _ -> SymbolsSet.empty)
+              | Some tr ->
+                let lr1' = Transition.target tr in
+                match Transition.split tr with
+                | L gt ->
+                  (fun vals ->
+                   let hd = vals (Goto gt) in
+                   let tl = vals (Tail (lr1', prod, pos + 1)) in
+                   if SymbolsSet.is_empty hd then
+                     SymbolsSet.empty
+                   else if SymbolsSet.equal hd epsilon then
+                     tl
+                   else
+                     SymbolsSet.union
+                       (add (Symbol.inj_r (Transition.goto_symbol gt)) tl)
+                       (join hd tl))
+                | R sh ->
+                  if A.cost_of_symbol sym = infinity then
+                    let t = Transition.shift_symbol sh in
+                    (fun vals -> add (Symbol.inj_l t) (vals (Tail (lr1', prod, pos + 1))))
+                  else
+                    (fun vals -> vals (Tail (lr1', prod, pos + 1)))
+            )
+      )
 end

@@ -140,7 +140,13 @@ let productive_items =
     (Synth.cost_of (Tail (st, prod, pos)), it, la)
   in
   let with_cost st =
-    List.map (add_cost st) (loop (effective_items st))
+    let items = effective_items st in
+    let items =
+      if IndexSet.is_empty (Lr1.predecessors st)
+      then items
+      else loop items
+    in
+    List.map (add_cost st) items
   in
   tabulate_finset Lr1.n with_cost
 
@@ -203,8 +209,8 @@ module NFA = struct
     | None ->
       let st = {
         index = fresh (); config;
-        epsilon=IndexSet.empty;
-        transitions=[]
+        epsilon = IndexSet.empty;
+        transitions = [];
       } in
       Hashtbl.add table config st;
       begin match
@@ -440,19 +446,20 @@ module DFA = struct
           let lhs = Production.lhs prod in
           let rhs = Production.rhs prod in
           let stuck_symbols = ref IndexSet.empty in
-          if pos > 1 || not (IndexSet.mem (Symbol.inj_r lhs) reached_lhs) then (
+          if true || pos > 1 || not (IndexSet.mem (Symbol.inj_r lhs) reached_lhs) then (
             let lr1 = ref lr1 in
             for i = pos to Array.length rhs - 1 do
+              let sym = rhs.(i) in
               let tr = List.find
-                  (fun tr -> Transition.symbol tr = rhs.(i))
+                  (fun tr -> Transition.symbol tr = sym)
                   (Transition.successors !lr1)
               in
               if Attr.penalty_of_item (prod, i) = infinity ||
                  match Transition.split tr with
                  | L gt -> Synth.cost_of (Goto gt) = infinity
-                 | R _ -> Attr.cost_of_symbol (Transition.symbol tr) = infinity
+                 | R _ -> Attr.cost_of_symbol sym = infinity
               then
-                stuck_symbols := IndexSet.add rhs.(i) !stuck_symbols;
+                stuck_symbols := IndexSet.add sym !stuck_symbols;
               lr1 := Transition.target tr;
             done;
             push reasons {item; symbols = !stuck_symbols}
@@ -532,6 +539,52 @@ module DFA = struct
       (cardinal n) !labelled !wildcard !none
 
   let () = print_dead_ends ()
+
+  module SymbolsSetMap = Map.Make(Synth.SymbolsSet)
+
+  let () =
+    let dead_symbols =
+      Hashtbl.fold
+        (fun sitems _ set ->
+          List.fold_left (fun set sitem -> IndexSet.union sitem.symbols set) set sitems)
+        dead_ends IndexSet.empty
+    in
+    let minimize tss =
+      Synth.SymbolsSet.filter (fun is ->
+          not (Synth.SymbolsSet.exists (fun is' -> IndexSet.subset is' is && not (IndexSet.equal is is')) tss)
+        ) tss
+    in
+    let map = ref SymbolsSetMap.empty in
+    Index.iter Transition.goto begin fun gt ->
+      let nt = Transition.goto_symbol gt in
+      if IndexSet.mem (Symbol.inj_r nt) dead_symbols then (
+        let tss = Synth.minimal_placeholders (Goto gt) in
+        if not (Synth.SymbolsSet.exists IndexSet.is_empty tss) then (
+          map := SymbolsSetMap.update (minimize tss) (function
+              | None -> Some (IndexSet.singleton nt)
+              | Some nts -> Some (IndexSet.add nt nts)
+            ) !map
+        )
+      )
+    end;
+    let dead_terminals =
+      IndexSet.filter
+        (fun sym -> Symbol.is_terminal sym && Attr.cost_of_symbol sym = infinity)
+        dead_symbols
+    in
+    if not (IndexSet.is_empty dead_terminals) then
+      Printf.eprintf "To complete more situations, \
+                      the following terminals could be given placeholding values:\n%s\n\n"
+        (string_concat_map " " Symbol.name (IndexSet.elements dead_terminals));
+    SymbolsSetMap.iter (fun tss nts ->
+        Printf.eprintf "Non-terminals %s\n\
+                        could be completed if at least one of these set of symbols had placeholder values:\n"
+          (string_concat_map ", " Nonterminal.to_string (IndexSet.elements nts));
+        Synth.SymbolsSet.iter (fun ts ->
+            Printf.eprintf "- %s\n"
+              (string_concat_map ", " Symbol.name (IndexSet.elements ts))
+          ) tss
+      ) !map
 end
 
 module Output = struct
