@@ -142,19 +142,8 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
       in
       merge [] [s1] k1 rest
 
-  let count = ref 0
-  let largest = ref 0
-  let total = ref 0
-
   let annotated_partition xs =
     let sets, annotations = List.split xs in
-    let sets' = List.sort_uniq Set.compare sets in
-    let l = List.length sets and l' = List.length sets' in
-    largest := Int.max !largest l;
-    total := !total + l;
-    if l <> l' then
-      Printf.eprintf "annotate_partition %d: %d non-unique (largest so far: %d, total: %d)\n" !count (l - l') !largest !total;
-    incr count;
     let annotations = Array.of_list annotations in
     let parts = compute_parts sets in
     let union = keyed_union_parts parts in
