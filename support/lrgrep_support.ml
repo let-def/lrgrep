@@ -19,11 +19,122 @@ let add_uint24_be b i =
 
 module Sparse_packer : sig
   type 'a t
-  val make : unit -> 'a t
   type 'a vector = (RT.lr1 * 'a) list
-  val add_vector : 'a t -> (RT.lr1 * 'a) list -> RT.sparse_index
+  type displacement
+
+  val make : unit -> 'a t
+
+  val add_vector : 'a t -> (RT.lr1 * 'a) list -> displacement
   val pack : 'a t -> ('a -> RT.program_counter) -> RT.sparse_table
+
+  val get_displacement : displacement -> int
 end = struct
+
+  type displacement = int ref
+  type 'a vector = (RT.lr1 * 'a) list
+  type 'a t = (displacement * 'a vector) list ref
+
+  (* Packer implementation *)
+
+  let make () = ref []
+
+  let get_displacement disp =
+    if !disp = min_int then
+      invalid_arg "Sparse_packer.get_displacement: table has not been packed yet";
+    !disp
+
+  let add_vector t v =
+    let disp = ref min_int in
+    push t (disp, v);
+    disp
+
+  (* Vector fitting *)
+
+  type key = RT.lr1
+  type value = RT.program_counter
+
+  type cell =
+    | Unused
+    | Used0 of (key * value)
+    | Used1 of (key * value)
+
+  let cell_unused = function
+    | Unused -> true
+    | _ -> false
+
+  let set_cell arr index k v =
+    assert (index >= 0);
+    let length = Array.length !arr in
+    if index >= length then (
+      let length' = max (index + 1) (length * 2) in
+      let arr' = Array.make length' Unused in
+      Array.blit !arr 0 arr' 0 length;
+      arr := arr'
+    );
+    match arr.contents.(index) with
+    | Unused ->
+      arr.contents.(index) <- Used0 (k, v)
+    | _ ->
+      match arr.contents.(index+1) with
+      | Unused -> arr.contents.(index+1) <- Used1 (k, v)
+      | _ -> assert false
+
+  let fit_vector arr = function
+    | [] -> 0
+    | (ofs, _) :: _ as cells ->
+      let fit index =
+        let rec loop k' = function
+          | [] -> true
+          | (k, _) :: _ when index + k >= Array.length !arr - 1 -> true
+          | (k, _) :: xs ->
+            if k' < k && cell_unused arr.contents.(index + k) then
+              loop k xs
+            else
+              cell_unused arr.contents.(index + k + 1) &&
+              loop (k + 1) xs
+        in
+        loop (-1) cells
+      in
+      let i = ref (-ofs) in
+      while not (fit !i) do incr i done;
+      let index = !i in
+      List.iter (fun (k, v) -> set_cell arr (index + k) k v) cells;
+      index
+
+  let fit_vectors (rows : (int ref * RT.program_counter vector) list) : int * cell array =
+    let arr = ref (Array.make 16 Unused) in
+    let rows =
+      match
+        (* Sort by decreasing length *)
+        List.sort (fun (_, r1) (_, r2) ->
+            let c = List.compare_lengths r2 r1 in
+            if c <> 0 then c else
+              List.compare (compare_pair Int.compare Int.compare) r1 r2
+          ) rows
+      with
+      | [] -> []
+      | (d, r) :: rest ->
+        (* Merge equal vectors *)
+        let rec merge ds r = function
+          | [] -> [(ds, r)]
+          | (d', r') :: rest ->
+            if List.equal (fun (a1,a2) (b1,b2) -> a1 = a2 && b1 = b2) r r' then
+              merge (d' :: ds) r rest
+            else
+              (ds, r) :: merge [d'] r' rest
+        in
+        merge [d] r rest
+    in
+    let disps = List.map (fun (_, r) -> fit_vector arr r) rows in
+    let min_disp = - List.fold_left Int.min 0 disps in
+    List.iter2 (fun (ds, _) disp ->
+        let disp = disp + min_disp in
+        List.iter (fun d -> d := disp) ds)
+      rows disps;
+    (min_disp, !arr)
+
+  (* Sparse table encoding *)
+
   let set_int table ~offset ~value = function
     | 1 -> Bytes.set_uint8 table offset value
     | 2 ->
@@ -33,70 +144,6 @@ end = struct
       Bytes.set_uint8 table (offset + 2) (value lsr 16)
     | 4 -> Bytes.set_int32_be table offset (Int32.of_int value)
     | _ -> assert false
-
-  type 'a cell =
-    | Unused
-    | Used0 of RT.lr1 * 'a
-    | Used1 of RT.lr1 * 'a
-
-  type 'a t = {
-    mutable table: 'a cell array;
-  }
-
-  type 'a vector = (RT.lr1 * 'a) list
-
-  let make () = { table = Array.make 16 Unused }
-
-  let cell_unused packer index k =
-    match packer.table.(index + k) with
-    | Unused -> true
-    | _ -> false
-
-  (*
-  let get_cell packer index =
-    assert (index >= 0);
-    if index < Array.length packer.table
-    then packer.table.(index)
-    else Unused
-  *)
-
-  let set_cell packer index k v =
-    assert (index >= 0);
-    let length = Array.length packer.table in
-    if index >= length then (
-      let length' = max (index + 1) (length * 2) in
-      let table = Array.make length' Unused in
-      Array.blit packer.table 0 table 0 length;
-      packer.table <- table;
-    );
-    match packer.table.(index) with
-    | Unused ->
-      packer.table.(index) <- Used0 (k, v)
-    | _ ->
-      match packer.table.(index+1) with
-      | Unused -> packer.table.(index+1) <- Used1 (k, v)
-      | _ -> assert false
-
-  let add_vector packer = function
-    | [] -> 0
-    | (ofs, _) :: _ as cells ->
-      let fit index =
-        let rec loop k' = function
-          | [] -> true
-          | (k, _) :: _ when index + k >= Array.length packer.table - 1 -> true
-          | (k, _) :: xs ->
-            if k' < k && cell_unused packer index k then loop k xs
-            else (cell_unused packer index (k + 1) && loop (k + 1) xs)
-        in
-        loop (-1) cells
-      in
-      let i = ref 0 in
-      while not (fit (!i - ofs)) do
-        incr i
-      done;
-      let index = !i - ofs in
-      List.iter (fun (k, v) -> set_cell packer (index + k) k v) cells;
-      index
 
   let int_size i =
     assert (i >= 0);
@@ -109,79 +156,74 @@ end = struct
     else
       (assert (i <= 0xFFFF_FFFF); 4)
 
-  let pack packer value_repr =
+  let pack t link =
     let max_k = ref 0 in
     let max_v = ref 0 in
-    let table =
-      let length = ref (Array.length packer.table) in
-      while !length > 0 && (
-          match packer.table.(!length - 1) with
-          | Unused -> true
-          | _ -> false
-        )
-      do
-        decr length;
-      done;
-      Array.init !length begin fun i ->
-        match packer.table.(i) with
-        | Unused -> Unused
-        | Used0 (k, v) ->
-          let v = value_repr v in
-          assert (v >= 0);
+    let min_disp, table =
+      (* Ensure keys are increasing and link values *)
+      let rec prepare_row last_k = function
+        | [] -> []
+        | (k, v) :: rest ->
+          if last_k >= k then
+            invalid_arg "pack: row indices are not strictly increasing";
+          let v = link v in
+          if v < 0 then
+            invalid_arg "pack: row value is negative after linking";
           if k > !max_k then max_k := k;
           if v > !max_v then max_v := v;
-          Used0 (k, v)
-        | Used1 (k, v) ->
-          let v = value_repr v in
-          assert (v >= 0);
-          if k > !max_k then max_k := k;
-          if v > !max_v then max_v := v;
-          Used1 (k, v)
-      end
+          (k, v) :: prepare_row k rest
+      in
+      fit_vectors (List.rev_map (fun (d,r) -> (d, prepare_row (-1) r)) !t)
     in
+    let length = ref (Array.length table) in
+    while !length > 0 && cell_unused table.(!length - 1) do
+      decr length
+    done;
+    let length = !length in
     let k_size = int_size (!max_k * 2 + 1) in
-    let sign_bit =
-      if k_size = 1 then 0x80 else
-      if k_size = 2 then 0x8000 else
-      if k_size = 3 then 0x800000 else
-      if k_size = 4 then 0x80000000 else
-        assert false
-    in
     let v_size = int_size !max_v in
-    let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
+    if min_disp < 0 || min_disp > 0xFFFF then
+      Printf.ksprintf invalid_arg
+        "pack: internal limit reached (minimal displacement %d does not fit on 16 bits)"
+        min_disp;
+    let repr = Bytes.make (4 + (length + 2) * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
-    Array.iteri begin fun i cell ->
-      let offset = 2 + i * (k_size + v_size) in
-      match cell with
+    set_int repr ~offset:2 ~value:min_disp 2;
+    let unused = ref 0 in
+    for i = 0 to length - 1 do
+      let offset = 4 + i * (k_size + v_size) in
+      match table.(i) with
       | Unused ->
-        set_int repr ~offset ~value:0 k_size
+        incr unused
       | Used0 (k, v) ->
-        set_int repr ~offset ~value:(k + 1) k_size;
+        set_int repr ~offset ~value:((k + 1) lsl 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size
       | Used1 (k, v) ->
-        set_int repr ~offset ~value:(sign_bit lor (k + 1)) k_size;
+        set_int repr ~offset ~value:(((k + 1) lsl 1) lor 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size
-    end table;
+    done;
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
     Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
-    Printf.eprintf "table size: %d\nrepr size: %d\n"
-      (Array.length table) (Bytes.length repr);
+    Printf.eprintf "table size: %d (%d unused)\nrepr size: %d\ndisplacement offset:%d\n"
+      length !unused
+      (Bytes.length repr)
+      min_disp;
     if false then (
-      let unused = ref 0 in
       let hist_unused = Array.make 1000 0 in
       let consec_unused = ref 0 in
-      let register_unused () =
+      let flush_unused () =
         hist_unused.(!consec_unused) <- hist_unused.(!consec_unused) + 1;
         unused := !unused + !consec_unused;
         consec_unused := 0
       in
-      register_unused();
-      Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float (Array.length table));
+      flush_unused ();
+      Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float length);
       Array.iter begin function
         | Unused -> incr consec_unused;
-        | Used0 _ | Used1 _ -> register_unused();
+        | Used0 _ | Used1 _ -> flush_unused ();
       end table;
+      flush_unused ();
       for i = 0 to 999 do
         if hist_unused.(i) > 0 then
           Printf.eprintf "%d consecutive unused appeared %d times\n" i hist_unused.(i)
@@ -196,15 +238,18 @@ module Code_emitter : sig
   val position : t -> int
   val emit : t -> RT.program_instruction -> unit
   val emit_yield_reloc : t -> RT.program_counter ref -> unit
+  val emit_match : t -> Sparse_packer.displacement -> unit
   val link : t -> RT.program_code
 end = struct
   type t = {
     mutable reloc: (int * int ref) list;
+    mutable disps: (int * Sparse_packer.displacement) list;
     buffer: Buffer.t;
   }
 
   let make () = {
     reloc = [];
+    disps = [];
     buffer = Buffer.create 15;
   }
 
@@ -246,7 +291,7 @@ end = struct
         ) registers
     | Match index ->
       Buffer.add_char t.buffer '\x06';
-      assert (index <= 0xFFFFFF);
+      assert (index > 0 && index <= 0xFFFFFF);
       add_uint24_be t.buffer index
     | Priority (clause, p1, p2) ->
       Buffer.add_char t.buffer '\x08';
@@ -263,6 +308,12 @@ end = struct
     Buffer.add_string t.buffer "   ";
     t.reloc <- (pos, reloc) :: t.reloc
 
+  let emit_match t disp =
+    Buffer.add_char t.buffer '\x06';
+    let pos = Buffer.length t.buffer in
+    Buffer.add_string t.buffer "   ";
+    t.disps <- (pos, disp) :: t.disps
+
   let link t =
     let buf = Buffer.to_bytes t.buffer in
     List.iter (fun (pos, reloc) ->
@@ -270,6 +321,12 @@ end = struct
         Bytes.set_uint16_be buf pos (!reloc land 0xFFFF);
         Bytes.set_uint8 buf (pos + 2) (!reloc lsr 16);
       ) t.reloc;
+    List.iter (fun (pos, disp) ->
+        let reloc = Sparse_packer.get_displacement disp in
+        assert (0 <= reloc && reloc < 0xFFFFFF);
+        Bytes.set_uint16_be buf pos (reloc land 0xFFFF);
+        Bytes.set_uint8 buf (pos + 2) (reloc lsr 16);
+      ) t.disps;
     Printf.eprintf "bytecode size: %d\n" (Bytes.length buf);
     Bytes.unsafe_to_string buf
 end
@@ -400,8 +457,8 @@ let compact (type dfa clause lr1)
       | cells ->
         cell_count := !cell_count + List.length cells;
         let cells = (cells : (lr1 index * _) list :> (RT.lr1 * _) list) in
-        let i = Sparse_packer.add_vector packer cells in
-        Code_emitter.emit code (Match i);
+        Code_emitter.emit_match code
+          (Sparse_packer.add_vector packer cells)
     end;
     begin match default with
       | None -> Code_emitter.emit code Halt
@@ -414,7 +471,7 @@ let compact (type dfa clause lr1)
   Array.iter process_state preparation;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
-  let code = Code_emitter.link code in
   let index = Sparse_packer.pack packer (!) in
+  let code = Code_emitter.link code in
   let pcs = Vector.as_array (Vector.map (!) pcs) in
   (code, index, pcs)

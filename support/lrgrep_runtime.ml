@@ -37,26 +37,19 @@ let get_int table ~offset = function
   | 4 -> Int32.to_int (String.get_int32_be table offset)
   | _ -> assert false
 
-let sign_bit = function
-  | 1 -> 0x80
-  | 2 -> 0x8000
-  | 3 -> 0x800000
-  | 4 -> 0x80000000
-  | _ -> assert false
-
 let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   : program_counter option =
   let ksize = String.get_uint8 table 0 in
   let vsize = String.get_uint8 table 1 in
-  if index <= 0 then
-    (Printf.eprintf "Index = %d ?!\n" index; assert (index >= 0));
+  let disp = String.get_uint16_be table 2 in
+  assert (index >= 0);
   assert (lr1 >= 0);
-  let offset = 2 + (index + lr1) * (ksize + vsize) in
-  if offset + 4 > String.length table then
+  let offset = 4 + (index + lr1 - disp) * (ksize + vsize) in
+  if offset < 4 || offset + (ksize + vsize) * 2  > String.length table then
     None
-  else if get_int table ~offset ksize = lr1 + 1 then
+  else if get_int table ~offset ksize = (lr1 + 1) lsl 1 then
     Some (get_int table ~offset:(offset + ksize) vsize)
-  else if get_int table ~offset:(offset + ksize + vsize) ksize = sign_bit ksize lor (lr1 + 1) then
+  else if get_int table ~offset:(offset + ksize + vsize) ksize = ((lr1 + 1) lsl 1) lor 1 then
     Some (get_int table ~offset:(offset + ksize + vsize + ksize) vsize)
   else
     None

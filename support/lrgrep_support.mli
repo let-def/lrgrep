@@ -26,14 +26,21 @@ module Sparse_packer : sig
   (** A sparse vector indexed by lr1 states, with elements of type ['a] *)
   type 'a vector = (RT.lr1 * 'a) list
 
+  (** A handle to get the displacement of the vector after packing *)
+  type displacement
+
   (** Add a new sparse vector to a packer.
      The index returned will be used at runtime to lookup cells of the vector
      by [Lrgrep_runtime.sparse_lookup]. *)
-  val add_vector : 'a t -> 'a vector -> RT.sparse_index
+  val add_vector : 'a t -> 'a vector -> displacement
 
   (** [pack t f] Produces a sparse table from the content of packer [t].
       Each element as to be mapped to instructions by [f]. *)
   val pack : 'a t -> ('a -> RT.program_counter) -> RT.sparse_table
+
+  (** [get_displacement d] returns the actual displacement as an integer,
+      computed by [pack]. This function should not be called before [pack]. *)
+  val get_displacement : displacement -> int
 end
 
 (** Emit and link bytecode program *)
