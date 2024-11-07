@@ -34,6 +34,9 @@ type priority = int
 *)
 type sparse_table = string
 
+(** Number of consecutively probed cells is (1 lsl probing_bits) - 1 *)
+val probing_bits : int
+
 (** A sparse index identifies a cell in a sparse table.
     Indexing starts after the first two bytes that determine the size of a
     cell. The cell with index [i] starts at 2 + (size_k + size_v) * i

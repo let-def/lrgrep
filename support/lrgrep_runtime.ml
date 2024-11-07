@@ -37,6 +37,8 @@ let get_int table ~offset = function
   | 4 -> Int32.to_int (String.get_int32_be table offset)
   | _ -> assert false
 
+let probing_bits = 1
+
 let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   : program_counter option =
   let ksize = String.get_uint8 table 0 in
@@ -45,14 +47,18 @@ let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   assert (index >= 0);
   assert (lr1 >= 0);
   let offset = 4 + (index + lr1 - disp) * (ksize + vsize) in
-  if offset < 4 || offset + (ksize + vsize) * 2  > String.length table then
+  if offset < 4 || offset + (ksize + vsize) * (1 lsl probing_bits) > String.length table then
     None
-  else if get_int table ~offset ksize = (lr1 + 1) lsl 1 then
-    Some (get_int table ~offset:(offset + ksize) vsize)
-  else if get_int table ~offset:(offset + ksize + vsize) ksize = ((lr1 + 1) lsl 1) lor 1 then
-    Some (get_int table ~offset:(offset + ksize + vsize + ksize) vsize)
   else
-    None
+    let probe = ref 0 in
+    let result = ref None in
+    while Option.is_none !result && !probe < 1 lsl probing_bits do
+      let offset = offset + (ksize + vsize) * !probe in
+      if get_int table ~offset ksize = (lr1 lsl probing_bits lor !probe) + 1 then
+        result := Some (get_int table ~offset:(offset + ksize) vsize);
+      incr probe
+    done;
+    !result
 
 let get_uint24_be str i =
   (String.get_uint16_be str i) lor (String.get_uint8 str (i + 2) lsl 16)

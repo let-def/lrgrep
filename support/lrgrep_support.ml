@@ -55,8 +55,7 @@ end = struct
 
   type cell =
     | Unused
-    | Used0 of (key * value)
-    | Used1 of (key * value)
+    | Used of (key * value * int)
 
   let cell_unused = function
     | Unused -> true
@@ -71,13 +70,14 @@ end = struct
       Array.blit !arr 0 arr' 0 length;
       arr := arr'
     );
-    match arr.contents.(index) with
-    | Unused ->
-      arr.contents.(index) <- Used0 (k, v)
-    | _ ->
-      match arr.contents.(index+1) with
-      | Unused -> arr.contents.(index+1) <- Used1 (k, v)
-      | _ -> assert false
+    let probe = ref 0 in
+    while !probe < 1 lsl RT.probing_bits do
+      match arr.contents.(index + !probe) with
+      | Unused ->
+        arr.contents.(index + !probe) <- Used (k, v, !probe);
+        probe := max_int
+      | Used _ -> incr probe
+    done
 
   let fit_vector arr = function
     | [] -> 0
@@ -85,15 +85,19 @@ end = struct
       let fit index =
         let rec loop k' = function
           | [] -> true
-          | (k, _) :: _ when index + k >= Array.length !arr - 1 -> true
+          | (k, _) :: _ when index + k + 1 lsl RT.probing_bits >= Array.length !arr -> true
           | (k, _) :: xs ->
-            if k' < k && cell_unused arr.contents.(index + k) then
-              loop k xs
-            else
-              cell_unused arr.contents.(index + k + 1) &&
-              loop (k + 1) xs
+            let found = ref false in
+            let probe = ref (Int.max 0 (k' - k)) in
+            while not !found && !probe < 1 lsl RT.probing_bits do
+              if cell_unused arr.contents.(index + k + !probe) then
+                found := true
+              else
+                incr probe
+            done;
+            !found && loop (k + !probe + 1) xs
         in
-        loop (-1) cells
+        loop 0 cells
       in
       let i = ref (-ofs) in
       while not (fit !i) do incr i done;
@@ -180,13 +184,13 @@ end = struct
       decr length
     done;
     let length = !length in
-    let k_size = int_size (!max_k * 2 + 1) in
+    let k_size = int_size (!max_k lsl RT.probing_bits + 1) in
     let v_size = int_size !max_v in
     if min_disp < 0 || min_disp > 0xFFFF then
       Printf.ksprintf invalid_arg
         "pack: internal limit reached (minimal displacement %d does not fit on 16 bits)"
         min_disp;
-    let repr = Bytes.make (4 + (length + 2) * (k_size + v_size)) '\x00' in
+    let repr = Bytes.make (4 + (length + 1 lsl RT.probing_bits - 1) * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
     set_int repr ~offset:2 ~value:min_disp 2;
@@ -196,11 +200,8 @@ end = struct
       match table.(i) with
       | Unused ->
         incr unused
-      | Used0 (k, v) ->
-        set_int repr ~offset ~value:((k + 1) lsl 1) k_size;
-        set_int repr ~offset:(offset + k_size) ~value:v v_size
-      | Used1 (k, v) ->
-        set_int repr ~offset ~value:(((k + 1) lsl 1) lor 1) k_size;
+      | Used (k, v, probe) ->
+        set_int repr ~offset ~value:(k lsl RT.probing_bits lor probe + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size
     done;
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
@@ -221,7 +222,7 @@ end = struct
       Printf.eprintf "unused ratio: %.02f%%\n" (100.0 *. float !unused /. float length);
       Array.iter begin function
         | Unused -> incr consec_unused;
-        | Used0 _ | Used1 _ -> flush_unused ();
+        | Used _ -> flush_unused ();
       end table;
       flush_unused ();
       for i = 0 to 999 do
