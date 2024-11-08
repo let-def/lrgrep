@@ -10,14 +10,23 @@ module type S = sig
 
   val variable_to_string : variable -> string
 
+  val goto_candidates : Transition.goto index -> Production.set
+
+  type tail_solution =
+    | Tail_reduce of float
+    | Tail_follow of float * Transition.any index * Lr1.t
+
+  val tail_candidates : Lr1.t -> Production.t -> int -> float * tail_solution
+
+  val cost_of  : variable -> float
+
   type action =
     | Abort
     | Reduce of Production.t
     | Shift  of Symbol.t
     | Var    of variable
 
-  val cost_of  : variable -> float
-  val solution : variable -> float * action list
+  val action : variable -> float * action list
 
   module SymbolsSet : Set.S with type elt = Symbol.set
   val minimal_placeholders : variable -> SymbolsSet.t

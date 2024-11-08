@@ -35,7 +35,6 @@ let append_list tbl key v =
   | Some r -> push r v
 
 module Info = Mid.Info.Make(Grammar)
-
 module Attr = Recover_attrib.Make(Info)
 module Synth = Synthesis.Make(Info)(Attr)
 

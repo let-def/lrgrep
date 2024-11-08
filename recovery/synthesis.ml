@@ -12,14 +12,23 @@ module type S = sig
 
   val variable_to_string : variable -> string
 
+  val goto_candidates : Transition.goto index -> Production.set
+
+  type tail_solution =
+    | Tail_reduce of float
+    | Tail_follow of float * Transition.any index * Lr1.t
+
+  val tail_candidates : Lr1.t -> Production.t -> int -> float * tail_solution
+
+  val cost_of  : variable -> float
+
   type action =
     | Abort
     | Reduce of Production.t
     | Shift  of Symbol.t
     | Var    of variable
 
-  val cost_of  : variable -> float
-  val solution : variable -> float * action list
+  val action : variable -> float * action list
 
   module SymbolsSet : Set.S with type elt = Symbol.set
   val minimal_placeholders : variable -> SymbolsSet.t
@@ -74,9 +83,10 @@ struct
     | Tail_follow of float * Transition.any index * Lr1.t
 
   let tail_candidates st prod pos =
+    let penalty = penalty_of_item (prod, pos) in
     let rhs = Production.rhs prod in
     if pos = Array.length rhs then
-      Tail_reduce (cost_of_prod prod)
+      (penalty, Tail_reduce (cost_of_prod prod))
     else
       let sym = rhs.(pos) in
       match
@@ -87,11 +97,12 @@ struct
       (* No more missing transitions: effective items should prevent
        * attempting to reduce a missing transition *)
       | exception Not_found -> assert false
-      | tr -> Tail_follow (cost_of_symbol sym, tr, Transition.target tr)
+      | tr ->
+        (penalty, Tail_follow (cost_of_symbol sym, tr, Transition.target tr))
 
   type 'a interpretation = {
     stuck: 'a;
-    shift: float -> Symbol.t -> 'a;
+    follow: float -> Transition.any index -> 'a;
     reduce: float -> Production.t -> 'a;
     sequence: 'a -> 'a -> 'a;
     choice: 'a -> 'a -> 'a;
@@ -105,12 +116,11 @@ struct
       fun fix ->
         IndexSet.fold (fun prod x -> sem.choice x (fix (Tail (src, prod, 0)))) prods sem.stuck
     | Tail (st, prod, pos) ->
-      let penalty = penalty_of_item (prod, pos) in
       match tail_candidates st prod pos with
-      | Tail_reduce cost ->
+      | penalty, Tail_reduce cost ->
         Fun.const (sem.penalty penalty (sem.reduce cost prod))
-      | Tail_follow (cost, tr, st') ->
-        let x = sem.shift cost (Transition.symbol tr) in
+      | penalty, Tail_follow (cost, tr, st') ->
+        let x = sem.follow cost tr in
         let var = Tail (st', prod, pos + 1) in
         match Transition.split tr with
         | L gt when cost = infinity ->
@@ -139,7 +149,7 @@ struct
     in
     Solver.lfp (eval {
       stuck    = infinity;
-      shift    = (fun x _ -> x);
+      follow   = (fun x _ -> x);
       reduce   = (fun x _ -> x);
       sequence = (+.);
       choice   = Float.min;
@@ -152,12 +162,12 @@ struct
     | Shift of Symbol.t
     | Var of variable
 
-  let solution =
+  let action =
     let abort = (infinity, [Abort]) in
     let ret x p = if x = infinity then abort else (x, p) in
     let sem = eval {
         stuck    = abort;
-        shift    = (fun x sym -> ret x [Shift sym]);
+        follow   = (fun x tr -> ret x [Shift (Transition.symbol tr)]);
         reduce   = (fun x prod -> ret x [Reduce prod]);
         sequence = (fun (x1, s1) (x2, s2) -> ret (x1 +. x2) (s1 @ s2));
         choice   = (fun (x1, _ as t1) (x2, _ as t2) -> if x1 <= x2 then t1 else t2);
@@ -210,8 +220,9 @@ struct
     in
     Solver.lfp (eval {
       stuck    = SymbolsSet.empty;
-      shift    = (fun x sym ->
-          if x = infinity then SymbolsSet.singleton (IndexSet.singleton sym)
+      follow   = (fun x tr ->
+          if x = infinity then
+            SymbolsSet.singleton (IndexSet.singleton (Transition.symbol tr))
           else epsilon
         );
       reduce   = (fun x _prod -> if x = infinity then SymbolsSet.empty else epsilon);
