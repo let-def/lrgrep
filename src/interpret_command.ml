@@ -43,8 +43,9 @@ struct
     else
       sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
-  let print_item (prod, pos) =
+  let print_item item =
     let open Info in
+    let (prod, pos) = Item.prj item in
     let rhs = Production.rhs prod in
     let path = ref [] in
     let add_dot i = if pos = i then path := "." :: !path in
@@ -190,7 +191,7 @@ struct
             (fun lr1 -> Option.get (print_lr1 lr1))
             suffix
         in
-        print_items n suffix (Lr1.items config.top);
+        print_items n suffix (Lr1.lr0_items config.top);
       );
       acc
 
@@ -220,7 +221,7 @@ struct
             process_threads (process_steps acc thread) threads
         in
         outer := process_threads [] !outer;
-        let items = Info.Lr1.items state in
+        let items = Info.Lr1.lr0_items state in
         if (i = 0 && not !opt_no_reduce_filter) then (
           print_items 0 "" items;
         ) else if !opt_stack_items then (

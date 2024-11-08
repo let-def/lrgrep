@@ -71,11 +71,12 @@ struct
     let non_nullable =
       IndexSet.of_list (
         List.concat_map (fun tr ->
-            List.filter_map (fun (prod, pos) ->
+            List.filter_map (fun item ->
+                let (prod, pos) = Item.prj item in
                 if pos = 1 && Production.lhs prod = nt
                 then Some prod
                 else None
-              ) (Lr1.items (Transition.target tr))
+              ) (Lr1.lr0_items (Transition.target tr))
           ) (Transition.successors src)
       )
     in

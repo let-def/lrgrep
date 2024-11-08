@@ -99,6 +99,17 @@ module type S = sig
     val all : set
   end
 
+  module Item : sig
+    type n
+    val n : n cardinal
+    type t = n index
+    val inj : Production.t -> int -> t
+    val prj : n index -> Production.t * int
+    val production : n index -> Production.t
+    val position : n index -> int
+    val pred : t -> t option
+  end
+
   module Lr0 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr0
 
@@ -106,7 +117,7 @@ module type S = sig
     val incoming : t -> Symbol.t option
 
     (* See [Lr1.items]. *)
-    val items : t -> (Production.t * int) list
+    val items : t -> Item.t list
 
     (* If the state is an initial state, returns the pseudo (start)
        non-terminal that it recognizes. *)
@@ -133,7 +144,12 @@ module type S = sig
     val incoming : t -> Symbol.t option
 
     (* Get the items in the kernel of a state (before closure). *)
-    val items : t -> (Production.t * int) list
+    val lr0_items : t -> Item.t list
+
+    (* Get the effective items of a state (including closure).
+     * The set of terminals are the lookahead symbols that permitted to reduce
+     * this item. *)
+    val effective_items : t -> (Item.t * Terminal.set) list
 
     (* Printing functions, for debug purposes.
        Not nice for the end-user (FIXME). *)
@@ -229,7 +245,6 @@ module type S = sig
     (* A reduction is a triple [(lr1, prod, lookaheads)], meaning that:
        in state [lr1], when looking ahead at a terminal in [lookaheads], the
        action is to reduce [prod]. *)
-
     val state: t -> Lr1.t
     val production: t -> Production.t
     val lookaheads: t -> Terminal.set
@@ -363,6 +378,57 @@ struct
     let all = all n
   end
 
+  module Item : sig
+    type n
+    val n : n cardinal
+    type t = n index
+    val inj : Production.t -> int -> t
+    val prj : n index -> Production.t * int
+    val production : n index -> Production.t
+    val position : n index -> int
+    val pred : t -> t option
+  end = struct
+    let count = ref 0
+    let first = Vector.init Production.n (fun p ->
+        let index = ! count in
+        count := !count + Production.length p + 1;
+        index
+      )
+    let count = !count
+
+    include Const(struct let cardinal = count end)
+    type t = n index
+
+    let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
+
+    let () =
+      Vector.iteri (fun r index ->
+          for i = index to index + Production.length r do
+            Vector.set production (Index.of_int n i) r
+          done
+        ) first
+
+    let inj r pos =
+      assert (pos >= 0 && pos <= Production.length r);
+      Index.of_int n (Vector.get first r + pos)
+
+    let prj t =
+      let r = Vector.get production t in
+      (r, (t :> int) - Vector.get first r)
+
+    let pred t =
+      let r, p = prj t in
+      if p > 0
+      then Some (inj r (p - 1))
+      else None
+
+    let position t =
+      let r = Vector.get production t in
+      ((t :> int) - Vector.get first r)
+
+    let production = Vector.get production
+  end
+
   module Lr0 = struct
     include Indexed(Grammar.Lr0)
 
@@ -371,16 +437,15 @@ struct
 
     let items lr0 =
       List.map
-        (fun (p,pos) -> (Production.of_g p, pos))
+        (fun (p, pos) -> Item.inj (Production.of_g p) pos)
         (Grammar.Lr0.items (to_g lr0))
 
     let entrypoint lr0 =
       match incoming lr0 with
       | Some _ -> None
       | None -> (
-          match items lr0 with
+          match Grammar.Lr0.items (to_g lr0) with
           | [p, 0] ->
-            let p = Production.to_g p in
             assert (Grammar.Production.kind p = `START);
             Some (Nonterminal.of_g (Grammar.Production.lhs p))
           | _ -> assert false
@@ -537,7 +602,7 @@ struct
 
     let incoming lr1 = Lr0.incoming (to_lr0 lr1)
 
-    let items lr1 = Lr0.items (to_lr0 lr1)
+    let lr0_items lr1 = Lr0.items (to_lr0 lr1)
 
     (** A somewhat informative string description of the Lr1 state, for debug
         purposes. *)
@@ -556,15 +621,13 @@ struct
       match incoming lr1 with
       | Some sym -> Symbol.name sym
       | None -> (
-          match items lr1 with
-          | [p, 0] ->
-            let p = Production.to_g p in
-            assert (Grammar.Production.kind p = `START);
-            let name = Grammar.Nonterminal.name (Grammar.Production.lhs p) in
+          match Lr0.entrypoint (to_lr0 lr1) with
+          | Some nt ->
+            let name = Nonterminal.to_string nt in
             let name = Bytes.of_string name in
             Bytes.set name (Bytes.length name - 1) ':';
             Bytes.unsafe_to_string name
-          | _ -> assert false
+          | None -> assert false
         )
 
     let list_to_string lr1s =
@@ -649,17 +712,7 @@ struct
         (fun _ lr1 acc -> IndexSet.add lr1 acc)
         entrypoints IndexSet.empty
 
-    let () = Stopwatch.step time "Lr1"
-  end
-
-  (** A more convenient presentation of reductions than the one from Cmly.
-      Reductions are represented as a distinct set. For a reduction, one can
-      query the production, the lookaheads and the state it starts from.
-      Conversely, one can go from a state to its reductions.
-      Start productions are ignored. *)
-  module Reduction = struct
-    let n = ref 0
-    let raw =
+    let raw_reductions =
       let import_red reds =
         reds
         |> List.filter_map (fun (t, p) ->
@@ -679,14 +732,56 @@ struct
               compare_index (Production.lhs p1) (Production.lhs p2)
           )
       in
-      let import_lr1 lr1 =
-        let reds = import_red (Grammar.Lr1.get_reductions (Lr1.to_g lr1)) in
-        n := !n + List.length reds;
-        reds
-      in
-      Vector.init Lr1.n import_lr1
+      Vector.init n (fun lr1 -> import_red (Grammar.Lr1.get_reductions (to_g lr1)))
 
-    include Const(struct let cardinal = !n end)
+    let effective_items : t -> (Item.t * Terminal.set) list =
+      let table = Vector.make n IndexMap.empty in
+      let rec populate states items =
+        let map = IndexMap.of_seq (List.to_seq items) in
+        IndexSet.iter (fun lr1 ->
+            let map' = Vector.get table lr1 in
+            let union _k v v' = Some (IndexSet.union v v') in
+            Vector.set table lr1 (IndexMap.union union map map')
+          ) states;
+        let previous_item (it, la) = match Item.pred it with
+          | None -> None
+          | Some it' -> Some (it', la)
+        in
+        match List.filter_map previous_item items with
+        | [] -> ()
+        | items' ->
+          populate (indexset_bind states predecessors) items'
+      in
+      Index.iter n begin fun lr1 ->
+        let initial_items =
+          List.map (fun (prod, lookaheads) ->
+              (Item.inj prod (Production.length prod), lookaheads)
+            ) (Vector.get raw_reductions lr1)
+        in
+        populate (IndexSet.singleton lr1) initial_items
+      end;
+      let bindings_by_length map =
+        List.sort (fun (it1, _) (it2, _) ->
+            let _, n1 = Item.prj it1 in
+            let _, n2 = Item.prj it2 in
+            Int.compare n1 n2
+          ) (IndexMap.bindings map)
+      in
+      Vector.get (Vector.map bindings_by_length table)
+
+    let () = Stopwatch.step time "Lr1"
+  end
+
+  (** A more convenient presentation of reductions than the one from Cmly.
+      Reductions are represented as a distinct set. For a reduction, one can
+      query the production, the lookaheads and the state it starts from.
+      Conversely, one can go from a state to its reductions.
+      Start productions are ignored. *)
+  module Reduction = struct
+    include Const(struct
+        let cardinal =
+          Vector.fold_left (fun sum l -> sum + List.length l) 0 Lr1.raw_reductions
+      end)
 
     type t = n index
     type set = n indexset
@@ -705,7 +800,7 @@ struct
               Vector.set lookaheads i la;
               IndexSet.add i set
             ) IndexSet.empty reds
-        ) raw
+        ) Lr1.raw_reductions
 
     let state = Vector.get state
     let production = Vector.get production

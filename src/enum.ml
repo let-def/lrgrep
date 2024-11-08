@@ -20,7 +20,8 @@ struct
       output_char oc ' ';
       output_string oc (Terminal.to_string t)
     in
-    let output_item oc (prod, dot) =
+    let output_item oc item =
+      let (prod, dot) = Item.prj item in
       output_string oc " /";
       output_string oc (Nonterminal.to_string (Production.lhs prod));
       output_char oc ':';
@@ -62,7 +63,8 @@ struct
         ) xs;
       output_char oc ']'
     in
-    let output_item oc (prod, dot) =
+    let output_item oc item =
+      let (prod, dot) = Item.prj item in
       Printf.fprintf oc
         "{\"lhs\":%a,\"rhs\":%a,\"dot\":%d}"
         output_symbol
@@ -276,7 +278,7 @@ struct
       | R lr1 -> lr1
 
     let items_from_suffix suffix =
-      let items_of_state state = Lr1.items (lr1_of state) in
+      let items_of_state state = Lr1.lr0_items (lr1_of state) in
       List.rev_map items_of_state suffix
 
     let form_from_suffix suffix =

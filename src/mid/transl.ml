@@ -149,65 +149,13 @@ struct
           vector_set_add table (Production.lhs prod) prod);
       Vector.get table
 
-    let left_rec_nt_reflexive_closure =
-      let table = Vector.make Nonterminal.n IndexSet.empty in
-      let rec close acc nt =
-        if IndexSet.mem nt acc then acc else
-          let acc' = Vector.get table nt in
-          if not (IndexSet.is_empty acc') then
-            IndexSet.union acc acc'
-          else
-            let acc = IndexSet.add nt acc in
-            IndexSet.fold
-              (fun prod acc -> close_rhs (Production.rhs prod) 0 acc)
-              (prod_by_lhs nt) acc
-      and close_rhs rhs pos acc =
-        if pos >= Array.length rhs then acc
-        else match Symbol.prj rhs.(pos) with
-          | L _ -> acc
-          | R nt ->
-            let acc = close acc nt in
-            if Nonterminal.nullable nt then
-              close_rhs rhs (pos + 1) acc
-            else
-              acc
-      in
-      fun nt ->
-        let result = Vector.get table nt in
-        if IndexSet.is_empty result then
-          let result = close IndexSet.empty nt in
-          Vector.set table nt result;
-          result
-        else
-          result
-
     let states_by_items =
-      let table = Vector.init Production.n
-          (fun prod -> Array.make (1 + Production.length prod) IndexSet.empty)
-      in
-      Index.rev_iter Lr1.n (fun lr1 ->
-          let register (prod, pos) =
-            let prod = Vector.get table prod in
-            prod.(pos) <- IndexSet.add lr1 prod.(pos)
-          in
-          let closure_items nt =
-            (* TODO: Should we traverse nullable nt?! *)
-            IndexSet.iter
-              (fun prod -> register (prod, 0))
-              (prod_by_lhs nt)
-          in
-          let kernel_item (prod, pos) =
-            register (prod, pos);
-            let rhs = Production.rhs prod in
-            if pos < Array.length rhs then
-              match Symbol.prj rhs.(pos) with
-              | L _ -> ()
-              | R nt ->
-                IndexSet.iter closure_items
-                  (left_rec_nt_reflexive_closure nt)
-          in
-          List.iter kernel_item (Lr1.items lr1)
-      );
+      let table = Vector.make Item .n IndexSet.empty in
+      Index.rev_iter Lr1.n begin fun lr1 ->
+        List.iter
+          (fun (item, _) -> vector_set_add table item lr1)
+          (Lr1.effective_items lr1)
+      end;
       Vector.get table
   end
 
@@ -382,30 +330,11 @@ struct
         | R n -> Indices.prod_by_lhs n
     in
     let filter = Globbing.parse rhs in
-    let matching_dots prod =
-      let result = Globbing.extract (Production.rhs prod) filter in
-      (*begin match IntSet.elements result with
-        | [] -> ()
-        | dots ->
-          let rhs = Array.to_list (Production.rhs prod) in
-          let rec annotate pos = function
-            | (pos' :: dots), rhs when pos = pos' ->
-              "." :: annotate pos (dots, rhs)
-            | [], [] -> []
-            | dots, [] -> assert (dots = []); []
-            | dots, (x :: rhs) ->
-              Symbol.name x :: annotate (pos + 1) (dots, rhs)
-          in
-          let txt = annotate 0 (dots, rhs) in
-          warn position "filter matches %s: %s"
-            (Nonterminal.to_string (Production.lhs prod))
-            (String.concat " " txt)
-        end;*)
-      result
-    in
+    let matching_dots prod = Globbing.extract (Production.rhs prod) filter in
     let matching_states prod =
       IntSet.fold
-        (fun pos acc -> IndexSet.union (Indices.states_by_items prod).(pos) acc)
+        (fun pos acc ->
+           IndexSet.union (Indices.states_by_items (Item.inj prod pos)) acc)
         (matching_dots prod) IndexSet.empty
     in
     indexset_bind prods matching_states

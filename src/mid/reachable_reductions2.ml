@@ -1062,8 +1062,8 @@ struct
         Printf.eprintf "Sentence %d, failing when looking ahead at %s:\n"
           !count (string_of_indexset ~index:Terminal.to_string failing);
         let print_step i step =
-          let plr1 lr1 = Lr1.symbol_to_string lr1 in
-          let pitem (prod, dot) =
+          let pitem item =
+            let (prod, dot) = Item.prj item in
             let components = ref [] in
             let rhs = Production.rhs prod in
             for i = Array.length rhs - 1 downto dot do
@@ -1077,22 +1077,22 @@ struct
             String.concat " " !components
           in
           let lr1 = IndexSet.choose step.label in
-          Printf.eprintf "- %s\n" (plr1 lr1);
+          Printf.eprintf "- %s\n" (Lr1.symbol_to_string lr1);
           match step.goto with
           | [] ->
             if i = 0 then
               Printf.eprintf "  [ %s]\n"
-              (string_concat_map " " pitem (Lr1.items lr1))
+              (string_concat_map " " pitem (Lr1.lr0_items lr1))
           | goto ->
             List.iter (fun goto ->
                 let lr1' = List.hd goto in
-                let suff = string_concat_map ";" plr1 (List.rev goto) in
+                let suff = string_concat_map ";" Lr1.symbol_to_string (List.rev goto) in
                 let pad = String.make (String.length suff) ' ' in
                 Printf.eprintf "  [%s " suff;
                 List.iteri (fun i item ->
                     if i > 0 then Printf.eprintf "\n    %s" pad;
                     Printf.eprintf "%s" (pitem item);
-                  ) (Lr1.items lr1');
+                  ) (Lr1.lr0_items lr1');
                 Printf.eprintf "]\n";
               ) goto
         in

@@ -41,95 +41,6 @@ module Synth = Synthesis.Make(Info)(Attr)
 
 open Info
 
-module Item : sig
-  type n
-  val n : n cardinal
-  type t = n index
-  val inj : Production.t -> int -> t
-  val prj : n index -> Production.t * int
-  val production : n index -> Production.t
-  val position : n index -> int
-  val pred : t -> t option
-end = struct
-  let count = ref 0
-  let first = Vector.init Production.n (fun p ->
-      let index = ! count in
-      count := !count + Production.length p + 1;
-      index
-    )
-  let count = !count
-
-  include Const(struct let cardinal = count end)
-  type t = n index
-
-  let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
-
-  let () =
-    Vector.iteri (fun r index ->
-        for i = index to index + Production.length r do
-          Vector.set production (Index.of_int n i) r
-        done
-      ) first
-
-  let inj r pos =
-    assert (pos >= 0 && pos <= Production.length r);
-    Index.of_int n (Vector.get first r + pos)
-
-  let prj t =
-    let r = Vector.get production t in
-    (r, (t :> int) - Vector.get first r)
-
-  let pred t =
-    let r, p = prj t in
-    if p > 0
-    then Some (inj r (p - 1))
-    else None
-
-  let position t =
-    let r = Vector.get production t in
-    ((t :> int) - Vector.get first r)
-
-  let production = Vector.get production
-
-end
-
-let effective_items : Lr1.t -> (Item.t * Terminal.set) list =
-  let table = Vector.make Lr1.n IndexMap.empty in
-  let rec populate states items =
-    let map = IndexMap.of_seq (List.to_seq items) in
-    IndexSet.iter (fun lr1 ->
-        let map' = Vector.get table lr1 in
-        let union _k v v' = Some (IndexSet.union v v') in
-        Vector.set table lr1 (IndexMap.union union map map')
-      ) states;
-    let previous_item (it, la) = match Item.pred it with
-      | None -> None
-      | Some it' -> Some (it', la)
-    in
-    match List.filter_map previous_item items with
-    | [] -> ()
-    | items' ->
-      populate (indexset_bind states Lr1.predecessors) items'
-  in
-  Index.iter Lr1.n begin fun lr1 ->
-    let initial_items =
-      IndexSet.fold (fun red acc ->
-          let prod = Reduction.production red in
-          let lookaheads = Reduction.lookaheads red in
-          (Item.inj prod (Production.length prod), lookaheads) :: acc
-        ) (Reduction.from_lr1 lr1) []
-    in
-    populate (IndexSet.singleton lr1) initial_items
-  end;
-  let bindings_by_length map =
-    List.sort (fun (it1, _) (it2, _) ->
-        let _, n1 = Item.prj it1 in
-        let _, n2 = Item.prj it2 in
-        Int.compare n1 n2
-      ) (IndexMap.bindings map)
-  in
-  Vector.get (Vector.map bindings_by_length table)
-
 let productive_items =
   let rec loop = function
     | (it, _) :: rest when Item.position it = 0 -> loop rest
@@ -140,7 +51,7 @@ let productive_items =
     (Synth.cost_of (Tail (st, prod, pos)), it, la)
   in
   let with_cost st =
-    let items = effective_items st in
+    let items = Info.Lr1.effective_items st in
     let items =
       if IndexSet.is_empty (Lr1.predecessors st)
       then items
