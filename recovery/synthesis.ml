@@ -12,23 +12,14 @@ module type S = sig
 
   val variable_to_string : variable -> string
 
-  type 'a paction =
+  type action =
     | Abort
     | Reduce of Production.t
     | Shift  of Symbol.t
-    | Var    of 'a
-
-  val paction_to_string : ('a -> string) -> 'a paction -> string
-
-  type action = variable paction
-
-  val action_to_string : action -> string
+    | Var    of variable
 
   val cost_of  : variable -> float
-  val cost_of_action  : action -> float
-  val cost_of_actions : action list -> float
-  val solution : variable -> action list
-  val report   : Format.formatter -> unit
+  val solution : variable -> float * action list
 
   module SymbolsSet : Set.S with type elt = Symbol.set
   val minimal_placeholders : variable -> SymbolsSet.t
@@ -152,46 +143,60 @@ struct
           | L gt -> Tail_goto (penalty, gt, Transition.target tr)
           | R _ -> Tail_stuck
 
-  type 'a paction =
-    | Abort
-    | Reduce of Production.t
-    | Shift  of Symbol.t
-    | Var    of 'a
+  type 'a interpretation = {
+    stuck: 'a;
+    const: float -> 'a;
+    shift: float -> Symbol.t -> 'a;
+    reduce: float -> Production.t -> 'a;
+    sequence: 'a -> 'a -> 'a;
+    choice: 'a -> 'a -> 'a;
+    var: variable -> 'a -> 'a;
+  }
 
-  let paction_to_string variable_to_string = function
-    | Abort -> "Abort"
-    | Reduce prod -> "Reduce p" ^ string_of_int (Index.to_int prod)
-    | Shift  sym -> "Shift " ^ (Symbol.name ~mangled:true sym)
-    | Var v -> "Var (" ^ variable_to_string v ^ ")"
-
-  type action = variable paction
-
-  let action_to_string = paction_to_string variable_to_string
-
-  let cost_of = function
+  let eval sem = function
     | Goto gt ->
       let {nullable; non_nullable} = goto_candidates gt in
-      let base_cost = match nullable with
-        | Some prod -> cost_of_prod prod
-        | None -> infinity
-      in
-      if base_cost = 0.0 then
-        Fun.const 0.0
-      else
-        fun solution ->
-          IndexSet.fold (fun prod cost ->
+      (* Try some basic syntactic simplifications to ease
+         implementation of interpretation and speed-up solver *)
+      begin match nullable with
+      | Some prod ->
+        let cost = cost_of_prod prod in
+        let base = sem.reduce cost prod in
+        if cost = 0.0 then
+          Fun.const base
+        else
+          fun fix ->
+            IndexSet.fold (fun prod x ->
+                let src = Transition.(source (of_goto gt)) in
+                let var = Tail (src, prod, 0) in
+                sem.choice x (sem.var var (fix var))
+              ) non_nullable base
+      | None ->
+        fun fix ->
+          IndexSet.fold (fun prod x ->
               let src = Transition.(source (of_goto gt)) in
               let var = Tail (src, prod, 0) in
-              Float.min cost (solution var)
-            ) non_nullable base_cost
+              sem.choice x (sem.var var (fix var))
+            ) non_nullable sem.stuck
+      end
     | Tail (st, prod, pos) ->
-      match tail_candidates st prod pos with
-      | Tail_stuck -> Fun.const infinity
-      | Tail_reduce penalty -> Fun.const penalty
-      | Tail_symbol (penalty, _, st') ->
-        fun var -> (penalty +. var (Tail (st', prod, pos + 1)))
-      | Tail_goto (penalty, gt, st') ->
-        fun var -> (penalty +. var (Goto gt) +. var (Tail (st', prod, pos + 1)))
+      begin match tail_candidates st prod pos with
+        | Tail_stuck ->
+          Fun.const sem.stuck
+        | Tail_reduce penalty ->
+          Fun.const (sem.reduce penalty prod)
+        | Tail_symbol (penalty, sym, st') ->
+          let x = sem.shift penalty sym in
+          fun fix ->
+            let var = Tail (st', prod, pos + 1) in
+            sem.sequence x (sem.var var (fix var))
+        | Tail_goto (penalty, gt, st') ->
+          let x = sem.const penalty in
+          fun fix ->
+            let y = Goto gt in
+            let z = Tail (st', prod, pos + 1) in
+            sem.sequence x (sem.sequence (sem.var y (fix y)) (sem.var z (fix z)))
+      end
 
   module Table = struct
     type key = variable
@@ -211,112 +216,33 @@ struct
         let is_maximal f = f = 0.0
       end)
     in
-    Solver.lfp cost_of
+    Solver.lfp (eval {
+      stuck    = infinity;
+      const    = (fun x -> x);
+      shift    = (fun x _ -> x);
+      reduce   = (fun x _ -> x);
+      sequence = (+.);
+      choice   = Float.min;
+      var      = (fun _ x -> x);
+    })
 
-  let cost_of_action = function
-    | Abort    -> infinity
-    | Reduce p -> cost_of_prod p
-    | Shift s  -> cost_of_symbol s
-    | Var v    -> cost_of v
+  type action =
+    | Abort
+    | Reduce of Production.t
+    | Shift of Symbol.t
+    | Var of variable
 
-  let select var1 var2 =
-    if cost_of_action var1 <= cost_of_action var2
-    then var1
-    else var2
-
-  let cost_of_actions actions =
-    List.fold_left (fun cost act -> cost +. cost_of_action act) 0.0 actions
-
-  let solution = function
-    | Goto gt ->
-      let src, nt, _ = decompose_goto gt in
-      let acc =
-        List.fold_left (fun acc tr ->
-            List.fold_left (fun acc (prod, pos) ->
-                if pos = 1 && Production.lhs prod = nt then
-                  select (Var (Tail (src, prod, 0))) acc
-                else acc
-              ) acc (Lr1.items (Transition.target tr))
-          ) Abort (Transition.successors src)
-      in
-      let visit_reduction red acc =
-        let prod = Reduction.production red in
-        if Production.length prod = 0 && Production.lhs prod = nt
-        then select (Reduce prod) acc
-        else acc
-      in
-      let acc = IndexSet.fold visit_reduction (Reduction.from_lr1 src) acc in
-      [acc]
-
-    | Tail (_st, prod, pos) when pos = Array.length (Production.rhs prod) ->
-      [Reduce prod]
-
-    | Tail (st, prod, pos) ->
-      let penalty = penalty_of_item (prod, pos) in
-      if penalty = infinity then
-        [Abort]
-      else
-        let head =
-          let sym = (Production.rhs prod).(pos) in
-          let cost = cost_of_symbol sym in
-          if cost < infinity then
-            Shift sym
-          else match Symbol.desc sym with
-            | T _ -> Abort
-            | N nt -> Var (Goto (Transition.find_goto st nt))
-        in
-        let tail =
-          let sym = (Production.rhs prod).(pos) in
-          match
-            List.find
-              (fun tr -> Index.compare sym (Transition.symbol tr) = 0)
-              (Transition.successors st)
-          with
-          | tr -> Var (Tail (Transition.target tr, prod, pos + 1))
-          | exception Not_found ->
-            Printf.eprintf "no transition: #%d (%d,%d)\n" (Index.to_int st) (Index.to_int prod) pos;
-            Abort
-        in
-        [head; tail]
-
-  let report ppf =
-    let open Format in
-    let solutions = ref [] in
-    let group_assoc l =
-      group_by l
-        ~compare:(compare_fst compare)
-        ~group:(fun (k, v) vs -> (k, v :: List.map snd vs))
-    in
-    Index.iter Lr1.n (fun st ->
-        match List.fold_left (fun (item, cost) (prod, pos) ->
-            let cost' = cost_of (Tail (st, prod, pos)) in
-            let actions = solution (Tail (st, prod, pos)) in
-            assert (cost' = cost_of_actions actions);
-            if cost' < cost then (Some (prod, pos), cost') else (item, cost)
-          ) (None, infinity) (Lr1.items st)
-        with
-        | None, _ ->
-          fprintf ppf "no synthesis from %d\n" (Index.to_int st);
-        | Some item, cost ->
-          push solutions (item, (cost, st))
-      );
-    List.iter (fun ((prod, pos), states) ->
-        fprintf ppf "# Item (%d,%d)\n" (Index.to_int prod) pos;
-        let rhs = Production.rhs prod in
-        fprintf ppf "%s:" (Nonterminal.to_string (Production.lhs prod));
-        for i = 0 to pos - 1 do
-          fprintf ppf " %s" (Symbol.name rhs.(i));
-        done;
-        fprintf ppf " .";
-        for i = pos to Array.length rhs - 1 do
-          fprintf ppf " %s" (Symbol.name rhs.(i));
-        done;
-        List.iter (fun (cost, states) ->
-            fprintf ppf "at cost %f from states %s\n\n"
-              cost (string_concat_map ", " string_of_index states)
-          )
-          (group_assoc states)
-      ) (group_assoc !solutions)
+  let solution =
+    let sem = eval {
+        stuck    = (infinity, [Abort]);
+        const    = (fun x -> x, if x = infinity then [Abort] else []);
+        shift    = (fun x sym -> (x, [Shift sym]));
+        reduce   = (fun x prod -> (x, [Reduce prod]));
+        sequence = (fun (x1, s1) (x2, s2) -> (x1 +. x2, s1 @ s2));
+        choice   = (fun (x1, _ as t1) (x2, _ as t2) -> if x1 <= x2 then t1 else t2);
+        var      = (fun _ x -> x);
+    } in
+    fun var -> sem var (fun var' -> (cost_of var', [Var var']))
 
   module SymbolsSet = Set.Make(struct
     type t = Symbol.set
@@ -325,21 +251,33 @@ struct
 
   let epsilon = SymbolsSet.singleton IndexSet.empty
 
-  let add t ts = SymbolsSet.map (IndexSet.add t) ts
+  let add t ts =
+    if IndexSet.is_empty t
+    then ts
+    else SymbolsSet.map (IndexSet.union t) ts
 
   let join t1 t2 =
     if SymbolsSet.is_empty t1 || SymbolsSet.is_empty t2 then
       SymbolsSet.empty
-    else if SymbolsSet.equal t1 epsilon then
-      t2
-    else if SymbolsSet.equal t2 epsilon then
-      t1
     else
-      SymbolsSet.fold (fun s1 acc ->
-          SymbolsSet.fold (fun s2 acc ->
-              SymbolsSet.add (IndexSet.union s1 s2) acc
-            ) t2 acc
-        ) t1 SymbolsSet.empty
+      let s1 = SymbolsSet.choose t1 in
+      if SymbolsSet.equal t1 (SymbolsSet.singleton s1) then
+        add s1 t2
+      else
+        let s2 = SymbolsSet.choose t2 in
+        if SymbolsSet.equal t2 (SymbolsSet.singleton s2) then
+          add s2 t1
+        else
+          SymbolsSet.fold (fun s1 acc ->
+              SymbolsSet.fold (fun s2 acc ->
+                  SymbolsSet.add (IndexSet.union s1 s2) acc
+                ) t2 acc
+            ) t1 SymbolsSet.empty
+
+  let union t1 t2 =
+    if SymbolsSet.equal t1 epsilon || SymbolsSet.equal t2 epsilon
+    then epsilon
+    else SymbolsSet.union t1 t2
 
   let minimal_placeholders =
     let module Solver = Fix.Make(Table)(struct
@@ -349,74 +287,19 @@ struct
         let is_maximal _ = false
       end)
     in
-    Solver.lfp (fun var ->
-        if cost_of var < infinity then
-          fun _ -> epsilon
-        else
-          match var with
-          | Goto gt ->
-            (fun vals ->
-               let src, nt, _ = decompose_goto gt in
-               let null_reduction red =
-                 let prod = Reduction.production red in
-                 Production.length prod = 0 &&
-                 Production.lhs prod = nt
-               in
-               if IndexSet.exists null_reduction (Reduction.from_lr1 src) then
-                 epsilon
-               else
-                 let acc =
-                   List.fold_left (fun acc tr ->
-                       List.fold_left (fun acc (prod, pos) ->
-                           if SymbolsSet.mem IndexSet.empty acc then
-                             epsilon
-                           else if pos = 1 && Production.lhs prod = nt then
-                             SymbolsSet.union acc (vals (Tail (src, prod, 0)))
-                           else acc
-                         ) acc (Lr1.items (Transition.target tr))
-                     ) SymbolsSet.empty (Transition.successors src)
-                 in
-                 if SymbolsSet.mem IndexSet.empty acc
-                 then epsilon
-                 else acc
-            )
-          | Tail (lr1, prod, pos) ->
-            if A.penalty_of_item (prod, pos) = infinity then
-              (fun _ -> SymbolsSet.empty)
-            else if pos = Production.length prod then
-              if A.cost_of_prod prod = infinity then
-                (fun _ -> SymbolsSet.empty)
-              else
-                (fun _ -> epsilon)
-            else (
-              let sym = (Production.rhs prod).(pos) in
-              match
-                List.find_opt
-                  (fun tr -> Transition.symbol tr = sym)
-                  (Transition.successors lr1)
-              with
-              | None -> (fun _ -> SymbolsSet.empty)
-              | Some tr ->
-                let lr1' = Transition.target tr in
-                match Transition.split tr with
-                | L gt ->
-                  (fun vals ->
-                   let hd = vals (Goto gt) in
-                   let tl = vals (Tail (lr1', prod, pos + 1)) in
-                   if SymbolsSet.is_empty hd then
-                     SymbolsSet.empty
-                   else if SymbolsSet.equal hd epsilon then
-                     tl
-                   else
-                     SymbolsSet.union
-                       (add (Symbol.inj_r (Transition.goto_symbol gt)) tl)
-                       (join hd tl))
-                | R sh ->
-                  if A.cost_of_symbol sym = infinity then
-                    let t = Transition.shift_symbol sh in
-                    (fun vals -> add (Symbol.inj_l t) (vals (Tail (lr1', prod, pos + 1))))
-                  else
-                    (fun vals -> vals (Tail (lr1', prod, pos + 1)))
-            )
-      )
+    Solver.lfp (eval {
+      stuck    = SymbolsSet.empty;
+      const    = (fun x -> if x = infinity then SymbolsSet.empty else epsilon);
+      shift    = (fun x sym ->
+          if x = infinity then SymbolsSet.singleton (IndexSet.singleton sym)
+          else epsilon
+        );
+      reduce   = (fun x _prod -> if x = infinity then SymbolsSet.empty else epsilon);
+      sequence = join;
+      choice   = union;
+      var      = (fun var x -> match var with
+          | Goto gt when cost_of var = infinity ->
+            add (IndexSet.singleton (Symbol.inj_r (Transition.goto_symbol gt))) x
+          | _ -> x);
+    })
 end

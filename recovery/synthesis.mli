@@ -10,23 +10,14 @@ module type S = sig
 
   val variable_to_string : variable -> string
 
-  type 'a paction =
+  type action =
     | Abort
     | Reduce of Production.t
     | Shift  of Symbol.t
-    | Var    of 'a
-
-  val paction_to_string : ('a -> string) -> 'a paction -> string
-
-  type action = variable paction
-
-  val action_to_string : action -> string
+    | Var    of variable
 
   val cost_of  : variable -> float
-  val cost_of_action  : action -> float
-  val cost_of_actions : action list -> float
-  val solution : variable -> action list
-  val report   : Format.formatter -> unit
+  val solution : variable -> float * action list
 
   module SymbolsSet : Set.S with type elt = Symbol.set
   val minimal_placeholders : variable -> SymbolsSet.t
