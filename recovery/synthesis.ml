@@ -178,16 +178,16 @@ struct
     else SymbolsSet.map (IndexSet.union t) ts
 
   let join t1 t2 =
-    if SymbolsSet.is_empty t1 || SymbolsSet.is_empty t2 then
-      SymbolsSet.empty
+    if SymbolsSet.is_empty t1 || SymbolsSet.is_empty t2
+    then SymbolsSet.empty
     else
       let s1 = SymbolsSet.choose t1 in
-      if SymbolsSet.equal t1 (SymbolsSet.singleton s1) then
-        add s1 t2
+      if SymbolsSet.equal t1 (SymbolsSet.singleton s1)
+      then add s1 t2
       else
         let s2 = SymbolsSet.choose t2 in
-        if SymbolsSet.equal t2 (SymbolsSet.singleton s2) then
-          add s2 t1
+        if SymbolsSet.equal t2 (SymbolsSet.singleton s2)
+        then add s2 t1
         else
           SymbolsSet.fold (fun s1 acc ->
               SymbolsSet.fold (fun s2 acc ->

@@ -469,13 +469,13 @@ module DFA = struct
     in
     let map = ref SymbolsSetMap.empty in
     Index.iter Transition.goto begin fun gt ->
-      let nt = Transition.goto_symbol gt in
-      if IndexSet.mem (Symbol.inj_r nt) dead_symbols then (
+      let sym = Symbol.inj_r (Transition.goto_symbol gt) in
+      if IndexSet.mem sym dead_symbols then (
         let tss = Synth.minimal_placeholders (Goto gt) in
         if not (Synth.SymbolsSet.exists IndexSet.is_empty tss) then (
           map := SymbolsSetMap.update (minimize tss) (function
-              | None -> Some (IndexSet.singleton nt)
-              | Some nts -> Some (IndexSet.add nt nts)
+              | None -> Some (IndexSet.singleton sym)
+              | Some syms -> Some (IndexSet.add sym syms)
             ) !map
         )
       )
@@ -489,10 +489,11 @@ module DFA = struct
       Printf.eprintf "To complete more situations, \
                       the following terminals could be given placeholding values:\n%s\n\n"
         (string_concat_map " " Symbol.name (IndexSet.elements dead_terminals));
-    SymbolsSetMap.iter (fun tss nts ->
+    SymbolsSetMap.iter (fun tss syms ->
+        let tss = Synth.SymbolsSet.remove syms tss in
         Printf.eprintf "Non-terminals %s\n\
                         could be completed if at least one of these set of symbols had placeholder values:\n"
-          (string_concat_map ", " Nonterminal.to_string (IndexSet.elements nts));
+          (string_concat_map ", " Symbol.name (IndexSet.elements syms));
         Synth.SymbolsSet.iter (fun ts ->
             Printf.eprintf "- %s\n"
               (string_concat_map ", " Symbol.name (IndexSet.elements ts))
