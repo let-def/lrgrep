@@ -37,7 +37,7 @@ let get_int table ~offset = function
   | 4 -> Int32.to_int (String.get_int32_be table offset)
   | _ -> assert false
 
-let probing_bits = 1
+let probing_bits = 2
 
 let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   : program_counter option =

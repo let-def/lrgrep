@@ -41,6 +41,13 @@ module Make
 struct
   open Info
 
+  let check_cost r =
+    assert (r >= 0.); r
+
+  let cost_of_prod p    = check_cost (A.cost_of_prod p)
+  let cost_of_symbol s  = check_cost (A.cost_of_symbol s)
+  let penalty_of_item i = check_cost (A.penalty_of_item i)
+
   type variable =
     | Goto of Transition.goto index
     | Tail of Lr1.t * Production.t * int
@@ -60,6 +67,91 @@ struct
       Printf.sprintf "Tail (#%d, p%d, %d)"
         (Index.to_int st) (Index.to_int prod) pos
 
+  type goto_candidates = {
+    (* List the different actions that result in following a goto transition *)
+
+    (* Non-nullable productions that would amount to follow this transition *)
+    non_nullable: Production.set;
+    nullable: Production.t option;
+  }
+
+  let goto_candidates gt =
+    let src, nt, _ = decompose_goto gt in
+    let non_nullable =
+      IndexSet.of_list (
+        List.concat_map (fun tr ->
+            List.filter_map (fun (prod, pos) ->
+                if pos = 1 && Production.lhs prod = nt
+                then Some prod
+                else None
+              ) (Lr1.items (Transition.target tr))
+          ) (Transition.successors src)
+      )
+    in
+    let nullable =
+      let visit_reduction red acc =
+        let prod = Reduction.production red in
+        if Production.length prod = 0 && Production.lhs prod = nt then
+          match acc with
+          | None -> Some prod
+          | Some prod' when cost_of_prod prod < cost_of_prod prod' -> Some prod
+          | _ -> acc
+        else acc
+      in
+      IndexSet.fold visit_reduction (Reduction.from_lr1 src) None
+    in
+    { nullable; non_nullable }
+
+  type tail_solution =
+    | Tail_reduce of float
+    | Tail_symbol of float * Symbol.t * Lr1.t
+    | Tail_goto of float * Transition.goto index * Lr1.t
+    | Tail_stuck
+
+  let tail_candidates st prod pos =
+    let penalty = penalty_of_item (prod, pos) in
+    if penalty = infinity then
+      Tail_stuck
+    else if pos = Array.length (Production.rhs prod) then
+      let cost = penalty +. cost_of_prod prod in
+      if cost = infinity then
+        Tail_stuck
+      else
+      Tail_reduce cost
+    else
+      let sym = (Production.rhs prod).(pos) in
+      match
+        List.find
+          (fun tr -> Index.compare sym (Transition.symbol tr) = 0)
+          (Transition.successors st)
+      with
+      (* A missing transition has been removed by conflict resolution *)
+      | exception Not_found ->
+        if false then (
+          let lhs = Production.lhs prod in
+          let rhs = Production.rhs prod in
+          Printf.eprintf "no transition in #%d for %s:"
+            (Index.to_int st) (Nonterminal.to_string lhs);
+          for i = 0 to pos - 1 do
+            prerr_char ' ';
+            prerr_string (Symbol.name rhs.(i));
+          done;
+          prerr_string " .";
+          for i = pos to Array.length rhs - 1 do
+            prerr_char ' ';
+            prerr_string (Symbol.name rhs.(i));
+          done;
+          prerr_char '\n';
+        );
+        Tail_stuck
+      | tr ->
+        let cost = cost_of_symbol sym in
+        if cost < infinity then
+          Tail_symbol (penalty +. cost, sym, Transition.target tr)
+        else match Transition.split tr with
+          | L gt -> Tail_goto (penalty, gt, Transition.target tr)
+          | R _ -> Tail_stuck
+
   type 'a paction =
     | Abort
     | Reduce of Production.t
@@ -76,94 +168,30 @@ struct
 
   let action_to_string = paction_to_string variable_to_string
 
-  let check_cost r =
-    assert (r >= 0.); r
-
-  let cost_of_prod p    = check_cost (A.cost_of_prod p)
-  let cost_of_symbol s  = check_cost (A.cost_of_symbol s)
-  let penalty_of_item i = check_cost (A.penalty_of_item i)
-
-  let app var v = v var
-
-  let var var = match var with
-    | Goto _ -> app var
-    | Tail (_,prod,pos) ->
-      if pos < Production.length prod then
-        app var
-      else
-        Fun.const (cost_of_prod prod)
-
   let cost_of = function
     | Goto gt ->
-      let src, nt, _ = decompose_goto gt in
-      let acc =
-        List.concat_map (fun tr ->
-            List.filter_map (fun (prod, pos) ->
-                if pos = 1 && Production.lhs prod = nt
-                then Some (var (Tail (src, prod, 0)))
-                else None
-              ) (Lr1.items (Transition.target tr))
-          ) (Transition.successors src)
+      let {nullable; non_nullable} = goto_candidates gt in
+      let base_cost = match nullable with
+        | Some prod -> cost_of_prod prod
+        | None -> infinity
       in
-      let cost =
-        let visit_reduction red acc =
-          let prod = Reduction.production red in
-          if Production.length prod = 0 && Production.lhs prod = nt
-          then Float.min (cost_of_prod prod) acc
-          else acc
-        in
-        IndexSet.fold visit_reduction (Reduction.from_lr1 src) infinity
-      in
-      if cost < infinity || acc <> [] then
-        (fun v -> List.fold_left (fun cost f -> Float.min cost (f v)) cost acc)
-      else Fun.const infinity
-
+      if base_cost = 0.0 then
+        Fun.const 0.0
+      else
+        fun solution ->
+          IndexSet.fold (fun prod cost ->
+              let src = Transition.(source (of_goto gt)) in
+              let var = Tail (src, prod, 0) in
+              Float.min cost (solution var)
+            ) non_nullable base_cost
     | Tail (st, prod, pos) ->
-      let penalty = penalty_of_item (prod, pos) in
-      if penalty = infinity then
-        Fun.const infinity
-      else
-      if pos = Array.length (Production.rhs prod) then
-        Fun.const (cost_of_prod prod)
-      else
-        let head =
-          let sym = (Production.rhs prod).(pos) in
-          let cost = cost_of_symbol sym in
-          if cost < infinity then Fun.const cost
-          else match Symbol.desc sym with
-            | Symbol.T _ -> Fun.const infinity
-            | Symbol.N nt -> var (Goto (Transition.find_goto st nt))
-        in
-        let tail =
-          let sym = (Production.rhs prod).(pos) in
-          match
-            List.find
-              (fun tr -> Index.compare sym (Transition.symbol tr) = 0)
-              (Transition.successors st)
-          with
-          | tr -> var (Tail (Transition.target tr, prod, pos + 1))
-          | exception Not_found ->
-            (* A missing transition has been removed
-               by conflict resolution *)
-            if false then (
-              let lhs = Production.lhs prod in
-              let rhs = Production.rhs prod in
-              Printf.eprintf "no transition in #%d for %s:"
-                (Index.to_int st) (Nonterminal.to_string lhs);
-              for i = 0 to pos - 1 do
-                prerr_char ' ';
-                prerr_string (Symbol.name rhs.(i));
-              done;
-              prerr_string " .";
-              for i = pos to Array.length rhs - 1 do
-                prerr_char ' ';
-                prerr_string (Symbol.name rhs.(i));
-              done;
-              prerr_char '\n';
-            );
-            Fun.const infinity
-        in
-        (fun v -> penalty +. head v +. tail v)
+      match tail_candidates st prod pos with
+      | Tail_stuck -> Fun.const infinity
+      | Tail_reduce penalty -> Fun.const penalty
+      | Tail_symbol (penalty, _, st') ->
+        fun var -> (penalty +. var (Tail (st', prod, pos + 1)))
+      | Tail_goto (penalty, gt, st') ->
+        fun var -> (penalty +. var (Goto gt) +. var (Tail (st', prod, pos + 1)))
 
   module Table = struct
     type key = variable

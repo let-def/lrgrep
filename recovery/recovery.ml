@@ -524,13 +524,12 @@ module DFA = struct
     let labelled = ref 0 in
     let wildcard = ref 0 in
     let none = ref 0 in
-    Vector.iter (fun ds ->
-        begin match ds.transitions with
-          | Wildcard _ -> incr wildcard
-          | Labelled [] -> incr none
-          | Labelled l -> labelled := !labelled + List.length l
-        end;
-      ) states;
+    Vector.iter begin fun ds ->
+      match ds.transitions with
+      | Wildcard _ -> incr wildcard
+      | Labelled [] -> incr none
+      | Labelled l -> labelled := !labelled + List.length l
+    end states;
     Printf.eprintf "Deterministic full reduction graph:\n\
                     - %d states\n\
                     - %d labelled transitions\n\
@@ -549,6 +548,9 @@ module DFA = struct
           List.fold_left (fun set sitem -> IndexSet.union sitem.symbols set) set sitems)
         dead_ends IndexSet.empty
     in
+    if false then
+      Printf.eprintf "Dead symbols: %s\n"
+        (string_of_indexset ~index:Symbol.name dead_symbols);
     let minimize tss =
       Synth.SymbolsSet.filter (fun is ->
           not (Synth.SymbolsSet.exists (fun is' -> IndexSet.subset is' is && not (IndexSet.equal is is')) tss)
@@ -696,10 +698,10 @@ module Output = struct
             let map = List.sort compare map in
             incr (get_default unique_map map 0);
         ) outgoing;
-      Printf.eprintf "%d unique domains, %d unique maps\n" (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
-      Printf.eprintf "%d unique transition\n" (Hashtbl.fold (fun map _ sum ->
-          sum + List.length map
-        ) unique_map 0);
+      Printf.eprintf "%d unique domains, %d unique maps\n"
+        (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
+      Printf.eprintf "%d unique transition\n"
+        (Hashtbl.fold (fun map _ sum -> sum + List.length map) unique_map 0);
       (*let doms = Array.of_seq (Hashtbl.to_seq unique_dom) in
         Array.fast_sort (fun (y,_) (z,_) -> List.compare_lengths y z) doms;
         Array.iter (fun (dom,c) ->
