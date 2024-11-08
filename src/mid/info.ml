@@ -107,6 +107,7 @@ module type S = sig
     val prj : n index -> Production.t * int
     val production : n index -> Production.t
     val position : n index -> int
+    val succ : t -> t option
     val pred : t -> t option
   end
 
@@ -386,6 +387,7 @@ struct
     val prj : n index -> Production.t * int
     val production : n index -> Production.t
     val position : n index -> int
+    val succ : t -> t option
     val pred : t -> t option
   end = struct
     let count = ref 0
@@ -415,6 +417,12 @@ struct
     let prj t =
       let r = Vector.get production t in
       (r, (t :> int) - Vector.get first r)
+
+    let succ t =
+      let r, p = prj t in
+      if p = Production.length r
+      then None
+      else Some (inj r (p + 1))
 
     let pred t =
       let r, p = prj t in

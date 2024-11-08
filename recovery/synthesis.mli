@@ -6,7 +6,7 @@ module type S = sig
 
   type variable =
     | Goto of Transition.goto index
-    | Tail of Lr1.t * Production.t * int
+    | Tail of Lr1.t * Item.t
 
   val variable_to_string : variable -> string
 
@@ -14,9 +14,9 @@ module type S = sig
 
   type tail_solution =
     | Tail_reduce of float
-    | Tail_follow of float * Transition.any index * Lr1.t
+    | Tail_follow of float * Transition.any index * Item.t
 
-  val tail_candidates : Lr1.t -> Production.t -> int -> float * tail_solution
+  val tail_candidates : Lr1.t -> Item.t -> float * tail_solution
 
   val cost_of  : variable -> float
 

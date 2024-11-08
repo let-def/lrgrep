@@ -956,7 +956,7 @@ let merloc startpos ?endpos x =
 %token TRUE [@symbol "true"]
 %token TRY [@symbol "try"]
 %token TYPE [@symbol "type"]
-%token <string> UIDENT [@cost 2][@recovery "_"][@printer Printf.sprintf "UIDENT(%S)"]
+%token <string> UIDENT [@cost 2][@printer Printf.sprintf "UIDENT(%S)"]
 %token UNDERSCORE [@symbol "_"]
 %token VAL [@symbol "val"]
 %token VIRTUAL [@symbol "virtual"]

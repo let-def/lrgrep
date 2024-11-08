@@ -3,7 +3,7 @@ module type S = sig
   open Info
 
   val cost_of_prod    : Production.t -> float
-  val penalty_of_item : Production.t * int -> float
+  val penalty_of_item : Item.t -> float
   val cost_of_symbol  : Symbol.t -> float
 
   val default_prelude     : Format.formatter -> unit

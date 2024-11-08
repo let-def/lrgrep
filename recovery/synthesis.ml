@@ -8,7 +8,7 @@ module type S = sig
 
   type variable =
     | Goto of Transition.goto index
-    | Tail of Lr1.t * Production.t * int
+    | Tail of Lr1.t * Item.t
 
   val variable_to_string : variable -> string
 
@@ -16,9 +16,9 @@ module type S = sig
 
   type tail_solution =
     | Tail_reduce of float
-    | Tail_follow of float * Transition.any index * Lr1.t
+    | Tail_follow of float * Transition.any index * Item.t
 
-  val tail_candidates : Lr1.t -> Production.t -> int -> float * tail_solution
+  val tail_candidates : Lr1.t -> Item.t -> float * tail_solution
 
   val cost_of  : variable -> float
 
@@ -50,7 +50,7 @@ struct
 
   type variable =
     | Goto of Transition.goto index
-    | Tail of Lr1.t * Production.t * int
+    | Tail of Lr1.t * Item.t
 
   let variable_to_string = function
     | Goto gt ->
@@ -59,7 +59,8 @@ struct
         (Index.to_int (Transition.source tr))
         (Nonterminal.to_string (Transition.goto_symbol gt) )
         (Index.to_int (Transition.target tr))
-    | Tail (st, prod, pos) ->
+    | Tail (st, item) ->
+      let prod, pos = Item.prj item in
       Printf.sprintf "Tail (#%d, p%d, %d)"
         (Index.to_int st) (Index.to_int prod) pos
 
@@ -80,10 +81,11 @@ struct
 
   type tail_solution =
     | Tail_reduce of float
-    | Tail_follow of float * Transition.any index * Lr1.t
+    | Tail_follow of float * Transition.any index * Item.t
 
-  let tail_candidates st prod pos =
-    let penalty = penalty_of_item (prod, pos) in
+  let tail_candidates st item =
+    let penalty = penalty_of_item item in
+    let prod, pos = Item.prj item in
     let rhs = Production.rhs prod in
     if pos = Array.length rhs then
       (penalty, Tail_reduce (cost_of_prod prod))
@@ -98,7 +100,7 @@ struct
        * attempting to reduce a missing transition *)
       | exception Not_found -> assert false
       | tr ->
-        (penalty, Tail_follow (cost_of_symbol sym, tr, Transition.target tr))
+        (penalty, Tail_follow (cost_of_symbol sym, tr, Item.inj prod (pos + 1)))
 
   type 'a interpretation = {
     stuck: 'a;
@@ -114,14 +116,14 @@ struct
       let src = Transition.(source (of_goto gt)) in
       let prods = goto_candidates gt in
       fun fix ->
-        IndexSet.fold (fun prod x -> sem.choice x (fix (Tail (src, prod, 0)))) prods sem.stuck
-    | Tail (st, prod, pos) ->
-      match tail_candidates st prod pos with
+        IndexSet.fold (fun prod x -> sem.choice x (fix (Tail (src, Item.inj prod 0)))) prods sem.stuck
+    | Tail (st, item) ->
+      match tail_candidates st item with
       | penalty, Tail_reduce cost ->
-        Fun.const (sem.penalty penalty (sem.reduce cost prod))
-      | penalty, Tail_follow (cost, tr, st') ->
+        Fun.const (sem.penalty penalty (sem.reduce cost (Item.production item)))
+      | penalty, Tail_follow (cost, tr, item') ->
         let x = sem.follow cost tr in
-        let var = Tail (st', prod, pos + 1) in
+        let var = Tail (Transition.target tr, item') in
         match Transition.split tr with
         | L gt when cost = infinity ->
           fun fix ->

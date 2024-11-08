@@ -46,8 +46,7 @@ let productive_items =
     | otherwise -> otherwise
   in
   let add_cost st (it, la) =
-    let prod, pos = Item.prj it in
-    (Synth.cost_of (Tail (st, prod, pos)), it, la)
+    (Synth.cost_of (Tail (st, it)), it, la)
   in
   let with_cost st =
     let items = Info.Lr1.effective_items st in
@@ -351,30 +350,30 @@ module DFA = struct
           st.reached
       in
       let reasons = ref [] in
-      List.iter (fun (lr1, item, _) ->
-          let prod, pos = Item.prj item in
-          let lhs = Production.lhs prod in
-          let rhs = Production.rhs prod in
-          let stuck_symbols = ref IndexSet.empty in
-          if true || pos > 1 || not (IndexSet.mem (Symbol.inj_r lhs) reached_lhs) then (
-            let lr1 = ref lr1 in
-            for i = pos to Array.length rhs - 1 do
-              let sym = rhs.(i) in
-              let tr = List.find
-                  (fun tr -> Transition.symbol tr = sym)
-                  (Transition.successors !lr1)
-              in
-              if Attr.penalty_of_item (prod, i) = infinity ||
-                 match Transition.split tr with
-                 | L gt -> Synth.cost_of (Goto gt) = infinity
-                 | R _ -> Attr.cost_of_symbol sym = infinity
-              then
-                stuck_symbols := IndexSet.add sym !stuck_symbols;
-              lr1 := Transition.target tr;
-            done;
-            push reasons {item; symbols = !stuck_symbols}
-          )
-        ) items;
+      List.iter begin fun (lr1, item, _) ->
+        let prod, pos = Item.prj item in
+        let lhs = Production.lhs prod in
+        let rhs = Production.rhs prod in
+        let stuck_symbols = ref IndexSet.empty in
+        if pos > 1 || not (IndexSet.mem (Symbol.inj_r lhs) reached_lhs) then (
+          let lr1 = ref lr1 in
+          for i = pos to Array.length rhs - 1 do
+            let sym = rhs.(i) in
+            let tr = List.find
+                (fun tr -> Transition.symbol tr = sym)
+                (Transition.successors !lr1)
+            in
+            if Attr.penalty_of_item (Item.inj prod i) = infinity ||
+               match Transition.split tr with
+               | L gt -> Synth.cost_of (Goto gt) = infinity
+               | R _ -> Attr.cost_of_symbol sym = infinity
+            then
+              stuck_symbols := IndexSet.add sym !stuck_symbols;
+            lr1 := Transition.target tr;
+          done;
+          push reasons {item; symbols = !stuck_symbols}
+        )
+      end items;
       let paths = match Hashtbl.find_opt dead_ends !reasons with
         | Some r -> r
         | None ->
@@ -463,21 +462,22 @@ module DFA = struct
         (string_of_indexset ~index:Symbol.name dead_symbols);
     let minimize tss =
       Synth.SymbolsSet.filter (fun is ->
-          not (Synth.SymbolsSet.exists (fun is' -> IndexSet.subset is' is && not (IndexSet.equal is is')) tss)
+          not (Synth.SymbolsSet.exists (fun is' ->
+              IndexSet.subset is' is &&
+              not (IndexSet.equal is is')
+            ) tss)
         ) tss
     in
     let map = ref SymbolsSetMap.empty in
     Index.iter Transition.goto begin fun gt ->
       let sym = Symbol.inj_r (Transition.goto_symbol gt) in
-      if IndexSet.mem sym dead_symbols then (
+      if IndexSet.mem sym dead_symbols then
         let tss = Synth.minimal_placeholders (Goto gt) in
-        if not (Synth.SymbolsSet.exists IndexSet.is_empty tss) then (
+        if not (Synth.SymbolsSet.exists IndexSet.is_empty tss) then
           map := SymbolsSetMap.update (minimize tss) (function
               | None -> Some (IndexSet.singleton sym)
               | Some syms -> Some (IndexSet.add sym syms)
             ) !map
-        )
-      )
     end;
     let dead_terminals =
       IndexSet.filter
@@ -498,6 +498,31 @@ module DFA = struct
               (string_concat_map ", " Symbol.name (IndexSet.elements ts))
           ) tss
       ) !map
+
+  let reachable =
+    let rec enumerate_reachable acc lr1 item =
+      let acc = IndexSet.add lr1 acc in
+      let penalty, next = Synth.tail_candidates lr1 item in
+      if penalty = infinity then acc
+      else match next with
+        | Synth.Tail_reduce _ -> acc
+        | Synth.Tail_follow (penalty, tr, item') ->
+          if penalty < infinity ||
+             match Transition.split tr with
+             | L gt -> Synth.cost_of (Goto gt) < infinity
+             | R _ -> false
+          then enumerate_reachable acc (Transition.target tr) item'
+          else acc
+    in
+    Vector.map (fun st ->
+        indexset_bind st.reached (fun nfa ->
+            let nst = Vector.get NFA.states nfa in
+            let lr1 = nst.NFA.config.goto in
+            List.fold_left
+              (fun acc (item, _) -> enumerate_reachable acc lr1 item)
+              IndexSet.empty (Lr1.effective_items lr1)
+          )
+      ) states
 end
 
 module Output = struct
@@ -596,19 +621,26 @@ module Output = struct
     let outgoing = Vector.make MDFA.states []
 
     let () =
-      Index.iter MDFA.transitions (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
+      Index.iter MDFA.transitions
+        (fun tr -> Vector.set_cons outgoing (MDFA.source tr) tr);
       let unique_dom = Hashtbl.create 7 in
       let unique_map = Hashtbl.create 7 in
-      Vector.iter (function
-          | [] | [_] -> ()
-          | trs ->
-            let dom = List.filter_map MDFA.label trs in
-            let dom = List.sort compare dom in
-            incr (get_default unique_dom dom 0);
-            let map = List.filter_map (fun tr -> match MDFA.label tr with None -> None | Some x -> Some (x, MDFA.target tr)) trs in
-            let map = List.sort compare map in
-            incr (get_default unique_map map 0);
-        ) outgoing;
+      Vector.iter begin function
+        | [] | [_] -> ()
+        | trs ->
+          let dom = List.filter_map MDFA.label trs in
+          let dom = List.sort compare dom in
+          incr (get_default unique_dom dom 0);
+          let map =
+            List.filter_map begin fun tr ->
+              match MDFA.label tr with
+              | None -> None
+              | Some x -> Some (x, MDFA.target tr)
+            end trs
+          in
+          let map = List.sort compare map in
+          incr (get_default unique_map map 0);
+      end outgoing;
       Printf.eprintf "%d unique domains, %d unique maps\n"
         (Hashtbl.length unique_dom) (Hashtbl.length unique_map);
       Printf.eprintf "%d unique transition\n"
@@ -630,9 +662,9 @@ module Output = struct
                   append_list by_target target ((lr1 :> int), target)
               ) trs;
             let longest = ref 0 in
-            Hashtbl.iter
-              (fun _target labels -> longest := Int.max !longest (List.length !labels))
-              by_target;
+            Hashtbl.iter (fun _target labels ->
+                 longest := Int.max !longest (List.length !labels)
+              ) by_target;
             let trs =
               Hashtbl.fold (fun _target labels acc ->
                   if List.length !labels = !longest then

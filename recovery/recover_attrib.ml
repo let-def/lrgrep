@@ -6,7 +6,7 @@ module type S = sig
   open Info
 
   val cost_of_prod    : Production.t -> float
-  val penalty_of_item : Production.t * int -> float
+  val penalty_of_item : Item.t -> float
   val cost_of_symbol  : Symbol.t -> float
 
   val default_prelude     : Format.formatter -> unit
@@ -67,7 +67,8 @@ module Make (Info : Mid.Info.S) : S with module Info := Info = struct
         (fun (_,_,a) -> cost_of_attributes a)
         (Grammar.Production.rhs (Production.to_g p))
     in
-    fun (p,i) ->
+    fun it ->
+      let p, i = Item.prj it in
       let costs = f p in
       if i < Array.length costs then costs.(i) else cost_of_prod p
 
