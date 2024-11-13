@@ -448,7 +448,7 @@ module DFA = struct
 
   let () = print_dead_ends ()
 
-  module SymbolsSetMap = Map.Make(Synth.SymbolsSet)
+  module ObstacleMap = Map.Make(Synth.ObstacleSet)
 
   let () =
     let dead_symbols =
@@ -461,20 +461,20 @@ module DFA = struct
       Printf.eprintf "Dead symbols: %s\n"
         (string_of_indexset ~index:Symbol.name dead_symbols);
     let minimize tss =
-      Synth.SymbolsSet.filter (fun is ->
-          not (Synth.SymbolsSet.exists (fun is' ->
+      Synth.ObstacleSet.filter (fun is ->
+          not (Synth.ObstacleSet.exists (fun is' ->
               IndexSet.subset is' is &&
               not (IndexSet.equal is is')
             ) tss)
         ) tss
     in
-    let map = ref SymbolsSetMap.empty in
+    let map = ref ObstacleMap.empty in
     Index.iter Transition.goto begin fun gt ->
       let sym = Symbol.inj_r (Transition.goto_symbol gt) in
       if IndexSet.mem sym dead_symbols then
-        let tss = Synth.minimal_placeholders (Goto gt) in
-        if not (Synth.SymbolsSet.exists IndexSet.is_empty tss) then
-          map := SymbolsSetMap.update (minimize tss) (function
+        let tss = Synth.obstacles (Goto gt) in
+        if not (Synth.ObstacleSet.exists IndexSet.is_empty tss) then
+          map := ObstacleMap.update (minimize tss) (function
               | None -> Some (IndexSet.singleton sym)
               | Some syms -> Some (IndexSet.add sym syms)
             ) !map
@@ -488,15 +488,27 @@ module DFA = struct
       Printf.eprintf "To complete more situations, \
                       the following terminals could be given placeholding values:\n%s\n\n"
         (string_concat_map " " Symbol.name (IndexSet.elements dead_terminals));
-    SymbolsSetMap.iter (fun tss syms ->
-        let tss = Synth.SymbolsSet.remove syms tss in
-        Printf.eprintf "Non-terminals %s\n\
-                        could be completed if at least one of these set of symbols had placeholder values:\n"
-          (string_concat_map ", " Symbol.name (IndexSet.elements syms));
-        Synth.SymbolsSet.iter (fun ts ->
-            Printf.eprintf "- %s\n"
-              (string_concat_map ", " Symbol.name (IndexSet.elements ts))
-          ) tss
+    ObstacleMap.iter (fun tss syms ->
+        let tss =
+          Synth.ObstacleSet.elements tss
+          |> List.map (IndexSet.filter_map (fun obs ->
+              match Synth.Obstacle.prj obs with
+              | Symbol sym -> Some sym
+              | Production _ | Item _ -> None
+            ))
+          |> List.sort_uniq IndexSet.compare
+          |> List.filter (fun s -> not (IndexSet.equal s syms))
+        in
+        if tss <> [] then (
+          Printf.eprintf "Non-terminals %s\n\
+                          could be completed if at least one of these set of \
+                          symbols had placeholder values:\n"
+            (string_concat_map ", " Symbol.name (IndexSet.elements syms));
+          List.iter (fun ts ->
+              Printf.eprintf "- %s\n"
+                (string_concat_map ", " Symbol.name (IndexSet.elements ts))
+            ) tss
+        )
       ) !map
 
   let reachable =
@@ -518,9 +530,15 @@ module DFA = struct
         indexset_bind st.reached (fun nfa ->
             let nst = Vector.get NFA.states nfa in
             let lr1 = nst.NFA.config.goto in
-            List.fold_left
-              (fun acc (item, _) -> enumerate_reachable acc lr1 item)
-              IndexSet.empty (Lr1.effective_items lr1)
+            let states =
+              List.fold_left
+                (fun acc (item, _) -> enumerate_reachable acc lr1 item)
+                IndexSet.empty (Lr1.effective_items lr1)
+            in
+            Printf.eprintf "State %s: %s\n"
+              (Lr1.to_string lr1)
+              (Lr1.set_to_string states);
+            states
           )
       ) states
 end
