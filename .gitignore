@@ -6,3 +6,6 @@ _build
 # LaTeX noise
 doc/pres/main.en.*
 doc/pres/main.fr.*
+
+# Temporary experiments on OCaml grammar failures
+ocaml/failures/
