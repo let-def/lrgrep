@@ -2,6 +2,7 @@
  (name main)
  (public_name lrgrep)
  (modules main
+          sentences
           compile_command
           enum_command enum
           interpret_command)

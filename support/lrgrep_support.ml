@@ -294,7 +294,15 @@ let compact (type dfa clause lr1)
         emit_moves rest
     | [] -> ()
   in
+  let rec check_moves = function
+    | (j1, i1) :: ((j2, i2) :: _ as rest) ->
+      assert (j1 < j2);
+      assert (i1 < i2);
+      check_moves rest
+    | _ -> ()
+  in
   let emit_action {move; store; clear; priority; target} =
+    check_moves move;
     emit_moves (move : (_ index * _ index) list :> (int * int) list);
     List.iter (fun i -> Code_emitter.emit code (Store (i : _ index :> int))) store;
     List.iter (fun i -> Code_emitter.emit code (Clear (i : _ index :> int))) clear;

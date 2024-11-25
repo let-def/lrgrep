@@ -71,7 +71,7 @@ rule error_message = parse error (implementation)
      line_and_char $endloc(loc) }
 
 | item=structure_item; [let_bindings(ext)] @ IN
-  { "A 'let ... in' is not allowed immediately after a module definition. \n\
+  { "A 'let ... in' expression is not allowed immediately after a definition. \n\
     This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endloc(item) }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
