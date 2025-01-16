@@ -245,10 +245,6 @@ let mkpat_opt_constraint ~loc p = function
 let syntax_error () =
   raise Syntaxerr.Escape_error
 
-let unclosed opening_name opening_loc closing_name closing_loc =
-  raise(Syntaxerr.Error(Syntaxerr.Unclosed(make_loc opening_loc, opening_name,
-                                           make_loc closing_loc, closing_name)))
-
 let expecting loc nonterm =
     raise Syntaxerr.(Error(Expecting(make_loc loc, nonterm)))
 
@@ -393,10 +389,6 @@ let mk_indexop_expr array_indexing_operator ~loc
     | Some expr -> [Nolabel, expr] in
   let args = (Nolabel,array) :: index @ set_arg in
   mkexp ~loc (Pexp_apply(ghexp ~loc (Pexp_ident fn), args))
-
-let indexop_unclosed_error loc_s s loc_e =
-  let left, right = paren_to_strings s in
-  unclosed left loc_s right loc_e
 
 let lapply ~loc p1 p2 =
   if !Clflags.applicative_functors
@@ -1403,10 +1395,6 @@ module_name:
 module_expr:
   | STRUCT attrs = attributes s = structure END
       { mkmod ~loc:$sloc ~attrs (Pmod_structure s) }
-  | STRUCT attributes structure error
-      { unclosed "struct" $loc($1) "end" $loc($4) }
-  | SIG error
-      { expecting $loc($1) "struct" }
   | FUNCTOR attrs = attributes args = functor_args MINUSGREATER me = module_expr
       { wrap_mod_attrs ~loc:$sloc attrs (
           List.fold_left (fun acc (startpos, arg) ->
@@ -1441,23 +1429,13 @@ paren_module_expr:
     (* A module expression annotated with a module type. *)
     LPAREN me = module_expr COLON mty = module_type RPAREN
       { mkmod ~loc:$sloc (Pmod_constraint(me, mty)) }
-  | LPAREN module_expr COLON module_type error
-      { unclosed "(" $loc($1) ")" $loc($5) }
   | (* A module expression within parentheses. *)
     LPAREN me = module_expr RPAREN
       { me (* TODO consider reloc *) }
-  | LPAREN module_expr error
-      { unclosed "(" $loc($1) ")" $loc($3) }
   | (* A core language expression that produces a first-class module.
        This expression can be annotated in various ways. *)
     LPAREN VAL attrs = attributes e = expr_colon_package_type RPAREN
       { mkmod ~loc:$sloc ~attrs (Pmod_unpack e) }
-  | LPAREN VAL attributes expr COLON error
-      { unclosed "(" $loc($1) ")" $loc($6) }
-  | LPAREN VAL attributes expr COLONGREATER error
-      { unclosed "(" $loc($1) ")" $loc($6) }
-  | LPAREN VAL attributes expr error
-      { unclosed "(" $loc($1) ")" $loc($5) }
 ;
 
 (* The various ways of annotating a core language expression that
@@ -1565,8 +1543,6 @@ structure_item:
 module_binding_body:
     EQUAL me = module_expr
       { me }
-  | COLON error
-      { expecting $loc($1) "=" }
   | mkmod(
       COLON mty = module_type EQUAL me = module_expr
         { Pmod_constraint(me, mty) }
@@ -1699,10 +1675,6 @@ open_description:
 module_type:
   | SIG attrs = attributes s = signature END
       { mkmty ~loc:$sloc ~attrs (Pmty_signature s) }
-  | SIG attributes signature error
-      { unclosed "sig" $loc($1) "end" $loc($4) }
-  | STRUCT error
-      { expecting $loc($1) "sig" }
   | FUNCTOR attrs = attributes args = functor_args
     MINUSGREATER mty = module_type
       %prec below_WITH
@@ -1715,8 +1687,6 @@ module_type:
       { mkmty ~loc:$sloc ~attrs:$4 (Pmty_typeof $5) }
   | LPAREN module_type RPAREN
       { $2 }
-  | LPAREN module_type error
-      { unclosed "(" $loc($1) ")" $loc($3) }
   | module_type attribute
       { Mty.attr $1 $2 }
   | mkmty(
@@ -1815,8 +1785,6 @@ signature_item:
 module_declaration_body:
     COLON mty = module_type
       { mty }
-  | EQUAL error
-      { expecting $loc($1) ":" }
   | mkmty(
       arg_and_pos = functor_arg body = module_declaration_body
         { let (_, arg) = arg_and_pos in
@@ -1858,8 +1826,6 @@ module_subst:
     let docs = symbol_docs $sloc in
     Ms.mk uid body ~attrs ~loc ~docs, ext
   }
-| MODULE ext attributes mkrhs(UIDENT) COLONEQUAL error
-    { expecting $loc($6) "module path" }
 ;
 
 (* A group of recursive module declarations. *)
@@ -2001,17 +1967,11 @@ class_expr:
 class_simple_expr:
   | LPAREN class_expr RPAREN
       { $2 }
-  | LPAREN class_expr error
-      { unclosed "(" $loc($1) ")" $loc($3) }
   | mkclass(
       tys = actual_class_parameters cid = mkrhs(class_longident)
         { Pcl_constr(cid, tys) }
-    | OBJECT attributes class_structure error
-        { unclosed "object" $loc($1) "end" $loc($4) }
     | LPAREN class_expr COLON class_type RPAREN
         { Pcl_constraint($2, $4) }
-    | LPAREN class_expr COLON class_type error
-        { unclosed "(" $loc($1) ")" $loc($5) }
     ) { $1 }
   | OBJECT attributes class_structure END
     { mkclass ~loc:$sloc ~attrs:$2 (Pcl_structure $3) }
@@ -2135,8 +2095,6 @@ class_signature:
     ) { $1 }
   | OBJECT attributes class_sig_body END
       { mkcty ~loc:$sloc ~attrs:$2 (Pcty_signature $3) }
-  | OBJECT attributes class_sig_body error
-      { unclosed "object" $loc($1) "end" $loc($4) }
   | class_signature attribute
       { Cty.attr $1 $2 }
   | LET OPEN override_flag attributes mkrhs(mod_longident) IN class_signature
@@ -2391,15 +2349,6 @@ let_pattern:
     { array, d, Bracket, i, r }
 ;
 
-%inline indexop_error(dot, index):
-  | simple_expr dot _p=LPAREN index  _e=error
-    { indexop_unclosed_error $loc(_p)  Paren $loc(_e) }
-  | simple_expr dot _p=LBRACE index  _e=error
-    { indexop_unclosed_error $loc(_p) Brace $loc(_e) }
-  | simple_expr dot _p=LBRACKET index  _e=error
-    { indexop_unclosed_error $loc(_p) Bracket $loc(_e) }
-;
-
 %inline qualified_dotop: ioption(DOT mod_longident {$2}) DOTOP { $1, $2 };
 
 fun_expr:
@@ -2457,8 +2406,6 @@ fun_expr:
       { Pexp_match($3, $5), $2 }
   | TRY ext_attributes seq_expr WITH match_cases
       { Pexp_try($3, $5), $2 }
-  | TRY ext_attributes seq_expr WITH error
-      { syntax_error() }
   | IF ext_attributes seq_expr THEN expr ELSE expr
       { Pexp_ifthenelse($3, $5, Some $7), $2 }
   | IF ext_attributes seq_expr THEN expr
@@ -2476,8 +2423,6 @@ fun_expr:
 %inline do_done_expr:
   | DO e = seq_expr DONE
       { e }
-  | DO seq_expr error
-      { unclosed "do" $loc($1) "done" $loc($2) }
 ;
 %inline expr_:
   | simple_expr nonempty_llist(labeled_simple_expr)
@@ -2499,16 +2444,12 @@ fun_expr:
 simple_expr:
   | LPAREN seq_expr RPAREN
       { reloc_exp ~loc:$sloc $2 }
-  | LPAREN seq_expr error
-      { unclosed "(" $loc($1) ")" $loc($3) }
   | LPAREN seq_expr type_constraint RPAREN
       { mkexp_constraint ~loc:$sloc $2 $3 }
   | indexop_expr(DOT, seq_expr, { None })
       { mk_indexop_expr builtin_indexing_operators ~loc:$sloc $1 }
   | indexop_expr(qualified_dotop, expr_semi_list, { None })
       { mk_indexop_expr user_indexing_operators ~loc:$sloc $1 }
-  | indexop_error (DOT, seq_expr) { $1 }
-  | indexop_error (qualified_dotop, expr_semi_list) { $1 }
   | metaocaml_expr { $1 }
   | simple_expr_attrs
     { let desc, attrs = $1 in
@@ -2521,20 +2462,14 @@ simple_expr:
       { e.pexp_desc, (ext, attrs @ e.pexp_attributes) }
   | BEGIN ext_attributes END
       { Pexp_construct (mkloc (Lident "()") (make_loc $sloc), None), $2 }
-  | BEGIN ext_attributes seq_expr error
-      { unclosed "begin" $loc($1) "end" $loc($4) }
   | NEW ext_attributes mkrhs(class_longident)
       { Pexp_new($3), $2 }
   | LPAREN MODULE ext_attributes module_expr RPAREN
       { Pexp_pack $4, $3 }
   | LPAREN MODULE ext_attributes module_expr COLON package_type RPAREN
       { Pexp_constraint (ghexp ~loc:$sloc (Pexp_pack $4), $6), $3 }
-  | LPAREN MODULE ext_attributes module_expr COLON error
-      { unclosed "(" $loc($1) ")" $loc($6) }
   | OBJECT ext_attributes class_structure END
       { Pexp_object $3, $2 }
-  | OBJECT ext_attributes class_structure error
-      { unclosed "object" $loc($1) "end" $loc($4) }
 ;
 
 (* We include this parsing rule from the BER-MetaOCaml patchset
@@ -2570,8 +2505,6 @@ simple_expr:
       { Pexp_apply($1, [Nolabel,$2]) }
   | LBRACELESS object_expr_content GREATERRBRACE
       { Pexp_override $2 }
-  | LBRACELESS object_expr_content error
-      { unclosed "{<" $loc($1) ">}" $loc($3) }
   | LBRACELESS GREATERRBRACE
       { Pexp_override [] }
   | simple_expr DOT mkrhs(label_longident)
@@ -2581,8 +2514,6 @@ simple_expr:
   | od=open_dot_declaration DOT LBRACELESS object_expr_content GREATERRBRACE
       { (* TODO: review the location of Pexp_override *)
         Pexp_open(od, mkexp ~loc:$sloc (Pexp_override $4)) }
-  | mod_longident DOT LBRACELESS object_expr_content error
-      { unclosed "{<" $loc($3) ">}" $loc($5) }
   | simple_expr HASH mkrhs(label)
       { Pexp_send($1, $3) }
   | simple_expr op(HASHOP) simple_expr
@@ -2591,23 +2522,15 @@ simple_expr:
       { Pexp_extension $1 }
   | od=open_dot_declaration DOT mkrhs(LPAREN RPAREN {Lident "()"})
       { Pexp_open(od, mkexp ~loc:($loc($3)) (Pexp_construct($3, None))) }
-  | mod_longident DOT LPAREN seq_expr error
-      { unclosed "(" $loc($3) ")" $loc($5) }
   | LBRACE record_expr_content RBRACE
       { let (exten, fields) = $2 in
         Pexp_record(fields, exten) }
-  | LBRACE record_expr_content error
-      { unclosed "{" $loc($1) "}" $loc($3) }
   | od=open_dot_declaration DOT LBRACE record_expr_content RBRACE
       { let (exten, fields) = $4 in
         Pexp_open(od, mkexp ~loc:($startpos($3), $endpos)
                         (Pexp_record(fields, exten))) }
-  | mod_longident DOT LBRACE record_expr_content error
-      { unclosed "{" $loc($3) "}" $loc($5) }
   | LBRACKETBAR expr_semi_list BARRBRACKET
       { Pexp_array($2) }
-  | LBRACKETBAR expr_semi_list error
-      { unclosed "[|" $loc($1) "|]" $loc($3) }
   | LBRACKETBAR BARRBRACKET
       { Pexp_array [] }
   | od=open_dot_declaration DOT LBRACKETBAR expr_semi_list BARRBRACKET
@@ -2615,13 +2538,8 @@ simple_expr:
   | od=open_dot_declaration DOT LBRACKETBAR BARRBRACKET
       { (* TODO: review the location of Pexp_array *)
         Pexp_open(od, mkexp ~loc:($startpos($3), $endpos) (Pexp_array [])) }
-  | mod_longident DOT
-    LBRACKETBAR expr_semi_list error
-      { unclosed "[|" $loc($3) "|]" $loc($5) }
   | LBRACKET expr_semi_list RBRACKET
       { fst (mktailexp $loc($3) $2) }
-  | LBRACKET expr_semi_list error
-      { unclosed "[" $loc($1) "]" $loc($3) }
   | od=open_dot_declaration DOT LBRACKET expr_semi_list RBRACKET
       { let list_exp =
           (* TODO: review the location of list_exp *)
@@ -2630,18 +2548,12 @@ simple_expr:
         Pexp_open(od, list_exp) }
   | od=open_dot_declaration DOT mkrhs(LBRACKET RBRACKET {Lident "[]"})
       { Pexp_open(od, mkexp ~loc:$loc($3) (Pexp_construct($3, None))) }
-  | mod_longident DOT
-    LBRACKET expr_semi_list error
-      { unclosed "[" $loc($3) "]" $loc($5) }
   | od=open_dot_declaration DOT LPAREN MODULE ext_attributes module_expr COLON
     package_type RPAREN
       { let modexp =
           mkexp_attrs ~loc:($startpos($3), $endpos)
             (Pexp_constraint (ghexp ~loc:$sloc (Pexp_pack $6), $8)) $5 in
         Pexp_open(od, modexp) }
-  | mod_longident DOT
-    LPAREN MODULE ext_attributes module_expr COLON error
-      { unclosed "(" $loc($3) ")" $loc($8) }
 ;
 labeled_simple_expr:
     simple_expr %prec below_HASH
@@ -2862,8 +2774,6 @@ type_constraint:
     COLON core_type                             { Pconstraint $2 }
   | COLON core_type COLONGREATER core_type      { Pcoerce (Some $2, $4) }
   | COLONGREATER core_type                      { Pcoerce (None, $2) }
-  | COLON error                                 { syntax_error() }
-  | COLONGREATER error                          { syntax_error() }
 ;
 
 /* Patterns */
@@ -2911,16 +2821,10 @@ pattern_no_exn:
   | mkpat(
       self AS mkrhs(val_ident)
         { Ppat_alias($1, $3) }
-    | self AS error
-        { expecting $loc($3) "identifier" }
     | pattern_comma_list(self) %prec below_COMMA
         { Ppat_tuple(List.rev $1) }
-    | self COLONCOLON error
-        { expecting $loc($3) "pattern" }
     | self BAR pattern
         { Ppat_or($1, $3) }
-    | self BAR error
-        { expecting $loc($3) "pattern" }
   ) { $1 }
 ;
 
@@ -2982,21 +2886,8 @@ simple_pattern_not_ident:
     { Ppat_open($1, mkpat ~loc:$sloc (Ppat_construct($3, None))) }
   | mkrhs(mod_longident) DOT LPAREN pattern RPAREN
       { Ppat_open ($1, $4) }
-  | mod_longident DOT LPAREN pattern error
-      { unclosed "(" $loc($3) ")" $loc($5)  }
-  | mod_longident DOT LPAREN error
-      { expecting $loc($4) "pattern" }
-  | LPAREN pattern error
-      { unclosed "(" $loc($1) ")" $loc($3) }
   | LPAREN pattern COLON core_type RPAREN
       { Ppat_constraint($2, $4) }
-  | LPAREN pattern COLON core_type error
-      { unclosed "(" $loc($1) ")" $loc($5) }
-  | LPAREN pattern COLON error
-      { expecting $loc($4) "type" }
-  | LPAREN MODULE ext_attributes module_name COLON package_type
-    error
-      { unclosed "(" $loc($1) ")" $loc($7) }
   | extension
       { Ppat_extension $1 }
 ;
@@ -3006,24 +2897,17 @@ simple_delimited_pattern:
       LBRACE record_pat_content RBRACE
       { let (fields, closed) = $2 in
         Ppat_record(fields, closed) }
-    | LBRACE record_pat_content error
-      { unclosed "{" $loc($1) "}" $loc($3) }
     | LBRACKET pattern_semi_list RBRACKET
       { fst (mktailpat $loc($3) $2) }
-    | LBRACKET pattern_semi_list error
-      { unclosed "[" $loc($1) "]" $loc($3) }
     | LBRACKETBAR pattern_semi_list BARRBRACKET
       { Ppat_array $2 }
     | LBRACKETBAR BARRBRACKET
       { Ppat_array [] }
-    | LBRACKETBAR pattern_semi_list error
-      { unclosed "[|" $loc($1) "|]" $loc($3) }
   ) { $1 }
 
 pattern_comma_list(self):
     pattern_comma_list(self) COMMA pattern      { $3 :: $1 }
   | self COMMA pattern                          { [$3; $1] }
-  | self COMMA error                            { expecting $loc($3) "pattern" }
 ;
 %inline pattern_semi_list:
   ps = separated_or_terminated_nonempty_list(SEMI, pattern)
@@ -3782,9 +3666,6 @@ ident:
 ;
 val_extra_ident:
   | LPAREN operator RPAREN    { $2 }
-  | LPAREN operator error     { unclosed "(" $loc($1) ")" $loc($3) }
-  | LPAREN error              { expecting $loc($2) "operator" }
-  | LPAREN MODULE error       { expecting $loc($3) "module-expr" }
 ;
 val_ident:
     LIDENT                    { $1 }
@@ -3871,8 +3752,6 @@ mod_ext_longident:
     mk_longident(mod_ext_longident, UIDENT) { $1 }
   | mod_ext_longident LPAREN mod_ext_longident RPAREN
       { lapply ~loc:$sloc $1 $3 }
-  | mod_ext_longident LPAREN error
-      { expecting $loc($3) "module path" }
 ;
 mty_longident:
     mk_longident(mod_ext_longident,ident) { $1 }
