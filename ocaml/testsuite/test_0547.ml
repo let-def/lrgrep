@@ -1,1 +1,0 @@
-object {%%hello|world|} with

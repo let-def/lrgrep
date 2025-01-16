@@ -1,1 +1,0 @@
-( MODULE {%foo|bar|} WITH

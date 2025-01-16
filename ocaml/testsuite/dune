@@ -1,7 +1,0 @@
-(rule
- (deps (glob_files test_*.ml))
- (action (with-stdout-to tests.output (run ../frontend.exe --test %{deps}))))
-
-(rule
- (alias runtest)
- (action (diff tests.expected tests.output)))

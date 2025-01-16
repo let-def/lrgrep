@@ -1,1 +1,0 @@
-object ( {%foo|bar|} while

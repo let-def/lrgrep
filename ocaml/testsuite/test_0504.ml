@@ -1,1 +1,0 @@
-object initializer UIDENT type

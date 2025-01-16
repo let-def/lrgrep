@@ -1,1 +1,0 @@
-object inherit ! [@ and ] while

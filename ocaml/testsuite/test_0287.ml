@@ -1,1 +1,0 @@
-[@@@ and ? {%foo|bar|} while

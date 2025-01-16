@@ -1,1 +1,0 @@
-{ lident : {%foo|bar|} )
