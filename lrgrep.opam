@@ -14,7 +14,6 @@ depends: [
   "ocaml" {>= "4.08"}
   "dune" {>= "2.0.0"}
   "menhir" {>= "20211128"}
-  "fix" {>= "20220121"}
   "cmon" {>= "0.2"}
 ]
 synopsis: "Analyse the stack of a Menhir-generated LR parser using regular expressions"
