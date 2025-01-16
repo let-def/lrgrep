@@ -251,22 +251,6 @@ let expecting loc nonterm =
 let removed_string_set loc =
   raise(Syntaxerr.Error(Syntaxerr.Removed_string_set(make_loc loc)))
 
-(* Using the function [not_expecting] in a semantic action means that this
-   syntactic form is recognized by the parser but is in fact incorrect. This
-   idiom is used in a few places to produce ad hoc syntax error messages. *)
-
-(* This idiom should be used as little as possible, because it confuses the
-   analyses performed by Menhir. Because Menhir views the semantic action as
-   opaque, it believes that this syntactic form is correct. This can lead
-   [make generate-parse-errors] to produce sentences that cause an early
-   (unexpected) syntax error and do not achieve the desired effect. This could
-   also lead a completion system to propose completions which in fact are
-   incorrect. In order to avoid these problems, the productions that use
-   [not_expecting] should be marked with AVOID. *)
-
-let not_expecting loc nonterm =
-    raise Syntaxerr.(Error(Not_expecting(make_loc loc, nonterm)))
-
 (* Helper functions for desugaring array indexing operators *)
 type paren_kind = Paren | Brace | Bracket
 
@@ -2379,10 +2363,6 @@ fun_expr:
     { mk_indexop_expr user_indexing_operators ~loc:$sloc $1 }
   | fun_expr attribute
       { Exp.attr $1 $2 }
-/* BEGIN AVOID */
-  | UNDERSCORE
-     { not_expecting $loc($1) "wildcard \"_\"" }
-/* END AVOID */
 ;
 %inline expr:
   | or_function(fun_expr) { $1 }
@@ -3818,9 +3798,6 @@ rec_flag:
 ;
 %inline no_nonrec_flag:
     /* empty */ { Recursive }
-/* BEGIN AVOID */
-  | NONREC      { not_expecting $loc "nonrec flag" }
-/* END AVOID */
 ;
 direction_flag:
     TO                                          { Upto }
@@ -3984,9 +3961,6 @@ ext:
 ;
 %inline no_ext:
   | /* empty */     { None }
-/* BEGIN AVOID */
-  | PERCENT attr_id { not_expecting $loc "extension" }
-/* END AVOID */
 ;
 %inline ext_attributes:
   ext attributes    { $1, $2 }
