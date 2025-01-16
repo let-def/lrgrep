@@ -33,6 +33,7 @@ open Parsetree
 open Ast_helper
 open Docstrings
 open Docstrings.WithMenhir
+open Parser_def
 
 let mkloc = Location.mkloc
 let mknoloc = Location.mknoloc
@@ -320,7 +321,7 @@ type ('dot,'index) array_family = {
 }
 
 let bigarray_untuplify = function
-    { pexp_desc = Pexp_tuple explist; pexp_loc = _ } -> explist
+    { pexp_desc = Pexp_tuple explist; pexp_loc = _; _ } -> explist
   | exp -> [exp]
 
 let builtin_arraylike_name loc _ ~assign paren_kind n =
@@ -525,21 +526,6 @@ let extra_rhs_core_type ct ~pos =
   let docs = rhs_info pos in
   { ct with ptyp_attributes = add_info_attrs docs ct.ptyp_attributes }
 
-type let_binding =
-  { lb_pattern: pattern;
-    lb_expression: expression;
-    lb_constraint: value_constraint option;
-    lb_is_pun: bool;
-    lb_attributes: attributes;
-    lb_docs: docs Lazy.t;
-    lb_text: text Lazy.t;
-    lb_loc: Location.t; }
-
-type let_bindings =
-  { lbs_bindings: let_binding list;
-    lbs_rec: rec_flag;
-    lbs_extension: string Asttypes.loc option }
-
 let mklb first ~loc (p, e, typ, is_pun) attrs =
   {
     lb_pattern = p;
@@ -696,8 +682,8 @@ let package_type_of_module_type pmty =
         err pmty.pmty_loc Not_with_type
   in
   match pmty with
-  | {pmty_desc = Pmty_ident lid} -> (lid, [], pmty.pmty_attributes)
-  | {pmty_desc = Pmty_with({pmty_desc = Pmty_ident lid}, cstrs)} ->
+  | {pmty_desc = Pmty_ident lid; _} -> (lid, [], pmty.pmty_attributes)
+  | {pmty_desc = Pmty_with({pmty_desc = Pmty_ident lid; _}, cstrs); _} ->
       (lid, List.map map_cstr cstrs, pmty.pmty_attributes)
   | _ ->
       err pmty.pmty_loc Neither_identifier_nor_with_type
