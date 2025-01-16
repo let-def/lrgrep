@@ -94,17 +94,13 @@ let print_items indent suffix items =
   ) items;
   Printf.printf "]\n"
 
-let get_token =
-  let state = Lexer_raw.make Lexer_raw.keyword_table in
-  let rec extract_token = function
-    | Lexer_raw.Return tok -> tok
-    | Lexer_raw.Refill k -> extract_token (k ())
-    | Lexer_raw.Fail (err, loc) ->
-      Format.eprintf "%a\n%!"
-        Location.print_report (Lexer_raw.prepare_error loc err);
-      exit 1
-  in
-  fun lexbuf -> extract_token (Lexer_raw.token_without_comments state lexbuf)
+let get_token lexbuf =
+  match Lexer_raw.token lexbuf with
+  | exception Lexer_raw.Error (err, loc) ->
+    Format.eprintf "%a\n%!"
+      Location.print_report (Lexer_raw.prepare_error loc err);
+    exit 1
+  | tok -> tok
 
 let do_parse
     (type a)
