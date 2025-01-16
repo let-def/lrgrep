@@ -24,20 +24,18 @@ let error_and_exit oc lexbuf msg =
     kind = Location.Report_error;
     main = Location.msg ~loc:(Location.curr lexbuf) "%s" msg;
     sub = [];
+    footnote = None;
   };
   raise Abort_parsing
 
-let get_token oc lexstate lexbuf =
-  let rec extract_token = function
-    | Lexer_raw.Return tok -> tok
-    | Lexer_raw.Refill k -> extract_token (k ())
-    | Lexer_raw.Fail (err, loc) ->
-      oprintf oc "%a\n%!" Location.print_report
-        (Lexer_raw.prepare_error loc err);
-      raise Abort_parsing
-  in
-  let tok = extract_token (Lexer_raw.token_without_comments lexstate lexbuf) in
-  (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
+let get_token oc lexbuf =
+  match Lexer_raw.token lexbuf with
+  | exception Lexer_raw.Error (err, loc) ->
+    oprintf oc "%a\n%!" Location.print_report
+      (Lexer_raw.prepare_error loc err);
+    raise Abort_parsing
+  | tok ->
+    (tok, lexbuf.Lexing.lex_start_p, lexbuf.Lexing.lex_curr_p)
 
 let parse
     (type a)
@@ -48,14 +46,22 @@ let parse
   =
   let initial = lexbuf.lex_start_p in
   Location.input_name := initial.pos_fname;
-  let lexstate = Lexer_raw.make Lexer_raw.keyword_table in
   let module I = Parser_raw.MenhirInterpreter in
-  let rec loop : _ I.env -> _ -> _ I.checkpoint -> _ = fun env tok -> function
+  let rec loop : a I.env -> _ -> a I.checkpoint -> _ = fun env tok -> function
     | I.InputNeeded env' as cp ->
-      let tok' = get_token oc lexstate lexbuf in
+      let tok' = get_token oc lexbuf in
       loop env' tok' (I.offer cp tok')
     | I.Shifting (_, _, _) | I.AboutToReduce (_, _) as cp ->
-      loop env tok (I.resume cp)
+      begin match I.resume cp with
+      | cp' -> loop env tok cp'
+      | exception (Syntaxerr.Error _ as exn) ->
+        match Location.error_of_exn exn with
+        | Some (`Ok err) ->
+          Format.eprintf "@[%a@]@."
+            Location.print_report err;
+          exit 1
+        | _ -> assert false
+      end
     | I.Accepted x -> x
     | I.Rejected -> assert false
     | I.HandlingError _ ->
@@ -78,7 +84,7 @@ let parse
   in
   match checkpoint lexbuf.lex_curr_p with
   | I.InputNeeded env as cp ->
-    let tok = get_token oc lexstate lexbuf in
+    let tok = get_token oc lexbuf in
     loop env tok (I.offer cp tok)
   | _ -> assert false
 

@@ -2,6 +2,7 @@ _build
 .depend
 .merlin
 #*#
+ocaml/failures
 
 # LaTeX noise
 doc/pres/main.en.*

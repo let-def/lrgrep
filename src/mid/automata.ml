@@ -615,9 +615,12 @@ struct
           List.iter (update bound) todo';
           loop bound
       in
-      let bound = Index.of_int Clause.n (cardinal Clause.n - 1) in
-      schedule bound initial Stacks.initials;
-      loop bound
+      match cardinal Clause.n with
+      | 0 -> ()
+      | n ->
+        let bound = Index.of_int Clause.n (n - 1) in
+        schedule bound initial Stacks.initials;
+        loop bound
 
     let states = Gen.freeze states
 
@@ -871,18 +874,21 @@ struct
       let root = Order_chain.root chain in
       let Packed initial = Vector.get states initial in
       initial.chain <- (
-        let rec fresh_chain t clause element = function
-          | [] -> []
-          | m :: ms ->
-            let clause' = (Vector.get t.group m).clause in
-            let element =
-              if clause = clause'
-              then Order_chain.next element
-              else root
-            in
-            (m, element) :: fresh_chain t clause' element ms
-        in
-        fresh_chain initial (Index.of_int Clause.n 0) root (IndexSet.elements initial.splits);
+        match cardinal Clause.n with
+        | 0 -> []
+        | _ ->
+          let rec fresh_chain t clause element = function
+            | [] -> []
+            | m :: ms ->
+              let clause' = (Vector.get t.group m).clause in
+              let element =
+                if clause = clause'
+                then Order_chain.next element
+                else root
+              in
+              (m, element) :: fresh_chain t clause' element ms
+          in
+          fresh_chain initial (Index.of_int Clause.n 0) root (IndexSet.elements initial.splits);
       );
       Vector.set chain_processed initial.index true;
       let direct_transitions = ref 0 in
