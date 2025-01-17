@@ -1,7 +1,41 @@
+(* MIT License
+ *
+ * Copyright (c) [Year] [Your Name]
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
+
+(** This module constructs a graph refining the LR automaton to reason about
+  reachable configurations---the pairs of an LR state and a lookahead token, the
+  transitions that allow to go from one to another, in order to determine which
+  ones are reachable from initial states. It includes functionality to compute
+  reachable states, idle states, entry points, predecessors, successors, and
+  prefixes for states in the LR automaton.
+  LRC means "LR with classes", where a class is the partition of lookahead
+  symbols with identical behaviors, as determined by the reachability
+  analysis. *)
+
 open Utils
 open Misc
 open Fix.Indexing
 
+(* Signature for a refinement of the set of LR states *)
 module type RAW0 = sig
   include Info.INDEXED
   module Info : Info.S
@@ -14,6 +48,7 @@ module type RAW0 = sig
   val all_successors : t -> set
 end
 
+(* Extended signature for class-based refinements *)
 module type RAW = sig
   include RAW0
   val lookahead : n index -> Info.Terminal.set
@@ -22,6 +57,7 @@ module type RAW = sig
   val set_to_string : n indexset -> string
 end
 
+(* Signature for a fully-featured LRC module with reachability information *)
 module type S = sig
   include RAW
   val reachable : n indexset
@@ -29,10 +65,15 @@ module type S = sig
   val entrypoints : n indexset
   val predecessors : n index -> n indexset
   val successors : n index -> n indexset
+
+  (* [some_prefix st] is a list of states reaching an entrypoint, starting from
+     [st], or the empty list if state is unreachable. *)
   val some_prefix : n index -> n index list
 end
 
-module Close(Info : Info.S)
+(* Find states reachable from specific states by closing over raw reachability
+   information *)
+module From_entrypoints(Info : Info.S)
     (Lrc : RAW with module Info := Info)
     (For : sig val entrypoints : Lrc.set end)
   : S with module Info := Info and type n = Lrc.n =
@@ -43,8 +84,10 @@ struct
   type n = Lrc.n
   let n = Lrc.n
 
+  (* Set of reachable states *)
   let reachable = ref IndexSet.empty
 
+  (* Compute transitive successors for each state and populate reachable set *)
   let successors =
     let table = Vector.make Lrc.n IndexSet.empty in
     let todo = ref entrypoints in
@@ -63,43 +106,49 @@ struct
     done;
     table
 
+  (* Compute predecessors for each state using successors information *)
   let predecessors = Misc.relation_reverse successors
 
+  (* Accessors for successors and predecessors *)
   let successors = Vector.get successors
   let predecessors = Vector.get predecessors
 
+  (* Final reachable states *)
   let reachable = !reachable
 
+  (* Idle states that are reachable *)
   let idle = IndexSet.inter Lrc.all_idle reachable
 
-  let some_prefix = lazy (
-    let table = Vector.make Lrc.n [] in
-    let todo = ref [] in
-    let expand prefix state =
-      match Vector.get table state with
-      | [] ->
-        Vector.set table state prefix;
-        let prefix = state :: prefix in
-        let succ = successors state in
-        if not (IndexSet.is_empty succ) then
-          push todo (succ, prefix)
-      | _ -> ()
+  (* Compute a prefix to reach each state *)
+  let some_prefix =
+    let table = lazy (
+      let table = Vector.make Lrc.n [] in
+      let todo = ref [] in
+      let expand prefix state =
+        match Vector.get table state with
+        | [] ->
+          Vector.set table state prefix;
+          let prefix = state :: prefix in
+          let succ = successors state in
+          if not (IndexSet.is_empty succ) then
+            push todo (succ, prefix)
+        | _ -> ()
+      in
+      Index.iter Info.Lr1.n (fun lr1 ->
+          if Option.is_none (Info.Lr1.incoming lr1) then
+            expand [] (Lrc.first_lrc_of_lr1 lr1)
+        );
+      let propagate (succ, prefix) =
+        IndexSet.iter (expand prefix) succ
+      in
+      fixpoint ~propagate todo;
+      table
+    )
     in
-    Index.iter Info.Lr1.n (fun lr1 ->
-        if Option.is_none (Info.Lr1.incoming lr1) then
-          expand [] (Lrc.first_lrc_of_lr1 lr1)
-      );
-    let propagate (succ, prefix) =
-      IndexSet.iter (expand prefix) succ
-    in
-    fixpoint ~propagate todo;
-    Vector.get table
-  )
-
-  let some_prefix st = Lazy.force some_prefix st
-
+    (fun st -> Vector.get (Lazy.force table) st)
 end
 
+(* Functor to create an LRC module from an Info module and Reachability module *)
 module Make
     (I : Info.S)
     (Reachability : Reachability.S with module Info := I)
@@ -108,28 +157,35 @@ module Make
 struct
   open I
 
+  (* Start timing for LRC computation *)
   let time = Stopwatch.enter Stopwatch.main "Lrc"
 
+  (* Compute the total number of LRC states *)
   let n =
     let count lr1 = Array.length (Reachability.Classes.for_lr1 lr1) in
     let sum = ref 0 in
     Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
     !sum
 
+  (* Lift `n` to type-level *)
   include Const(struct let cardinal = n end)
 
   type t = n index
   type set = n indexset
   type 'a map = (n, 'a) indexmap
 
+  (* Shift an index by a given offset *)
   let index_shift (i : n index) offset =
     Index.of_int n ((i :> int) + offset)
 
+  (* Compute the difference between two indices *)
   let index_delta (type n) (i : n index) (j : n index) =
     (i :> int) - (j :> int)
 
+  (* Map from LRC states to their corresponding LR1 states *)
   let lr1_of_lrc = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
 
+  (* Map from LR1 states to their corresponding set of LRC states *)
   let lrcs_of_lr1 =
     let count = ref 0 in
     let init_lr1 lr1 =
@@ -147,29 +203,36 @@ struct
     in
     Vector.init Lr1.n init_lr1
 
+  (* Map from LR1 states to their first LRC state *)
   let first_lrc_of_lr1 = Vector.map (fun x -> Option.get (IndexSet.minimum x)) lrcs_of_lr1
 
+  (* Accessors for the mappings between LRC and LR1 states *)
   let lr1_of_lrc       = Vector.get lr1_of_lrc
   let lrcs_of_lr1      = Vector.get lrcs_of_lr1
   let first_lrc_of_lr1 = Vector.get first_lrc_of_lr1
 
+  (* Set of idle LRC states *)
   let all_idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
 
+  (* Compute the class index for an LRC state *)
   let class_index lrc =
     let lr1 = lr1_of_lrc lrc in
     let lrc0 = first_lrc_of_lr1 lr1 in
     index_delta lrc lrc0
 
+  (* Compute the lookahead terminals for an LRC state *)
   let lookahead lrc =
     let lr1 = lr1_of_lrc lrc in
     let lrc0 = first_lrc_of_lr1 lr1 in
     let lookaheads = Reachability.Classes.for_lr1 lr1 in
     lookaheads.(index_delta lrc lrc0)
 
+  (* Step timing after computing the LRC set *)
   let () = Stopwatch.step time "Computed LRC set"
 
+  (* Compute successors for each LRC state *)
   let all_successors =
-    (* TODO: this computes the predecessors and then reverse the relation.
+    (* TODO: This computes the predecessors and then reverses the relation.
      * We could compute the successors directly. *)
     let table = Vector.make n IndexSet.empty in
     let process lr1 =
@@ -220,26 +283,36 @@ struct
     Index.iter Lr1.n process;
     Vector.get (Misc.relation_reverse table)
 
+  (* Convert an LRC state to a string representation *)
   let to_string lrc =
     Printf.sprintf "%s/%d"
       (Lr1.to_string (lr1_of_lrc lrc))
       (class_index lrc)
 
+  (* Convert a set of LRC states to a string representation *)
   let set_to_string lrcs =
     string_of_indexset ~index:to_string lrcs
 
+  (* End timing after computing all necessary information *)
   let () = Stopwatch.leave time
 end
 
-module Minimize(Info : Info.S)(Lrc : RAW0 with module Info := Info) : RAW0 with module Info := Info =
+(* Minimize the number of states in a refinement *)
+module Minimize
+    (Info : Info.S)
+    (Lrc : RAW0 with module Info := Info)
+  : RAW0 with module Info := Info =
 struct
   open Info
+  (* Start timing for LRC minimization *)
   let time = Stopwatch.enter Stopwatch.main "Minimizing Lrc"
 
+  (* Define a DFA (Deterministic Finite Automaton) module for minimization *)
   module DFA = struct
     type states = Lrc.n
     let states = Lrc.n
 
+    (* Define transitions as a vector of (source, target) pairs *)
     module Transitions = Vector.Of_array(struct
       type a = Lrc.n index * Lrc.n index
       let array =
@@ -261,17 +334,22 @@ struct
     type transitions = Transitions.n
     let transitions = Vector.length Transitions.vector
 
+    (* Label transitions with their corresponding LR1 states *)
     let label tr =
       let src, _ = Vector.get Transitions.vector tr in
       Lrc.lr1_of_lrc src
 
+    (* Source state for a transition *)
     let source tr = fst (Vector.get Transitions.vector tr)
 
+    (* Target state for a transition *)
     let target tr = snd (Vector.get Transitions.vector tr)
 
+    (* Initial states (idle states in Lrc) *)
     let initials f =
       IndexSet.iter f Lrc.all_idle
 
+    (* Final states (states with no incoming transitions in LR1) *)
     let finals f =
       Index.iter Lr1.n
         (fun lr1 ->
@@ -279,6 +357,7 @@ struct
           | None -> IndexSet.iter f (Lrc.lrcs_of_lr1 lr1)
           | Some _ -> ())
 
+    (* Refinements based on incoming transitions *)
     let refinements (f : (add:(states index -> unit) -> unit) -> unit) =
       Index.iter Lr1.n
         (fun lr1 ->
@@ -289,6 +368,7 @@ struct
         )
   end
 
+  (* Minimize the DFA using Valmari's algorithm *)
   module MDFA = Valmari.Minimize(struct
     type t = Lr1.t
     let compare = compare_index
@@ -301,33 +381,40 @@ struct
   type set = n indexset
   type 'a map = (n, 'a) indexmap
 
+  (* Set of idle states in the minimized DFA *)
   let all_idle =
     let set = ref IndexSet.empty in
     Array.iter (fun t -> set := IndexSet.add t !set) MDFA.initials;
     !set
     (*IndexSet.filter_map MDFA.transport_state Lrc.idle*)
 
+  (* Map from minimized states to their corresponding LR1 states *)
   let lr1_of_lrc =
     tabulate_finset n
       (fun t -> Lrc.lr1_of_lrc (MDFA.represent_state t))
 
+  (* Map from LR1 states to their corresponding set of minimized states *)
   let lrcs_of_lr1 =
     let table = Vector.make Lr1.n IndexSet.empty in
     Index.iter n
       (fun lrc -> vector_set_add table (lr1_of_lrc lrc) lrc);
     Vector.get table
 
+  (* Map from LR1 states to their first minimized state *)
   let first_lrc_of_lr1 lr1 =
     Option.get (IndexSet.minimum (lrcs_of_lr1 lr1))
 
+  (* Compute successors for each minimized state *)
   let all_successors =
     let table = Vector.make n IndexSet.empty in
     Index.iter MDFA.transitions
       (fun tr -> vector_set_add table (MDFA.target tr) (MDFA.source tr));
     Vector.get table
 
+  (* Step timing after minimizing LRC states *)
   let () =
     Stopwatch.step time "Minimized Lrc from %d states to %d"
       (cardinal Lrc.n) (cardinal MDFA.states);
+    (* End timing *)
     Stopwatch.leave time
 end

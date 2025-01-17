@@ -79,7 +79,7 @@ module Run(P : sig val grammar_file : string end)() = struct
             exit 1)
           syms
     in
-    let module Lrc = Kernel.Lrc.Close(Info)(Lrc)(struct
+    let module Lrc = Kernel.Lrc.From_entrypoints(Info)(Lrc)(struct
       let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1
     end) in
     let module Reachable = Kernel.Reachable_reductions.Make(Info)(Viable)(Lrc)() in

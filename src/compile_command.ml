@@ -116,7 +116,7 @@ end)() = struct
           (fun loc msg -> error loc "%s" msg)
           syms
     in
-    let module Lrc = Kernel.Lrc.Close(Info)(Lrc)
+    let module Lrc = Kernel.Lrc.From_entrypoints(Info)(Lrc)
         (struct let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1 end)
     in
     let open Kernel.Automata.Entry
