@@ -1,4 +1,5 @@
 (library
- (name interpreter)
+ (name lrgrep_interpreter)
+ (wrapped false)
  (libraries kernel fix utils menhirSdk)
  (public_name lrgrep.interpreter))
