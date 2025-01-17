@@ -50,61 +50,6 @@ module type STACKS = sig
   val label : n index -> lr1 indexset
 end
 
-module Printer : sig
-  type t
-  val create : filename:string -> ?line:int -> (string -> unit) -> t
-  val print : ?loc:Syntax.location -> t -> string -> unit
-  val fmt : ?loc:Syntax.location -> t -> ('a, unit, string, unit) format4 -> 'a
-end = struct
-  type t = {
-    filename: string;
-    mutable line: int;
-    output: string -> unit;
-    mutable reloc: bool;
-    mutable last_is_nl: bool;
-  }
-
-  let output t = function
-    | "" -> ()
-    | str ->
-      let nl = ref 0 in
-      let last = String.length str - 1 in
-      for i = 0 to last do
-        if str.[i] = '\n' then incr nl;
-      done;
-      t.line <- t.line + !nl;
-      t.last_is_nl <- str.[last] = '\n';
-      t.output str
-
-  let create ~filename ?(line=1) output =
-    {filename; line; output; reloc = false; last_is_nl = true}
-
-  let print_loc_dir t filename line =
-    output t (Printf.sprintf "# %d %S\n" (line + 1) filename)
-
-  let print_loc t (loc : Syntax.location) =
-    print_loc_dir t loc.loc_file (loc.start_line - 1);
-    output t (String.make loc.start_col ' ')
-
-  let print ?loc t msg =
-    match loc with
-    | None ->
-      if t.reloc then (
-        if not t.last_is_nl then output t "\n";
-        print_loc_dir t t.filename t.line;
-        t.reloc <- false;
-      );
-      output t msg
-    | Some loc ->
-      if not t.last_is_nl then output t "\n";
-      print_loc t loc;
-      t.reloc <- true;
-      output t msg
-
-  let fmt ?loc t fmt =
-    Printf.ksprintf (print ?loc t) fmt
-end
-
 module Entry
     (Transl : Transl.S)
     (Stacks: STACKS with type lr1 := Transl.Regexp.Info.Lr1.n)
@@ -116,37 +61,59 @@ module Entry
 sig
   open Transl.Regexp.Info
 
+  (* Representation of a clause *)
   module Clause : sig
     include CARDINAL
     type t = n index
+
+    (* Is the clause total? *)
     val total : t -> bool
+
+    (* Lookahead constraints of this clause, if any *)
     val lookaheads : t -> Terminal.set option
   end
 
+  (* Variables captured by a clause *)
   val captures : Clause.t -> Capture.set
 
+  (* The first DFA produced. Exposed only to gather statistics.
+     Big because it is before optimization/minimization. *)
   module BigDFA : sig
     type n
     val n : n cardinal
   end
 
+  (* Labels annotating transitions *)
   module Label : sig
     type t = {
       filter: Lr1.set;
+      (** The set of lr1 states that allow this transition to be taken. *)
       captures: (Capture.t * Register.t) list;
+      (** The set of variables captured, and the register in which to store the
+          variable, when the transition is taken. *)
       clear: Register.set;
+      (** The set of registers to clear when the transition is taken. *)
       moves: Register.t Register.map;
+      (** Registers to move when taking this transition.
+          The source register is used as a key and the target as a value. *)
       priority: (Clause.t * priority * priority) list;
+      (** Dynamic priority levels to remap.
+          An element (c, p1, p2) means that a match of clause [c] at priority
+          [p1] in the source state corresponds to a match at priority [p2] in
+          the target state. *)
     }
+    (* Maximum number of register used *)
     val register_count : int
     val compare : t -> t -> int
   end
 
+  (* BigDFA after minimization.  Exposed only to gather statistics. *)
   module MinDFA : sig
     type states
     val states : states cardinal
   end
 
+  (* Final DFA, produced after all optimizations. *)
   module OutDFA : sig
     type states
     val states : states cardinal
@@ -159,17 +126,26 @@ sig
     val label : transitions index -> Label.t
     val target : transitions index -> states index
 
-    (* Labels which are reachable (there exists failing configurations (stack,
-       lookahead) that reach these state) but for which the state defines no
-       transition. They should be rejected at runtime. *)
+    (* Transitions labelled by Lr1 states in [unhandled st] are reachable
+       (there exists viable stacks that can reach them), but are not defined
+       (there is no [transitions] for them).
+       They should be rejected at runtime. *)
     val unhandled : states index -> Lr1.set
 
+    (* [outgoing st] is the set of transitions leaving [st] *)
     val outgoing : states index -> transitions indexset
+
+    (* [matching st] is the set of clauses accepted when reaching [st].  Each
+       clause comes with a priority level and a mapping indicating in which
+       register captured variables can be found. *)
     val matching : states index -> (Clause.t * priority * Register.t Capture.map) list
+
+    (* [threads st] list the clauses being recognized in state [st].
+       The boolean indicates if the clause is accepted in this state. *)
     val threads : states index -> (bool * Clause.t * Register.t Capture.map) list
   end
 
-  val output_code : Printer.t -> unit
+  val output_code : Code_printer.t -> unit
 end =
 struct
   open Transl
@@ -1537,7 +1513,7 @@ struct
     match def with
     | Value ->
       let typ = recover_type index in
-      Printer.fmt out
+      Code_printer.fmt out
         "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
         \      | Empty -> %s\n\
         \      | Initial -> assert false\n\
@@ -1551,21 +1527,21 @@ struct
       begin match typ with
         | None -> ()
         | Some (symbols, typ) ->
-          Printer.fmt out
+          Code_printer.fmt out
             "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n"
             E.parser_name;
             List.iter (fun symbol ->
-              Printer.fmt out "          | %s -> (x : %s)\n"
+              Code_printer.fmt out "          | %s -> (x : %s)\n"
               (symbol_matcher symbol) typ) (IndexSet.elements symbols);
-            Printer.fmt out
+            Code_printer.fmt out
             "          | _ -> assert false\n\
             \        in\n"
       end;
-      Printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
-      Printer.fmt out "    in\n";
-      Printer.fmt out "    let _ = %s in\n" name
+      Code_printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
+      Code_printer.fmt out "    in\n";
+      Code_printer.fmt out "    let _ = %s in\n" name
     | Start_loc ->
-      Printer.fmt out
+      Code_printer.fmt out
         "    let _startloc_%s_ = match __registers.(%d) with\n\
         \      | Empty -> %s\n\
         \      | Initial -> %s\n\
@@ -1576,7 +1552,7 @@ struct
         (some "__initialpos")
         E.parser_name (some "p")
     | End_loc ->
-      Printer.fmt out
+      Code_printer.fmt out
         "    let _endloc_%s_ = match __registers.(%d) with\n\
         \      | Empty -> %s\n\
         \      | Initial -> %s\n\
@@ -1601,7 +1577,7 @@ struct
               "|" term_pattern (IndexSet.elements terms))
 
   let output_code out =
-    Printer.fmt out
+    Code_printer.fmt out
       "let lrgrep_execute_%s %s\n\
       \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
       \  (__initialpos : Lexing.position)\n\
@@ -1610,27 +1586,27 @@ struct
       E.entry.name (String.concat " " E.entry.args)
       E.parser_name E.parser_name;
     let output_action (source, clauses) (captures, _states) =
-      Printer.fmt out " ";
+      Code_printer.fmt out " ";
       IndexSet.iter (fun index ->
-          Printer.fmt out
+          Code_printer.fmt out
             " | %d, %s"
             (Index.to_int index)
             (Option.value (lookahead_constraint index)
                ~default:"_");
         ) clauses;
-      Printer.fmt out " ->\n";
+      Code_printer.fmt out " ->\n";
       IndexMap.iter (bind_capture out ~roffset:(ref 0)) captures;
       begin match source.Syntax.action with
         | Unreachable ->
-          Printer.print out "    failwith \"Should be unreachable\"\n"
+          Code_printer.print out "    failwith \"Should be unreachable\"\n"
         | Partial (loc, str) ->
-          Printer.print out "    (\n";
-          Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
-          Printer.print out "    )\n"
+          Code_printer.print out "    (\n";
+          Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
+          Code_printer.print out "    )\n"
         | Total (loc, str) ->
-          Printer.print out "    Some (\n";
-          Printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
-          Printer.print out "    )\n"
+          Code_printer.print out "    Some (\n";
+          Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
+          Code_printer.print out "    )\n"
       end;
       let constrained =
         IndexSet.filter
@@ -1638,11 +1614,11 @@ struct
           clauses
       in
       if not (IndexSet.is_empty constrained) then
-        Printer.fmt out "  | (%s), _ -> None\n"
+        Code_printer.fmt out "  | (%s), _ -> None\n"
           (string_concat_map "|" string_of_index (IndexSet.elements constrained))
     in
     Vector.iter2 output_action Clause.actions LazyNFA.actions;
-    Printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
+    Code_printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
   let () = Stopwatch.leave time
 end

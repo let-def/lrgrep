@@ -29,7 +29,7 @@ open Utils
 
 (** {1 The shallow abstract syntax} *)
 
-type location = CodePrinter.location = {
+type location = Code_printer.location = {
   loc_file : string;
   start_pos : int;
   end_pos : int;

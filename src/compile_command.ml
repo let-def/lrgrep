@@ -286,7 +286,7 @@ end)() = struct
   )
 
   let output_table out entry (registers, initial, (program, table, remap)) =
-    let print fmt = Kernel.Automata.Printer.fmt out fmt in
+    let print fmt = Code_printer.fmt out fmt in
     print
       "let lrgrep_program_%s : Lrgrep_runtime.program = {\n"
       entry.Kernel.Syntax.name;
@@ -300,7 +300,7 @@ end)() = struct
     let {Kernel.Syntax.name; args; _} = entry in
     let args = "lrgrep_initial" :: "lrgrep_lookahead" :: args in
     let args = String.concat " " args in
-    Kernel.Automata.Printer.fmt out
+    Code_printer.fmt out
       "let %s _lrgrep_env %s = (\n\
       \  List.find_map \n\
       \    (fun m -> lrgrep_execute_%s m %s)\n\
@@ -328,56 +328,55 @@ end)() = struct
       | Some filename ->
         let oc = open_out_bin filename in
         let out =
-          Kernel.Automata.Printer.create
+          Code_printer.create
             ~filename:(Filename.basename filename)
             (output_string oc)
         in
         (Some oc, Some out)
     in
     let print_ocaml_code out (loc, code) =
-      Kernel.Automata.Printer.print out ~loc code
+      Code_printer.print out ~loc code
     in
-    out |> Option.iter (fun out ->
-        begin match Grammar.Grammar.parameters with
-          | [] -> ()
-          | parameters ->
-            Kernel.Automata.Printer.print out "module Make";
-            List.iter (Kernel.Automata.Printer.fmt out "(%s)") parameters;
-            Kernel.Automata.Printer.fmt out
-              "(%s : module type of %s.Make" parser_name parser_name;
-            let extract_name name =
-              match String.index_opt name ':' with
-              | None -> name
-              | Some index -> String.sub name 0 index
-            in
-            List.iter
-              (fun param ->
-                 Kernel.Automata.Printer.fmt out "(%s)"
-                   (extract_name param))
-              parameters;
-            Kernel.Automata.Printer.print out ") = struct\n";
-        end;
-        print_ocaml_code out lexer_definition.header
-      );
-    Option.iter (fun out ->
-        Kernel.Automata.Printer.fmt out
-          "include Lrgrep_runtime.Interpreter(%s.MenhirInterpreter)\n" parser_name;
-      ) out;
-    List.iter (fun entry ->
-        let program = process_entry out entry in
-        Option.iter (fun out ->
-            output_table out entry program;
-            output_wrapper out entry
-          ) out
-      ) lexer_definition.entrypoints;
-    out |> Option.iter (fun out ->
-        Kernel.Automata.Printer.print out "\n";
-        print_ocaml_code out lexer_definition.trailer;
-        begin match Grammar.Grammar.parameters with
-          | [] -> ()
-          | _ -> Kernel.Automata.Printer.print out "\nend\n"
-        end;
-      );
+    Option.iter begin fun out ->
+      begin match Grammar.Grammar.parameters with
+        | [] -> ()
+        | parameters ->
+          Code_printer.print out "module Make";
+          List.iter (Code_printer.fmt out "(%s)") parameters;
+          Code_printer.fmt out
+            "(%s : module type of %s.Make" parser_name parser_name;
+          let extract_name name =
+            match String.index_opt name ':' with
+            | None -> name
+            | Some index -> String.sub name 0 index
+          in
+          List.iter
+            (fun param -> Code_printer.fmt out "(%s)" (extract_name param))
+            parameters;
+          Code_printer.print out ") = struct\n";
+      end;
+      print_ocaml_code out lexer_definition.header
+    end out;
+    Option.iter begin fun out ->
+      Code_printer.fmt out
+        "include Lrgrep_runtime.Interpreter(%s.MenhirInterpreter)\n"
+        parser_name;
+    end out;
+    List.iter begin fun entry ->
+      let program = process_entry out entry in
+      Option.iter begin fun out ->
+        output_table out entry program;
+        output_wrapper out entry
+      end out
+    end lexer_definition.entrypoints;
+    Option.iter begin fun out ->
+      Code_printer.print out "\n";
+      print_ocaml_code out lexer_definition.trailer;
+      begin match Grammar.Grammar.parameters with
+        | [] -> ()
+        | _ -> Code_printer.print out "\nend\n"
+      end;
+    end out;
     Option.iter close_out oc
 
   let () = process_source P.source_file
