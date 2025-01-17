@@ -45,7 +45,6 @@ let mk_re desc pos = {desc; position = make_position pos}
        EOF
 
 %start <Kernel.Syntax.lexer_definition> lexer_definition
-%start <Kernel.Syntax.prompt_sentence> prompt_sentence
 
 %%
 
@@ -166,14 +165,6 @@ regsum_loop:
 
 regexp:
 | regsum_loop { match $1 with [x] -> x | xs -> mk_re (Alternative xs) $startpos }
-;
-
-prompt_sentence:
-| symbol* "."
-| symbol* EOF
-  { Prompt_interpret $1 }
-| symbol ":"
-  { Prompt_entrypoint $1 }
 ;
 
 %%

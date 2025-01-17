@@ -147,15 +147,6 @@ type lexer_definition = {
   trailer     : ocaml_code;
 }
 
-(** This definition is used by the interpreter, not the analyser.
-    The interpreter reads a list of [prompt_sentence] commands from
-    standard input. *)
-type prompt_command =
-  | Prompt_entrypoint of symbol
-  (** Starts interpretation from this grammar entrypoint *)
-  | Prompt_interpret of symbol list
-  (** Interpret this list of symbols *)
-
 (** {1 Helper and cmoning functions} *)
 
 (** Create a position from a Lexing position. *)
