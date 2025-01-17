@@ -105,60 +105,6 @@ end = struct
     Printf.ksprintf (print ?loc t) fmt
 end
 
-module Order_chain : sig
-  type t
-  type element
-  val make : unit -> t
-  val root : t -> element
-  val next : element -> element
-  val extend : element -> element
-
-  val freeze : t -> int
-  val evaluate : element -> int
-end = struct
-  type chain = {
-    mutable value: int;
-    mutable next: chain;
-  }
-
-  let rec sentinel = {value = -2; next=sentinel}
-
-  let make () = {value = -1; next=sentinel}
-
-  let root x = x
-
-  let extend c =
-    assert (c.value = -1);
-    let next = {value = -1; next = c.next} in
-    c.next <- next;
-    next
-
-  let next c =
-    if c.next != sentinel then
-      c.next
-    else
-      extend c
-
-  type t = chain
-
-  type element = chain
-
-  let rec freeze t i =
-    assert (t.value = -1);
-    t.value <- i;
-    let i = i + 1 in
-    if t.next != sentinel then
-      freeze t.next i
-    else
-      i
-
-  let freeze t = freeze t 0
-
-  let evaluate elt =
-    assert (elt.value > -1);
-    elt.value
-end
-
 module Entry
     (Transl : Transl.S)
     (Stacks: STACKS with type lr1 := Transl.Regexp.Info.Lr1.n)
