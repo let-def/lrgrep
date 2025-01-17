@@ -288,14 +288,14 @@ struct
     let compare_outer_candidate c1 c2 =
       let c = compare_index c1.Redgraph.target c2.Redgraph.target in
       if c <> 0 then c else
-        let c = IndexSet.compare c1.filter c2.filter in
+        let c = IndexSet.compare c1.source c2.source in
         if c <> 0 then c else
           IndexSet.compare c1.lookahead c2.lookahead
 
     let compare_reduction_step r1 r2 =
       let c = IndexSet.compare r1.Redgraph.reachable r2.Redgraph.reachable in
       if c <> 0 then c else
-        list_compare compare_outer_candidate r1.candidates r2.candidates
+        list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
 
     let rec compare t1 t2 =
       if t1 == t2 then 0 else
@@ -316,11 +316,11 @@ struct
         | More _, Reducing _ -> -1
         | Reducing _, More _ -> +1
 
-    let cmon_candidate ?lookahead:lookahead' ~filter:cmon_filter
-      {Redgraph. target; lookahead; filter; reduction=_}
+    let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
+      {Redgraph. target; lookahead; source; reduction=_}
       =
       Cmon.record [
-        "target"  , cmon_index target;
+        "target"    , cmon_index target;
         "lookahead" , (
           match lookahead' with
           | None -> cmon_set_cardinal lookahead
@@ -331,23 +331,24 @@ struct
                 (IndexSet.cardinal (IndexSet.inter lookahead lookahead'))
             )
         );
-        "filter"     , cmon_filter filter;
+        "source"    , cmon_source source;
       ]
 
-    let cmon_outer_candidate ?lookahead c =
-      cmon_candidate ?lookahead c
-        ~filter:(fun filter ->
-            if IndexSet.cardinal filter >= 10 then cmon_set_cardinal filter else
-              cmon_indexset filter
+    let cmon_outer_goto_transition ?lookahead c =
+      cmon_goto_transition ?lookahead c
+        ~source:(fun source ->
+            if IndexSet.cardinal source >= 10 then cmon_set_cardinal source else
+              cmon_indexset source
                 ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
           )
 
-    let cmon_transitions ~candidate trs =
-      trs |> Cmon.list_map @@ fun {Redgraph. reachable; candidates} ->
-      Cmon.record [
-        "reachable", cmon_set_cardinal reachable;
-        "candidates", Cmon.list_map candidate candidates;
-      ]
+    let cmon_transitions ~goto_transition trs =
+      Cmon.list_map begin fun {Redgraph. reachable; goto_transitions} ->
+        Cmon.record [
+          "reachable", cmon_set_cardinal reachable;
+          "goto_transitions", Cmon.list_map goto_transition goto_transitions;
+        ]
+      end trs
 
     (*let cmon_all_transitions {Redgraph. inner; outer} =
       Cmon.record [
@@ -363,7 +364,7 @@ struct
       | Reducing {reduction; transitions; next} ->
         Cmon.crecord "Reducing" [
           "reduction"   , RE.cmon_reduction reduction;
-          "transitions" , cmon_transitions ~candidate:cmon_outer_candidate transitions;
+          "transitions" , cmon_transitions ~goto_transition:cmon_outer_goto_transition transitions;
           "next"        , cmon next;
         ]
 
@@ -407,13 +408,13 @@ struct
 
     and reduce_inner_transitions ~on_outer r {Redgraph. inner; outer} =
       let matched = ref false in
-      let visit_candidate (c : unit Redgraph.goto_candidate) =
+      let visit_candidate (c : unit Redgraph.goto_transition) =
         if reduce_target ~on_outer r c.target then
           matched := true
       in
       let rec loop = function
         | step :: xs when live_redstep r step ->
-          List.iter visit_candidate step.candidates;
+          List.iter visit_candidate step.goto_transitions;
           loop xs
         | _ -> ()
       in
@@ -451,13 +452,13 @@ struct
       let can_succeed_next (red : RE.reduction) = function
         | (step : Lr1.set Redgraph.reduction_step) :: _ ->
           List.exists (fun cand -> IndexSet.mem cand.Redgraph.target red.pattern)
-            step.candidates
+            step.goto_transitions
         | [] -> false
       in
       let reduce_outer matching ks next label reduction transitions =
         let rec visit_transitions label reduction = function
           | step :: transitions when live_redstep reduction step ->
-            List.iter (visit_candidate label) step.candidates;
+            List.iter (visit_candidate label) step.goto_transitions;
             begin match transitions with
               | step' :: _ when live_redstep reduction step' ->
                 let reducing = Reducing {reduction; transitions; next} in
@@ -465,8 +466,8 @@ struct
               | _ -> ()
             end
           | _ -> ()
-        and visit_candidate label (candidate : Lr1.set Redgraph.goto_candidate) =
-          match label_filter label candidate.filter with
+        and visit_candidate label (candidate : Lr1.set Redgraph.goto_transition) =
+          match label_filter label candidate.source with
           | Some label
             when reduce_target reduction candidate.target
                 ~on_outer:(visit_transitions label reduction) ->

@@ -147,12 +147,12 @@ struct
   (* Visit transitions from a given configuration *)
   and visit_transitions lrcs {Viable.inner; outer} =
     let inner =
-      List.fold_left (fun acc {Viable.candidates; _} ->
+      List.fold_left (fun acc {Viable.goto_transitions; _} ->
           List.fold_left
-            (fun acc {Viable.target; lookahead=_; filter=(); reduction} ->
+            (fun acc {Viable.target; lookahead=_; source=(); reduction} ->
                let state = visit_config lrcs (Source.inj_l target) in
                (state, reduction) :: acc)
-            acc candidates
+            acc goto_transitions
         ) [] inner
     in
     match visit_outer lrcs outer with
@@ -162,15 +162,16 @@ struct
   (* Visit outer transitions with lookahead restrictions *)
   and visit_outer lrcs = function
     | [] -> []
-    | {Viable.candidates; _} :: rest ->
-      let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
+    | {Viable.goto_transitions; _} :: rest ->
+      let visit_goto_transition
+          {Viable.target; lookahead=_; source=lr1s; reduction} =
         let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
         let lrcs = indexset_bind lr1s compatible_lrc in
         if IndexSet.is_empty lrcs
         then None
         else Some (visit_config lrcs (Source.inj_l target), reduction)
       in
-      let candidates = List.filter_map visit_candidate candidates in
+      let candidates = List.filter_map visit_goto_transition goto_transitions in
       let rest =
         if rest = [] then
           []

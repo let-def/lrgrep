@@ -63,13 +63,13 @@ struct
   let display config =
     let rec display_steps la n acc = function
       | [] -> acc
-      | {Viable. reachable=_; candidates} :: rest ->
-         let acc = List.fold_left (display_candidate la n) acc candidates in
+      | {Viable. reachable=_; goto_transitions} :: rest ->
+         let acc = List.fold_left (display_goto_transition la n) acc goto_transitions in
          display_steps la (n - 1) acc rest
 
-    and display_candidate
-        : type a . Terminal.set -> int -> _ -> a Viable.goto_candidate -> _ =
-      fun la n acc {Viable. target; lookahead; filter=_; reduction=_} ->
+    and display_goto_transition
+        : type a . Terminal.set -> int -> _ -> a Viable.goto_transition -> _ =
+      fun la n acc {Viable. target; lookahead; source=_; reduction=_} ->
       let la = IndexSet.inter la lookahead in
       if IndexSet.is_empty la then
         acc
@@ -97,7 +97,7 @@ struct
           print_items n suffix (Lr1.items target.top);
         );
         acc
-    in display_candidate
+    in display_goto_transition
 
   let analyze_stack config stack =
     (*Format.printf "let stack = [%s]\n"
@@ -113,8 +113,8 @@ struct
         | (la, step :: next) ->
            let candidates =
              List.filter
-               (fun c -> IndexSet.mem state c.Viable.filter)
-               step.Viable.candidates
+               (fun c -> IndexSet.mem state c.Viable.source)
+               step.Viable.goto_transitions
            in
            let threads = List.fold_left (display config la 1) [] candidates in
            (la, next) :: process_threads acc threads
