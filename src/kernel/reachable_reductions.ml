@@ -173,10 +173,9 @@ struct
       in
       let candidates = List.filter_map visit_goto_transition goto_transitions in
       let rest =
-        if rest = [] then
-          []
-        else
-          visit_outer (indexset_bind lrcs Lrc.predecessors) rest
+        match rest with
+        | [] -> []
+        | rest -> visit_outer (indexset_bind lrcs Lrc.predecessors) rest
       in
       candidates :: rest
 

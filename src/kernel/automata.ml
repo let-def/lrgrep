@@ -1081,51 +1081,14 @@ struct
 
     (* Naive allocator *)
     let () =
-      let inflate_set (f : 'n index -> 'a) (set : 'n indexset) : ('n, 'a) indexmap =
-        IndexSet.fold (fun i map -> IndexMap.add i (f i) map) set IndexMap.empty
-      in
       let init (Packed state) =
         let in_use = ref IntSet.empty in
-        let alloc caps = inflate_set (fun _ -> Register.of_int (IntSet.allocate in_use)) caps in
+        let alloc_reg _ = Register.of_int (IntSet.allocate in_use) in
+        let alloc caps = IndexMap.inflate alloc_reg caps in
         Vector.set registers state.index
           (Vector.Packed (Vector.map alloc (liveness state)))
       in
       Vector.iter init states
-
-    (* Smarter allocator ... Actually performs really badly,
-       the registers attribution make the DFA minimizable and the table less compressible *)
-    (*let () =
-      let allocate_successor (registers : (_, Register.t Capture.map) vector) allocated mapping target =
-        let live = liveness target in
-        let in_use = ref (
-            Vector.fold_right
-              (fun (ii, _) set -> IndexSet.union (Vector.get allocated ii) set)
-              mapping IndexSet.empty
-            : Register.set :> IntSet.t
-          )
-        in
-        (* Allocate fresh registers *)
-        Vector.mapi begin fun j (i, _) ->
-          let allocated = Vector.get registers i in
-          let live = Vector.get live j in
-          let to_allocate = IndexSet.diff live (IndexMap.domain allocated) in
-          IndexSet.fold (fun cap allocated ->
-              IndexMap.add cap (Register.of_int (IntSet.allocate in_use)) allocated
-            ) to_allocate allocated
-        end mapping
-      in
-      let init (Packed src) =
-        let regs = get_registers src in
-        let allocated = Vector.map (fun x -> IndexMap.fold (fun _ reg map -> IndexSet.add reg map) x IndexSet.empty) regs in
-        iter_transitions src @@ fun _ (Fwd_mapping (mapping, target)) ->
-        if Vector.get registers target.index == empty_registers then
-          let regs' = allocate_successor regs allocated mapping target in
-          Vector.set registers target.index (Vector.Packed regs')
-      in
-      Vector.set registers initial
-        (let Packed t = Vector.get states initial in
-         Packed (Vector.make (Vector.length t.group) IndexMap.empty));
-      Vector.iter init states*)
 
     let register_count =
       let max_live = ref 0 in
