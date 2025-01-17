@@ -1,12 +1,35 @@
 (******************************************************************************)
 (*                                                                            *)
-(*                                    Menhir                                  *)
+(*                                Reachability                                *)
 (*                                                                            *)
-(*   Copyright Inria. All rights reserved. This file is distributed under     *)
-(*   the terms of the GNU General Public License version 2, as described in   *)
-(*   the file LICENSE.                                                        *)
+(* Copyright (c) 2025 Frédéric Bour                                           *)
+(*                                                                            *)
+(* Permission is hereby granted, free of charge, to any person obtaining a    *)
+(* copy of this software and associated documentation files (the "Software"), *)
+(* to deal in the Software without restriction, including without limitation  *)
+(* the rights to use, copy, modify, merge, publish, distribute, sublicense,   *)
+(* and/or sell copies of the Software, and to permit persons to whom the      *)
+(* Software is furnished to do so, subject to the following conditions:       *)
+(*                                                                            *)
+(* The above copyright notice and this permission notice shall be included in   *)
+(* all copies or substantial portions of the Software.                        *)
+(*                                                                            *)
+(* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR *)
+(* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,   *)
+(* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL    *)
+(* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER *)
+(* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING    *)
+(* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER        *)
+(* DEALINGS IN THE SOFTWARE.                                                  *)
 (*                                                                            *)
 (******************************************************************************)
+
+(** This module computes the reachability of states in a parser automaton. It is
+    used to reason about the behavior of an LR(1) automaton after conflict
+    resolution (with some transitions removed).
+    The module implements algorithms for partitioning lookahead symbols with
+    identical behaviors, and uses these partitions to determine the cost of
+    reaching each state with a given lookahead. *)
 
 open Fix.Indexing
 open Utils
@@ -17,44 +40,86 @@ module type S = sig
   open Info
 
   module Classes : sig
+    (* Returns the classes of terminals for a given goto transition *)
     val for_edge : Transition.goto index -> Terminal.set array
+
+    (* Returns the classes of terminals for a given LR(1) state *)
     val for_lr1 : Lr1.t -> Terminal.set array
+
+    (* Returns the classes of terminals before taking a transition *)
     val pre_transition : Transition.any index -> Terminal.set array
+
+    (* Returns the classes of terminals after taking a transition *)
     val post_transition : Transition.any index -> Terminal.set array
   end
+
   module Tree : sig
     include CARDINAL
+
+    (* Returns the leaf node corresponding to a given transition *)
     val leaf : Transition.any index -> n index
+
+    (* Splits a node into its left and right children if it is an inner node *)
     val split : n index -> (Transition.any index, n index * n index) either
+
+    (* Returns the nullable terminals and non-nullable equations for a given goto transition *)
     val goto_equations : Transition.goto index -> Terminal.set * (n index * Terminal.set) list
+
+    (* Returns the pre-classes for a given node *)
     val pre_classes : n index -> Terminal.set array
+
+    (* Returns the post-classes for a given node *)
     val post_classes : n index -> Terminal.set array
   end
+
   module Cells : sig
     type t = private int
     type offset = int
     type row = int
     type column = int
 
+    (* The table that stores all compact cost matrices *)
     val table : (Tree.n, int array) vector
+
+    (* Total number of cells *)
     val count : int
+
+    (* Cost of a cell *)
     val cost : t -> int
+
+    (* Compute an index in a table *)
     val table_index : post_classes:int -> pre:int -> post:int -> int
+
+    (* Compute a linear offset from a node, a row, and a column *)
     val offset : Tree.n index -> row -> column -> offset
+
+    (* Get the cell corresponding to a node and offset *)
     val encode_offset : Tree.n index -> offset -> t
+
+    (* Get the node and offset corresponding to a cell *)
     val decode_offset : t -> Tree.n index * offset
+
+    (* Get the cell corresponding to a node, a row, and a column *)
     val encode : Tree.n index -> row -> column -> t
+
+    (* Get the node, row, and column corresponding to a cell *)
     val decode : t -> Tree.n index * row * column
   end
+
   module Coercion : sig
     type pre = Pre_identity | Pre_singleton of int
+
+    (* Compute the pre coercion from a partition of the form P = first(cost(s, A))
+       to a partition of the form Q = first(ccost(𝑠, 𝐴 → 𝜖•𝛼)))
+    *)
     val pre : 'a indexset array -> 'a indexset array -> pre option
+
     type forward = int array array
     type backward = int array
     type infix = { forward : forward; backward : backward; }
-    val infix :
-      ?lookahead:'a indexset ->
-      'a indexset array -> 'a indexset array -> infix
+
+    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
+    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
   end
 end
 
@@ -78,7 +143,7 @@ struct
      transition, reversing the effect of a single reduction.
 
      It serves the same purpose as the [reduce(𝑠, 𝐴 → 𝛼)] function from the
-     paper but is more convenient for the rest of the implementaion.
+     paper but is more convenient for the rest of the implementation.
   *)
   module Unreduce : sig
 
@@ -783,16 +848,16 @@ struct
 
     (* Reverse dependencies record in which equations a node appears *)
     type reverse_dependency =
-      | (* Equation (7): this node appears in the RHS of the definition of a
-           goto transition.
-           The dependency is accompanied with pre-coercion (see [Coercion.pre])
-           and the forward coercion that represents the creduce(...). *)
-        Leaf of Transition.goto index * Coercion.pre * Coercion.forward
+      (* Equation (7): this node appears in the RHS of the definition of a
+         goto transition.
+         The dependency is accompanied with pre-coercion (see [Coercion.pre])
+         and the forward coercion that represents the creduce(...). *)
+      | Leaf of Transition.goto index * Coercion.pre * Coercion.forward
 
-      | (* Equation (8): this node appears in some inner product.
-           The dependency stores the index of the parent node as well as the
-           coercion matrix. *)
-        Inner of Tree.Inner.n index * Coercion.infix
+      (* Equation (8): this node appears in some inner product.
+         The dependency stores the index of the parent node as well as the
+         coercion matrix. *)
+      | Inner of Tree.Inner.n index * Coercion.infix
 
     let dependents : (Tree.n, reverse_dependency list) vector =
       (* Store enough information with each node of the tree to compute

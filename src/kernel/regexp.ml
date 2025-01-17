@@ -1,12 +1,46 @@
+(* The MIT License (MIT)
+
+   Copyright (c) 2025 Frédéric Bour
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+*)
+
+(** This module implements the regular expressions used by LRGrep.
+    It provides functions for creating, comparing, and deriving regular
+    expressions and continuations, which appear during the derivation process.
+    It is parameterized by the `Info` and `Redgraph` modules, which are used to
+    provide information about the LR automaton and its (viable) reductions,
+    respectively. *)
 open Fix.Indexing
 open Utils
 open Misc
 
+(** The Capture module defines types and functions for representing variables
+    captured in regular expressions.
+    It uses an index type to uniquely identify a capture in an expression. *)
 module Capture : sig
   type n
   type t = n index
   type set = n indexset
   type 'a map = (n, 'a) indexmap
+
+  (* The gensym is instantiated separately for each expression *)
   val gensym : unit -> unit -> n index
 end = struct
   include Positive
@@ -18,6 +52,12 @@ end = struct
     fun () -> incr r; Index.of_int n !r
 end
 
+(** The RE module type defines the signature for regular expressions, including
+    types for reductions, unique IDs to identify sub-terms, and the regular
+    expression terms themselves.
+
+    It also includes functions for creating, comparing, and converting regular
+    expressions to a Cmon document. *)
 module type RE = sig
   module Info : Info.S
   open Info
@@ -76,6 +116,11 @@ module type RE = sig
   val cmon : t -> Cmon.t
 end
 
+(** The S module type defines the signature of the internal regex language,
+    which includes [Redgraph] for representing reductions, and [RE] for the
+    surface language, and [K] module for representing intermediate continuations
+    during derivation.
+*)
 module type S = sig
   module Info : Info.S
   open Info

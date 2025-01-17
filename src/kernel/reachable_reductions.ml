@@ -1,10 +1,45 @@
+(*
+ * MIT License
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
+
+(** This module is responsible for building a representation of the reachable
+    reductions of an LR automaton, by refining the viable reductions with the
+    reachability analysis.
+    It includes functionality to construct state machines (NFA and DFA) suitable
+    for static analyses, and use them to perform coverage checks, and to
+    generate sentences that lead to specific states or failures.  *)
+
 open Utils
 open Misc
 open Fix.Indexing
 
+(* Flag to control the inclusion of expensive assertions for debugging *)
 let build_with_expensive_assertions = false
+
+(* Flag to control the safety checks *)
 let build_safe = true
 
+(* Graphviz style for visualizing graphs *)
 let style = "\
     bgcolor=black;\
     color=white;\
@@ -14,7 +49,7 @@ let style = "\
     compound=true;\
   "
 
-
+(* Signature of reachable reductions modules *)
 module type S = sig
   module Info : Info.S
   module Viable: Viable_reductions.S with module Info := Info
@@ -55,6 +90,7 @@ module type S = sig
   val rev_fold_targets : (target -> 'a -> 'a) -> transitions -> 'a -> 'a
 end
 
+(* Functor to create an instance of reachable reductions *)
 module Make
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
@@ -87,8 +123,10 @@ struct
 
   let states = get_generator ()
 
+  (* Hashtable to store nodes and their configurations *)
   let nodes = Hashtbl.create 7
 
+  (* Recursive function to visit a configuration and build the state machine *)
   let rec visit_config lrcs source =
     let config = {source; lrcs} in
     match Hashtbl.find_opt nodes config with
@@ -106,6 +144,7 @@ struct
       IndexBuffer.Gen.commit states reservation {config; transitions};
       index
 
+  (* Visit transitions from a given configuration *)
   and visit_transitions lrcs {Viable.inner; outer} =
     let inner =
       List.fold_left (fun acc {Viable.candidates; _} ->
@@ -120,6 +159,7 @@ struct
     | [] -> [inner]
     | x :: xs -> (inner @ x) :: xs
 
+  (* Visit outer transitions with lookahead restrictions *)
   and visit_outer lrcs = function
     | [] -> []
     | {Viable.candidates; _} :: rest ->
@@ -139,6 +179,7 @@ struct
       in
       candidates :: rest
 
+  (* Initial configurations for the state machine *)
   let initial =
     let process lrc =
       let lr1 = Lrc.lr1_of_lrc lrc in
@@ -149,22 +190,29 @@ struct
     in
     IndexMap.inflate process Lrc.idle
 
+  (* Freeze the state generator to finalize the state machine *)
   let states = IndexBuffer.Gen.freeze states
 
+  (* Print timing information and the number of nodes in the state machine *)
   let () = Stopwatch.step time "Nodes: %d" (cardinal n)
 
+  (* Iterate over all transition targets *)
   let iter_targets tr f =
     List.iter (List.iter f) tr
 
+  (* Iterate over all transition targets in reverse order *)
   let rev_iter_targets tr f =
     list_rev_iter (list_rev_iter f) tr
 
+  (* Fold over all targets in transitions *)
   let fold_targets f acc tr =
     List.fold_left (List.fold_left f) acc tr
 
+  (* Fold over all targets in transitions in reverse order *)
   let rev_fold_targets f tr acc =
     List.fold_right (List.fold_right f) tr acc
 
+  (* Successors of a state *)
   let successors =
     Vector.map (fun desc ->
         rev_fold_targets
@@ -172,9 +220,11 @@ struct
           desc.transitions IndexSet.empty
       ) states
 
+  (* Predecessors of a state *)
   let predecessors =
     relation_reverse successors
 
+  (* The set of terminals that are immediately rejected by a state *)
   let reject st =
     let {config; _} = Vector.get states st in
     match Source.prj config.source with
@@ -183,6 +233,7 @@ struct
       IndexSet.inter (Lr1.reject config.top) config.lookahead
     | R lr1 -> IndexSet.inter (Lr1.reject lr1) Terminal.regular
 
+  (* Compute the set of terminals that can be rejected by successors of a state *)
   let rejectable =
     let table = Vector.init n (fun st -> (reject st, IndexMap.empty)) in
     let propagate source (sreject, _) _target (treject, trejects as prev) =
@@ -201,6 +252,7 @@ struct
     let project (ts, edges) = (ts, IndexMap.bindings edges) in
     Vector.get (Vector.map project table)
 
+  (* List the reductions that can lead from state [src] to state [tgt] *)
   let reductions src tgt =
     fold_targets (fun acc (tgt', red) ->
         if equal_index tgt tgt'
@@ -208,9 +260,11 @@ struct
         else acc
       ) IndexSet.empty (Vector.get states src).transitions
 
+  (* Leave the stopwatch to mark the end of the process *)
   let () = Stopwatch.leave time
 end
 
+(* Functor to create a covering tree for the Reachable_reductions module *)
 module Covering_tree
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
@@ -224,9 +278,12 @@ struct
   open Info
   open Reach
 
+  (* Enumerate the stack suffixes produced by following one or more goto
+     transitions as part of a sequence of reductions.*)
   module Goto_star = struct
     include IndexBuffer.Gen.Make()
 
+    (* Function to get the LR0 stack from a source *)
     let lr0_stack_of_source source =
       match Source.prj source with
       | L v -> List.rev_map Lr1.to_lr0 (Viable.get_stack v)
@@ -234,6 +291,7 @@ struct
 
     let def = get_generator ()
 
+    (* Function to get the index of a LR0 stack *)
     let index_of =
       let table = Hashtbl.create 7 in
       let index_of lr0s =
@@ -251,11 +309,13 @@ struct
 
     let def = IndexBuffer.Gen.freeze def
 
+    (* Print the number of configurations to cover *)
     let () =
       Printf.eprintf "Goto*: found %d configurations to cover\n"
         (cardinal (Vector.length def))
   end
 
+  (* Type representing a node in the covering tree *)
   type node = {
     state: n index;
     rejected: Terminal.set;
@@ -263,12 +323,15 @@ struct
     mutable children: node list;
   }
 
+  (* Vector to store the set of rejected terminals before a state *)
   let reject_before = Vector.make n IndexSet.empty
 
+  (* Function to make an arborescence from a set of roots *)
   let make_arborescence roots =
     let marked = Boolvector.make n false in
     let nodes = ref 0 in
     let queue = ref [] in
+    (* Function to visit a state and add it to the arborescence *)
     let visit rejected state acc =
       let rejected = IndexSet.union (reject state) rejected in
       let continue, rejected' =
@@ -291,6 +354,7 @@ struct
         acc
     in
     let roots = IndexSet.fold (visit IndexSet.empty) roots [] in
+    (* Function to propagate the arborescence to children *)
     let propagate node =
       let next = Vector.get successors node.state in
       node.children <- IndexSet.fold (visit node.rejected) next node.children
@@ -299,8 +363,10 @@ struct
     Printf.eprintf "Arborescence has %d nodes\n" !nodes;
     roots
 
+  (* Function to complete the arborescence with goals *)
   let complete_arborescence goals roots =
     let sentences = ref 0 in
+    (* Function to get a child node for a state *)
     let get_child node state =
       let pred node' = equal_index node'.state state in
       match List.find_opt pred node.children with
@@ -311,6 +377,7 @@ struct
         node.children <- node' :: node.children;
         node'
     in
+    (* Function to visit a state after processing its children *)
     let rec visit_after node todo =
       let goal = Goto_star.index_of node.state in
       Vector.set goals goal
