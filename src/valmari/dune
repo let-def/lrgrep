@@ -1,3 +1,4 @@
 (library
  (name valmari)
+ (public_name lrgrep.internal.valmari)
  (libraries fix))

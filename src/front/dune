@@ -3,4 +3,4 @@
 
 (library
  (name front)
- (libraries utils cmon))
+ (libraries kernel utils cmon))

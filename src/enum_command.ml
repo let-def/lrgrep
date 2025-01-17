@@ -41,12 +41,12 @@ module Run(P : sig val grammar_file : string end)() = struct
 
   let () = Stopwatch.step Stopwatch.main "Loaded grammar"
 
-  module Info = Mid.Info.Make(Grammar)
-  module Viable = Mid.Viable_reductions.Make(Info)()
-  module Regexp = Mid.Regexp.Make(Info)(Viable)
-  module Transl = Mid.Transl.Make(Regexp)
-  module Reachability = Mid.Reachability.Make(Info)()
-  module Lrc = Mid.Lrc.Make(Info)(Reachability)
+  module Info = Kernel.Info.Make(Grammar)
+  module Viable = Kernel.Viable_reductions.Make(Info)()
+  module Regexp = Kernel.Regexp.Make(Info)(Viable)
+  module Transl = Kernel.Transl.Make(Regexp)
+  module Reachability = Kernel.Reachability.Make(Info)()
+  module Lrc = Kernel.Lrc.Make(Info)(Reachability)
 
   let translate_entrypoints prj loc err symbols =
     let unhandled = ref [] in
@@ -79,11 +79,11 @@ module Run(P : sig val grammar_file : string end)() = struct
             exit 1)
           syms
     in
-    let module Lrc = Mid.Lrc.Close(Info)(Lrc)(struct
+    let module Lrc = Kernel.Lrc.Close(Info)(Lrc)(struct
       let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1
     end) in
-    let module Reachable = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
-    let module Failure = Mid.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in
+    let module Reachable = Kernel.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
+    let module Failure = Kernel.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in
     let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable)() in
     let output = match !opt_enumerate_format with
       | Efmt_raw -> Enum.output_raw

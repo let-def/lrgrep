@@ -6,4 +6,4 @@
           compile_command
           enum_command enum
           interpret_command)
- (libraries front mid fix cmon utils menhirSdk valmari support))
+ (libraries front kernel fix cmon utils menhirSdk valmari support))

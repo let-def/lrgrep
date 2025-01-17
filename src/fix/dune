@@ -1,3 +1,4 @@
 (library
   (name fix)
+  (public_name lrgrep.internal.fix)
   (synopsis "An on-demand, incremental fixed point computation algorithm"))

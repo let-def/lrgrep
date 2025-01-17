@@ -1,4 +1,5 @@
 (library
  (name lrijkstra_utils)
+ (public_name lrgrep.internal.lrijkstra)
  (wrapped false)
  (libraries utils fix))

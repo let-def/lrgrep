@@ -1,7 +1,7 @@
 open Utils
 open Misc
 
-let error {Front.Syntax. line; col} fmt =
+let error {Kernel.Syntax. line; col} fmt =
   Printf.eprintf "Error line %d, column %d: " line col;
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
@@ -65,14 +65,14 @@ end)() = struct
 
   let () = Stopwatch.step Stopwatch.main "Loaded grammar"
 
-  module Info = Mid.Info.Make(Grammar)
-  module Viable = Mid.Viable_reductions.Make(Info)()
-  module Regexp = Mid.Regexp.Make(Info)(Viable)
-  module Transl = Mid.Transl.Make(Regexp)
-  module Reachability = Mid.Reachability.Make(Info)()
-  module Lrc = Mid.Lrc.Make(Info)(Reachability)
+  module Info = Kernel.Info.Make(Grammar)
+  module Viable = Kernel.Viable_reductions.Make(Info)()
+  module Regexp = Kernel.Regexp.Make(Info)(Viable)
+  module Transl = Kernel.Transl.Make(Regexp)
+  module Reachability = Kernel.Reachability.Make(Info)()
+  module Lrc = Kernel.Lrc.Make(Info)(Reachability)
 
-  module type STACKS = Mid.Automata.STACKS with type lr1 := Info.Lr1.n
+  module type STACKS = Kernel.Automata.STACKS with type lr1 := Info.Lr1.n
 
   module Lr1_stacks : STACKS with type n = Info.Lr1.n =
   struct
@@ -106,7 +106,7 @@ end)() = struct
   let parser_name =
     String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
-  let process_entry oc (entry : Front.Syntax.entry) = (
+  let process_entry oc (entry : Kernel.Syntax.entry) = (
     let open Fix.Indexing in
     let entrypoints =
       match entry.startsymbols with
@@ -116,10 +116,10 @@ end)() = struct
           (fun loc msg -> error loc "%s" msg)
           syms
     in
-    let module Lrc = Mid.Lrc.Close(Info)(Lrc)
+    let module Lrc = Kernel.Lrc.Close(Info)(Lrc)
         (struct let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1 end)
     in
-    let open Mid.Automata.Entry
+    let open Kernel.Automata.Entry
         (Transl)
         (struct
           include Lrc
@@ -144,9 +144,9 @@ end)() = struct
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
     if !opt_coverage || !opt_coverage_silent || !opt_coverage_fatal then (
       (*let open Info in*)
-      let module Reach = Mid.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
-      let module Failure = Mid.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-      let module Check = Mid.Reachable_reductions2.Coverage_check(Info)(Lrc)(Failure)(struct
+      let module Reach = Kernel.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
+      let module Failure = Kernel.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+      let module Check = Kernel.Reachable_reductions2.Coverage_check(Info)(Lrc)(Failure)(struct
           type n = OutDFA.states
           let n = OutDFA.states
           let initial = OutDFA.initial
@@ -286,10 +286,10 @@ end)() = struct
   )
 
   let output_table out entry (registers, initial, (program, table, remap)) =
-    let print fmt = Mid.Automata.Printer.fmt out fmt in
+    let print fmt = Kernel.Automata.Printer.fmt out fmt in
     print
       "let lrgrep_program_%s : Lrgrep_runtime.program = {\n"
-      entry.Front.Syntax.name;
+      entry.Kernel.Syntax.name;
     print "  registers = %d;\n" registers;
     print "  initial = %d;\n" remap.(initial);
     print "  table = %S;\n" table;
@@ -297,10 +297,10 @@ end)() = struct
     print "}\n"
 
   let output_wrapper out entry =
-    let {Front.Syntax.name; args; _} = entry in
+    let {Kernel.Syntax.name; args; _} = entry in
     let args = "lrgrep_initial" :: "lrgrep_lookahead" :: args in
     let args = String.concat " " args in
-    Mid.Automata.Printer.fmt out
+    Kernel.Automata.Printer.fmt out
       "let %s _lrgrep_env %s = (\n\
       \  List.find_map \n\
       \    (fun m -> lrgrep_execute_%s m %s)\n\
@@ -328,22 +328,22 @@ end)() = struct
       | Some filename ->
         let oc = open_out_bin filename in
         let out =
-          Mid.Automata.Printer.create
+          Kernel.Automata.Printer.create
             ~filename:(Filename.basename filename)
             (output_string oc)
         in
         (Some oc, Some out)
     in
     let print_ocaml_code out (loc, code) =
-      Mid.Automata.Printer.print out ~loc code
+      Kernel.Automata.Printer.print out ~loc code
     in
     out |> Option.iter (fun out ->
         begin match Grammar.Grammar.parameters with
           | [] -> ()
           | parameters ->
-            Mid.Automata.Printer.print out "module Make";
-            List.iter (Mid.Automata.Printer.fmt out "(%s)") parameters;
-            Mid.Automata.Printer.fmt out
+            Kernel.Automata.Printer.print out "module Make";
+            List.iter (Kernel.Automata.Printer.fmt out "(%s)") parameters;
+            Kernel.Automata.Printer.fmt out
               "(%s : module type of %s.Make" parser_name parser_name;
             let extract_name name =
               match String.index_opt name ':' with
@@ -352,15 +352,15 @@ end)() = struct
             in
             List.iter
               (fun param ->
-                 Mid.Automata.Printer.fmt out "(%s)"
+                 Kernel.Automata.Printer.fmt out "(%s)"
                    (extract_name param))
               parameters;
-            Mid.Automata.Printer.print out ") = struct\n";
+            Kernel.Automata.Printer.print out ") = struct\n";
         end;
         print_ocaml_code out lexer_definition.header
       );
     Option.iter (fun out ->
-        Mid.Automata.Printer.fmt out
+        Kernel.Automata.Printer.fmt out
           "include Lrgrep_runtime.Interpreter(%s.MenhirInterpreter)\n" parser_name;
       ) out;
     List.iter (fun entry ->
@@ -371,11 +371,11 @@ end)() = struct
           ) out
       ) lexer_definition.entrypoints;
     out |> Option.iter (fun out ->
-        Mid.Automata.Printer.print out "\n";
+        Kernel.Automata.Printer.print out "\n";
         print_ocaml_code out lexer_definition.trailer;
         begin match Grammar.Grammar.parameters with
           | [] -> ()
-          | _ -> Mid.Automata.Printer.print out "\nend\n"
+          | _ -> Kernel.Automata.Printer.print out "\nend\n"
         end;
       );
     Option.iter close_out oc

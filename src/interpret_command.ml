@@ -28,9 +28,8 @@ module Run(P : sig
 struct
   module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = P.grammar_file end)
 
-  module Info = Mid.Info.Make(Grammar)
-  module Viable = Mid.Viable_reductions.Make(Info)()
-  module Regexp = Mid.Regexp.Make(Info)(Viable)
+  module Info = Kernel.Info.Make(Grammar)
+  module Viable = Kernel.Viable_reductions.Make(Info)()
 
   let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
     let sprintf = Printf.sprintf in

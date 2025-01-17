@@ -1,6 +1,6 @@
 open Utils
 open Misc
-open Front.Syntax
+open Syntax
 open Fix.Indexing
 open Regexp
 

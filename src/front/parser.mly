@@ -16,12 +16,12 @@
 (* The grammar for lexer definitions *)
 
 %{
-open Syntax
+open Kernel.Syntax
 let mk_re desc pos = {desc; position = make_position pos}
 %}
 
 %token <string> IDENT
-%token <Syntax.ocaml_code> ACTION
+%token <Kernel.Syntax.ocaml_code> ACTION
 %token UNREACHABLE
 %token RULE        "rule"
        PARSE       "parse"
@@ -44,8 +44,8 @@ let mk_re desc pos = {desc; position = make_position pos}
        AT          "@"
        EOF
 
-%start <Syntax.lexer_definition> lexer_definition
-%start <Syntax.prompt_sentence> prompt_sentence
+%start <Kernel.Syntax.lexer_definition> lexer_definition
+%start <Kernel.Syntax.prompt_sentence> prompt_sentence
 
 %%
 
@@ -171,9 +171,9 @@ regexp:
 prompt_sentence:
 | symbol* "."
 | symbol* EOF
-  { Syntax.Prompt_interpret $1 }
+  { Prompt_interpret $1 }
 | symbol ":"
-  { Syntax.Prompt_entrypoint $1 }
+  { Prompt_entrypoint $1 }
 ;
 
 %%

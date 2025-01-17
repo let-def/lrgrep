@@ -16,7 +16,7 @@
 (* The lexical analyzer for lexer definitions. Bootstrapped! *)
 
 {
-open Syntax
+open Kernel.Syntax
 open Parser
 
 (* Auxiliaries for the lexical analyzer *)

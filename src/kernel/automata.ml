@@ -1,6 +1,5 @@
 open Utils
 open Misc
-open Front
 open Fix.Indexing
 open Regexp
 open Lrgrep_support

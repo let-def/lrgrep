@@ -2,11 +2,11 @@ open Utils
 open Fix.Indexing
 
 module Make
-    (Info : Mid.Info.S)
-    (Reachability : Mid.Reachability.S with module Info := Info)
-    (Viable : Mid.Viable_reductions.S with module Info := Info)
-    (Lrc : Mid.Lrc.S with module Info := Info)
-    (Reach : Mid.Reachable_reductions2.S
+    (Info : Kernel.Info.S)
+    (Reachability : Kernel.Reachability.S with module Info := Info)
+    (Viable : Kernel.Viable_reductions.S with module Info := Info)
+    (Lrc : Kernel.Lrc.S with module Info := Info)
+    (Reach : Kernel.Reachable_reductions2.S
      with module Info := Info
       and module Viable := Viable
       and module Lrc := Lrc)
@@ -279,7 +279,7 @@ struct
   end
 
   module Covering_tree =
-    Mid.Reachable_reductions2.Covering_tree
+    Kernel.Reachable_reductions2.Covering_tree
       (Info)
       (Viable)
       (Lrc)

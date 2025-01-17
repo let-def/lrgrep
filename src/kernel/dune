@@ -1,0 +1,4 @@
+(library
+ (name kernel)
+ (public_name lrgrep.internal.kernel)
+ (libraries utils fix menhirSdk valmari lrijkstra_utils support))
