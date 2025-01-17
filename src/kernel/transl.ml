@@ -25,7 +25,6 @@ module type S = sig
     val find_symbol : symbol -> Symbol.t option
     val get_symbol : position -> symbol -> Symbol.t
   end
-  val match_sym : 'a index -> 'a index option -> bool
   type capture_kind = Start_loc | End_loc | Value
   type lr1_trie = {
     mutable sub : lr1_trie Lr1.map;
@@ -366,10 +365,6 @@ struct
             IntSet.empty
           | Some dots -> IntSet.union dots exact.dots
   end
-
-  let match_sym sym = function
-    | None -> true
-    | Some sym' -> Misc.equal_index sym sym'
 
   let transl_filter position ~lhs ~rhs =
     let transl_sym = Option.map (Indices.get_symbol position) in
