@@ -144,9 +144,9 @@ end)() = struct
     Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
     if !opt_coverage || !opt_coverage_silent || !opt_coverage_fatal then (
       (*let open Info in*)
-      let module Reach = Kernel.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
-      let module Failure = Kernel.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-      let module Check = Kernel.Reachable_reductions2.Coverage_check(Info)(Lrc)(Failure)(struct
+      let module Reach = Kernel.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+      let module Failure = Kernel.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+      let module Check = Kernel.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
           type n = OutDFA.states
           let n = OutDFA.states
           let initial = OutDFA.initial

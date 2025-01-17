@@ -6,7 +6,7 @@ module Make
     (Reachability : Kernel.Reachability.S with module Info := Info)
     (Viable : Kernel.Viable_reductions.S with module Info := Info)
     (Lrc : Kernel.Lrc.S with module Info := Info)
-    (Reach : Kernel.Reachable_reductions2.S
+    (Reach : Kernel.Reachable_reductions.S
      with module Info := Info
       and module Viable := Viable
       and module Lrc := Lrc)
@@ -279,7 +279,7 @@ struct
   end
 
   module Covering_tree =
-    Kernel.Reachable_reductions2.Covering_tree
+    Kernel.Reachable_reductions.Covering_tree
       (Info)
       (Viable)
       (Lrc)

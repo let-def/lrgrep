@@ -82,8 +82,8 @@ module Run(P : sig val grammar_file : string end)() = struct
     let module Lrc = Kernel.Lrc.Close(Info)(Lrc)(struct
       let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1
     end) in
-    let module Reachable = Kernel.Reachable_reductions2.Make(Info)(Viable)(Lrc)() in
-    let module Failure = Kernel.Reachable_reductions2.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in
+    let module Reachable = Kernel.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
+    let module Failure = Kernel.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reachable)() in
     let module Enum = Enum.Make(Info)(Reachability)(Viable)(Lrc)(Reachable)() in
     let output = match !opt_enumerate_format with
       | Efmt_raw -> Enum.output_raw

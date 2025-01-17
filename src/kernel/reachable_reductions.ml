@@ -1,16 +1,19 @@
 open Utils
 open Misc
 open Fix.Indexing
-open Monotonous
 
-let count pred vector =
-  let k = ref 0 in
-  Vector.iter (fun dfa -> if pred dfa then incr k) vector;
-  !k
+let build_with_expensive_assertions = false
+let build_safe = true
 
-module Increasing = Increasing_ref
+let style = "\
+    bgcolor=black;\
+    color=white;\
+    fontcolor=white;\
+    node [color=white fontcolor=white shape=rectangle];\
+    edge [color=white fontcolor=white];\
+    compound=true;\
+  "
 
-let is_not_minimal f = not (Increasing.is_minimum f)
 
 module type S = sig
   module Info : Info.S
@@ -19,22 +22,16 @@ module type S = sig
   open Info
 
   include CARDINAL
-
-  module Source : SUM with type l := Viable.n and type r := Lrc.n
+  module Source : SUM with type l := Viable.n and type r := Lr1.n
 
   type config = {
     source: Source.n index;
-    lrcs : Lrc.set;
-    accepted: Terminal.set;
-    rejected: Terminal.set;
+    lrcs: Lrc.set;
   }
 
   type target = n index * Reduction.t
 
-  type transitions = {
-    inner: target list;
-    outer: target list list;
-  }
+  type transitions = target list list
 
   type desc = {
     config: config;
@@ -44,12 +41,13 @@ module type S = sig
   val initial : n index Lrc.map
   val states : (n, desc) vector
 
+  val reject : n index -> Terminal.set
+  val rejectable : n index -> Terminal.set * (n index * Terminal.set) list
+
   val successors : (n, n indexset) vector
   val predecessors : (n, n indexset) vector
 
-  val accepted : n index -> Terminal.set
-  val rejected : n index -> Terminal.set
-  val potential_reject : n index -> Terminal.set
+  val reductions : n index -> n index -> Reduction.set
 
   val iter_targets : transitions -> (target -> unit) -> unit
   val rev_iter_targets : transitions -> (target -> unit) -> unit
@@ -69,23 +67,18 @@ struct
   open Info
   let time = Stopwatch.enter Stopwatch.main "Reachable reductions"
 
-  module Source = Sum(Viable)(Lrc)
-
   include IndexBuffer.Gen.Make()
+
+  module Source = Sum(Viable)(Lr1)
 
   type config = {
     source: Source.n index;
     lrcs : Lrc.set;
-    accepted: Terminal.set;
-    rejected: Terminal.set;
   }
 
   type target = n index * Reduction.t
 
-  type transitions = {
-    inner: target list;
-    outer: target list list;
-  }
+  type transitions = target list list
 
   type desc = {
     config: config;
@@ -96,87 +89,63 @@ struct
 
   let nodes = Hashtbl.create 7
 
-  let lr1_of_source source =
-    match Source.prj source with
-    | L viable -> (Viable.get_config viable).top
-    | R lrc -> Lrc.lr1_of_lrc lrc
-
-  let make_config ~accepted ~rejected lrcs source =
-    let lr1 = lr1_of_source source in
-    let a, r =
-      if IndexSet.mem lr1 Lr1.accepting then
-        IndexSet.union accepted (IndexSet.diff Terminal.all rejected),
-        rejected
-      else
-        IndexSet.union accepted (IndexSet.diff (Lr1.shift_on lr1) rejected),
-        IndexSet.union rejected (IndexSet.diff (Lr1.reject lr1) accepted)
-    in
-    {accepted=a; rejected=r; source; lrcs}
-
-  let rec visit_config ~accepted ~rejected lrcs source =
-    let config = make_config ~accepted ~rejected lrcs source in
+  let rec visit_config lrcs source =
+    let config = {source; lrcs} in
     match Hashtbl.find_opt nodes config with
     | Some state -> state
     | None ->
       let reservation = IndexBuffer.Gen.reserve states in
       let index = IndexBuffer.Gen.index reservation in
       Hashtbl.add nodes config index;
-      let {accepted; rejected; source; lrcs} = config in
-      let transitions =
+      let source_transitions =
         match Source.prj source with
-        | L viable ->
-          visit_transitions ~accepted ~rejected lrcs
-            (Viable.get_transitions viable)
-        | R lrc ->
-          match Vector.get Viable.initial (Lrc.lr1_of_lrc lrc) with
-          | [] -> {inner=[]; outer=[]}
-          | outer0 :: outer ->
-            {inner=[]; outer=visit_outer ~accepted ~rejected lrcs outer0 outer}
+        | L viable -> Viable.get_transitions viable
+        | R lr1 -> {Viable.inner=[]; outer=Vector.get Viable.initial lr1}
       in
+      let transitions = visit_transitions lrcs source_transitions in
       IndexBuffer.Gen.commit states reservation {config; transitions};
       index
 
-  and visit_transitions ~accepted ~rejected lrcs {Viable.inner; outer} =
-    (*let  = Viable.get_transitions config.viable in*)
+  and visit_transitions lrcs {Viable.inner; outer} =
     let inner =
       List.fold_left (fun acc {Viable.candidates; _} ->
           List.fold_left
             (fun acc {Viable.target; lookahead=_; filter=(); reduction} ->
-               let state = visit_config ~accepted ~rejected lrcs (Source.inj_l target) in
+               let state = visit_config lrcs (Source.inj_l target) in
                (state, reduction) :: acc)
             acc candidates
         ) [] inner
     in
-    let outer = match outer with
-      | first :: rest -> visit_outer ~accepted ~rejected lrcs first rest
-      | [] -> []
-    in
-    {inner; outer}
+    match visit_outer lrcs outer with
+    | [] -> [inner]
+    | x :: xs -> (inner @ x) :: xs
 
-  and visit_outer ~accepted ~rejected lrcs {Viable.candidates; _} rest =
-    let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
-      let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
-      let lrcs = indexset_bind lr1s compatible_lrc in
-      if IndexSet.is_empty lrcs
-      then None
-      else Some (visit_config ~accepted ~rejected lrcs (Source.inj_l target), reduction)
-    in
-    let candidates = List.filter_map visit_candidate candidates in
-    match rest with
-    | [] -> [candidates]
-    | next :: rest ->
-      candidates ::
-      visit_outer ~accepted ~rejected (indexset_bind lrcs Lrc.predecessors) next rest
+  and visit_outer lrcs = function
+    | [] -> []
+    | {Viable.candidates; _} :: rest ->
+      let visit_candidate {Viable.target; lookahead=_; filter=lr1s; reduction} =
+        let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
+        let lrcs = indexset_bind lr1s compatible_lrc in
+        if IndexSet.is_empty lrcs
+        then None
+        else Some (visit_config lrcs (Source.inj_l target), reduction)
+      in
+      let candidates = List.filter_map visit_candidate candidates in
+      let rest =
+        if rest = [] then
+          []
+        else
+          visit_outer (indexset_bind lrcs Lrc.predecessors) rest
+      in
+      candidates :: rest
 
   let initial =
     let process lrc =
       let lr1 = Lrc.lr1_of_lrc lrc in
       assert (not (IndexSet.mem lr1 Lr1.accepting));
-      let accepted = Lr1.shift_on lr1 in
-      let rejected = Lr1.reject lr1 in
-      visit_config ~accepted ~rejected
+      visit_config
         (IndexSet.singleton lrc)
-        (Source.inj_r lrc)
+        (Source.inj_r lr1)
     in
     IndexMap.inflate process Lrc.idle
 
@@ -184,23 +153,17 @@ struct
 
   let () = Stopwatch.step time "Nodes: %d" (cardinal n)
 
-  let iter_targets {inner; outer} f =
-    List.iter f inner;
-    List.iter (List.iter f) outer
+  let iter_targets tr f =
+    List.iter (List.iter f) tr
 
-  let rev_iter_targets {inner; outer} f =
-    list_rev_iter f inner;
-    list_rev_iter (list_rev_iter f) outer
+  let rev_iter_targets tr f =
+    list_rev_iter (list_rev_iter f) tr
 
-  let fold_targets f acc {inner; outer} =
-    let acc = List.fold_left f acc inner in
-    let acc = List.fold_left (List.fold_left f) acc outer in
-    acc
+  let fold_targets f acc tr =
+    List.fold_left (List.fold_left f) acc tr
 
-  let rev_fold_targets f {inner; outer} acc =
-    let acc = List.fold_right f inner acc in
-    let acc = List.fold_right (List.fold_right f) outer acc in
-    acc
+  let rev_fold_targets f tr acc =
+    List.fold_right (List.fold_right f) tr acc
 
   let successors =
     Vector.map (fun desc ->
@@ -212,52 +175,222 @@ struct
   let predecessors =
     relation_reverse successors
 
-  let accepted st = (Vector.get states st).config.accepted
-  let rejected st = (Vector.get states st).config.rejected
+  let reject st =
+    let {config; _} = Vector.get states st in
+    match Source.prj config.source with
+    | L viable ->
+      let config = Viable.get_config viable in
+      IndexSet.inter (Lr1.reject config.top) config.lookahead
+    | R lr1 -> IndexSet.inter (Lr1.reject lr1) Terminal.regular
 
-  let potential_reject =
-    let table = Vector.init n rejected in
-    let widen _src rej1 _tgt rej2 =
-      (*assert (IndexSet.disjoint rej1 (accepted tgt));*)
-      IndexSet.union rej1 rej2
+  let rejectable =
+    let table = Vector.init n (fun st -> (reject st, IndexMap.empty)) in
+    let propagate source (sreject, _) _target (treject, trejects as prev) =
+      let treject' = IndexSet.union sreject treject in
+      if treject' == treject then
+        prev
+      else
+        let delta = IndexSet.diff sreject treject in
+        let update = function
+          | None -> Some delta
+          | Some ts -> Some (IndexSet.union ts delta)
+        in
+        (treject', IndexMap.update source update trejects)
     in
-    fix_relation predecessors table ~propagate:widen;
-    Vector.get table
+    fix_relation ~propagate predecessors table;
+    let project (ts, edges) = (ts, IndexMap.bindings edges) in
+    Vector.get (Vector.map project table)
+
+  let reductions src tgt =
+    fold_targets (fun acc (tgt', red) ->
+        if equal_index tgt tgt'
+        then IndexSet.add red acc
+        else acc
+      ) IndexSet.empty (Vector.get states src).transitions
 
   let () = Stopwatch.leave time
+end
 
+module Covering_tree
+    (Info : Info.S)
+    (Viable: Viable_reductions.S with module Info := Info)
+    (Lrc: Lrc.S with module Info := Info)
+    (Reach : S with module Info := Info
+                and module Viable := Viable
+                and module Lrc := Lrc)
+    ()
+=
+struct
+  open Info
+  open Reach
+
+  module Goto_star = struct
+    include IndexBuffer.Gen.Make()
+
+    let lr0_stack_of_source source =
+      match Source.prj source with
+      | L v -> List.rev_map Lr1.to_lr0 (Viable.get_stack v)
+      | R lr1 -> [Lr1.to_lr0 lr1]
+
+    let def = get_generator ()
+
+    let index_of =
+      let table = Hashtbl.create 7 in
+      let index_of lr0s =
+        match Hashtbl.find_opt table lr0s with
+        | Some i -> i
+        | None ->
+          let r = IndexBuffer.Gen.reserve def in
+          let i = IndexBuffer.Gen.index r in
+          Hashtbl.add table lr0s i;
+          IndexBuffer.Gen.commit def r lr0s;
+          i
+      in
+      let project desc = index_of (lr0_stack_of_source desc.config.source) in
+      Vector.get (Vector.map project states)
+
+    let def = IndexBuffer.Gen.freeze def
+
+    let () =
+      Printf.eprintf "Goto*: found %d configurations to cover\n"
+        (cardinal (Vector.length def))
+  end
+
+  type node = {
+    state: n index;
+    rejected: Terminal.set;
+    mutable handled: Terminal.set;
+    mutable children: node list;
+  }
+
+  let reject_before = Vector.make n IndexSet.empty
+
+  let make_arborescence roots =
+    let marked = Boolvector.make n false in
+    let nodes = ref 0 in
+    let queue = ref [] in
+    let visit rejected state acc =
+      let rejected = IndexSet.union (reject state) rejected in
+      let continue, rejected' =
+        if Boolvector.test marked state then (
+          let rejected' = Vector.get reject_before state in
+          let rejected'' = IndexSet.union rejected rejected' in
+          (rejected' != rejected'', rejected'')
+        ) else (
+          Boolvector.set marked state;
+          (true, rejected)
+        )
+      in
+      if continue then (
+        incr nodes;
+        Vector.set reject_before state rejected';
+        let node = {state; rejected; handled = IndexSet.empty; children = []} in
+        push queue node;
+        node :: acc
+      ) else
+        acc
+    in
+    let roots = IndexSet.fold (visit IndexSet.empty) roots [] in
+    let propagate node =
+      let next = Vector.get successors node.state in
+      node.children <- IndexSet.fold (visit node.rejected) next node.children
+    in
+    fixpoint ~propagate queue;
+    Printf.eprintf "Arborescence has %d nodes\n" !nodes;
+    roots
+
+  let complete_arborescence goals roots =
+    let sentences = ref 0 in
+    let get_child node state =
+      let pred node' = equal_index node'.state state in
+      match List.find_opt pred node.children with
+      | Some node' -> node'
+      | None ->
+        let rejected = IndexSet.union (reject state) node.rejected in
+        let node' = {state; rejected; handled = IndexSet.empty; children = []} in
+        node.children <- node' :: node.children;
+        node'
+    in
+    let rec visit_after node todo =
+      let goal = Goto_star.index_of node.state in
+      Vector.set goals goal
+        (IndexSet.diff (Vector.get goals goal) todo);
+      let todo = List.fold_left (fun todo (successor, terminals) ->
+          let todo' = IndexSet.inter todo terminals in
+          if IndexSet.is_empty todo' then todo else (
+            visit_after (get_child node successor) todo';
+            IndexSet.diff todo todo'
+          )
+        ) todo (snd (rejectable node.state))
+      in
+      if not (IndexSet.is_empty todo) then (
+        assert (IndexSet.subset todo (reject node.state));
+        node.handled <- todo;
+        incr sentences;
+      )
+    in
+    let rec visit_before node =
+      let visited =
+        List.fold_left
+          (fun acc node' -> IndexSet.union (visit_before node') acc)
+          IndexSet.empty node.children
+      in
+      let goal = Goto_star.index_of node.state in
+      let rejectable, _ = rejectable node.state in
+      let remaining = Vector.get goals goal in
+      let remaining = IndexSet.diff remaining visited in
+      Vector.set goals goal remaining;
+      let todo = IndexSet.inter rejectable remaining in
+      visit_after node todo;
+      IndexSet.union visited todo
+    in
+    List.iter (fun node -> ignore (visit_before node)) roots;
+    Printf.eprintf "Enumeration has %d sentences\n" !sentences
+
+  let goals =
+    let table = Vector.make Goto_star.n IndexSet.empty in
+    Index.iter (Vector.length states) (fun st ->
+        let ra = reject st in
+        let rb, _ = rejectable st in
+        let rc = Vector.get reject_before st in
+        let r = IndexSet.union ra (IndexSet.union rb rc) in
+        vector_set_union table (Goto_star.index_of st) r
+      );
+    table
+
+  let roots =
+    let add _ = IndexSet.add in
+    let initial = IndexMap.fold add Reach.initial IndexSet.empty in
+    let roots = make_arborescence initial in
+    complete_arborescence goals roots;
+    roots
+
+  let enum_sentences f =
+    let rec visit path (node : node) =
+      let path = node.state :: path in
+      if not (IndexSet.is_empty node.handled) then
+        f path node.rejected;
+      List.iter (visit path) node.children
+    in
+    List.iter (visit []) roots
 end
 
 module type FAILURE_NFA = sig
-  type terminal
+  type reach
   type lr1
   type lrc
-  type reach
-
+  type terminal
   include CARDINAL
-
-  type config = { state : reach index; lrcs : lrc indexset; }
-  type desc =
-      State of {
-        config : config;
-        rejected : terminal indexset;
-        epsilon : n indexset;
-      }
-    | Intermediate of {
-        lrcs : lrc indexset;
-        rejected : terminal indexset;
-        potential : terminal indexset;
-        next : n indexset;
-      }
-
-  val initial : (lrc, n index) indexmap
-  val states : (n, desc) vector
-  val outer_transitions :
-    n index -> (lr1 indexset * n indexset) list
-  val potential : n index -> terminal indexset
-  val rejected : n index -> terminal indexset
-  val delta : n index -> terminal indexset
-  val lrcs_of : n index -> lrc indexset
+  val initial : (n, terminal indexset) indexmap
+  (*val reject : n index -> terminal indexset*)
+  val rejectable : n index -> terminal indexset
+  val top : n index -> lr1 index option
+  val goto : n index -> lr1 index list
+  val is_bottom : n index -> bool
+  val incoming : n index -> lr1 indexset
+  val incoming_lrc : n index -> lrc indexset
+  val transitions : n index -> (n, terminal indexset) indexmap
+  val to_string : n index -> string
 end
 
 module FailureNFA
@@ -275,245 +408,256 @@ module FailureNFA
 =
 struct
 
+  let time = Stopwatch.enter Stopwatch.main "FailureNFA2"
+
   type reach = Reach.n
 
-  let time = Stopwatch.enter Stopwatch.main "FailureNFA"
-
-  let has_extra_rejections st =
-    not (IndexSet.equal (Reach.potential_reject st) (Reach.rejected st))
-
-  (* Potential optimization:
-
-     let has_strong_extra_rejections st =
-     (Reach.potential_reject st) != (Reach.rejected st)
-
-     let () =
-     Index.iter Reach.n (fun st ->
-      assert (has_extra_rejections st = has_strong_extra_rejections st))
-  *)
-
-  let extra_transitions st =
-    let open Reach in
-    let filter xs = List.filter (fun (st, _) -> has_extra_rejections st) xs in
-    let rec filter_trim = function
-      | [] -> []
-      | x :: xs ->
-        match filter x, filter_trim xs with
-        | [], [] -> []
-        | x', xs' -> x' :: xs'
-    in
-    let {transitions; _} = Vector.get states st in
-    let inner = filter transitions.inner in
-    let outer = filter_trim transitions.outer in
-    {inner; outer}
-
-  let lrcs_of st = (Vector.get Reach.states st).config.lrcs
-
-  open Info
-
-  type tree =
-      Node of Lrc.set * Terminal.set * Reach.n indexset * tree list
-
-  let rec merge_tree l1 l2 = match l1, l2 with
-    | [], xs | xs, [] -> xs
-    | (Node (s1, j1, r1, t1) as n1) :: l1',
-      (Node (s2, j2, r2, t2) as n2) :: l2' ->
-      let c = IndexSet.compare s1 s2 in
-      if c < 0 then
-        n1 :: merge_tree l1' l2
-      else if c > 0 then
-        n2 :: merge_tree l1 l2'
-      else
-        Node (s1, IndexSet.union j1 j2, IndexSet.union r1 r2, merge_tree t1 t2) :: merge_tree l1' l2'
-
-  let order_node (Node (s1, _, _, _)) (Node (s2, _, _, _)) =
-    IndexSet.compare s1 s2
-
-  let rec merge_trees ls =
-    let ls = List.sort order_node ls in
-    let rec visit_many s j r t = function
-      | Node (s', j', r', t') :: rest when IndexSet.equal s s' ->
-        visit_many s (IndexSet.union j j') (IndexSet.union r r') (t' @ t) rest
-      | rest ->
-        Node (s, j, r, merge_trees t) :: visit_one rest
-    and visit_one = function
-      | Node (s, j, r, t) :: Node (s', j', r', t') :: rest when IndexSet.equal s s' ->
-        visit_many s (IndexSet.union j j') (IndexSet.union r r') (t' @ t) rest
-      | x :: xs -> x :: visit_one xs
-      | [] -> []
-    in
-    visit_one ls
-
-  let rec expand_outer rejected lrcs = function
-    | [] -> []
-    | hd :: tl ->
-      let tl = match tl with
-        | [] -> []
-        | tl -> expand_outer rejected (indexset_bind lrcs Lrc.predecessors) tl
+  let () =
+    if build_with_expensive_assertions then (
+      Index.iter Lrc.n (fun lrc ->
+          let lr1 = Lrc.lr1_of_lrc lrc in
+          let lr1s' = Info.Lr1.predecessors lr1 in
+          IndexSet.iter (fun lrc' ->
+              assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s')
+            ) (Lrc.predecessors lrc)
+        );
+      let validate {Reach. config; transitions} =
+        let rec validate lrcs = function
+          | [] -> ()
+          | x :: xs ->
+            List.iter (fun (reach', _) ->
+                let lrcs' = (Vector.get Reach.states reach').config.lrcs in
+                if not (IndexSet.subset lrcs' lrcs) then (
+                  Printf.eprintf "%s not included in %s\n"
+                    (Lrc.set_to_string lrcs')
+                    (Lrc.set_to_string lrcs);
+                  assert false
+                )
+              ) x;
+            validate (indexset_bind lrcs Lrc.predecessors) xs
+        in
+        validate config.lrcs transitions
       in
-      let hd =
-        IndexSet.fold (fun st acc ->
-            let lrcs = IndexSet.inter lrcs (lrcs_of st) in
-            if IndexSet.is_empty lrcs
-            then acc
-            else Node (lrcs, rejected, IndexSet.singleton st, []) :: acc
-          ) hd []
-        |> List.sort order_node
-      in
-      let tl = List.filter_map (fun (Node (lrcs', _, _, _) as tree) ->
-          let lrcs = IndexSet.inter lrcs
-              (indexset_bind lrcs' Lrc.successors)
+      Vector.iter validate Reach.states
+    )
+
+  module States = struct
+    module Suffix = IndexBuffer.Gen.Make()
+    module Reach_or_suffix = Sum(Reach)(Suffix)
+    include Sum(Lrc)(Reach_or_suffix)
+
+    let prefix i = inj_l i
+    let suffix i = inj_r (Reach_or_suffix.inj_r i)
+    let reach i = inj_r (Reach_or_suffix.inj_l i)
+
+    type t =
+      | Prefix of Lrc.n index
+      | Suffix of Suffix.n index
+      | Reach  of Reach.n index
+
+    let prj i = match prj i with
+      | L i -> Prefix i
+      | R i ->
+        match Reach_or_suffix.prj i with
+        | L i -> Reach i
+        | R i -> Suffix i
+  end
+
+  type n = States.n
+  let n = States.n
+
+  let map_union m1 m2 =
+    let merge _ a0 a1 = Some (IndexSet.union a0 a1) in
+    let m3 = IndexMap.union merge m1 m2 in
+    if IndexMap.equal IndexSet.equal m2 m3
+    then m2
+    else m3
+
+  let epsilon_closure =
+    let epsilon_predecessors = Vector.make Reach.n IndexSet.empty in
+    Vector.iteri (fun src {Reach.transitions; _} ->
+        match transitions with
+        | [] -> ()
+        | epsilon :: _ ->
+          List.iter
+            (fun (tgt, _) -> vector_set_add epsilon_predecessors tgt src)
+            epsilon
+      ) Reach.states;
+    let table =
+      Vector.init Reach.n
+        (fun i -> IndexMap.singleton (States.reach i) (Reach.reject i))
+    in
+    fix_relation epsilon_predecessors table
+      ~propagate:(fun _ map _ map' -> map_union map map');
+    Vector.get table
+
+  let suffix_transitions =
+    States.Suffix.get_generator ()
+
+  let lrc_initials =
+    IndexSet.filter
+      (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
+      Lrc.idle
+
+  let bottom =
+    States.suffix
+      (IndexBuffer.Gen.add suffix_transitions (IndexMap.empty, IndexSet.empty))
+
+  let reach_transitions =
+    let preds lrcs = indexset_bind lrcs Lrc.predecessors in
+    let succs lrcs = indexset_bind lrcs Lrc.successors in
+    let rec import lrcs = function
+      | [] -> (IndexMap.empty, IndexSet.empty)
+      | targets :: next ->
+        let targets, lrcs1 =
+          let add (set, lrcs) (reach, _) =
+            let set = map_union (epsilon_closure reach) set in
+            let desc =Vector.get Reach.states reach in
+            let lrcs = IndexSet.union desc.config.lrcs lrcs in
+            (set, lrcs)
           in
-          if IndexSet.is_empty lrcs
-          then None
-          else Some (Node (lrcs, rejected, IndexSet.empty, [tree]))
-        ) tl
-               |> List.sort order_node
-      in
-      merge_tree hd tl
-
-  include IndexBuffer.Gen.Make()
-
-  type config = {
-    state: Reach.n index;
-    lrcs: Lrc.set;
-  }
-
-  type desc =
-    | State of {
-        config: config;
-        rejected: Info.Terminal.set;
-        epsilon: n indexset;
-      }
-    | Intermediate of {
-        lrcs: Lrc.set;
-        rejected: Info.Terminal.set;
-        potential: Info.Terminal.set;
-        next: n indexset;
-      }
-
-  let states = get_generator ()
-
-  let table = Hashtbl.create 7
-
-  let intermediate_table = Hashtbl.create 7
-
-  let rec merge_outer acc = function
-    | [] -> acc
-    | x :: xs ->
-      let hd, tl = match acc with
-        | [] -> IndexSet.empty, []
-        | hd :: tl -> hd, tl
-      in
-      let add_tr hd (st, _) = IndexSet.add st hd in
-      let hd = List.fold_left add_tr hd x in
-      let tl = merge_outer tl xs in
-      hd :: tl
-
-  let inner_closure st =
-    let rejected = ref IndexSet.empty in
-    let acc = ref [] in
-    let rec loop st =
-      rejected := IndexSet.union (Reach.rejected st) !rejected;
-      let tr = extra_transitions st in
-      acc := merge_outer !acc tr.outer;
-      List.iter loop_tr tr.inner
-    and loop_tr (st, _) = loop st
+          List.fold_left add (IndexMap.empty, IndexSet.empty) targets
+        in
+        (*FIXME: Find out why it is not always a subset*)
+        if not (IndexSet.subset lrcs1 lrcs) then (
+          Printf.eprintf "expected: %s in %s\n"
+            (Lrc.set_to_string lrcs1)
+            (Lrc.set_to_string lrcs);
+          assert false
+        );
+        match next with
+        | [] -> (targets, lrcs1)
+        | next ->
+          let next, lrcs2 = import (preds lrcs) next in
+          let lrcs2 = IndexSet.inter (succs lrcs2) lrcs in
+          let suffix = IndexBuffer.Gen.add suffix_transitions (next, lrcs2) in
+          (IndexMap.add (States.suffix suffix) IndexSet.empty targets,
+           IndexSet.union lrcs1 lrcs2)
     in
-    loop st;
-    !rejected, !acc
+    Vector.map (fun (d : Reach.desc) ->
+        let regular =
+          match d.transitions with
+          | [] | [_] -> IndexMap.empty
+          | _ :: rest -> fst (import (preds d.config.lrcs) rest)
+        in
+        if IndexSet.subset d.config.lrcs lrc_initials then (
+          assert (IndexMap.is_empty regular);
+          IndexMap.singleton bottom IndexSet.empty
+        ) else
+          regular
+      ) Reach.states
 
-  let visit_intermediate lrcs rejected potential next =
-    let desc = Intermediate {lrcs; rejected; potential; next} in
-    match Hashtbl.find_opt intermediate_table desc with
-    | Some index -> index
-    | None ->
-      let index = IndexBuffer.Gen.add states desc in
-      Hashtbl.add intermediate_table desc index;
-      index
-
-  let prepare_state st lrcs =
-    let rejected, outer = inner_closure st in
-    let outer = expand_outer rejected lrcs outer in
-    (rejected, outer)
-
-  let rec visit_config config =
-    let lrcs = IndexSet.inter (lrcs_of config.state) config.lrcs in
-    let config = {config with lrcs} in
-    match Hashtbl.find_opt table config with
-    | Some transitions -> transitions
-    | None ->
-      let reservation = IndexBuffer.Gen.reserve states in
-      let index = IndexBuffer.Gen.index reservation in
-      Hashtbl.add table config index;
-      let rejected, trees = prepare_state config.state config.lrcs in
-      let _, epsilon = memoize_branch trees in
-      IndexBuffer.Gen.commit states reservation
-        (State {config; rejected; epsilon});
-      index
-
-  and memoize_tree acc (Node (lrcs, rejected, reachs, next)) =
-    let (potential, reached) as acc =
-      IndexSet.fold
-        (fun state (potential, states) ->
-           (IndexSet.union (Reach.potential_reject state) potential,
-            IndexSet.add (visit_config {state; lrcs}) states)
-        )
-        reachs acc
-    in
-    let potential', next =
-      List.fold_left memoize_tree (IndexSet.empty, IndexSet.empty) next
-    in
-    if IndexSet.is_empty next then acc else
-      (IndexSet.union potential' potential,
-       IndexSet.add (visit_intermediate lrcs rejected potential' next) reached)
-
-  and memoize_branch trees =
-    merge_trees trees
-    |> List.fold_left memoize_tree (IndexSet.empty, IndexSet.empty)
+  let suffix_transitions =
+    IndexBuffer.Gen.freeze suffix_transitions
 
   let initial =
-    IndexMap.map
-      (fun state -> visit_config {lrcs = lrcs_of state; state})
-      Reach.initial
+    let add _ st acc = map_union (epsilon_closure st) acc in
+    IndexMap.fold add Reach.initial IndexMap.empty
 
-  let states = IndexBuffer.Gen.freeze states
-
-  let () = Stopwatch.step time "Nodes: %d" (cardinal n)
-
-  let outer_transitions =
-    let rec raw_transitions st acc =
-      match Vector.get states st with
-      | Intermediate {lrcs; next; _} ->
-        (IndexSet.map Lrc.lr1_of_lrc lrcs, next) :: acc
-      | State {epsilon; _} ->
-        IndexSet.fold raw_transitions epsilon acc
+  let rejectable =
+    let table = Vector.make States.Suffix.n IndexSet.empty in
+    let get i =
+      match States.prj i with
+      | States.Prefix _ -> IndexSet.empty
+      | States.Reach  i -> fst (Reach.rejectable i)
+      | States.Suffix i -> Vector.get table i
     in
-    tabulate_finset n
-      (fun st -> raw_transitions st [])
+    let populate target _ set = IndexSet.union (get target) set in
+    let def targets = IndexMap.fold populate targets IndexSet.empty in
+    let initialize suf (targets, _) =
+      Vector.set table suf (def targets)
+    in
+    (* A suffix state comes always before its predecessors, and rejectables are
+       propagated from a state to its predecessors, so:
+       - a forward pass should initialize them correctly,
+       - there is no need to look for a fixed point. *)
+    Vector.iteri initialize suffix_transitions;
+    if build_with_expensive_assertions then (
+      let validate st (targets, _) =
+        assert (IndexSet.equal (Vector.get table st) (def targets))
+      in
+      Vector.iteri validate suffix_transitions
+    );
+    get
 
-  let potential st =
-    match Vector.get states st with
-    | Intermediate t -> t.potential
-    | State t -> Reach.potential_reject t.config.state
+  let top i =
+    match States.prj i with
+    | States.Prefix _ -> None
+    | States.Suffix _ -> None
+    | States.Reach r ->
+      let desc = Vector.get Reach.states r in
+      let source = desc.config.source in
+      match Reach.Source.prj source with
+      | L v -> Some (Viable.get_config v).top
+      | R lr1 -> Some lr1
 
-  let rejected st =
-    match Vector.get states st with
-    | Intermediate t -> t.rejected
-    | State t -> t.rejected
+  let goto i =
+    match States.prj i with
+    | States.Prefix _ -> []
+    | States.Suffix _ -> []
+    | States.Reach r ->
+      let desc = Vector.get Reach.states r in
+      let source = desc.config.source in
+      match Reach.Source.prj source with
+      | L v -> Viable.get_stack v
+      | R _ -> []
 
-  let delta = tabulate_finset n
-      (fun st -> IndexSet.diff (potential st) (rejected st))
+  let incoming_lrc i =
+    match States.prj i with
+    | States.Prefix lrc -> IndexSet.singleton lrc
+    | States.Reach i -> (Vector.get Reach.states i).config.lrcs
+    | States.Suffix i -> snd (Vector.get suffix_transitions i)
 
-  let lrcs_of st =
-    match Vector.get states st with
-    | Intermediate t -> t.lrcs
-    | State t -> t.config.lrcs
+  let reach_incoming =
+    let incoming desc = IndexSet.map Lrc.lr1_of_lrc desc.Reach.config.lrcs in
+    Vector.map incoming Reach.states
+
+  let suffix_incoming =
+    let incoming (_, lrcs) = IndexSet.map Lrc.lr1_of_lrc lrcs in
+    Vector.map incoming suffix_transitions
+
+  let incoming i =
+    match States.prj i with
+    | States.Prefix lrc -> IndexSet.singleton (Lrc.lr1_of_lrc lrc)
+    | States.Reach i -> Vector.get reach_incoming i
+    | States.Suffix i -> Vector.get suffix_incoming i
+
+  let transitions i =
+    match States.prj i with
+    | States.Prefix lrc ->
+      IndexMap.inflate (fun _ -> IndexSet.empty)
+        (IndexSet.map States.prefix (Lrc.predecessors lrc))
+    | States.Reach i -> Vector.get reach_transitions i
+    | States.Suffix i -> fst (Vector.get suffix_transitions i)
+
+  let is_bottom i = i = bottom
+
+  let to_string i =
+    if is_bottom i then "bottom" else
+      match States.prj i with
+      | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
+      | States.Reach  i ->
+        let desc = Vector.get Reach.states i in
+        Printf.sprintf "reach(%d, %s)"
+          (Index.to_int i)
+          (Lrc.set_to_string desc.config.lrcs)
+      | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () =
-    Stopwatch.step time "Outer transitions";
-    Stopwatch.leave time
+    let oc = open_out_bin "nfa.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    Index.iter n (fun i ->
+        p "  st%d[label=%S];\n" (i :> int) (to_string i);
+        IndexMap.iter (fun j _ ->
+            p "  st%d -> st%d;\n" (i :> int) (Index.to_int j);
+          ) (transitions i)
+      );
+    p "}";
+    close_out oc
 
+  let () = Stopwatch.leave time
 end
 
 module Coverage_check
@@ -534,585 +678,427 @@ module Coverage_check
 =
 struct
   open Info
+  let time = Stopwatch.enter Stopwatch.main "Coverage check"
 
-  let time = Stopwatch.enter Stopwatch.main "Coverage forward pass"
+  module FDFA = struct
+    let table = Hashtbl.create 7
 
-  let predecessors =
-    let table = Vector.make DFA.n [] in
-    Index.iter DFA.n (fun src ->
-        List.iter
-          (fun (lr1, tgt) -> Vector.set_cons table tgt (lr1, src))
-          (DFA.successors src)
-      );
-    Vector.get table
+    let todo = ref []
 
-  let successor =
-    let index src =
-      List.fold_left (fun acc (lr1s, tgt) ->
-          IndexSet.fold
-            (fun lr1 acc -> IndexMap.add lr1 tgt acc)
-            lr1s acc
-        ) IndexMap.empty (DFA.successors src)
-    in
-    let table = Vector.init DFA.n index in
-    fun dfa lr1 ->
-      IndexMap.find_opt lr1 (Vector.get table dfa)
-
-  let reverse ~propagate fixpoint =
-    let table = Vector.make DFA.n [] in
-    let update src tgt dom img =
-      Vector.set_cons table tgt (src,dom,img)
-    in
-    Vector.iteri (fun src f -> propagate (update src) src f) fixpoint;
-    Vector.get table
-
-  let rec diffs d = function
-    | [] -> d
-    | x :: xs -> diffs (IndexSet.diff d x) xs
-
-  module Forward = struct
-
-    let found_uncovered = ref false
-
-    module Reducible = struct
-      let table = Vector.make DFA.n Increasing.minimum
-
-      let todo = ref []
-
-      let update dfa g =
-        let f = Vector.get table dfa in
-        let f, df = Increasing.increase ~ignore:(DFA.accept dfa) f g in
-        if is_not_minimal df then (
-          Vector.set table dfa f;
-          push todo (dfa, df);
-        )
-
-      let initial_fun =
-        Increasing.piecewise (
-          IndexMap.fold
-            (fun _ st acc -> (IndexSet.singleton st, NFA.potential st) :: acc)
-            NFA.initial []
-        )
-
-      let () = update DFA.initial initial_fun
-
-      let follow dfa unhandled (lr1s, nfa') =
-        let image nfa = IndexSet.inter unhandled (NFA.potential nfa) in
-        let g = Increasing.from nfa' image in
-        if is_not_minimal g then
-          let remainder =
-            List.fold_left (fun lr1s (label, dfa') ->
-                let lr1s' = IndexSet.diff lr1s label in
-                if lr1s != lr1s' then
-                  update dfa' g;
-                lr1s'
-              ) lr1s (DFA.successors dfa)
+    let explore_transitions trs =
+      let sets =
+        List.fold_left (fun acc tr ->
+            IndexMap.fold
+              (fun state reject acc ->
+                 (NFA.incoming state, (reject, state)) :: acc)
+              tr acc
+          )
+          [] trs
+      in
+      List.map (fun (lbl, clss) ->
+          let reject, states =
+            List.fold_left (fun (rejects, states) (reject, state) ->
+              (IndexSet.union reject rejects, IndexSet.add state states))
+              (IndexSet.empty, IndexSet.empty)
+              clss
           in
-          if not (IndexSet.is_empty remainder) then
-            found_uncovered := true
-
-      let propagate (dfa, f) =
-        Increasing.iter f (fun nfa unhandled ->
-            List.iter
-              (follow dfa (IndexSet.inter unhandled (NFA.delta nfa)))
-              (NFA.outer_transitions nfa)
-          )
-
-      let () = fixpoint ~propagate todo
-
-      let () =
-        Vector.iteri (fun dfa f ->
-            Increasing.iter f (fun nfa img ->
-                assert (IndexSet.disjoint img (DFA.accept dfa));
-                assert (IndexSet.subset img (NFA.potential nfa))
-              )
-          ) table;
-        Stopwatch.step time "Propagated reductions, %d states reached"
-          (count is_not_minimal table)
-
-      let iter_transitions dfa inc ~f =
-        let follow unhandled (lr1s, nfa') =
-          let image nfa = IndexSet.inter unhandled (NFA.potential nfa) in
-          let g = Increasing.from nfa' image in
-          if is_not_minimal g then
-            IndexSet.iter (fun lr1 -> f lr1 g (successor dfa lr1))
-              lr1s
-        in
-        Increasing.iter inc (fun nfa unhandled ->
-            List.iter
-              (follow (IndexSet.inter unhandled (NFA.delta nfa)))
-              (NFA.outer_transitions nfa)
-          )
-    end
-
-    module Prefix = struct
-      let expand f =
-        Increasing.piecewise (
-          Increasing.fold f (fun nfa unhandled acc ->
-              let unhandled = IndexSet.inter unhandled (NFA.rejected nfa) in
-              if IndexSet.is_empty unhandled
-              then acc
-              else (NFA.lrcs_of nfa, unhandled) :: acc
-            ) []
+          push todo states;
+          (lbl, reject, states)
         )
+        (IndexRefine.annotated_partition sets)
 
-      let table = Vector.map expand Reducible.table
-
-      let todo = ref []
-
-      let update dfa g =
-        let f = Vector.get table dfa in
-        let f, df = Increasing.increase ~ignore:(DFA.accept dfa) f g in
-        if is_not_minimal df then (
-          Vector.set table dfa f;
-          push todo (dfa, df);
+    let propagate states =
+      if not (Hashtbl.mem table states) then (
+        Hashtbl.add table states (
+          explore_transitions (
+            IndexSet.fold (fun state acc -> NFA.transitions state :: acc)
+              states []
+          )
         )
+      )
 
-      let follow src lrc unhandled =
-        match successor src (Lrc.lr1_of_lrc lrc) with
-        | None -> found_uncovered := true
-        | Some tgt ->
-          update tgt (Increasing.piece (Lrc.predecessors lrc) unhandled)
+    let initial = explore_transitions [NFA.initial]
 
-      let propagate (dfa, f) =
-        Increasing.iter f (follow dfa)
+    let () =
+      fixpoint ~propagate todo
 
-      let iter_transitions dfa inc ~f =
-        let follow src lrc unhandled =
-          let lr1 = Lrc.lr1_of_lrc lrc in
-          f lr1
-            (Increasing.piece (Lrc.predecessors lrc) unhandled)
-            (successor src lr1)
-        in
-        Increasing.iter inc (follow dfa)
-
-      let () =
-        Vector.iteri (fun i x -> propagate (i, x)) table;
-        fixpoint ~propagate todo
-
-      let () =
-        Vector.iteri (fun dfa f ->
-            Increasing.iter f
-              (fun _ img -> assert (IndexSet.disjoint img (DFA.accept dfa)))
-          ) table;
-        Stopwatch.step time "Propagated prefixes, %d states reached"
-          (count is_not_minimal table)
-    end
+    let () =
+      Stopwatch.step time
+        "Determinized Failure NFA, %d states\n"
+        (Hashtbl.length table)
   end
+
+  let pts ts = string_of_indexset ~index:Terminal.to_string ts
+
+  let () =
+    let oc = open_out_bin "dfa.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    p "  %s" style;
+    Index.iter DFA.n (fun src ->
+        let accept = pts (DFA.accept src) in
+        p "  st%d [label=%S]" (Index.to_int src)
+          (if src = DFA.initial then "initial " ^ accept else accept)
+        ;
+        List.iter (fun (lbl, tgt) ->
+            p "  st%d -> st%d [label=%S]"
+              (Index.to_int src) (Index.to_int tgt)
+              (Lr1.set_to_string lbl)
+        ) (DFA.successors src);
+      );
+    p "}";
+    close_out_noerr oc
+
+  module Image = struct
+    type t = {
+      handled: Terminal.set;
+      rejected: Terminal.set;
+    }
+
+    let empty = {rejected=IndexSet.empty; handled=IndexSet.empty}
+
+    (* Return the image propagated when following a transition:
+       - reaching a DFA state accepting [accept]
+       - rejecting [reject]
+       - with continuations possibly rejecting [rejectable]
+
+       Returns [None] if nothing has to be propagated (all rejected or
+       rejectable lookaheads are handled), or [Some img] with the propagated
+       image if some lookahead still need to be handled.
+    *)
+    let normalize ~accept ~reject ~rejectable image =
+      let handled = IndexSet.union image.handled accept in
+      let rejected = IndexSet.diff (IndexSet.union reject image.rejected) handled in
+      let handled = IndexSet.inter handled rejectable in
+      if IndexSet.is_empty rejected && IndexSet.equal handled rejectable then
+        None
+      else
+        Some {rejected; handled}
+
+    (* This function increase an image with a propagated delta.
+     * Returns [None] if the image is unchanged, or [Some (image', delta')] with
+     * the new image and the change.
+    *)
+    let increase ~delta image =
+      let {rejected; handled} = delta in
+      let rejected = IndexSet.union rejected image.rejected in
+      let handled = IndexSet.diff (IndexSet.inter handled image.handled) rejected in
+      if rejected == image.rejected && handled == image.handled then
+        None
+      else
+        let image' = {rejected; handled} in
+        let rejected = IndexSet.diff rejected image.rejected in
+        Some (image', {rejected; handled})
+
+    (* If two different delta are propagated to the same target,
+       it is possible to refine the deltas and update the target once.
+       E.g. [increase ~delta:d1 (increase ~delta:d2 target)] is equivalent to
+            [increase ~delta:(refine d1 d2) target]
+    *)
+    let refine i1 i2 =
+      {handled = IndexSet.inter i1.handled i2.handled;
+       rejected = IndexSet.union i1.rejected i2.rejected}
+  end
+
+  module State = Prod(DFA)(NFA)
+
+  type desc = {
+    state: State.n index;
+    mutable successors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
+
+    uncovered: Lr1.set;
+    mutable image: Image.t;
+    mutable failing: Terminal.set;
+    mutable failing_successors: (Lr1.set * (Terminal.set * desc)) list;
+
+    mutable mark: bool;
+    mutable todo: Image.t;
+  }
+
+  let coverage = IndexTable.create 7
+
+  let get_state index =
+    match IndexTable.find_opt coverage index with
+    | Some desc -> desc
+    | None ->
+      let dfa, nfa = State.prj index in
+      let (successors, uncovered) =
+        List.fold_left (fun (successors, uncovered) (lbl, dfa') ->
+            let uncovered' = IndexSet.diff uncovered lbl in
+            let successors' =
+              if uncovered != uncovered' then (
+                let lbl' = IndexSet.inter uncovered lbl in
+                IndexMap.fold
+                  (fun nfa' reject acc ->
+                     let index' = State.inj dfa' nfa' in
+                     (lbl', reject, index') :: acc)
+                  (NFA.transitions nfa) successors
+              ) else
+                successors
+            in
+            (successors', uncovered')
+          ) ([], NFA.incoming nfa) (DFA.successors dfa)
+      in
+      let desc = {
+        state = index;
+        successors; uncovered;
+        predecessors = [];
+        image = Image.empty;
+        failing = IndexSet.empty;
+        failing_successors = [];
+        mark = false;
+        todo = Image.empty;
+      } in
+      IndexTable.add coverage index desc;
+      desc
+
+  let worklist = ref []
+
+  let add_delta index = function
+    | None -> ()
+    | Some delta ->
+      let desc = get_state index in
+      match Image.increase ~delta desc.image with
+      | None -> ()
+      | Some (image', delta') ->
+        desc.image <- image';
+        let delta' =
+          if desc.mark then
+            Image.refine delta' desc.todo
+          else (
+            push worklist desc;
+            desc.mark <- true;
+            delta'
+          )
+        in
+        desc.todo <- delta'
+
+  let initial =
+    let initialize nfa reject acc =
+      let index = State.inj DFA.initial nfa in
+      add_delta index (
+        Image.normalize
+          ~accept:(DFA.accept DFA.initial)
+          ~rejectable:(NFA.rejectable nfa)
+          ~reject Image.empty
+      );
+      index :: acc
+    in
+    IndexMap.fold initialize NFA.initial []
+
+  let () =
+    let propagate desc =
+      let img = desc.todo in
+      desc.mark <- false;
+      desc.todo <- Image.empty;
+      List.iter (fun (_, reject, index') ->
+          let dfa, nfa = State.prj index' in
+          add_delta index' (
+            Image.normalize
+              ~accept:(DFA.accept dfa)
+              ~rejectable:(NFA.rejectable nfa)
+              ~reject img
+          )
+        ) desc.successors
+    in
+    fixpoint ~propagate worklist
 
   let () = Stopwatch.leave time
 
-  module Backward() = struct
-    let time = Stopwatch.enter Stopwatch.main "Coverage backward pass"
-
-    module Prefix = struct
-      let transitions = Vector.make DFA.n IndexMap.empty
-
-      let table =
-        Vector.mapi (fun src f ->
-            let lr1s = List.fold_left (fun acc (lr1s, tgt) ->
-                IndexSet.fold
-                  (fun lr1 acc -> IndexMap.add lr1 tgt acc)
-                  lr1s acc
-              ) IndexMap.empty (DFA.successors src)
-            in
-            let filter lrc unhandled =
-              match IndexMap.find_opt (Lrc.lr1_of_lrc lrc) lr1s with
-              | None -> true
-              | Some tgt ->
-                let map = Vector.get transitions tgt in
-                let lrcs = Lrc.predecessors lrc in
-                let map = IndexSet.fold (fun lrc' map ->
-                    let x = (src, lrc, unhandled) in
-                    IndexMap.update lrc' (function
-                        | None -> Some [x]
-                        | Some xs -> Some (x :: xs)
-                      ) map
-                  ) lrcs map
-                in
-                Vector.set transitions tgt map;
-                false
-            in
-            Increasing.filter f filter
-          ) Forward.Prefix.table
-
-      let () =
-        Stopwatch.step time "Initialized prefixes with %d states"
-        (count is_not_minimal table)
-
-      let todo = ref []
-
-      let update dfa g =
-        let f = Vector.get table dfa in
-        let f, df = Increasing.increase f g in
-        if is_not_minimal df then (
-          Vector.set table dfa f;
-          push todo (dfa, df);
-        )
-
-      let follow dfa lrc unhandled =
-        let tr = Vector.get transitions dfa in
-        match IndexMap.find_opt lrc tr with
-        | None -> assert (dfa = DFA.initial)
-        | Some trs ->
-          List.iter (fun (src, lrc', unhandled') ->
-              let unhandled = IndexSet.inter unhandled unhandled' in
-              if not (IndexSet.is_empty unhandled) then (
-                update src (Increasing.piece (IndexSet.singleton lrc') unhandled)
-              )
-            ) trs
-
-      let propagate (dfa, f) =
-        Increasing.iter f (follow dfa)
-
-      let () =
-        Vector.iteri (fun i x -> propagate (i, x)) table;
-        fixpoint ~propagate todo
-
-      let () =
-        Stopwatch.step time "Propagated prefixes, reached %d states"
-        (count is_not_minimal table)
-    end
-    module Reducible = struct
-      let transitions = Vector.make DFA.n []
-
-      let uncovered =
-        let follow dfa nfa unhandled lr1s nfa' =
-          let has_image nfa' = not (IndexSet.disjoint unhandled (NFA.delta nfa')) in
-          let nfa' = IndexSet.filter has_image nfa' in
-          if IndexSet.is_empty nfa' then
-            IndexSet.empty
-          else
-            List.fold_left (fun lr1s (label, dfa') ->
-                let lr1s' = IndexSet.diff lr1s label in
-                if lr1s != lr1s' then
-                  Vector.set_cons transitions dfa'
-                    (nfa', unhandled, IndexSet.inter lr1s label, dfa, nfa);
-                lr1s'
-              ) lr1s (DFA.successors dfa)
-        in
-        let propagate dfa f =
-          Increasing.fold f (fun nfa unhandled acc ->
-              let process acc (lr1s, nfa') =
-                let rem = follow dfa nfa unhandled lr1s nfa' in
-                if IndexSet.is_empty rem
-                then acc
-                else (nfa, unhandled, rem, nfa') :: acc
-              in
-              List.fold_left process acc (NFA.outer_transitions nfa)
-            ) []
-        in
-        Vector.mapi propagate Forward.Reducible.table
-
-      let table = Vector.mapi (fun dfa pieces ->
-          let red_uncovered =
-            let prepare (nfa, img, _, _) = (IndexSet.singleton nfa, img) in
-            Increasing.piecewise (List.map prepare pieces)
-          in
-          let prefix_uncovered = Vector.get Prefix.table dfa in
-          Increasing.fold (Vector.get Forward.Reducible.table dfa)
-            (fun nfa unhandled acc ->
-               let unhandled = IndexSet.inter unhandled (NFA.rejected nfa) in
-               if IndexSet.is_empty unhandled then acc else
-                 let unhandled' =
-                   IndexSet.fold
-                     (fun lrc acc ->
-                        IndexSet.union (Increasing.image prefix_uncovered lrc) acc)
-                     (NFA.lrcs_of nfa) IndexSet.empty
-                 in
-                 let unhandled = IndexSet.inter unhandled unhandled' in
-                 Increasing.add acc nfa unhandled
-            ) red_uncovered
-        ) uncovered
-
-      let () =
-        let total_count = count is_not_minimal table in
-        let red_count = count ((<>) []) uncovered in
-        Stopwatch.step time "Propagated reductions: %d uncovered states, %d direct, %d via prefixes"
-          total_count red_count (total_count - red_count)
-
-      let todo = ref []
-
-      let update dfa g =
-        let f = Vector.get table dfa in
-        let f, df = Increasing.increase f g in
-        if is_not_minimal df then (
-          Vector.set table dfa f;
-          push todo (dfa, df);
-        )
-
-      let propagate (dfa_tgt, f) =
-        Increasing.iter f (fun nfa_tgt unhandled ->
-            List.iter (fun (nfa_tgts', unhandled', _, dfa_src, nfa_src) ->
-                if IndexSet.mem nfa_tgt nfa_tgts' then
-                  let unhandled = IndexSet.inter unhandled unhandled' in
-                  if not (IndexSet.is_empty unhandled) then
-                    update dfa_src (Increasing.piece (IndexSet.singleton nfa_src) unhandled);
-              )
-              (Vector.get transitions dfa_tgt)
+  (* Normalize successors & compute predecessors *)
+  let () =
+    IndexTable.iter (fun index desc ->
+        let check_successor (_lbl, reject, index') =
+          let dfa', nfa' = State.prj index' in
+          Option.is_some (
+            Image.normalize
+              ~accept:(DFA.accept dfa')
+              ~rejectable:(NFA.rejectable nfa')
+              ~reject desc.image
           )
-
-      let () =
-        Vector.iteri (fun i x -> propagate (i,x)) table;
-        fixpoint ~propagate todo
-
-      let () =
-        Stopwatch.step time "Reducible backward fixpoint: %d states reached"
-          (count is_not_minimal table)
-    end
-
-    module Sym_or_lr1 = Sum(Symbol)(Lr1)
-
-    module FG = struct
-      type t = (NFA.n, Terminal.n) Increasing.t * (Lrc.n, Terminal.n) Increasing.t
-
-      let compare (a1,b1) (a2,b2) =
-        let c = Increasing.compare a1 a2 in
-        if c <> 0 then c else
-          Increasing.compare b1 b2
-
-      let normalize f g =
-        (f, Increasing.union g (Forward.Prefix.expand f))
-
-      let is_minimum (f,g) =
-        Increasing.is_minimum f && Increasing.is_minimum g
-
-      let union (f,g) (f',g')=
-        (Increasing.union f f', Increasing.union g g')
-    end
-
-
-    module UncoveredNFA = struct
-      include IndexBuffer.Gen.Make()
-
-      type desc = {
-        dfa: DFA.n index;
-        fg: FG.t;
-        mutable transitions: (Sym_or_lr1.n, n indexset) indexmap;
-        mutable uncovered: (Sym_or_lr1.n, FG.t) indexmap;
-      }
-
-      let states = get_generator ()
-
-      let initial_fun =
-        let f1 = Forward.Reducible.initial_fun in
-        let f2 = Vector.get Reducible.table DFA.initial in
-        FG.normalize (Increasing.intersect f1 f2) Increasing.minimum
-
-      let sym_of lr1 = match Lr1.incoming lr1 with
-        | Some sym -> Sym_or_lr1.inj_l sym
-        | None -> Sym_or_lr1.inj_r lr1
-
-      module KeyMap = Map.Make(FG)
-
-      let visited = Vector.make DFA.n KeyMap.empty
-
-      let todo = ref []
-
-      let visit dfa (f,g) =
-        let f' = Vector.get Reducible.table dfa in
-        let g' = Vector.get Prefix.table dfa in
-        let f = Increasing.intersect f f' in
-        let g = Increasing.intersect g g' in
-        let fg = FG.normalize f g in
-        if FG.is_minimum (f,g) then None else
-          let visited' = Vector.get visited dfa in
-          match KeyMap.find_opt fg visited' with
-          | Some _ as result -> result
-          | None ->
-            let reservation = IndexBuffer.Gen.reserve states in
-            let index = IndexBuffer.Gen.index reservation in
-            let desc = {
-              dfa; fg; transitions = IndexMap.empty;
-              uncovered = IndexMap.empty;
-            } in
-            Vector.set visited dfa (KeyMap.add fg index visited');
-            push todo desc;
-            IndexBuffer.Gen.commit states reservation desc;
-            Some index
-
-      let propagate ({dfa; fg; _} as desc) =
-        let transitions = ref IndexMap.empty in
-        let update_inc key fg map =
-          if FG.is_minimum fg then map else
-            IndexMap.update key (function
-                | None -> Some fg
-                | Some fg' -> Some (FG.union fg fg')
-              ) map
         in
-        let update_transition lr1 fg dfa' =
-          let sym = sym_of lr1 in
-          match dfa' with
-          | None ->
-            desc.uncovered <- update_inc sym fg desc.uncovered
-          | Some tgt ->
-            transitions := IndexMap.update sym (function
-                | None -> Some (IndexMap.singleton tgt fg)
-                | Some map' -> Some (update_inc tgt fg map')
-              ) !transitions
-        in
-        Forward.Reducible.iter_transitions dfa (fst fg)
-          ~f:(fun lr1 f' dfa' -> update_transition lr1 (f',Increasing.minimum) dfa');
-        Forward.Prefix.iter_transitions dfa (snd fg)
-          ~f:(fun lr1 g' dfa' -> update_transition lr1 (Increasing.minimum,g') dfa');
-        let visit_target dfa' fg acc =
-          match visit dfa' fg with
+        List.iter (fun (lbl, reject, index' as succ) ->
+            if check_successor succ then
+              let desc' = get_state index' in
+              desc'.predecessors <- (lbl, reject, index) :: desc'.predecessors
+          ) desc.successors
+      ) coverage
+
+  let is_bottom desc =
+    let _, nfa = State.prj desc.state in
+    NFA.is_bottom nfa
+
+  let is_immediate_failure desc =
+    not (IndexSet.is_empty desc.uncovered) || is_bottom desc
+
+  (* Propagate failing lookaheads backward *)
+  let () =
+    let counter = ref 0 in
+    let worklist = ref [] in
+    let schedule index desc =
+      if not desc.mark then (
+        desc.mark <- true;
+        push worklist index;
+      )
+    in
+    let update desc (lbl, reject, index') =
+      let _, nfa' = State.prj index' in
+      let desc' = IndexTable.find coverage index' in
+      let failing =
+        let f1 = IndexSet.inter desc.failing desc'.image.rejected in
+        let f2 = IndexSet.inter desc.failing (NFA.rejectable nfa') in
+        IndexSet.union f1 (IndexSet.diff f2 desc'.image.handled)
+      in
+      if not (IndexSet.subset failing desc'.failing) then (
+        desc'.failing <- IndexSet.union failing desc'.failing;
+        desc'.failing_successors <- (lbl, (reject, desc)) :: desc'.failing_successors;
+        schedule index' desc'
+      )
+    in
+    let propagate index =
+      let desc = get_state index in
+      assert desc.mark;
+      desc.mark <- false;
+      List.iter (update desc) desc.predecessors
+    in
+    IndexTable.iter (fun index desc ->
+        if is_immediate_failure desc then (
+          let _, nfa = State.prj index in
+          desc.failing <- IndexSet.union desc.image.rejected (NFA.rejectable nfa);
+          assert (not (IndexSet.is_empty desc.failing));
+          schedule index desc
+        )
+      ) coverage;
+    fixpoint ~counter ~propagate worklist;
+    let initial_failing =
+      IndexMap.fold (fun nfa _ acc ->
+          match IndexTable.find_opt coverage (State.inj DFA.initial nfa) with
           | None -> acc
-          | Some index -> IndexSet.add index acc
+          | Some desc -> IndexSet.union desc.failing acc
+        ) NFA.initial IndexSet.empty
+    in
+    Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
+    Printf.eprintf "Unhandled lookaheads: %s.\n"
+      (string_concat_map ", " Terminal.to_string
+         (IndexSet.elements initial_failing))
+
+  (* Generate sentences and determinize on the fly *)
+
+  type step = {
+    label: Lr1.set;
+    goto: Lr1.t list list;
+  }
+
+  let union_all l =
+    List.fold_left IndexSet.union IndexSet.empty l
+
+  let enum_uncovered ~f =
+    let rec visit path states =
+      let transitions =
+        List.fold_left (fun acc (reject, desc) ->
+            List.fold_left (fun acc (lbl, (reject', desc')) ->
+                let _, nfa = State.prj desc.state in
+                let goto = match NFA.goto nfa with
+                  | [] -> []
+                  | other -> [other]
+                in
+                (lbl, (goto, (IndexSet.union reject reject', desc'))) :: acc
+              ) acc desc.failing_successors
+          ) [] states
+      in
+      List.iter (fun (label, states') ->
+          let goto, states' = List.split states' in
+          let goto = List.concat goto in
+          visit ({label; goto} :: path) states')
+        (IndexRefine.annotated_partition transitions);
+      let uncovered =
+          List.filter_map (fun (reject, desc) ->
+              if IndexSet.is_empty desc.uncovered then
+                None
+              else
+                let _, nfa = State.prj desc.state in
+                let goto = match NFA.goto nfa with
+                  | [] -> []
+                  | other -> [other]
+                in
+                Some (desc.uncovered, (goto, IndexSet.union reject (NFA.rejectable nfa)))
+            ) states
+      in
+      List.iter
+        (fun (label, rejects) ->
+           let goto, rejects = List.split rejects in
+           let goto = List.concat goto in
+           f ({label; goto} :: path) (union_all rejects))
+        (IndexRefine.annotated_partition uncovered);
+      begin match List.filter (fun (_, desc) -> is_bottom desc) states with
+        | [] -> ()
+        | immediate ->
+          let failing =
+            List.fold_left (fun acc (reject, desc) ->
+                let _, nfa = State.prj desc.state in
+                IndexSet.union acc
+                  (IndexSet.union reject (NFA.rejectable nfa))
+              ) IndexSet.empty immediate
+          in
+          f path failing;
+      end
+    in
+    let initials =
+      IndexMap.fold (fun nfa reject acc ->
+          let index = State.inj DFA.initial nfa in
+          match IndexTable.find_opt coverage index with
+          | None -> acc
+          | Some desc ->
+            if IndexSet.is_empty desc.failing
+            then acc
+            else (reject, desc) :: acc
+        ) NFA.initial []
+    in
+    visit [] initials
+
+  let _ =
+    let count = ref 0 in
+    enum_uncovered ~f:(fun path failing ->
+        incr count;
+        Printf.eprintf "Sentence %d, failing when looking ahead at %s:\n"
+          !count (string_of_indexset ~index:Terminal.to_string failing);
+        let print_step i step =
+          let plr1 lr1 = Lr1.symbol_to_string lr1 in
+          let pitem (prod, dot) =
+            let components = ref [] in
+            let rhs = Production.rhs prod in
+            for i = Array.length rhs - 1 downto dot do
+              push components (Symbol.name rhs.(i));
+            done;
+            push components ".";
+            for i = dot - 1 downto 0 do
+              push components (Symbol.name rhs.(i));
+            done;
+            push components ("/" ^ Nonterminal.to_string (Production.lhs prod) ^ ":");
+            String.concat " " !components
+          in
+          let lr1 = IndexSet.choose step.label in
+          Printf.eprintf "- %s\n" (plr1 lr1);
+          match step.goto with
+          | [] ->
+            if i = 0 then
+              Printf.eprintf "  [ %s]\n"
+              (string_concat_map " " pitem (Lr1.items lr1))
+          | goto ->
+            List.iter (fun goto ->
+                let lr1' = List.hd goto in
+                let suff = string_concat_map ";" plr1 (List.rev goto) in
+                let pad = String.make (String.length suff) ' ' in
+                Printf.eprintf "  [%s " suff;
+                List.iteri (fun i item ->
+                    if i > 0 then Printf.eprintf "\n    %s" pad;
+                    Printf.eprintf "%s" (pitem item);
+                  ) (Lr1.items lr1');
+                Printf.eprintf "]\n";
+              ) goto
         in
-        let visit_tr map' = IndexMap.fold visit_target map' IndexSet.empty in
-        let transitions = IndexMap.map visit_tr !transitions in
-        desc.transitions <- transitions
+        List.iteri print_step (List.rev path)
+      )
 
-      let initial =
-        Option.fold
-          ~none:IndexSet.empty
-          ~some:IndexSet.singleton
-          (visit DFA.initial initial_fun)
-
-      let () = fixpoint ~propagate todo
-
-      let states = IndexBuffer.Gen.freeze states
-
-      let () = Stopwatch.step time "Uncovered NFA has %d states" (cardinal n)
-    end
-
-    module UncoveredDFA = struct
-      include IndexBuffer.Gen.Make()
-
-      type desc = {
-        nfas: UncoveredNFA.n indexset;
-        transitions: (Sym_or_lr1.n, n index) indexmap;
-        uncovered: (Sym_or_lr1.n, FG.t) indexmap;
-      }
-
-      let states = get_generator ()
-
-      let table : (UncoveredNFA.n indexset, _) Hashtbl.t = Hashtbl.create 7
-
-      let rec visit nfas =
-        match Hashtbl.find_opt table nfas with
-        | Some index -> index
-        | None ->
-          let reservation = IndexBuffer.Gen.reserve states in
-          let index = IndexBuffer.Gen.index reservation in
-          Hashtbl.add table nfas index;
-          let visit_nfa nfa (uncovered, transitions) =
-            let ndesc = Vector.get UncoveredNFA.states nfa in
-            (IndexMap.union (fun _ m1 m2 -> Some (FG.union m1 m2))
-               uncovered ndesc.uncovered,
-             IndexMap.union (fun _ m1 m2 -> Some (IndexSet.union m1 m2))
-               ndesc.transitions transitions)
-          in
-          let uncovered, transitions =
-            IndexSet.fold visit_nfa nfas
-              (IndexMap.empty, IndexMap.empty)
-          in
-          let transitions = IndexMap.map visit transitions in
-          let desc = {nfas; transitions; uncovered} in
-          IndexBuffer.Gen.commit states reservation desc;
-          index
-
-      let initial = visit UncoveredNFA.initial
-
-      let states = IndexBuffer.Gen.freeze states
-
-      let () =
-        let count_f = ref 0 in
-        let count_g = ref 0 in
-        Vector.iter (fun desc ->
-            IndexMap.iter (fun _ (f,g) ->
-                if is_not_minimal f then incr count_f;
-                if is_not_minimal g then incr count_g;
-              ) desc.uncovered
-          ) states;
-        Stopwatch.step time "Uncovered DFA has %d states (%d uncovered lrc, %d uncovered nfa)"
-          (cardinal n)
-          !count_g
-          !count_f
-
-      type terminal = Terminal.n
-      type transition = Sym_or_lr1.n index
-
-      let initials f = f initial
-      let successors i f =
-        let desc = Vector.get states i in
-        IndexMap.iter f desc.transitions
-
-      let add_image (f, g) acc =
-        acc
-        |> Increasing.fold f (fun _ img acc -> IndexSet.union img acc)
-        |> Increasing.fold g (fun _ img acc -> IndexSet.union img acc)
-
-      let rejected = tabulate_finset n (fun i ->
-          let desc = Vector.get states i in
-          IndexMap.fold (fun _ -> add_image) desc.uncovered IndexSet.empty
-        )
-
-      let potential_reject = tabulate_finset n (fun i ->
-          let desc = Vector.get states i in
-          IndexSet.fold
-            (fun nfa acc -> add_image (Vector.get UncoveredNFA.states nfa).fg acc)
-            desc.nfas IndexSet.empty
-        )
-    end
-
-    let expand_nfa fn suffix nfa unhandled =
-      let unhandled = ref unhandled in
-      let threads = ref [nfa, suffix] in
-      let visit suffix nfa =
-        let handled = IndexSet.inter !unhandled (NFA.rejected nfa) in
-        if not (IndexSet.is_empty handled) then (
-          unhandled := IndexSet.diff !unhandled handled;
-          let lrc = IndexSet.choose (NFA.lrcs_of nfa) in
-          fn suffix lrc handled
-        );
-        if not (IndexSet.disjoint !unhandled (NFA.potential nfa)) then
-          push threads (nfa, suffix)
-      in
-      let expand (nfa, suffix) =
-        List.iter
-          (fun (lr1s, nfa') ->
-             let lr1 = IndexSet.choose lr1s in
-             let sym = match Lr1.incoming lr1 with
-               | None -> Sym_or_lr1.inj_r lr1
-               | Some sym -> Sym_or_lr1.inj_l sym
-             in
-             let suffix = sym :: suffix in
-             IndexSet.iter (visit suffix) nfa'
-          )
-          (NFA.outer_transitions nfa)
-      in
-      let rec loop () =
-        match !threads with
-        | _ when IndexSet.is_empty !unhandled -> ()
-        | [] -> assert false
-        | threads' ->
-          threads := [];
-          List.iter expand threads';
-          loop ()
-      in
-      loop ()
-
-    let enum_sentence fn =
-      let visited = Boolvector.make UncoveredDFA.n false in
-      let todo = ref [[], UncoveredDFA.initial] in
-      let propagate (suffix, index) =
-        if not (Boolvector.test visited index) then (
-          Boolvector.set visited index;
-          let desc = Vector.get UncoveredDFA.states index in
-          IndexMap.iter (fun sym (f, g) ->
-              let suffix = sym :: suffix in
-              Increasing.iter f (expand_nfa fn suffix);
-              Increasing.iter g (fn suffix)
-            ) desc.uncovered;
-          IndexMap.iter (fun sym state' ->
-              push todo (sym :: suffix, state')
-            ) desc.transitions
-        )
-      in
-      fixpoint ~propagate todo
-
-    let () = Stopwatch.leave time
-  end
 end
