@@ -1384,7 +1384,7 @@ struct
           let source _ = assert false
           let label _ = assert false
           let target _ = assert false
-          let unhandled _ = Lr1.idle
+          let unhandled _ = Lr1.wait
           let outgoing _ = IndexSet.empty
           let matching _ = []
           let threads _ = []

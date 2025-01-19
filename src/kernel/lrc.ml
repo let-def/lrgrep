@@ -25,7 +25,7 @@
   reachable configurations---the pairs of an LR state and a lookahead token, the
   transitions that allow to go from one to another, in order to determine which
   ones are reachable from initial states. It includes functionality to compute
-  reachable states, idle states, entry points, predecessors, successors, and
+  reachable states, wait states, entry points, predecessors, successors, and
   prefixes for states in the LR automaton.
   LRC means "LR with classes", where a class is the partition of lookahead
   symbols with identical behaviors, as determined by the reachability
@@ -41,7 +41,9 @@ module type RAW0 = sig
   module Info : Info.S
   open Info
 
-  val all_idle : set
+  (** Wait states lifted to LRC *)
+  val all_wait : set
+
   val lr1_of_lrc : t -> Lr1.t
   val lrcs_of_lr1 : Lr1.t -> set
   val first_lrc_of_lr1 : Lr1.t -> t
@@ -51,24 +53,24 @@ end
 (* Extended signature for class-based refinements *)
 module type RAW = sig
   include RAW0
-  val lookahead : n index -> Info.Terminal.set
-  val class_index : n index -> int
-  val to_string : n index -> string
-  val set_to_string : n indexset -> string
+  val lookahead : t -> Info.Terminal.set
+  val class_index : t -> int
+  val to_string : t -> string
+  val set_to_string : set -> string
 end
 
 (* Signature for a fully-featured LRC module with reachability information *)
 module type S = sig
   include RAW
-  val reachable : n indexset
-  val idle : n indexset
-  val entrypoints : n indexset
-  val predecessors : n index -> n indexset
-  val successors : n index -> n indexset
+  val reachable : set
+  val wait : set
+  val entrypoints : set
+  val predecessors : t -> set
+  val successors : t -> set
 
   (* [some_prefix st] is a list of states reaching an entrypoint, starting from
      [st], or the empty list if state is unreachable. *)
-  val some_prefix : n index -> n index list
+  val some_prefix : t -> t list
 end
 
 (* Find states reachable from specific states by closing over raw reachability
@@ -116,8 +118,8 @@ struct
   (* Final reachable states *)
   let reachable = !reachable
 
-  (* Idle states that are reachable *)
-  let idle = IndexSet.inter Lrc.all_idle reachable
+  (* Wait states that are reachable *)
+  let wait = IndexSet.inter Lrc.all_wait reachable
 
   (* Compute a prefix to reach each state *)
   let some_prefix =
@@ -211,8 +213,8 @@ struct
   let lrcs_of_lr1      = Vector.get lrcs_of_lr1
   let first_lrc_of_lr1 = Vector.get first_lrc_of_lr1
 
-  (* Set of idle LRC states *)
-  let all_idle = IndexSet.map first_lrc_of_lr1 Lr1.idle
+  (* Set of wait LRC states *)
+  let all_wait = IndexSet.map first_lrc_of_lr1 Lr1.wait
 
   (* Compute the class index for an LRC state *)
   let class_index lrc =
@@ -345,9 +347,9 @@ struct
     (* Target state for a transition *)
     let target tr = snd (Vector.get Transitions.vector tr)
 
-    (* Initial states (idle states in Lrc) *)
+    (* Initial states (wait states in Lrc) *)
     let initials f =
-      IndexSet.iter f Lrc.all_idle
+      IndexSet.iter f Lrc.all_wait
 
     (* Final states (states with no incoming transitions in LR1) *)
     let finals f =
@@ -381,12 +383,11 @@ struct
   type set = n indexset
   type 'a map = (n, 'a) indexmap
 
-  (* Set of idle states in the minimized DFA *)
-  let all_idle =
+  (* Set of wait states in the minimized DFA *)
+  let all_wait =
     let set = ref IndexSet.empty in
     Array.iter (fun t -> set := IndexSet.add t !set) MDFA.initials;
     !set
-    (*IndexSet.filter_map MDFA.transport_state Lrc.idle*)
 
   (* Map from minimized states to their corresponding LR1 states *)
   let lr1_of_lrc =

@@ -78,7 +78,7 @@ end)() = struct
   struct
     type n = Info.Lr1.n
     let n = Info.Lr1.n
-    let initials = Info.Lr1.idle
+    let initials = Info.Lr1.wait
     let next = Info.Lr1.predecessors
     let label = IndexSet.singleton
   end
@@ -125,7 +125,7 @@ end)() = struct
           include Lrc
           let initials =
             if entry.error then
-              Lrc.idle
+              Lrc.wait
             else
               IndexSet.init_from_set Lrc.n (fun _ -> true)
           let next = Lrc.predecessors

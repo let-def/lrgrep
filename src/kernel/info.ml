@@ -148,12 +148,12 @@ module type S = sig
     val all : set
     val accepting : set
 
-    (* An LR(1) state is idle if the parser needs to look at more input
-       before knowing how to proceed.
-       Idle states are the initial states and the targets of SHIFT transitions
+    (* A ``wait'' state is an LR(1) state in which the parser needs to look at
+       more input before knowing how to proceed.
+       Wait states are the initial states and the targets of SHIFT transitions
        (states with a terminal as incoming symbol), except the accepting ones
        (after reading EOF, the only valid action is to reduce). *)
-    val idle : set
+    val wait : set
 
     (* Get the LR(0) "core" state *)
     val to_lr0 : t -> Lr0.t
@@ -635,7 +635,7 @@ struct
         result
       )
 
-    let idle = IndexSet.init_from_set n (fun lr1 ->
+    let wait = IndexSet.init_from_set n (fun lr1 ->
         match Option.map Symbol.desc (incoming lr1) with
         | Some (N _) -> false
         | Some (T t) ->

@@ -188,7 +188,7 @@ struct
         (IndexSet.singleton lrc)
         (Source.inj_r lr1)
     in
-    IndexMap.inflate process Lrc.idle
+    IndexMap.inflate process Lrc.wait
 
   (* Freeze the state generator to finalize the state machine *)
   let states = IndexBuffer.Gen.freeze states
@@ -564,7 +564,7 @@ struct
   let lrc_initials =
     IndexSet.filter
       (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
-      Lrc.idle
+      Lrc.wait
 
   let bottom =
     States.suffix
