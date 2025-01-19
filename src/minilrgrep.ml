@@ -32,6 +32,8 @@ let list_from_set ss f =
       | Some x -> x :: acc
     ) ss []
 
+let time = Stopwatch.enter Stopwatch.main "Reduction automaton"
+
 (* Implementation of 2.3.2 : The viable reduction NFA *)
 
 module Reduction_NFA = struct
@@ -156,6 +158,8 @@ module Reduction_DFA = struct
     lookaheads: Terminal.set;
   }
 
+  let time = Stopwatch.enter time "Determinization"
+
   include IndexBuffer.Gen.Make()
 
   type config = {
@@ -192,6 +196,200 @@ module Reduction_DFA = struct
 
   let states = IndexBuffer.Gen.freeze states
 
+  let () = Stopwatch.step time
+      "Constructed the Reduction DFA with %d states" (cardinal n)
+
+  let predecessors = Vector.make n IndexSet.empty
+
+  let () = Vector.iteri (fun source config ->
+      IndexMap.iter
+        (fun _lr1 target -> Misc.vector_set_add predecessors target source)
+        config.transitions
+    ) states
+
+  let () = Stopwatch.leave time
+end
+
+(* A reduce-filter pattern translate to a set of suffixes.
+   To quickly recognize patterns, we want to index Reduction_DFA states
+   by the suffixes they can reach. *)
+module Suffixes = struct
+
+  let time = Stopwatch.enter time "Pre-computing suffixes"
+
+  include IndexBuffer.Gen.Make()
+
+  let desc = get_generator ()
+
+  let of_state =
+    let table = Hashtbl.create 7 in
+    let visit_suffix suffix =
+      match Hashtbl.find_opt table suffix with
+      | Some index -> index
+      | None ->
+        let index = IndexBuffer.Gen.add desc suffix in
+        Hashtbl.add table suffix index;
+        index
+    in
+    let visit_state {Reduction_DFA.suffixes; _} =
+      IndexSet.of_list (List.map visit_suffix suffixes)
+    in
+    Vector.map visit_state Reduction_DFA.states
+
+  let desc = IndexBuffer.Gen.freeze desc
+
+  let reachable = Vector.copy of_state
+
   let () =
-    Printf.eprintf "Constructed the Reduction DFA with %d states\n" (cardinal n)
+    Misc.fix_relation Reduction_DFA.predecessors of_state
+      ~propagate:(fun _ s _ s' -> IndexSet.union s s')
+
+  let () = Stopwatch.leave time
+end
+
+module Input = struct
+  let ic =
+    try open_in_bin spec_file
+    with
+    | Sys_error msg ->
+      Printf.eprintf "Error: Cannot open specification file (%S).\n" msg;
+      exit 1
+    | exn ->
+      Printf.eprintf "Error: Cannot open specification file %S (%s).\n"
+        spec_file (Printexc.to_string exn);
+      exit 1
+
+  let lexbuf =
+    Front.Lexer.ic := Some ic;
+    Lexing.from_channel ~with_positions:true ic
+
+  let ast =
+    Lexing.set_filename lexbuf spec_file;
+    try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+    with
+    | Front.Lexer.Lexical_error {msg; file; line; col} ->
+      Printf.eprintf "Error %s:%d-%d: %s\n" file line col msg;
+      exit 1
+    | Front.Parser.Error ->
+      let pos = lexbuf.lex_start_p in
+      Printf.eprintf "Error %s:%d-%d: %s\n"
+        pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol) "Parse error";
+      exit 1
+
+  let () =
+    Front.Lexer.ic := None;
+    close_in_noerr ic
+end
+
+module Transl = struct
+  open Info
+  open Kernel.Syntax
+
+  let error pos fmt =
+    Printf.eprintf "Error line %d, column %d: " pos.line pos.col;
+    Printf.kfprintf (fun oc ->
+        Printf.fprintf oc "\n";
+        exit 1
+      ) stderr fmt
+
+  let string_of_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Name s -> Buffer.add_string buffer s
+        | Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
+
+  let parse_symbol =
+    let table = Hashtbl.create 7 in
+    let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
+    Index.iter Symbol.n add_symbol;
+    Hashtbl.find_opt table
+
+  let parse_filter rhs =
+    let dot = ref (-1) in
+    let rec prepare_symbols index = function
+      | [] ->
+        if !dot = -1 then
+          error (snd (List.hd rhs)) "expecting a '.' in the filter";
+        []
+      | (Skip, pos) :: _ ->
+        error pos "'_*' syntax is not supported in filter"
+      | (Dot, pos) :: rest ->
+        if !dot <> -1 then
+          error pos "only one '.' per filter is supported";
+        dot := index;
+        prepare_symbols index rest
+      | (Find sym, pos) :: rest ->
+        let sym = match sym with
+          | None -> None
+          | Some sym ->
+            let sym = string_of_symbol sym in
+            match parse_symbol sym with
+            | Some sym -> Some sym
+            | None ->
+              error pos "unknown symbol %S" sym
+        in
+        sym :: prepare_symbols (index + 1) rest
+    in
+    let symbols = Array.of_list (prepare_symbols 0 rhs) in
+    (symbols, !dot)
+
+  let process_filter lhs rhs =
+    let symbols, dot = parse_filter rhs in
+    let match_prod prod =
+      begin match lhs with
+        | None -> true
+        | Some n -> Index.equal n (Production.lhs prod)
+      end &&
+      Array.length symbols = Production.length prod &&
+      Array.for_all2 (fun sym -> function
+          | None -> true
+          | Some sym' -> Index.equal sym sym'
+        ) (Production.rhs prod) symbols
+    in
+    let productions = IndexSet.init_from_set Production.n match_prod in
+    let match_lr1 lr1 =
+      List.exists
+        (fun (prod, n) -> n = dot && IndexSet.mem prod productions)
+        (Lr1.items lr1)
+    in
+    IndexSet.init_from_set Lr1.n match_lr1
+
+  let rec flatten expr = match expr.desc with
+    | Concat exprs -> List.concat_map flatten exprs
+    | desc -> [desc]
+
+  let process_expr (expr : regular_expr) =
+    match expr.desc with
+    | Atom (_, _, _)
+    | Alternative _
+    | Repetition _
+    | Reduce _
+    | Concat _
+    | Filter _ -> ()
+
+  let process_pattern (pattern : pattern) =
+    pattern.expr
+
+  let process_clause (clause : clause) =
+    clause.patterns
+
+  let process_entry (entry : entry) =
+    entry.clauses
+
+  let entries = List.map process_entry Input.ast.entrypoints
+
 end
