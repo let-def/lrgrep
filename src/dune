@@ -7,3 +7,8 @@
           enum_command enum
           interpret_command)
  (libraries front kernel fix cmon utils menhirSdk valmari support))
+
+(executable
+ (name minilrgrep)
+ (modules minilrgrep)
+ (libraries front fix cmon utils menhirSdk valmari support))
