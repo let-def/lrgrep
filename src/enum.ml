@@ -15,25 +15,85 @@ module Make
 struct
   open Info
 
+  let get_reduce_filter st =
+    let desc = Vector.get Reach.states st in
+    let get_items lr1 =
+      List.filter (fun (p, n) -> Production.length p > n) (Lr1.items lr1)
+    in
+    let reduce, filter =
+      match Reach.Source.prj desc.config.source with
+      | L viable ->
+        let stack = Viable.get_stack viable in
+        (List.tl (List.rev stack), List.hd stack)
+      | R lr1 -> ([], lr1)
+    in
+    let reduce = List.filter_map Lr1.incoming reduce in
+    let filter = get_items filter in
+    (reduce, filter)
+
+
+  let hashtable = Hashtbl.create 7
+
+  let () = Index.iter Reach.n begin fun st ->
+      match Reach.rejectable st with
+      | lookaheads, [] ->
+        let key = get_reduce_filter st in
+        let lookaheads =
+          match Hashtbl.find_opt hashtable key with
+          | None -> lookaheads
+          | Some lookaheads' -> IndexSet.union lookaheads lookaheads'
+        in
+        Hashtbl.replace hashtable key lookaheads
+      | _ -> ()
+    end
+
+  let output_item oc (prod, dot) =
+    output_string oc "/";
+    output_string oc (Nonterminal.to_string (Production.lhs prod));
+    output_char oc ':';
+    let rhs = Production.rhs prod in
+    for i = 0 to dot - 1 do
+      output_char oc ' ';
+      output_string oc (Symbol.name rhs.(i));
+    done;
+    output_string oc " .";
+    for i = dot to Array.length rhs - 1 do
+      output_char oc ' ';
+      output_string oc (Symbol.name rhs.(i));
+    done
+
+  let () =
+    Printf.eprintf "Maximal reduce-filter patterns:\n";
+    let print_items oc items =
+      List.iteri (fun i item ->
+          if i > 0 then output_char oc ' ';
+          output_item oc item
+        ) items
+    in
+    Hashtbl.iter begin fun (reduce, filter) lookaheads ->
+      begin match reduce with
+      | [] -> print_items stderr filter
+      | syms ->
+        Printf.eprintf "[%s %a]"
+          (Misc.string_concat_map "; " Symbol.name syms)
+          print_items filter
+      end;
+      Printf.eprintf " @";
+      let count = ref 0 in
+      IndexSet.iter (fun elt ->
+          incr count;
+          if !count < 10 then
+            Printf.eprintf " %s" (Terminal.to_string elt)
+          else if !count = 10 then
+            Printf.eprintf " ..."
+        ) lookaheads;
+      Printf.eprintf "\n"
+    end hashtable
+
   let output_raw =
     let output_terminal oc t =
       output_char oc ' ';
       output_string oc (Terminal.to_string t)
-    in
-    let output_item oc (prod, dot) =
-      output_string oc "/";
-      output_string oc (Nonterminal.to_string (Production.lhs prod));
-      output_char oc ':';
-      let rhs = Production.rhs prod in
-      for i = 0 to dot - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done;
-      output_string oc " .";
-      for i = dot to Array.length rhs - 1 do
-        output_char oc ' ';
-        output_string oc (Symbol.name rhs.(i));
-      done
     in
     let output_suffix oc (top, suffix) =
       output_string oc " [";
