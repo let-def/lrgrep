@@ -353,9 +353,13 @@ module Transl = struct
 
   (* A more "semantic" representation of a filter.
 
-     [Filter], the base case, restricts but do not consume accepted states.
-     [Consume] recognizes stacks whose top states belong to a certain subset and
-     apply another filter to the remainder of the stack.
+     Filters have three representations in the pipeline.
+     From highest to lowest level:
+     - [Syntax.regular_expr], syntactic expressions
+     - [filter], this type, which directly characterizes a stack suffix
+       (with or without reductions)
+     - [Suffixes.n indexset], a subset of suffixes we know can be reduced to
+       (for reasoning modulo reduction)
   *)
   type filter =
     | Filter of Lr1.set * position
