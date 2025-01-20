@@ -72,7 +72,7 @@ startsymbols:
 ;
 
 rule:
-| "rule" name=ident args=ident* "=" "parse" error=boption("error") startsymbols=startsymbols
+| "rule" name=ident args=ident* "=" "parse" error=positioned(boption("error")) startsymbols=startsymbols
   clauses=clause*
   { {startsymbols; error; name; args; clauses} }
 ;

@@ -124,7 +124,7 @@ type clause = {
 type entry = {
   name    : string;
   (** Name of this entry *)
-  error   : bool;
+  error   : bool * position;
   (** [error] is true if this entry only matches failing stacks.
       Syntactically, an error entry has the form:
         rule x ... = parse error
@@ -281,7 +281,7 @@ let cmon_clause {patterns; action} =
 let cmon_entrypoints {error; startsymbols; name; args; clauses} =
   Cmon.record [
     "startsymbols", Cmon.list_map (cmon_positioned Cmon.string) startsymbols;
-    "error", Cmon.bool error;
+    "error", cmon_positioned Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list_map Cmon.string args;
     "clauses", Cmon.list_map cmon_clause clauses;

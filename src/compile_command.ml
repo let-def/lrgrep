@@ -124,7 +124,7 @@ end)() = struct
         (struct
           include Lrc
           let initials =
-            if entry.error then
+            if fst entry.error then
               Lrc.wait
             else
               IndexSet.init_from_set Lrc.n (fun _ -> true)
