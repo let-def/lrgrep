@@ -12,13 +12,18 @@ let usage () =
      \n\
      Usage:\n\
      %s compile <grammar.cmly> <spec.mlyl>\n\
-    " Sys.argv.(0)
+     %s enumerate <grammar.cmly>\n\
+     %s coverage <grammar.cmly> <spec.mlyl>\n\
+    "
+    Sys.argv.(0)
+    Sys.argv.(0)
+    Sys.argv.(0)
 
 (* Parse command line arguments for grammar and specification files *)
-let grammar_file, spec_file =
+let compile, grammar_file, spec_file =
   match Sys.argv with
   | [|_; "compile"; grammar_file; spec_file|] ->
-    grammar_file, spec_file
+    (true, grammar_file, Some spec_file)
   | _ ->
     usage ();
     exit 1
@@ -311,44 +316,47 @@ end
    We now switch to processing the error specification. *)
 
 (* Handle parsing using LRGrep's parser. *)
-module Input = struct
-
-  (* Open the specification file *)
-  let ic =
-    try open_in_bin spec_file
-    with
-    | Sys_error msg ->
-      Printf.eprintf "Error: Cannot open specification file (%S).\n" msg;
-      exit 1
-    | exn ->
-      Printf.eprintf "Error: Cannot open specification file %S (%s).\n"
-        spec_file (Printexc.to_string exn);
-      exit 1
-
-  (* Create a lexer buffer from the file *)
-  let lexbuf =
-    Front.Lexer.ic := Some ic;
-    Lexing.from_channel ~with_positions:true ic
-
-  (* Parse the specification file into an abstract syntax tree (AST) *)
-  let ast =
-    Lexing.set_filename lexbuf spec_file;
-    try Front.Parser.lexer_definition Front.Lexer.main lexbuf
-    with
-    | Front.Lexer.Lexical_error {msg; file; line; col} ->
-      Printf.eprintf "Error %s:%d-%d: %s\n" file line col msg;
-      exit 1
-    | Front.Parser.Error ->
-      let pos = lexbuf.lex_start_p in
-      Printf.eprintf "Error %s:%d-%d: %s\n"
-        pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol) "Parse error";
-      exit 1
-
-  (* Close the input channel *)
-  let () =
-    Front.Lexer.ic := None;
-    close_in_noerr ic
-end
+let ast =
+  match spec_file with
+  | None -> None
+  | Some spec_file ->
+    (* Open the specification file *)
+    let ic =
+      try open_in_bin spec_file
+      with
+      | Sys_error msg ->
+        Printf.eprintf "Error: Cannot open specification file (%S).\n" msg;
+        exit 1
+      | exn ->
+        Printf.eprintf "Error: Cannot open specification file %S (%s).\n"
+          spec_file (Printexc.to_string exn);
+        exit 1
+    in
+    (* Create a lexer buffer from the file *)
+    let lexbuf =
+      Front.Lexer.ic := Some ic;
+      Lexing.from_channel ~with_positions:true ic
+    in
+    (* Parse the specification file into an abstract syntax tree (AST) *)
+    let ast =
+      Lexing.set_filename lexbuf spec_file;
+      try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+      with
+      | Front.Lexer.Lexical_error {msg; file; line; col} ->
+        Printf.eprintf "Error %s:%d-%d: %s\n" file line col msg;
+        exit 1
+      | Front.Parser.Error ->
+        let pos = lexbuf.lex_start_p in
+        Printf.eprintf "Error %s:%d-%d: %s\n"
+          pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol) "Parse error";
+        exit 1
+    in
+    (* Close the input channel *)
+    let () =
+      Front.Lexer.ic := None;
+      close_in_noerr ic
+    in
+    Some ast
 
 (* Translate parsed specifications into subsets of suffixes.
 
@@ -589,9 +597,13 @@ module Transl = struct
 
   (* Produce a spec for each entry *)
   let branches : spec list =
-    List.map (fun entry ->
-        List.map
-          (fun branch -> branch, compile_branch branch)
-          (extract_branches entry)
-      ) Input.ast.entrypoints
+    match ast with
+    | None -> []
+    | Some ast ->
+      List.map (fun entry ->
+          List.map
+            (fun branch -> branch, compile_branch branch)
+            (extract_branches entry)
+        ) ast.entrypoints
+end
 end
