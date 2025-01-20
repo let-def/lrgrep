@@ -3,8 +3,9 @@ open Fix.Indexing
 
 (* This file is a minimal implementation of LRgrep, supporting only
    Reduce-filter patterns (chapter 2) and with over-approximated coverage
-   (to avoid dealing with rechability analysis (chapter 7) *)
+   (to avoid dealing with reachability analysis (chapter 7)). *)
 
+(* Print usage information for the program *)
 let usage () =
   Printf.eprintf
     "Minilrgrep\n\
@@ -13,6 +14,7 @@ let usage () =
      %s compile <grammar.cmly> <spec.mlyl>\n\
     " Sys.argv.(0)
 
+(* Parse command line arguments for grammar and specification files *)
 let grammar_file, spec_file =
   match Sys.argv with
   | [|_; "compile"; grammar_file; spec_file|] ->
@@ -21,10 +23,15 @@ let grammar_file, spec_file =
     usage ();
     exit 1
 
+(* Read Menhir grammar and LR automaton using MenhirSdk *)
 module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end)
 
+(* Information module is the representation of the grammar and LR automaton we
+   are going to use. *)
 module Info = Kernel.Info.Make(Grammar)
 
+(* Helper function to convert a set to a list, applying a function [f] to each
+   element *)
 let list_from_set ss f =
   IndexSet.fold (fun s acc ->
       match f s with
@@ -32,43 +39,64 @@ let list_from_set ss f =
       | Some x -> x :: acc
     ) ss []
 
+(* Helper to print error message and exit *)
+let error (pos : Kernel.Syntax.position) fmt =
+  Printf.eprintf "Error line %d, column %d: " pos.line pos.col;
+  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n"; exit 1) stderr fmt
+
+(* Helper to print warning message *)
+let warn (pos : Kernel.Syntax.position) fmt =
+  Printf.eprintf "Warning line %d, column %d: " pos.line pos.col;
+  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n") stderr fmt
+
+(* Start timing the construction of the reduction automaton *)
 let time = Stopwatch.enter Stopwatch.main "Reduction automaton"
 
-(* Implementation of 2.3.2 : The viable reduction NFA *)
-
+(* Module implementing the reduction NFA.
+   The implementation follows section 2.3.2. *)
 module Reduction_NFA = struct
   open Info
 
-  (* Define states as described by in the thesis.
-     Two simplifications:
+  (* Define states of the reduction NFA.
+     - [Initial]: initial state.
+     - [Suffix]: represents a stack suffix with a set of lookaheads.
+     - [Reduce]: represents a state during reduction with a stack suffix,
+                 set of lookaheads, nonterminal being reduced, and number of symbols to reduce.
+
+     Compared to the description in the thesis, the two main simplifications are:
      - The stack suffix is represented by a single list with the current state
        as the first element.
        Thus, what is described in the document as [s . s'] is represented by a
        list [List.rev (s :: s')].
      - During reduction, we do not care about the actual symbols to remove
        (written α) but only by the number of symbols, thus we only store |α| as
-       an [int] *)
+       an [int]
+  *)
   type state =
     | Initial
     | Suffix of Lr1.t list * Terminal.set
     | Reduce of Lr1.t list * Terminal.set * Nonterminal.t * int
 
-
-  (* The label of a transition is an optional LR(1) state, where [None] denotes ϵ. *)
+  (* Label of a transition is an optional LR(1) state, where [None] denotes ϵ (epsilon). *)
   type label = Lr1.t option
 
-  (* An (outgoing) transition is represented as a pair of a label and a target state. *)
+  (* Transition is represented as a pair of a label and a target state. *)
   type transition = label * state
 
-  (* Since we are compiling error-matching patterns, we are only interested in
-     the subset of the reduction automaton starting from wait states.
-     (See 4.2.1). *)
-  let initial_lr1_states = Lr1.wait
+  (* Reductions are initiated only from wait LR(1) states.
 
+     In the thesis, the reduction automaton is built on the whole LR automaton,
+     wait states are only introduced in section 4.2.1.
+     Since we are only compiling reduce-filter patterns matching errors, we the
+     subset of the reduction automaton starting from wait states is sufficient.
+  *)
+  let initial_reductions = Lr1.wait
+
+  (* Function to get transitions from a given state *)
   let transitions : state -> transition list = function
     | Initial ->
       (* Visit all initial states *)
-      list_from_set initial_lr1_states
+      list_from_set initial_reductions
         (fun lr1 -> Some (Some lr1, Suffix ([lr1], Terminal.all)))
     | Suffix (stack, lookaheads) ->
       (* The current state of the LR automaton is at the top of the stack *)
@@ -108,8 +136,12 @@ module Reduction_NFA = struct
       [None, Reduce (List.tl stack, lookaheads, lhs, n - 1)]
 end
 
-(* Determinize the automaton and use an explicit representation *)
+(* Module to determinize the NFA and create an explicit representation of the DFA.
 
+   If one is only interested in matching, the NFA is sufficient. The DFA is
+   useful for enumeration and coverage.  Since we want all those features, it is
+   simpler to implement everything on top of the DFA.
+*)
 module Reduction_DFA = struct
   open Info
 
@@ -124,66 +156,78 @@ module Reduction_DFA = struct
             acc
       ) acc (Reduction_NFA.transitions state)
 
-  (* Explicit representation focusing on suffixes *)
+  (* Explicit representation focusing on suffixes.
 
+     A suffix [{stack; lookaheads}] abstracts the set of LR configurations whose
+     stacks are suffixed by [stack] and looking ahead at a symbol in
+     [lookaheads]. *)
   type suffix = {
     stack: Lr1.t list;
     lookaheads: Terminal.set;
   }
 
+  (* Start timing the determinization process *)
   let time = Stopwatch.enter time "Determinization"
 
   include IndexBuffer.Gen.Make()
 
-  type config = {
+  (* Description of a DFA state.
+     The DFA consumes a suffix of an LR stack and recognizes reductions that
+     apply too it:
+     - [suffixes] represent the intermediate configurations the can be reached
+       by reductions applicable on this stack (reductions that succeded)
+     - [transitions] list the transitions to other DFA states, when more
+       reductions are potentially applicable but a longer suffix of the stack is
+       needed to identify them.
+  *)
+  type desc = {
     suffixes: suffix list;
     transitions: n index Lr1.map;
   }
 
-  let states = get_generator ()
+  (* Construct the DFA *)
+  let initial, states =
+    (* Generator for DFA states *)
+    let states = get_generator () in
+    (* Hashtable to memoize visited states. *)
+    let table = Hashtbl.create 7 in
+    (* Recursive function to visit and process states *)
+    let rec visit nstates =
+      let nstates = List.sort_uniq compare nstates in
+      match Hashtbl.find_opt table nstates with
+      | Some index -> index
+      | None ->
+        let slot = IndexBuffer.Gen.reserve states in
+        Hashtbl.add table nstates (IndexBuffer.Gen.index slot);
+        let transitions =
+          nstates
+          |> List.fold_left fold_transitions IndexMap.empty
+          |> IndexMap.map visit
+        in
+        let suffixes = List.filter_map (function
+            | Reduction_NFA.Initial | Reduction_NFA.Reduce _ -> None
+            | Reduction_NFA.Suffix (stack, lookaheads) -> Some {stack; lookaheads}
+          ) nstates
+        in
+        IndexBuffer.Gen.commit states slot {suffixes; transitions};
+        IndexBuffer.Gen.index slot
+    in
+    (* Start exploration from the initial state *)
+    let initial = visit [Reduction_NFA.Initial] in
+    (* Freeze the DFA states *)
+    let states = IndexBuffer.Gen.freeze states in
+    (initial, states)
 
-  (* A hashtable to memoize visited states *)
-  let table = Hashtbl.create 7
+  (* Record the time taken for DFA construction *)
+  let () = Stopwatch.step time "Constructed the Reduction DFA with %d states" (cardinal n)
 
-  let rec visit nstates =
-    let nstates = List.sort_uniq compare nstates in
-    match Hashtbl.find_opt table nstates with
-    | Some index -> index
-    | None ->
-      let slot = IndexBuffer.Gen.reserve states in
-      Hashtbl.add table nstates (IndexBuffer.Gen.index slot);
-      let transitions =
-        nstates
-        |> List.fold_left fold_transitions IndexMap.empty
-        |> IndexMap.map visit
-      in
-      let suffixes = List.filter_map (function
-          | Reduction_NFA.Initial | Reduce _ -> None
-          | Reduction_NFA.Suffix (stack, lookaheads) -> Some {stack; lookaheads}
-        ) nstates
-      in
-      IndexBuffer.Gen.commit states slot {suffixes; transitions};
-      IndexBuffer.Gen.index slot
-
-  let initial = visit [Reduction_NFA.Initial]
-
-  let states = IndexBuffer.Gen.freeze states
-
-  let () = Stopwatch.step time
-      "Constructed the Reduction DFA with %d states" (cardinal n)
-
-  let predecessors = Vector.make n IndexSet.empty
-
-  let () = Vector.iteri (fun source config ->
-      IndexMap.iter
-        (fun _lr1 target -> Misc.vector_set_add predecessors target source)
-        config.transitions
-    ) states
-
+  (* End timing the determinization process *)
   let () = Stopwatch.leave time
 end
 
-(* These simple definitions lead to quite large automata. On OCaml 5.3.0
+(* Optimization opportunities.
+
+   These simple definitions lead to quite large automata. On OCaml 5.3.0
    grammar, ϵ-NFA has 90000 states and the DFA 40000 states.
    To make things faster, some optimizations are possible:
    - NFA: construct an NFA rather than an ϵ-NFA,
@@ -194,17 +238,28 @@ end
                 (make the base of an abstract stack is a set of states)
 *)
 
-(* A reduce-filter pattern translate to a set of suffixes.
-   To quickly recognize patterns, we want to index Reduction_DFA states
-   by the suffixes they can reach. *)
+(* Pre-compute suffixes reachable from each DFA state.
+
+   A reduce-filter pattern compiles to a set of suffixes,
+   which themselves are recognized by scanning subset of the DFA
+   reaching these suffixes.
+   To make this efficient we pre-compute some informations:
+   - The finite set of suffixes (they coincide with the "Reduction targets" of
+     Section 2.3.3).
+   - The subset of suffixes recognized by each DFA state.
+   - The subset of suffixes recognized by states reachable from a DFA state.
+*)
 module Suffixes = struct
 
+  (* Start timing the suffix computation *)
   let time = Stopwatch.enter time "Pre-computing suffixes"
 
   include IndexBuffer.Gen.Make()
 
+  (* Generator for the finite set of suffixes *)
   let desc = get_generator ()
 
+  (* Map each DFA state to a set of suffix indices *)
   let of_state =
     let table = Hashtbl.create 7 in
     let visit_suffix suffix =
@@ -220,18 +275,38 @@ module Suffixes = struct
     in
     Vector.map visit_state Reduction_DFA.states
 
+  (* Freeze the suffix descriptions *)
   let desc = IndexBuffer.Gen.freeze desc
 
+  (* Vector to store reachable suffixes for each state *)
   let reachable = Vector.copy of_state
 
+  (* Compute the transitive closure of reachable states *)
   let () =
-    Misc.fix_relation Reduction_DFA.predecessors of_state
+    (* Pre-compute the predecessors for each DFA state *)
+    let predecessors = Vector.make Reduction_DFA.n IndexSet.empty in
+    let () = Vector.iteri (fun source desc ->
+        IndexMap.iter
+          (fun _lr1 target -> Misc.vector_set_add predecessors target source)
+          desc.Reduction_DFA.transitions
+      ) Reduction_DFA.states
+    in
+    (* Propagate reachable suffixes to predecessors of a state until reaching a
+       fixed point. *)
+    Misc.fix_relation predecessors of_state
       ~propagate:(fun _ s _ s' -> IndexSet.union s s')
 
+  (* End timing the suffix computation *)
   let () = Stopwatch.leave time
 end
 
+(* We are done with preprocessing of the LR automaton.
+   We now switch to processing the error specification. *)
+
+(* Handle parsing using LRGrep's parser. *)
 module Input = struct
+
+  (* Open the specification file *)
   let ic =
     try open_in_bin spec_file
     with
@@ -243,10 +318,12 @@ module Input = struct
         spec_file (Printexc.to_string exn);
       exit 1
 
+  (* Create a lexer buffer from the file *)
   let lexbuf =
     Front.Lexer.ic := Some ic;
     Lexing.from_channel ~with_positions:true ic
 
+  (* Parse the specification file into an abstract syntax tree (AST) *)
   let ast =
     Lexing.set_filename lexbuf spec_file;
     try Front.Parser.lexer_definition Front.Lexer.main lexbuf
@@ -260,23 +337,67 @@ module Input = struct
         pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol) "Parse error";
       exit 1
 
+  (* Close the input channel *)
   let () =
     Front.Lexer.ic := None;
     close_in_noerr ic
 end
 
+(* Translate parsed specifications into subsets of suffixes.
+
+   Since Minilrgrep only supports a subset of the DSL, many constructions are
+   rejected during this step. *)
 module Transl = struct
   open Info
   open Kernel.Syntax
 
-  let error pos fmt =
-    Printf.eprintf "Error line %d, column %d: " pos.line pos.col;
-    Printf.kfprintf (fun oc -> Printf.fprintf oc "\n"; exit 1) stderr fmt
+  (* A more "semantic" representation of a filter.
 
-  let warn pos fmt =
-    Printf.eprintf "Warning line %d, column %d: " pos.line pos.col;
-    Printf.kfprintf (fun oc -> Printf.fprintf oc "\n") stderr fmt
+     [Filter], the base case, restricts but do not consume accepted states.
+     [Consume] recognizes stacks whose top states belong to a certain subset and
+     apply another filter to the remainder of the stack.
+  *)
+  type filter =
+    | Filter of Lr1.set * position
+    | Consume of filter * Lr1.set * position
 
+  (* Semantic representation of a branch. *)
+  type branch = {
+    (* Should the filter match literally or modulo reduction? *)
+    reduce: bool;
+    (* The filter the stack suffix should satisfy. *)
+    filter: filter;
+    (* The clause being recognized.  If this branch succeeds, semantic action
+       from clause number [clause] should be executed. *)
+    clause: int;
+  }
+
+  (* The default filter matches all states (restricting nothing) *)
+  let default_filter position = Filter (Lr1.all, position)
+
+  (* Refine a filter by intersecting it with another state set.
+
+     Warn if no states are recognized. *)
+  let refine_filter states = function
+    | Filter (states', position) ->
+      let states = Lr1.intersect states states' in
+      if IndexSet.is_empty states then
+        warn position "these filters reject all states";
+      Filter (states, position)
+    | Consume (filter', states', position) ->
+      let states = Lr1.intersect states states' in
+      if IndexSet.is_empty states then
+        warn position "these filters reject all states";
+      Consume (filter', states, position)
+
+  (* A specification is a list of entries, made of a list of clauses, made of a
+     list of branches. A branch is compiled to the set of suffixes that
+     recognize it. *)
+  type spec = (branch * Suffixes.n IndexSet.t) list
+
+  (* Convert a symbol to its string representation.
+     This serializes user-provided symbols to the format used by Menhir for
+     monomorphized symbols, before mangling. *)
   let string_of_symbol =
     let buffer = Buffer.create 32 in
     function
@@ -297,6 +418,12 @@ module Transl = struct
       aux sym;
       Buffer.contents buffer
 
+  (* Parse a symbol from its string representation.
+
+     To recognize higher-order Menhir symbols (e.g. list(foo)), we index
+     monomorphized symbols of the automaton in a hashtable and lookup
+     user-provided ones by serializing them first.
+  *)
   let parse_symbol =
     let table = Hashtbl.create 7 in
     let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
@@ -307,6 +434,7 @@ module Transl = struct
       | Some sym -> sym
       | None -> error pos "unknown symbol %S" sym
 
+  (* Parse a filter to an item (symbol array and position of the dot) *)
   let parse_filter rhs =
     let dot = ref (-1) in
     let rec prepare_symbols index = function
@@ -328,6 +456,7 @@ module Transl = struct
     let symbols = Array.of_list (prepare_symbols 0 rhs) in
     (symbols, !dot)
 
+  (* Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
     let symbols, dot = parse_filter rhs in
     let match_prod prod =
@@ -349,41 +478,31 @@ module Transl = struct
     in
     IndexSet.init_from_set Lr1.n match_lr1
 
+  (* Translate an atom to the set of LR1 states it matches *)
   let process_atom =
+    (* Index states by their incoming symbol *)
     let table = Vector.make Symbol.n IndexSet.empty in
     Index.iter Lr1.n (fun lr1 -> match Lr1.incoming lr1 with
         | None -> ()
         | Some sym -> Misc.vector_set_add table sym lr1);
     fun pos -> function
-    | None -> Lr1.all
-    | Some sym -> Vector.get table (parse_symbol pos sym)
+    | None ->
+      (* A wildcard symbol matches all states *)
+      Lr1.all
+    | Some sym ->
+      (* A normal symbol matches states by their incoming symbol *)
+      Vector.get table (parse_symbol pos sym)
 
-  type filter =
-    | Filter of Lr1.set * position
-    | Consume of filter * Lr1.set * position
+  (* The subset of patterns supported by Minilrgrep can be summarized
+     as a "sum of reduced products":
+     - sum is a disjunction of branches
+     - produces are concatenations of atoms and filters, identified modulo
+       reductions.
 
-  type branch = {
-    reduce: bool;
-    filter: filter;
-    clause: int;
-  }
+     The following code extracts this subset from the AST and reject the rest.
+  *)
 
-  type spec = branch list
-
-  let default_filter position = Filter (Lr1.all, position)
-
-  let refine_filter states = function
-    | Filter (states', position) ->
-      let states = Lr1.intersect states states' in
-      if IndexSet.is_empty states then
-        warn position "these filters reject all states";
-      Filter (states, position)
-    | Consume (filter', states', position) ->
-      let states = Lr1.intersect states states' in
-      if IndexSet.is_empty states then
-        warn position "these filters reject all states";
-      Consume (filter', states, position)
-
+  (* Flatten a concatenation expression into a filter *)
   let rec flatten_concat filter expr = match expr.desc with
     | Atom (Some _, _, _) | Reduce {capture = Some _; _} ->
       error expr.position "variable bindings are not supported"
@@ -407,6 +526,7 @@ module Transl = struct
       in
       refine_filter (process_filter lhs rhs) filter
 
+  (* Flatten an alternatives expression into a list of branches *)
   let rec flatten_alternatives clause expr = match expr.desc with
     | Atom (Some _, _, _) | Reduce {capture = Some _; _} ->
       error expr.position "variable bindings are not supported"
@@ -421,6 +541,7 @@ module Transl = struct
       let filter = flatten_concat (default_filter expr.position) expr in
       [{clause; filter; reduce = false}]
 
+  (* Extract branches from an entry in the specification *)
   let extract_branches (entry : entry) =
     let extract_pattern index (pattern : pattern) =
       begin match pattern.lookaheads with
@@ -434,6 +555,7 @@ module Transl = struct
     in
     List.concat (List.mapi extract_clause entry.clauses)
 
+  (* Compile a branch into a set of suffixes that match the branch *)
   let compile_branch branch =
     let rec match_stack = function
       | [], _ | (_ :: _ :: _), Filter _ -> false
@@ -450,4 +572,12 @@ module Transl = struct
         (fun suffix ->
            let desc = Vector.get Suffixes.desc suffix in
            match_stack (desc.stack, branch.filter))
+
+  (* Produce a spec for each entry *)
+  let branches : spec list =
+    List.map (fun entry ->
+        List.map
+          (fun branch -> branch, compile_branch branch)
+          (extract_branches entry)
+      ) Input.ast.entrypoints
 end
