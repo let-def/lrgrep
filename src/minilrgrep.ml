@@ -173,9 +173,9 @@ module Reduction_DFA = struct
   let rec fold_transitions acc (state0 : Reduction_NFA.state)
     : suffix list * Reduction_NFA.state list Lr1.map =
     List.fold_left (fun acc (label, state) ->
-        let acc = register_suffix acc state in
         match label with
-        | None -> fold_transitions acc state
+        | None ->
+          fold_transitions acc state
         | Some lr1 ->
           let suffixes, transitions = acc in
           let transitions =
@@ -184,7 +184,7 @@ module Reduction_DFA = struct
               transitions
           in
           (suffixes, transitions)
-      ) acc (Reduction_NFA.transitions state0)
+      ) (register_suffix acc state0) (Reduction_NFA.transitions state0)
 
   (* Start timing the determinization process *)
   let time = Stopwatch.enter time "Determinization"
