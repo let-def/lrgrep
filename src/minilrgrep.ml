@@ -106,33 +106,6 @@ module Reduction_NFA = struct
     (* Reducing from the current suffix *)
     | Reduce (stack, lookaheads, lhs, n) ->
       [None, Reduce (List.tl stack, lookaheads, lhs, n - 1)]
-
-  (* (* Explicit representation of the NFA *)
-  include IndexBuffer.Gen.Make()
-
-  let states = get_generator ()
-
-  (* A hashtable to memoize visited states *)
-  let table = Hashtbl.create 7
-
-  let rec visit state =
-    match Hashtbl.find_opt table state with
-    | Some index -> index
-    | None ->
-      let slot = IndexBuffer.Gen.reserve states in
-      Hashtbl.add table state (IndexBuffer.Gen.index slot);
-      let transitions =
-        List.map (fun (label, state) -> (label, visit state)) (transitions state)
-      in
-      IndexBuffer.Gen.commit states slot (state, transitions);
-      IndexBuffer.Gen.index slot
-
-  let initial = visit Initial
-
-  let states = IndexBuffer.Gen.freeze states
-
-  let () =
-    Printf.eprintf "Constructed the Reduction NFA with %d states\n" (cardinal n) *)
 end
 
 (* Determinize the automaton and use an explicit representation *)
@@ -209,6 +182,17 @@ module Reduction_DFA = struct
 
   let () = Stopwatch.leave time
 end
+
+(* These simple definitions lead to quite large automata. On OCaml 5.3.0
+   grammar, ϵ-NFA has 90000 states and the DFA 40000 states.
+   To make things faster, some optimizations are possible:
+   - NFA: construct an NFA rather than an ϵ-NFA,
+   - NFA: determinize reductions on-the-fly (explore all reductions applicable
+     to a given state simultaneously)
+   - NFA & DFA: introduce wildcard-labelled transitions (in 2.4.1)
+   - NFA & DFA: merge goto-transitions with same target state
+                (make the base of an abstract stack is a set of states)
+*)
 
 (* A reduce-filter pattern translate to a set of suffixes.
    To quickly recognize patterns, we want to index Reduction_DFA states
@@ -287,10 +271,11 @@ module Transl = struct
 
   let error pos fmt =
     Printf.eprintf "Error line %d, column %d: " pos.line pos.col;
-    Printf.kfprintf (fun oc ->
-        Printf.fprintf oc "\n";
-        exit 1
-      ) stderr fmt
+    Printf.kfprintf (fun oc -> Printf.fprintf oc "\n"; exit 1) stderr fmt
+
+  let warn pos fmt =
+    Printf.eprintf "Warning line %d, column %d: " pos.line pos.col;
+    Printf.kfprintf (fun oc -> Printf.fprintf oc "\n") stderr fmt
 
   let string_of_symbol =
     let buffer = Buffer.create 32 in
@@ -316,7 +301,11 @@ module Transl = struct
     let table = Hashtbl.create 7 in
     let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
     Index.iter Symbol.n add_symbol;
-    Hashtbl.find_opt table
+    fun pos sym ->
+      let sym = string_of_symbol sym in
+      match Hashtbl.find_opt table sym with
+      | Some sym -> sym
+      | None -> error pos "unknown symbol %S" sym
 
   let parse_filter rhs =
     let dot = ref (-1) in
@@ -333,15 +322,7 @@ module Transl = struct
         dot := index;
         prepare_symbols index rest
       | (Find sym, pos) :: rest ->
-        let sym = match sym with
-          | None -> None
-          | Some sym ->
-            let sym = string_of_symbol sym in
-            match parse_symbol sym with
-            | Some sym -> Some sym
-            | None ->
-              error pos "unknown symbol %S" sym
-        in
+        let sym = Option.map (parse_symbol pos) sym in
         sym :: prepare_symbols (index + 1) rest
     in
     let symbols = Array.of_list (prepare_symbols 0 rhs) in
@@ -368,28 +349,105 @@ module Transl = struct
     in
     IndexSet.init_from_set Lr1.n match_lr1
 
-  let rec flatten expr = match expr.desc with
-    | Concat exprs -> List.concat_map flatten exprs
-    | desc -> [desc]
+  let process_atom =
+    let table = Vector.make Symbol.n IndexSet.empty in
+    Index.iter Lr1.n (fun lr1 -> match Lr1.incoming lr1 with
+        | None -> ()
+        | Some sym -> Misc.vector_set_add table sym lr1);
+    fun pos -> function
+    | None -> Lr1.all
+    | Some sym -> Vector.get table (parse_symbol pos sym)
 
-  let process_expr (expr : regular_expr) =
-    match expr.desc with
-    | Atom (_, _, _)
-    | Alternative _
-    | Repetition _
-    | Reduce _
-    | Concat _
-    | Filter _ -> ()
+  type filter =
+    | Filter of Lr1.set * position
+    | Consume of filter * Lr1.set * position
 
-  let process_pattern (pattern : pattern) =
-    pattern.expr
+  type branch = {
+    reduce: bool;
+    filter: filter;
+    clause: int;
+  }
 
-  let process_clause (clause : clause) =
-    clause.patterns
+  type spec = branch list
 
-  let process_entry (entry : entry) =
-    entry.clauses
+  let default_filter position = Filter (Lr1.all, position)
 
-  let entries = List.map process_entry Input.ast.entrypoints
+  let refine_filter states = function
+    | Filter (states', position) ->
+      let states = Lr1.intersect states states' in
+      if IndexSet.is_empty states then
+        warn position "these filters reject all states";
+      Filter (states, position)
+    | Consume (filter', states', position) ->
+      let states = Lr1.intersect states states' in
+      if IndexSet.is_empty states then
+        warn position "these filters reject all states";
+      Consume (filter', states, position)
 
+  let rec flatten_concat filter expr = match expr.desc with
+    | Atom (Some _, _, _) | Reduce {capture = Some _; _} ->
+      error expr.position "variable bindings are not supported"
+    | Repetition _ ->
+      error expr.position "repetitions are not supported"
+    | Alternative _ ->
+      error expr.position "only top-level disjunctions are supported"
+    | Reduce _ ->
+      error expr.position "only top-level reductions are supported"
+    | Concat exprs ->
+      List.fold_left flatten_concat filter exprs
+    | Atom (None, sym, _) ->
+      Consume (filter, process_atom expr.position sym, expr.position)
+    | Filter {lhs; rhs} ->
+      let lhs = match lhs with
+        | None -> None
+        | Some sym ->
+          match Symbol.prj (parse_symbol expr.position sym) with
+          | L _ -> error expr.position "expecting a non-terminal"
+          | R n -> Some n
+      in
+      refine_filter (process_filter lhs rhs) filter
+
+  let rec flatten_alternatives clause expr = match expr.desc with
+    | Atom (Some _, _, _) | Reduce {capture = Some _; _} ->
+      error expr.position "variable bindings are not supported"
+    | Repetition _ ->
+      error expr.position "repetitions are not supported"
+    | Alternative exprs ->
+      List.concat_map (flatten_alternatives clause) exprs
+    | Reduce {expr; _} ->
+      let filter = flatten_concat (default_filter expr.position) expr in
+      [{clause; filter; reduce = true}]
+    | _ ->
+      let filter = flatten_concat (default_filter expr.position) expr in
+      [{clause; filter; reduce = false}]
+
+  let extract_branches (entry : entry) =
+    let extract_pattern index (pattern : pattern) =
+      begin match pattern.lookaheads with
+        | [] -> ()
+        | (_, pos) :: _ -> error pos "lookahead constraints are not supported"
+      end;
+      flatten_alternatives index pattern.expr
+    in
+    let extract_clause index (clause : clause) =
+      List.concat_map (extract_pattern index) clause.patterns
+    in
+    List.concat (List.mapi extract_clause entry.clauses)
+
+  let compile_branch branch =
+    let rec match_stack = function
+      | [], _ | (_ :: _ :: _), Filter _ -> false
+      | [top], Filter (states, _) ->
+        IndexSet.mem top states
+      | (top :: rest), Consume (filter, states, _) ->
+        IndexSet.mem top states && match_stack (rest, filter)
+    in
+    match branch.filter with
+    | Consume (_, _, pos) when branch.reduce ->
+      error pos "atoms are not supported outside of reductions"
+    | _ ->
+      IndexSet.init_from_set Suffixes.n
+        (fun suffix ->
+           let desc = Vector.get Suffixes.desc suffix in
+           match_stack (desc.stack, branch.filter))
 end
