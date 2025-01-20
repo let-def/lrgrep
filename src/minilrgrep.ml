@@ -673,11 +673,13 @@ module Enum = struct
 
   (* Produce reduce-filter patterns for each leaf:
      - Consider the suffixes with non-reducible items in a leaf
-     - For each suffix, construct the most specific reduce-filter pattern
-       by extracting the sentential forms
+     - For each suffix, construct a reduce-filter pattern that would match it
+     - Generalize filters of patterns sharing common reduction targets
   *)
-  let () =
-    let open Info in
+
+  open Info
+
+  let maximal_patterns =
     let irreducible_item (p, i) =
       let rhs = Production.rhs p in
       i < Array.length rhs &&
@@ -687,28 +689,67 @@ module Enum = struct
     in
     let pattern_from_stack stack =
       let filter = List.filter irreducible_item (Lr1.items (List.hd stack)) in
+      let max_dot = List.fold_left (fun max (_, dot) -> Int.max max dot) 0 filter in
+      let filter = List.filter (fun (prod, dot) ->
+          dot = max_dot && (
+            max_dot <> 1 ||
+            not (Index.equal
+                   (Symbol.inj_r (Production.lhs prod))
+                   (Production.rhs prod).(0))
+          )
+        ) filter in
       let reduce = List.filter_map Lr1.incoming (List.tl (List.rev stack)) in
       (reduce, filter)
     in
     let table = Hashtbl.create 7 in
     let visit_suffix i =
       let desc = Vector.get Suffixes.desc i in
+      Printf.printf "%s\n"
+        (Misc.string_concat_map " " Symbol.name
+           (List.filter_map Lr1.incoming (List.rev desc.stack)));
       match pattern_from_stack desc.stack with
       | _, [] -> ()
-      | pattern ->
-        begin match Hashtbl.find_opt table pattern with
-          | None -> Hashtbl.add table pattern (ref 1)
-          | Some r -> incr r
+      | reduce, filter ->
+        begin match Hashtbl.find_opt table reduce with
+          | None -> Hashtbl.add table reduce (ref [filter])
+          | Some r -> r := filter :: !r
         end;
     in
     let visit_node i = IndexSet.iter visit_suffix (Vector.get Suffixes.of_state i) in
     let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
     IndexSet.iter visit_leaf leaves;
-    let patterns =
-      Hashtbl.fold (fun pattern count acc -> (!count, pattern) :: acc) table []
+    Hashtbl.fold (fun reduce filters acc ->
+        (reduce, List.length !filters, !filters) :: acc) table []
+    |> List.sort (fun (_, i1, _) (_, i2, _) -> - Int.compare i1 i2)
+
+  let () =
+    let minimum_filters filters =
+      let rec keep_minima acc = function
+        | [] -> List.rev acc
+        | xs :: xxs ->
+          if List.exists (fun (r, xs') ->
+              if List.for_all (fun x' -> List.mem x' xs) xs' then
+                (incr r; true)
+              else
+                false
+            ) acc
+          then keep_minima acc xxs
+          else keep_minima ((ref 1, xs) :: acc) xxs
+      in
+      filters
+      |> List.sort List.compare_lengths
+      |> keep_minima []
+      |> List.map (fun (r, xs) -> (!r, xs))
+      |> List.sort (fun (r1, _) (r2, _) -> - Int.compare r1 r2)
     in
-    let patterns = List.sort compare patterns in
-    List.iter (fun (count, (reduce, filter)) ->
+    maximal_patterns
+    |> List.concat_map (fun (reduce, _, filters) ->
+        filters
+        |> minimum_filters
+        |> List.map (fun (count, filter) -> (count, reduce, filter))
+      )
+    |> List.sort (fun (c1, _, _) (c2, _, _) -> - Int.compare c1 c2)
+    |> List.iter (fun (count, reduce, filter) ->
         let print_item (prod, pos) =
           let comps = ref [] in
           let rhs = Production.rhs prod in
@@ -723,13 +764,18 @@ module Enum = struct
         in
         match reduce with
         | [] ->
-          Printf.eprintf "%d occurrences: /%s\n"
-            count
-            (Misc.string_concat_map " /" print_item filter)
+          Printf.eprintf "%d occurrences\n" count;
+          List.iter (fun item -> Printf.eprintf "/%s\n" (print_item item)) filter
         | _ ->
-          Printf.eprintf "%d occurrences: [%s /%s]\n"
-            count
-            (Misc.string_concat_map "; " Symbol.name reduce)
-            (Misc.string_concat_map " /" print_item filter)
-      ) patterns
+          let reduce = Misc.string_concat_map "; " Symbol.name reduce in
+          let padding = String.make (String.length reduce) ' ' in
+          Printf.eprintf "%d occurrences" count;
+          List.iteri (fun i item ->
+              if i = 0 then
+                Printf.eprintf "\n[%s /%s" reduce (print_item item)
+              else
+                Printf.eprintf "\n %s /%s" padding (print_item item)
+            ) filter;
+          Printf.eprintf "]\n"
+      )
 end
