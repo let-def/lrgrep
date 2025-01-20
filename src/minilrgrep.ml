@@ -24,6 +24,8 @@ let compile, grammar_file, spec_file =
   match Sys.argv with
   | [|_; "compile"; grammar_file; spec_file|] ->
     (true, grammar_file, Some spec_file)
+  | [|_; "enumerate"; grammar_file|] ->
+    (false, grammar_file, None)
   | _ ->
     usage ();
     exit 1
@@ -606,4 +608,128 @@ module Transl = struct
             (extract_branches entry)
         ) ast.entrypoints
 end
+
+(* Now we switch to enumeration support.
+
+   Again, this implementation is an over-approximation
+   because we do not account for precise reachability information
+   (chapter 7).
+   This is acceptable because:
+   - This is correct for automata that have not went through conflict
+     resolution
+   - In other cases, the over-approximation means that some cases found by
+     enumeration are not reachable in practice (it is possible to produce a
+     sentential form for which there exists no sentence that can actually put
+     an LR automaton in a configuration with this sentential form on the stack)
+   It is not a big deal in this example as actual problems are quite rare and
+   the enumeration is intended to guide grammar authors writing error messages.
+   This is more problematic when using enumeration for fuzzing purposes (where
+   the output is fed to another program). The full LRgrep implementation handles
+   this.
+*)
+module Enum = struct
+
+  (* We are interested in listing the "maximal" reduce-filter patterns:
+     patterns that matches stacks after reducing as much as possible.
+
+     They tend to be a good starting point for providing exhaustive, relatively
+     coarse-grained, error messages.
+
+     They coincide with leaves of the strongly connected components of the
+     reduction automata. We started by computing the SCC of the reduction
+     automata.
+
+     DFA or NFA? Working with the DFA allows us to relate independent sequence
+     of reductions that apply to the same stacks.
+  *)
+  module SCC = Tarjan.IndexedSCC(struct
+      type n = Reduction_DFA.n
+      let n = Reduction_DFA.n
+      let successors f i =
+        IndexMap.iter (fun _ j -> f j)
+          (Vector.get Reduction_DFA.states i).transitions
+    end)
+
+  (* Identify leaf components.
+     A leaf has all successors of all nodes of the component in the
+     component. *)
+  let leaves =
+    let check_component scc =
+      let check_successor _ j =
+        if not (Index.equal (Vector.get SCC.component j) scc) then
+          raise Exit
+      in
+      let check_node i =
+        IndexMap.iter check_successor (Vector.get Reduction_DFA.states i).transitions
+      in
+      match IndexSet.iter check_node (Vector.get SCC.nodes scc) with
+      | () -> true
+      | exception Exit -> false
+    in
+    IndexSet.init_from_set SCC.n check_component
+
+  let () =
+    Printf.eprintf "%d leaves\n" (IndexSet.cardinal leaves)
+
+  (* Produce reduce-filter patterns for each leaf:
+     - Consider the suffixes with non-reducible items in a leaf
+     - For each suffix, construct the most specific reduce-filter pattern
+       by extracting the sentential forms
+  *)
+  let () =
+    let open Info in
+    let irreducible_item (p, i) =
+      let rhs = Production.rhs p in
+      i < Array.length rhs &&
+      match Symbol.prj rhs.(i) with
+      | L _ -> true
+      | R n -> not (Nonterminal.nullable n)
+    in
+    let pattern_from_stack stack =
+      let filter = List.filter irreducible_item (Lr1.items (List.hd stack)) in
+      let reduce = List.filter_map Lr1.incoming (List.tl (List.rev stack)) in
+      (reduce, filter)
+    in
+    let table = Hashtbl.create 7 in
+    let visit_suffix i =
+      let desc = Vector.get Suffixes.desc i in
+      match pattern_from_stack desc.stack with
+      | _, [] -> ()
+      | pattern ->
+        begin match Hashtbl.find_opt table pattern with
+          | None -> Hashtbl.add table pattern (ref 1)
+          | Some r -> incr r
+        end;
+    in
+    let visit_node i = IndexSet.iter visit_suffix (Vector.get Suffixes.of_state i) in
+    let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
+    IndexSet.iter visit_leaf leaves;
+    let patterns =
+      Hashtbl.fold (fun pattern count acc -> (!count, pattern) :: acc) table []
+    in
+    let patterns = List.sort compare patterns in
+    List.iter (fun (count, (reduce, filter)) ->
+        let print_item (prod, pos) =
+          let comps = ref [] in
+          let rhs = Production.rhs prod in
+          for i = Array.length rhs - 1 downto pos do
+            comps := Symbol.name rhs.(i) :: !comps
+          done;
+          comps := "." :: !comps;
+          for i = pos - 1 downto 0 do
+            comps := Symbol.name rhs.(i) :: !comps
+          done;
+          Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
+        in
+        match reduce with
+        | [] ->
+          Printf.eprintf "%d occurrences: /%s\n"
+            count
+            (Misc.string_concat_map " /" print_item filter)
+        | _ ->
+          Printf.eprintf "%d occurrences: [%s /%s]\n"
+            count
+            (Misc.string_concat_map "; " Symbol.name reduce)
+            (Misc.string_concat_map " /" print_item filter)
+      ) patterns
 end
