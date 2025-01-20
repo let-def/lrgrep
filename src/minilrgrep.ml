@@ -145,17 +145,6 @@ end
 module Reduction_DFA = struct
   open Info
 
-  (* Determinize and close over ϵ-transitions *)
-  let rec fold_transitions acc (state : Reduction_NFA.state) : Reduction_NFA.state list Lr1.map =
-    List.fold_left (fun acc (label, state') ->
-        match label with
-        | None -> fold_transitions acc state'
-        | Some lr1 ->
-          IndexMap.update lr1
-            (function None -> Some [state'] | Some states -> Some (state' :: states))
-            acc
-      ) acc (Reduction_NFA.transitions state)
-
   (* Explicit representation focusing on suffixes.
 
      A suffix [{stack; lookaheads}] abstracts the set of LR configurations whose
@@ -165,6 +154,30 @@ module Reduction_DFA = struct
     stack: Lr1.t list;
     lookaheads: Terminal.set;
   }
+
+  (* Determinize states, accumulating visited suffixes, and close over
+     ϵ-transitions. *)
+  let register_suffix acc = function
+    | Reduction_NFA.Initial | Reduce _ -> acc
+    | Suffix (stack, lookaheads) ->
+      let suffixes, transitions = acc in
+      ({stack; lookaheads} :: suffixes, transitions)
+
+  let rec fold_transitions acc (state0 : Reduction_NFA.state)
+    : suffix list * Reduction_NFA.state list Lr1.map =
+    List.fold_left (fun acc (label, state) ->
+        let acc = register_suffix acc state in
+        match label with
+        | None -> fold_transitions acc state
+        | Some lr1 ->
+          let suffixes, transitions = acc in
+          let transitions =
+            IndexMap.update lr1
+              (function None -> Some [state] | Some states -> Some (state :: states))
+              transitions
+          in
+          (suffixes, transitions)
+      ) acc (Reduction_NFA.transitions state0)
 
   (* Start timing the determinization process *)
   let time = Stopwatch.enter time "Determinization"
@@ -199,16 +212,10 @@ module Reduction_DFA = struct
       | None ->
         let slot = IndexBuffer.Gen.reserve states in
         Hashtbl.add table nstates (IndexBuffer.Gen.index slot);
-        let transitions =
-          nstates
-          |> List.fold_left fold_transitions IndexMap.empty
-          |> IndexMap.map visit
+        let suffixes, transitions =
+          List.fold_left fold_transitions ([], IndexMap.empty) nstates
         in
-        let suffixes = List.filter_map (function
-            | Reduction_NFA.Initial | Reduction_NFA.Reduce _ -> None
-            | Reduction_NFA.Suffix (stack, lookaheads) -> Some {stack; lookaheads}
-          ) nstates
-        in
+        let transitions = IndexMap.map visit transitions in
         IndexBuffer.Gen.commit states slot {suffixes; transitions};
         IndexBuffer.Gen.index slot
     in
