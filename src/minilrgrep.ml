@@ -547,6 +547,9 @@ module Transl = struct
 
   (* Extract branches from an entry in the specification *)
   let extract_branches (entry : entry) =
+    if not (fst entry.error) then
+      error (snd entry.error) "only entries matching errors are supported \
+                               (use '... = parse error ...' syntax)";
     let extract_pattern index (pattern : pattern) =
       begin match pattern.lookaheads with
         | [] -> ()
