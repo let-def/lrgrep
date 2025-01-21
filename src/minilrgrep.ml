@@ -805,19 +805,22 @@ module Enum = struct
           done;
           Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
         in
+        if false then Printf.eprintf "%d occurrences\n" count;
         begin match reduce with
         | [] ->
-          Printf.eprintf "%d occurrences\n" count;
-          List.iter (fun item -> Printf.eprintf "/%s\n" (print_item item)) filter
+          List.iteri (fun i item ->
+              Printf.eprintf "%c /%s\n"
+                (if i = 0 then '|' else ' ')
+                (print_item item)
+            ) filter
         | _ ->
           let reduce = Misc.string_concat_map "; " Symbol.name reduce in
           let padding = String.make (String.length reduce) ' ' in
-          Printf.eprintf "%d occurrences" count;
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "\n[%s /%s" reduce (print_item item)
+                Printf.eprintf "\n| [%s /%s" reduce (print_item item)
               else
-                Printf.eprintf "\n %s /%s" padding (print_item item)
+                Printf.eprintf "\n   %s /%s" padding (print_item item)
             ) filter;
           Printf.eprintf "]\n"
         end;
@@ -829,7 +832,7 @@ module Enum = struct
           let symbols = List.filter_map Lr1.incoming path in
           Misc.string_concat_map " " Symbol.name symbols
         in
-        Printf.eprintf "Path:\n  %s\n" (print_lr1_seq path)
+        Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n" (print_lr1_seq path)
 
       ) generalized_patterns
 end
