@@ -154,37 +154,44 @@ module Reduction_DFA = struct
 
   (* Explicit representation focusing on suffixes.
 
-     A suffix [{stack; lookaheads}] abstracts the set of LR configurations whose
-     stacks are suffixed by [stack] and looking ahead at a symbol in
-     [lookaheads]. *)
+     A suffix [{stack; lookaheads}] abstracts the set of LR configurations
+     whose stacks are suffixed by [stack] and looking ahead at a symbol
+     in [lookaheads]. *)
   type suffix = {
     stack: Lr1.t list;
     lookaheads: Terminal.set;
+
+    child: suffix list;
   }
 
-  (* Determinize states, accumulating visited suffixes, and close over
-     ϵ-transitions. *)
-  let register_suffix acc = function
-    | Reduction_NFA.Initial | Reduce _ -> acc
-    | Suffix (stack, lookaheads) ->
-      let suffixes, transitions = acc in
-      ({stack; lookaheads} :: suffixes, transitions)
+  (* Determinize states and close over ϵ-transitions,
+     accumulating visited suffixes on the way.  *)
+  let rec fold_transition acc (label, state) =
+    match label with
+    | None ->
+      fold_transitions acc state
+    | Some lr1 ->
+      let suffixes, targets = acc in
+      let targets =
+        IndexMap.update lr1
+          (function None -> Some [state] | Some states -> Some (state :: states))
+          targets
+      in
+      (suffixes, targets)
 
-  let rec fold_transitions acc (state0 : Reduction_NFA.state)
+  and fold_transitions acc (state : Reduction_NFA.state)
     : suffix list * Reduction_NFA.state list Lr1.map =
-    List.fold_left (fun acc (label, state) ->
-        match label with
-        | None ->
-          fold_transitions acc state
-        | Some lr1 ->
-          let suffixes, transitions = acc in
-          let transitions =
-            IndexMap.update lr1
-              (function None -> Some [state] | Some states -> Some (state :: states))
-              transitions
-          in
-          (suffixes, transitions)
-      ) (register_suffix acc state0) (Reduction_NFA.transitions state0)
+    let transitions = Reduction_NFA.transitions state in
+    match state with
+    | Reduction_NFA.Initial | Reduce _ ->
+      List.fold_left fold_transition acc transitions
+
+    | Suffix (stack, lookaheads) ->
+      let suffixes, targets = acc in
+      let child, targets =
+        List.fold_left fold_transition ([], targets) transitions
+      in
+      ({stack; lookaheads; child} :: suffixes, targets)
 
   (* Start timing the determinization process *)
   let time = Stopwatch.enter time "Determinization"
@@ -703,17 +710,20 @@ module Enum = struct
     in
     let table = Hashtbl.create 7 in
     let visit_suffix i =
-      let desc = Vector.get Suffixes.desc i in
-      Printf.printf "%s\n"
-        (Misc.string_concat_map " " Symbol.name
-           (List.filter_map Lr1.incoming (List.rev desc.stack)));
-      match pattern_from_stack desc.stack with
-      | _, [] -> ()
-      | reduce, filter ->
-        begin match Hashtbl.find_opt table reduce with
-          | None -> Hashtbl.add table reduce (ref [filter])
-          | Some r -> r := filter :: !r
-        end;
+      match Vector.get Suffixes.desc i with
+      | {child = _ :: _; _} -> ()
+      | {stack; _} ->
+        Printf.printf "%s\n"
+          (Misc.string_concat_map " " Symbol.name
+             (List.filter_map Lr1.incoming (List.rev stack)));
+        begin match pattern_from_stack stack with
+        | _, [] -> ()
+        | reduce, filter ->
+          begin match Hashtbl.find_opt table reduce with
+            | None -> Hashtbl.add table reduce (ref [filter])
+            | Some r -> r := filter :: !r
+          end
+        end
     in
     let visit_node i = IndexSet.iter visit_suffix (Vector.get Suffixes.of_state i) in
     let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
