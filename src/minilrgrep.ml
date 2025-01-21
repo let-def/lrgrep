@@ -244,6 +244,39 @@ module Reduction_DFA = struct
 
   (* End timing the determinization process *)
   let () = Stopwatch.leave time
+
+  let path_suffix = Vector.make n []
+
+  let () =
+    let todo = ref [initial, []] in
+    let propagate (x, path) =
+      match Vector.get path_suffix x with
+      | _ :: _ -> ()
+      | [] ->
+        Vector.set path_suffix x path;
+        IndexMap.iter
+          (fun lr1 y -> Misc.push todo (y, lr1 :: path))
+          (Vector.get states x).transitions
+    in
+    Misc.fixpoint ~propagate todo
+
+  let path_prefix = Vector.make Lr1.n []
+
+  let () =
+    let todo = ref [] in
+    let propagate (x, path) =
+      match Vector.get path_prefix x with
+      | _ :: _ -> ()
+      | [] ->
+        Vector.set path_prefix x path;
+        List.iter (fun tr ->
+            let y = Transition.target tr in
+            Misc.push todo (y, x :: path)
+          ) (Transition.successors x)
+    in
+    Hashtbl.iter (fun _ lr1 -> Misc.push todo (lr1, [])) Lr1.entrypoints;
+    Misc.fixpoint ~propagate todo
+
 end
 
 (* Optimization opportunities.
@@ -283,18 +316,18 @@ module Suffixes = struct
   (* Map each DFA state to a set of suffix indices *)
   let of_state =
     let table = Hashtbl.create 7 in
-    let visit_suffix suffix =
+    let visit_suffix dfa suffix =
       match Hashtbl.find_opt table suffix with
       | Some index -> index
       | None ->
-        let index = IndexBuffer.Gen.add desc suffix in
+        let index = IndexBuffer.Gen.add desc (dfa, suffix) in
         Hashtbl.add table suffix index;
         index
     in
-    let visit_state {Reduction_DFA.suffixes; _} =
-      IndexSet.of_list (List.map visit_suffix suffixes)
+    let visit_state dfa {Reduction_DFA.suffixes; _} =
+      IndexSet.of_list (List.map (visit_suffix dfa) suffixes)
     in
-    Vector.map visit_state Reduction_DFA.states
+    Vector.mapi visit_state Reduction_DFA.states
 
   (* Freeze the suffix descriptions *)
   let desc = IndexBuffer.Gen.freeze desc
@@ -601,7 +634,7 @@ module Transl = struct
     | _ ->
       IndexSet.init_from_set Suffixes.n
         (fun suffix ->
-           let desc = Vector.get Suffixes.desc suffix in
+           let _, desc = Vector.get Suffixes.desc suffix in
            match_stack (desc.stack, branch.filter))
 
   (* Produce a spec for each entry *)
@@ -711,55 +744,55 @@ module Enum = struct
     let table = Hashtbl.create 7 in
     let visit_suffix i =
       match Vector.get Suffixes.desc i with
-      | {child = _ :: _; _} -> ()
-      | {stack; _} ->
-        Printf.printf "%s\n"
+      | _, {child = _ :: _; _} -> ()
+      | _, {stack; _} ->
+        (*Printf.printf "%s\n"
           (Misc.string_concat_map " " Symbol.name
-             (List.filter_map Lr1.incoming (List.rev stack)));
+             (List.filter_map Lr1.incoming (List.rev stack)));*)
         begin match pattern_from_stack stack with
         | _, [] -> ()
         | reduce, filter ->
           begin match Hashtbl.find_opt table reduce with
-            | None -> Hashtbl.add table reduce (ref [filter])
-            | Some r -> r := filter :: !r
+            | None -> Hashtbl.add table reduce (ref [i, filter])
+            | Some r -> r := (i, filter) :: !r
           end
         end
     in
     let visit_node i = IndexSet.iter visit_suffix (Vector.get Suffixes.of_state i) in
     let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
     IndexSet.iter visit_leaf leaves;
-    Hashtbl.fold (fun reduce filters acc ->
-        (reduce, List.length !filters, !filters) :: acc) table []
-    |> List.sort (fun (_, i1, _) (_, i2, _) -> - Int.compare i1 i2)
+    Hashtbl.fold (fun reduce filters acc -> (reduce, !filters) :: acc) table []
 
-  let () =
+  let generalized_patterns =
     let minimum_filters filters =
       let rec keep_minima acc = function
         | [] -> List.rev acc
-        | xs :: xxs ->
-          if List.exists (fun (r, xs') ->
+        | (i, xs) :: xxs ->
+          if List.exists (fun (r, _, xs') ->
               if List.for_all (fun x' -> List.mem x' xs) xs' then
                 (incr r; true)
               else
                 false
             ) acc
           then keep_minima acc xxs
-          else keep_minima ((ref 1, xs) :: acc) xxs
+          else keep_minima ((ref 1, i, xs) :: acc) xxs
       in
       filters
-      |> List.sort List.compare_lengths
+      |> List.sort (fun (_, l1) (_, l2) -> List.compare_lengths l1 l2)
       |> keep_minima []
-      |> List.map (fun (r, xs) -> (!r, xs))
-      |> List.sort (fun (r1, _) (r2, _) -> - Int.compare r1 r2)
+      |> List.map (fun (r, i, xs) -> (!r, i, xs))
+      |> List.sort (fun (r1, _, _) (r2, _, _) -> - Int.compare r1 r2)
     in
     maximal_patterns
-    |> List.concat_map (fun (reduce, _, filters) ->
+    |> List.concat_map (fun (reduce, filters) ->
         filters
         |> minimum_filters
-        |> List.map (fun (count, filter) -> (count, reduce, filter))
+        |> List.map (fun (count, suffix, filter) -> (count, suffix, reduce, filter))
       )
-    |> List.sort (fun (c1, _, _) (c2, _, _) -> - Int.compare c1 c2)
-    |> List.iter (fun (count, reduce, filter) ->
+    |> List.sort (fun (c1, _, _, _) (c2, _, _, _) -> - Int.compare c1 c2)
+
+  let () =
+    List.iter (fun (count, suffix, reduce, filter) ->
         let print_item (prod, pos) =
           let comps = ref [] in
           let rhs = Production.rhs prod in
@@ -772,7 +805,7 @@ module Enum = struct
           done;
           Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
         in
-        match reduce with
+        begin match reduce with
         | [] ->
           Printf.eprintf "%d occurrences\n" count;
           List.iter (fun item -> Printf.eprintf "/%s\n" (print_item item)) filter
@@ -787,5 +820,16 @@ module Enum = struct
                 Printf.eprintf "\n %s /%s" padding (print_item item)
             ) filter;
           Printf.eprintf "]\n"
-      )
+        end;
+        let dfa, _ = Vector.get Suffixes.desc suffix in
+        let path_suffix = Vector.get Reduction_DFA.path_suffix dfa in
+        let path_prefix = Vector.get Reduction_DFA.path_prefix (List.hd path_suffix) in
+        let path = List.rev_append path_prefix path_suffix in
+        let print_lr1_seq path =
+          let symbols = List.filter_map Lr1.incoming path in
+          Misc.string_concat_map " " Symbol.name symbols
+        in
+        Printf.eprintf "Path:\n  %s\n" (print_lr1_seq path)
+
+      ) generalized_patterns
 end
