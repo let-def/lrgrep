@@ -648,6 +648,52 @@ module Transl = struct
             (fun branch -> branch, compile_branch branch)
             (extract_branches entry)
         ) ast.entrypoints
+
+  let covered =
+    List.fold_left (fun set spec ->
+        List.fold_left
+          (fun set (_branch, suffixes) -> IndexSet.union set suffixes)
+          set spec
+      ) IndexSet.empty branches
+
+  module Uncovered = struct
+    let successors = Misc.relation_reverse Reduction_DFA.predecessors
+    let enabled = Boolvector.make Reduction_DFA.n true
+    let states = ref (cardinal Reduction_DFA.n)
+
+    let () =
+      let todo = ref [] in
+      let disable_edge i j =
+        if Boolvector.test enabled i then (
+          let succ = Vector.get successors i in
+          let succ' = IndexSet.remove j succ in
+          if succ == succ' then (
+            Vector.set successors i succ';
+            if IndexSet.is_empty succ' then (
+              Boolvector.clear enabled i;
+              decr states;
+              Misc.push todo i
+            )
+          )
+        )
+      in
+      let disable_node j =
+        IndexSet.iter (fun i -> disable_edge i j)
+          (Vector.get Reduction_DFA.predecessors j)
+      in
+      Vector.iteri (fun dfa suffixes ->
+          if not (IndexSet.disjoint covered suffixes) then (
+            Boolvector.clear enabled dfa;
+            decr states;
+            disable_node dfa
+          )
+        ) Suffixes.of_state;
+      Misc.fixpoint ~propagate:disable_node todo
+
+    let () =
+      Printf.eprintf "DFA states: %d / covered: %d / uncovered: %d\n"
+        (cardinal Reduction_DFA.n) (cardinal Reduction_DFA.n - !states) !states
+  end
 end
 
 (* Now we switch to enumeration support.
