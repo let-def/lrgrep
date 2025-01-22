@@ -277,14 +277,15 @@ module Reduction_DFA = struct
     Hashtbl.iter (fun _ lr1 -> Misc.push todo (lr1, [])) Lr1.entrypoints;
     Misc.fixpoint ~propagate todo
 
-  (* Pre-compute the predecessors for each DFA state *)
-  let predecessors = Vector.make n IndexSet.empty
+  (* Pre-compute the successors and predecessors *)
 
-  let () = Vector.iteri (fun source desc ->
-      IndexMap.iter
-        (fun _lr1 target -> Misc.vector_set_add predecessors target source)
-        desc.transitions
+  let successors = Vector.map (fun desc ->
+      IndexMap.fold (fun _ i is -> IndexSet.add i is)
+        desc.transitions IndexSet.empty
     ) states
+
+  let predecessors =
+    Misc.relation_reverse successors
 end
 
 (* Optimization opportunities.
@@ -655,62 +656,63 @@ module Transl = struct
           (fun set (_branch, suffixes) -> IndexSet.union set suffixes)
           set spec
       ) IndexSet.empty branches
+
+  let () =
+    if false then
+    IndexSet.iter (fun suffix ->
+        let _, def = Vector.get Suffixes.desc suffix in
+        Printf.eprintf "Covered suffix: %s\n"
+          (Lr1.list_to_string (List.rev def.stack))
+      ) covered
 end
 
 (* Find uncovered states: states on a path ending with an uncovered suffix *)
 module Uncovered = struct
-  let successors = Misc.relation_reverse Reduction_DFA.predecessors
+
+  let outgoing = Vector.map IndexSet.cardinal Reduction_DFA.successors
+
   let enabled = Boolvector.make Reduction_DFA.n true
 
   (* Pass 1: disable prefixes of paths ending with covered states *)
   let () =
-    let todo = ref [] in
-    let disable_edge i j =
+    let rec disable_outgoing_edge i =
+      let count = Vector.get outgoing i - 1 in
+      Vector.set outgoing i count;
+      assert (count >= 0);
+      if count = 0 then
+        disable_node i
+    and disable_node i =
       if Boolvector.test enabled i then (
-        let succ = Vector.get successors i in
-        let succ' = IndexSet.remove j succ in
-        if succ == succ' then (
-          Vector.set successors i succ';
-          if IndexSet.is_empty succ' then (
-            Boolvector.clear enabled i;
-            Misc.push todo i
-          )
-        )
+        Boolvector.clear enabled i;
+        IndexSet.iter disable_outgoing_edge
+          (Vector.get Reduction_DFA.predecessors i)
       )
     in
-    let disable_node j =
-      IndexSet.iter (fun i -> disable_edge i j)
-        (Vector.get Reduction_DFA.predecessors j)
-    in
-    Vector.iteri (fun dfa suffixes ->
-        if not (IndexSet.disjoint Transl.covered suffixes) then (
-          Boolvector.clear enabled dfa;
-          disable_node dfa
-        )
-      ) Suffixes.of_state;
-    Misc.fixpoint ~propagate:disable_node todo
+    Vector.iteri begin fun i suffixes ->
+      if not (IndexSet.disjoint Transl.covered suffixes) then
+        disable_node i
+    end Suffixes.of_state
 
   (* Pass 2: retain only the prefixes reachable from initial state,
              disabling suffixes with covered states *)
-  let count, enabled =
+  let enabled =
+    let count = ref 0 in
     let vector = Boolvector.make Reduction_DFA.n false in
     let rec visit i =
-      if Boolvector.test enabled i &&
-         not (Boolvector.test vector i)
-      then (
+      if Boolvector.test enabled i && not (Boolvector.test vector i) then (
         Boolvector.set vector i;
-        IndexSet.iter visit (Vector.get successors i)
+        incr count;
+        IndexSet.iter visit (Vector.get Reduction_DFA.successors i)
       )
     in
     visit Reduction_DFA.initial;
-    let count = ref 0 in
-    Index.iter Reduction_DFA.n (fun i ->
-        if Boolvector.test vector i then
-          incr count
-        else
-          Vector.set successors i IndexSet.empty
-      );
-    (!count, vector)
+    if false then (
+      Printf.eprintf "Covered suffixes: %d / %d\n"
+        (IndexSet.cardinal Transl.covered) (cardinal Suffixes.n);
+      Printf.eprintf "Uncovered states: %d / %d\n"
+        !count (cardinal Reduction_DFA.n);
+    );
+    vector
 end
 
 let () =
@@ -727,7 +729,7 @@ let () =
                 (List.filter_map Info.Lr1.incoming (List.rev suffix.Reduction_DFA.stack)))
            desc.Reduction_DFA.suffixes);
       IndexMap.iter begin fun lr1 j ->
-        if IndexSet.mem j (Vector.get Uncovered.successors i) then
+        if Boolvector.test Uncovered.enabled j then
           p " st%d -> st%d [label=%S];\n" (Index.to_int i) (Index.to_int j) (Info.Lr1.to_string lr1)
       end desc.Reduction_DFA.transitions
     )
@@ -772,7 +774,10 @@ module Enum = struct
       type n = Reduction_DFA.n
       let n = Reduction_DFA.n
       let successors f i =
-        IndexSet.iter f (Vector.get Uncovered.successors i)
+        IndexSet.iter (fun j ->
+            if Boolvector.test Uncovered.enabled j then
+              f j)
+          (Vector.get Reduction_DFA.successors i)
     end)
 
   (* Identify leaf components.
