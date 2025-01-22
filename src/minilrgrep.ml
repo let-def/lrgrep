@@ -630,7 +630,7 @@ module Transl = struct
         IndexSet.mem top states && match_stack (rest, filter)
     in
     match branch.filter with
-    | Consume (_, _, pos) when branch.reduce ->
+    | Consume (_, _, pos) when not branch.reduce ->
       error pos "atoms are not supported outside of reductions"
     | _ ->
       IndexSet.init_from_set Suffixes.n
