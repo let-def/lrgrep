@@ -495,46 +495,47 @@ module Transl = struct
       | Some sym -> sym
       | None -> error pos "unknown symbol %S" sym
 
-  (* Parse a filter to an item (symbol array and position of the dot) *)
-  let parse_filter rhs =
-    let dot = ref (-1) in
-    let rec prepare_symbols index = function
+  (* Match the right-hand side of a filter to an item *)
+  let match_rhs rfilter (prod, pos) =
+    let rec loop rhs dot index = function
       | [] ->
-        if !dot = -1 then
-          error (snd (List.hd rhs)) "expecting a '.' in the filter";
-        []
-      | (Skip, pos) :: _ ->
-        error pos "'_*' syntax is not supported in filter"
-      | (Dot, pos) :: rest ->
-        if !dot <> -1 then
-          error pos "only one '.' per filter is supported";
-        dot := index;
-        prepare_symbols index rest
+        (index = Array.length rhs) && (dot = -1)
+      | (Dot, _) :: rest ->
+        loop rhs (if dot = index then -1 else dot) index rest
       | (Find sym, pos) :: rest ->
-        let sym = Option.map (parse_symbol pos) sym in
-        sym :: prepare_symbols (index + 1) rest
+        index < Array.length rhs && (
+          match sym with
+          | None -> true
+          | Some sym ->
+            Index.equal (parse_symbol pos sym) rhs.(index)
+        ) &&
+        loop rhs dot (index + 1) rest
+      | (Skip, _) :: rest ->
+        let rec skip_skip = function
+          | (Skip, _) :: rest -> skip_skip rest
+          | (Dot, _) :: rest when dot = -1 -> skip_skip rest
+          | rest -> rest
+        in
+        let rec skip_sym index rest =
+          (index <= Array.length rhs) &&
+          (loop rhs dot index rest ||
+           skip_sym (index + 1) rest)
+        in
+        skip_sym index (skip_skip rest)
     in
-    let symbols = Array.of_list (prepare_symbols 0 rhs) in
-    (symbols, !dot)
+    loop (Production.rhs prod) pos 0 rfilter
 
   (* Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
-    let symbols, dot = parse_filter rhs in
-    let match_prod prod =
-      begin match lhs with
-        | None -> true
-        | Some n -> Index.equal n (Production.lhs prod)
-      end &&
-      Array.length symbols = Production.length prod &&
-      Array.for_all2 (fun sym -> function
-          | None -> true
-          | Some sym' -> Index.equal sym sym'
-        ) (Production.rhs prod) symbols
-    in
-    let productions = IndexSet.init_from_set Production.n match_prod in
     let match_lr1 lr1 =
-      List.exists
-        (fun (prod, n) -> n = dot && IndexSet.mem prod productions)
+      List.exists (fun item ->
+          begin match lhs with
+            | None -> true
+            | Some lhs ->
+              Index.equal lhs (Production.lhs (fst item))
+          end &&
+          match_rhs rhs item
+        )
         (Lr1.items lr1)
     in
     IndexSet.init_from_set Lr1.n match_lr1
