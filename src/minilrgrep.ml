@@ -277,6 +277,14 @@ module Reduction_DFA = struct
     Hashtbl.iter (fun _ lr1 -> Misc.push todo (lr1, [])) Lr1.entrypoints;
     Misc.fixpoint ~propagate todo
 
+  (* Pre-compute the predecessors for each DFA state *)
+  let predecessors = Vector.make n IndexSet.empty
+
+  let () = Vector.iteri (fun source desc ->
+      IndexMap.iter
+        (fun _lr1 target -> Misc.vector_set_add predecessors target source)
+        desc.transitions
+    ) states
 end
 
 (* Optimization opportunities.
@@ -337,17 +345,9 @@ module Suffixes = struct
 
   (* Compute the transitive closure of reachable states *)
   let () =
-    (* Pre-compute the predecessors for each DFA state *)
-    let predecessors = Vector.make Reduction_DFA.n IndexSet.empty in
-    let () = Vector.iteri (fun source desc ->
-        IndexMap.iter
-          (fun _lr1 target -> Misc.vector_set_add predecessors target source)
-          desc.Reduction_DFA.transitions
-      ) Reduction_DFA.states
-    in
     (* Propagate reachable suffixes to predecessors of a state until reaching a
        fixed point. *)
-    Misc.fix_relation predecessors of_state
+    Misc.fix_relation Reduction_DFA.predecessors of_state
       ~propagate:(fun _ s _ s' -> IndexSet.union s s')
 
   (* End timing the suffix computation *)
