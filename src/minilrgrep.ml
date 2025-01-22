@@ -655,46 +655,85 @@ module Transl = struct
           (fun set (_branch, suffixes) -> IndexSet.union set suffixes)
           set spec
       ) IndexSet.empty branches
+end
 
-  module Uncovered = struct
-    let successors = Misc.relation_reverse Reduction_DFA.predecessors
-    let enabled = Boolvector.make Reduction_DFA.n true
-    let states = ref (cardinal Reduction_DFA.n)
+(* Find uncovered states: states on a path ending with an uncovered suffix *)
+module Uncovered = struct
+  let successors = Misc.relation_reverse Reduction_DFA.predecessors
+  let enabled = Boolvector.make Reduction_DFA.n true
 
-    let () =
-      let todo = ref [] in
-      let disable_edge i j =
-        if Boolvector.test enabled i then (
-          let succ = Vector.get successors i in
-          let succ' = IndexSet.remove j succ in
-          if succ == succ' then (
-            Vector.set successors i succ';
-            if IndexSet.is_empty succ' then (
-              Boolvector.clear enabled i;
-              decr states;
-              Misc.push todo i
-            )
+  (* Pass 1: disable prefixes of paths ending with covered states *)
+  let () =
+    let todo = ref [] in
+    let disable_edge i j =
+      if Boolvector.test enabled i then (
+        let succ = Vector.get successors i in
+        let succ' = IndexSet.remove j succ in
+        if succ == succ' then (
+          Vector.set successors i succ';
+          if IndexSet.is_empty succ' then (
+            Boolvector.clear enabled i;
+            Misc.push todo i
           )
         )
-      in
-      let disable_node j =
-        IndexSet.iter (fun i -> disable_edge i j)
-          (Vector.get Reduction_DFA.predecessors j)
-      in
-      Vector.iteri (fun dfa suffixes ->
-          if not (IndexSet.disjoint covered suffixes) then (
-            Boolvector.clear enabled dfa;
-            decr states;
-            disable_node dfa
-          )
-        ) Suffixes.of_state;
-      Misc.fixpoint ~propagate:disable_node todo
+      )
+    in
+    let disable_node j =
+      IndexSet.iter (fun i -> disable_edge i j)
+        (Vector.get Reduction_DFA.predecessors j)
+    in
+    Vector.iteri (fun dfa suffixes ->
+        if not (IndexSet.disjoint Transl.covered suffixes) then (
+          Boolvector.clear enabled dfa;
+          disable_node dfa
+        )
+      ) Suffixes.of_state;
+    Misc.fixpoint ~propagate:disable_node todo
 
-    let () =
-      Printf.eprintf "DFA states: %d / covered: %d / uncovered: %d\n"
-        (cardinal Reduction_DFA.n) (cardinal Reduction_DFA.n - !states) !states
-  end
+  (* Pass 2: retain only the prefixes reachable from initial state,
+             disabling suffixes with covered states *)
+  let count, enabled =
+    let vector = Boolvector.make Reduction_DFA.n false in
+    let rec visit i =
+      if Boolvector.test enabled i &&
+         not (Boolvector.test vector i)
+      then (
+        Boolvector.set vector i;
+        IndexSet.iter visit (Vector.get successors i)
+      )
+    in
+    visit Reduction_DFA.initial;
+    let count = ref 0 in
+    Index.iter Reduction_DFA.n (fun i ->
+        if Boolvector.test vector i then
+          incr count
+        else
+          Vector.set successors i IndexSet.empty
+      );
+    (!count, vector)
 end
+
+let () =
+  let oc = open_out_bin "red.dot" in
+  let p fmt = Printf.fprintf oc fmt in
+  p "digraph G {\n";
+  Vector.iteri begin fun i desc ->
+    if Boolvector.test Uncovered.enabled i then (
+      p " st%d[label=%S];\n"
+        (Index.to_int i)
+        (Misc.string_concat_map "\n"
+           (fun suffix ->
+              Misc.string_concat_map " " Info.Symbol.name
+                (List.filter_map Info.Lr1.incoming (List.rev suffix.Reduction_DFA.stack)))
+           desc.Reduction_DFA.suffixes);
+      IndexMap.iter begin fun lr1 j ->
+        if IndexSet.mem j (Vector.get Uncovered.successors i) then
+          p " st%d -> st%d [label=%S];\n" (Index.to_int i) (Index.to_int j) (Info.Lr1.to_string lr1)
+      end desc.Reduction_DFA.transitions
+    )
+  end Reduction_DFA.states;
+  p "}\n";
+  close_out_noerr oc
 
 (* Now we switch to enumeration support.
 
