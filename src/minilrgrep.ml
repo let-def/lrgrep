@@ -733,8 +733,7 @@ module Enum = struct
       type n = Reduction_DFA.n
       let n = Reduction_DFA.n
       let successors f i =
-        IndexMap.iter (fun _ j -> f j)
-          (Vector.get Reduction_DFA.states i).transitions
+        IndexSet.iter f (Vector.get Uncovered.successors i)
     end)
 
   (* Identify leaf components.
@@ -747,6 +746,7 @@ module Enum = struct
           raise Exit
       in
       let check_node i =
+        if not (Boolvector.test Uncovered.enabled i) then raise Exit;
         IndexMap.iter check_successor (Vector.get Reduction_DFA.states i).transitions
       in
       match IndexSet.iter check_node (Vector.get SCC.nodes scc) with
