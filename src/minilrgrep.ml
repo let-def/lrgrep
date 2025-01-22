@@ -423,10 +423,17 @@ module Transl = struct
     | Filter of Lr1.set * position
     | Consume of filter * Lr1.set * position
 
+  type reduce =
+    | Reduce_yes
+    | Reduce_no
+    | Reduce_auto (* Special case for supporting [_* / ...] syntax which lets
+                     LRGrep finds out what needs to be reduced, if necessary,
+                     for a pattern to match *)
+
   (* Semantic representation of a branch. *)
   type branch = {
     (* Should the filter match literally or modulo reduction? *)
-    reduce: bool;
+    reduce: reduce;
     (* The filter the stack suffix should satisfy. *)
     filter: filter;
     (* The clause being recognized.  If this branch succeeds, semantic action
@@ -597,12 +604,16 @@ module Transl = struct
       error expr.position "repetitions are not supported"
     | Alternative exprs ->
       List.concat_map (flatten_alternatives clause) exprs
+    (* Special-case recognizing [_* ...] *)
+    | Reduce {expr = {desc = Concat ({desc = Repetition {expr = {desc = Atom (_, None, _); _}; _}; _} :: rest); _}; _} ->
+      let filter = List.fold_left flatten_concat (default_filter expr.position) rest in
+      [{clause; filter; reduce = Reduce_auto}]
     | Reduce {expr; _} ->
       let filter = flatten_concat (default_filter expr.position) expr in
-      [{clause; filter; reduce = true}]
+      [{clause; filter; reduce = Reduce_yes}]
     | _ ->
       let filter = flatten_concat (default_filter expr.position) expr in
-      [{clause; filter; reduce = false}]
+      [{clause; filter; reduce = Reduce_no}]
 
   (* Extract branches from an entry in the specification *)
   let extract_branches (entry : entry) =
@@ -624,14 +635,18 @@ module Transl = struct
   (* Compile a branch into a set of suffixes that match the branch *)
   let compile_branch branch =
     let rec match_stack = function
-      | [], _ | (_ :: _ :: _), Filter _ -> false
-      | [top], Filter (states, _) ->
-        IndexSet.mem top states
+      | [], _ -> false
+      | (top :: rest), Filter (states, _) ->
+        IndexSet.mem top states &&
+        begin match rest, branch.reduce with
+          | [], _ | _, Reduce_auto -> true
+          | _ -> false
+        end
       | (top :: rest), Consume (filter, states, _) ->
         IndexSet.mem top states && match_stack (rest, filter)
     in
-    match branch.filter with
-    | Consume (_, _, pos) when not branch.reduce ->
+    match branch.filter, branch.reduce with
+    | Consume (_, _, pos), Reduce_no ->
       error pos "atoms are not supported outside of reductions"
     | _ ->
       IndexSet.init_from_set Suffixes.n
