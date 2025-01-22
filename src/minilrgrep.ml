@@ -878,31 +878,40 @@ module Enum = struct
       let rec keep_minima acc = function
         | [] -> List.rev acc
         | (i, xs) :: xxs ->
-          if List.exists (fun (r, _, xs') ->
-              if List.for_all (fun x' -> List.mem x' xs) xs' then
-                (incr r; true)
-              else
-                false
-            ) acc
+          if List.exists
+              (fun (_, xs') -> List.for_all (fun x' -> List.mem x' xs) xs')
+              acc
           then keep_minima acc xxs
-          else keep_minima ((ref 1, i, xs) :: acc) xxs
+          else keep_minima ((i, xs) :: acc) xxs
       in
       filters
       |> List.sort (fun (_, l1) (_, l2) -> List.compare_lengths l1 l2)
       |> keep_minima []
-      |> List.map (fun (r, i, xs) -> (!r, i, xs))
-      |> List.sort (fun (r1, _, _) (r2, _, _) -> - Int.compare r1 r2)
+    in
+    let add_lookahead acc (prod, pos) =
+      let rhs = Production.rhs prod in
+      if pos < Array.length rhs then
+        IndexSet.add rhs.(pos) acc
+      else acc
     in
     maximal_patterns
     |> List.concat_map (fun (reduce, filters) ->
         filters
         |> minimum_filters
-        |> List.map (fun (count, suffix, filter) -> (count, suffix, reduce, filter))
+        |> List.map (fun (suffix, filter) ->
+            let lookaheads =
+              List.fold_left add_lookahead IndexSet.empty filter
+            in
+            (suffix, reduce, filter, lookaheads))
       )
-    |> List.sort (fun (c1, _, _, _) (c2, _, _, _) -> - Int.compare c1 c2)
+    |> List.sort (fun (_, _, _, l1) (_, _, _, l2) ->
+        IndexSet.compare l1 l2
+      )
+    |> List.map (fun (s, r, f, _l) -> (s, r, f))
+
 
   let () =
-    List.iter (fun (count, suffix, reduce, filter) ->
+    List.iter (fun (suffix, reduce, filter) ->
         let print_item (prod, pos) =
           let comps = ref [] in
           let rhs = Production.rhs prod in
@@ -915,7 +924,6 @@ module Enum = struct
           done;
           Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
         in
-        if false then Printf.eprintf "%d occurrences\n" count;
         begin match reduce with
         | [] ->
           List.iteri (fun i item ->
