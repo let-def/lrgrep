@@ -347,7 +347,7 @@ module Suffixes = struct
   let () =
     (* Propagate reachable suffixes to predecessors of a state until reaching a
        fixed point. *)
-    Misc.fix_relation Reduction_DFA.predecessors of_state
+    Misc.fix_relation Reduction_DFA.predecessors reachable
       ~propagate:(fun _ s _ s' -> IndexSet.union s s')
 
   (* End timing the suffix computation *)
