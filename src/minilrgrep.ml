@@ -819,7 +819,7 @@ module Enum = struct
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "\n| [%s /%s" reduce (print_item item)
+                Printf.eprintf "| [%s /%s" reduce (print_item item)
               else
                 Printf.eprintf "\n   %s /%s" padding (print_item item)
             ) filter;
@@ -833,7 +833,7 @@ module Enum = struct
           let symbols = List.filter_map Lr1.incoming path in
           Misc.string_concat_map " " Symbol.name symbols
         in
-        Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n" (print_lr1_seq path)
+        Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq path)
 
       ) generalized_patterns
 end
