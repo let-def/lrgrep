@@ -56,6 +56,12 @@ let warn (pos : Kernel.Syntax.position) fmt =
   Printf.eprintf "Warning line %d, column %d: " pos.line pos.col;
   Printf.kfprintf (fun oc -> Printf.fprintf oc "\n") stderr fmt
 
+(* Helper to check if a symbol is not nullable *)
+let non_nullable_symbol sym =
+  match Info.Symbol.prj sym with
+  | L _ -> true
+  | R n -> not (Info.Nonterminal.nullable n)
+
 (* Start timing the construction of the reduction automaton *)
 let time = Stopwatch.enter Stopwatch.main "Reduction automaton"
 
@@ -829,9 +835,7 @@ module Enum = struct
     let irreducible_item (p, i) =
       let rhs = Production.rhs p in
       i < Array.length rhs &&
-      match Symbol.prj rhs.(i) with
-      | L _ -> true
-      | R n -> not (Nonterminal.nullable n)
+      non_nullable_symbol rhs.(i)
     in
     let pattern_from_stack stack =
       let filter = List.filter irreducible_item (Lr1.items (List.hd stack)) in
@@ -936,6 +940,7 @@ module Enum = struct
         let path = List.rev_append path_prefix path_suffix in
         let print_lr1_seq path =
           let symbols = List.filter_map Lr1.incoming path in
+          let symbols = List.filter non_nullable_symbol symbols in
           Misc.string_concat_map " " Symbol.name symbols
         in
         Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq path)
