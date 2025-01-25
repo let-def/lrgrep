@@ -576,15 +576,17 @@ module Transl = struct
   (* Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
     let match_lr1 lr1 =
-      List.exists (fun item ->
-          begin match lhs with
-            | None -> true
-            | Some lhs ->
-              Index.equal lhs (Production.lhs (fst item))
-          end &&
-          match_rhs rhs item
-        )
-        (Lr1.items lr1)
+      let match_item item =
+        (match lhs with
+          | None -> true
+          | Some lhs ->
+            Index.equal lhs (Production.lhs (fst item))
+        ) && match_rhs rhs item
+      in
+      let match_closed prod = match_item (prod, 0) in
+      List.exists match_item (Lr1.items lr1) ||
+      IndexSet.exists match_closed
+        (Vector.get Item_closure.closure lr1)
     in
     IndexSet.init_from_set Lr1.n match_lr1
 
