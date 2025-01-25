@@ -38,6 +38,9 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 module Info = Kernel.Info.Make(Grammar)
 open Info
 
+(* Start timing the execution Minilrgrep *)
+let time = Stopwatch.enter Stopwatch.main "Minilrgrep"
+
 (* Helper function to display an item as string *)
 let item_to_string (prod, pos) =
   let comps = ref [] in
@@ -75,9 +78,6 @@ let non_nullable_symbol sym =
   match Info.Symbol.prj sym with
   | L _ -> true
   | R n -> not (Info.Nonterminal.nullable n)
-
-(* Start timing the construction of the reduction automaton *)
-let time = Stopwatch.enter Stopwatch.main "Reduction automaton"
 
 (* Module implementing the reduction NFA.
    The implementation follows section 2.3.2. *)
@@ -257,10 +257,7 @@ module Reduction_DFA = struct
     (initial, states)
 
   (* Record the time taken for DFA construction *)
-  let () = Stopwatch.step time "Constructed the Reduction DFA with %d states" (cardinal n)
-
-  (* End timing the determinization process *)
-  let () = Stopwatch.leave time
+  let () = Stopwatch.step time "Constructed the Reduction DFA (%d states)" (cardinal n)
 
   let path_suffix = Vector.make n []
 
@@ -294,6 +291,9 @@ module Reduction_DFA = struct
     Hashtbl.iter (fun _ lr1 -> Misc.push todo (lr1, [])) Lr1.entrypoints;
     Misc.fixpoint ~propagate todo
 
+  let () =
+    Stopwatch.step time "Pre-computed stack prefixes/suffixes that reach DFA states"
+
   (* Pre-compute the successors and predecessors *)
 
   let successors = Vector.map (fun desc ->
@@ -303,11 +303,17 @@ module Reduction_DFA = struct
 
   let predecessors =
     Misc.relation_reverse successors
+
+  let () =
+    Stopwatch.step time "Pre-computed DFA predecessors and successors"
+
+  (* End timing the determinization process *)
+  let () = Stopwatch.leave time
 end
 
 (* Item closure aware of truncated actions *)
 module Item_closure = struct
-  open Info
+  let time = Stopwatch.enter time "Item closure"
 
   let closure = Vector.make Info.Lr1.n IndexSet.empty
 
@@ -336,6 +342,8 @@ module Item_closure = struct
       in
       reduce (IndexSet.singleton lr1) (steps 0 prods)
     )
+
+  let () = Stopwatch.leave time
 end
 
 
@@ -392,6 +400,9 @@ module Suffixes = struct
   (* Freeze the suffix descriptions *)
   let desc = IndexBuffer.Gen.freeze desc
 
+  let () =
+    Stopwatch.step time "Generated set of all suffixes (%d unique suffixes)" (cardinal n)
+
   (* Vector to store reachable suffixes for each state *)
   let reachable = Vector.copy of_state
 
@@ -399,8 +410,11 @@ module Suffixes = struct
   let () =
     (* Propagate reachable suffixes to predecessors of a state until reaching a
        fixed point. *)
+    (* FIXME: Bottleneck, this computation is naive *)
     Misc.fix_relation Reduction_DFA.predecessors reachable
       ~propagate:(fun _ s _ s' -> IndexSet.union s s')
+
+  let () = Stopwatch.step time "Computed set of reachable suffixes"
 
   (* End timing the suffix computation *)
   let () = Stopwatch.leave time
