@@ -109,7 +109,7 @@ struct
     table
 
   (* Compute predecessors for each state using successors information *)
-  let predecessors = Misc.relation_reverse successors
+  let predecessors = Misc.relation_reverse n successors
 
   (* Accessors for successors and predecessors *)
   let successors = Vector.get successors
@@ -283,7 +283,7 @@ struct
         List.iter process_transition (Transition.predecessors lr1)
     in
     Index.iter Lr1.n process;
-    Vector.get (Misc.relation_reverse table)
+    Vector.get (Misc.relation_reverse n table)
 
   (* Convert an LRC state to a string representation *)
   let to_string lrc =

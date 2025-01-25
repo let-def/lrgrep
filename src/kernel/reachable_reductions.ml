@@ -222,7 +222,7 @@ struct
 
   (* Predecessors of a state *)
   let predecessors =
-    relation_reverse successors
+    relation_reverse n successors
 
   (* The set of terminals that are immediately rejected by a state *)
   let reject st =

@@ -302,7 +302,7 @@ module Reduction_DFA = struct
     ) states
 
   let predecessors =
-    Misc.relation_reverse successors
+    Misc.relation_reverse n successors
 
   let () =
     Stopwatch.step time "Pre-computed DFA predecessors and successors"

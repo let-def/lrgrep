@@ -130,15 +130,15 @@ let tabulate_finset n f =
 let relation_reverse' n f =
   let rev = Vector.make n IndexSet.empty in
   Index.rev_iter n (fun src ->
-      IndexSet.iter (fun tgt -> vector_set_add rev tgt src)
+      IndexSet.rev_iter (fun tgt -> vector_set_add rev tgt src)
         (f src)
     );
   rev
 
-let relation_reverse rel =
-  let rev = Vector.make (Vector.length rel) IndexSet.empty in
+let relation_reverse n rel =
+  let rev = Vector.make n IndexSet.empty in
   Vector.rev_iteri (fun src tgts ->
-      IndexSet.iter (fun tgt -> vector_set_add rev tgt src) tgts
+      IndexSet.rev_iter (fun tgt -> vector_set_add rev tgt src) tgts
     ) rel;
   rev
 
@@ -149,7 +149,7 @@ let fix_relation  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vecto
   let marks = IndexMarks.make n in
   let update i =
     let value = Vector.get values i in
-    IndexSet.iter (fun j ->
+    IndexSet.rev_iter (fun j ->
         let value' = Vector.get values j in
         let value'' = propagate i value j value' in
         if value' != value'' then (
@@ -162,13 +162,13 @@ let fix_relation  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vecto
   while not (IndexMarks.is_empty marks) do
     let todo = IndexMarks.marked marks in
     IndexMarks.clear marks;
-    IndexSet.iter update todo
+    IndexSet.rev_iter update todo
   done
 
 let close_relation ?reverse rel =
   let rev = match reverse with
     | Some rev -> rev
-    | None -> relation_reverse rel
+    | None -> relation_reverse (Vector.length rel) rel
   in
   fix_relation rev rel
     ~propagate:(fun _ v _ v' -> IndexSet.union v v')
