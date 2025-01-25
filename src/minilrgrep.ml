@@ -294,6 +294,40 @@ module Reduction_DFA = struct
     Misc.relation_reverse successors
 end
 
+(* Item closure aware of truncated actions *)
+module Item_closure = struct
+  open Info
+
+  let closure = Vector.make Info.Lr1.n IndexSet.empty
+
+  let () = Index.iter Lr1.n (fun lr1 ->
+      let prods =
+        IndexSet.elements (Info.Reduction.from_lr1 lr1)
+        |> List.map Info.Reduction.production
+        |> List.sort (fun p1 p2 -> Int.compare (Production.length p1) (Production.length p2))
+      in
+      let rec steps depth = function
+        | [] -> (IndexSet.empty, [])
+        | (p :: _) as ps when Production.length p > depth ->
+          let x, xs = steps (depth + 1) ps in
+          (IndexSet.empty, x :: xs)
+        | p :: ps ->
+          assert (Production.length p = depth);
+          let x, xs = steps depth ps in
+          (IndexSet.add p x, xs)
+      in
+      let rec reduce states (x, xs) =
+        IndexSet.iter (fun st -> Misc.vector_set_union closure st x) states;
+        match xs with
+        | [] -> ()
+        | x :: xs ->
+          reduce (Misc.indexset_bind states Lr1.predecessors) (x, xs)
+      in
+      reduce (IndexSet.singleton lr1) (steps 0 prods)
+    )
+end
+
+
 (* Optimization opportunities.
 
    These simple definitions lead to quite large automata. On OCaml 5.3.0
