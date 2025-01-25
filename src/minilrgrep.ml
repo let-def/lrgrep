@@ -752,6 +752,25 @@ module Transl = struct
       ) covered
 end
 
+module Recognizer = struct
+  let states_of_suffix = Misc.relation_reverse Suffixes.n Suffixes.of_state
+
+  let accept = Vector.make Reduction_DFA.n max_int
+
+  let () =
+    List.iter (fun spec ->
+        List.iter (fun (br, suffixes) ->
+            let clause = br.Transl.clause in
+            IndexSet.iter (fun suf ->
+                IndexSet.iter (fun dfa ->
+                    Vector.set accept dfa
+                      (Int.min clause (Vector.get accept dfa))
+                  ) (Vector.get states_of_suffix suf)
+              ) suffixes
+          ) spec
+      ) Transl.branches
+end
+
 (* Find uncovered states: states on a path ending with an uncovered suffix *)
 module Uncovered = struct
 
@@ -823,6 +842,41 @@ let () =
   p "}\n";
   close_out_noerr oc
 
+let print_suffix suffix =
+  let _, suffix = Vector.get Suffixes.desc suffix in
+  prerr_endline (Lr1.list_to_string (List.rev suffix.stack));
+  List.iter (fun it ->
+      prerr_endline (item_to_string it)
+    ) (Lr1.items (List.hd suffix.stack))
+
+let print_suffixes state =
+  let suffixes = Vector.get Suffixes.of_state state in
+  IndexSet.iter print_suffix suffixes
+
+let () =
+  let used = ref IntSet.empty in
+  let visited = Boolvector.make Reduction_DFA.n false in
+  let rec traverse path state =
+    if not (Boolvector.test visited state) then (
+      Boolvector.set visited state;
+      let clause = Vector.get Recognizer.accept state in
+      if clause = max_int then (
+        let succ = (Vector.get Reduction_DFA.states state).transitions in
+        if IndexMap.is_empty succ then (
+          Printf.eprintf "Found uncovered path:\n%s\n"
+            (Lr1.list_to_string
+               (List.rev_append
+                  (Vector.get Reduction_DFA.path_prefix (fst (List.hd path)))
+                  (List.map fst path)));
+          List.iter (fun (_, st') -> print_suffixes st') path;
+        );
+        IndexMap.iter (fun lr1 state' -> traverse ((lr1, state) :: path) state') succ
+      ) else
+        used := IntSet.add clause !used
+    )
+  in
+  traverse [] Reduction_DFA.initial
+
 (* Now we switch to enumeration support.
 
    Again, this implementation is an over-approximation
@@ -879,8 +933,22 @@ module Enum = struct
         if not (Boolvector.test Uncovered.enabled i) then raise Exit;
         IndexMap.iter check_successor (Vector.get Reduction_DFA.states i).transitions
       in
-      match IndexSet.iter check_node (Vector.get SCC.nodes scc) with
-      | () -> true
+      let states = Vector.get SCC.nodes scc in
+      match IndexSet.iter check_node states with
+      | () ->
+        assert (IndexSet.is_singleton states);
+        let state = IndexSet.choose states in
+        Printf.eprintf "Leaf %d\n" (Index.to_int state);
+        let suffixes = Vector.get Suffixes.of_state state in
+        IndexSet.iter (fun suffix ->
+            let _, suffix = Vector.get Suffixes.desc suffix in
+            prerr_endline (Lr1.list_to_string (List.rev suffix.stack));
+            List.iter (fun it ->
+                prerr_endline (item_to_string it)
+              ) (Lr1.items (List.hd suffix.stack))
+          ) suffixes;
+        ();
+        true
       | exception Exit -> false
     in
     IndexSet.init_from_set SCC.n check_component
