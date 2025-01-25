@@ -558,12 +558,17 @@ module Transl = struct
       | None -> error pos "unknown symbol %S" sym
 
   (* Match the right-hand side of a filter to an item *)
-  let match_rhs rfilter (prod, pos) =
-    let rec loop rhs dot index = function
+  let match_rhs rfilter (prod, dot) =
+    let found = ref false in
+    let rec loop rhs index = function
       | [] ->
-        (index = Array.length rhs) && (dot = -1)
+        (index = Array.length rhs) && !found
       | (Dot, _) :: rest ->
-        loop rhs (if dot = index then -1 else dot) index rest
+        if dot = index then
+          found := true;
+        if dot < index && not !found
+        then false
+        else loop rhs index rest
       | (Find sym, pos) :: rest ->
         index < Array.length rhs && (
           match sym with
@@ -571,7 +576,7 @@ module Transl = struct
           | Some sym ->
             Index.equal (parse_symbol pos sym) rhs.(index)
         ) &&
-        loop rhs dot (index + 1) rest
+        loop rhs (index + 1) rest
       | (Skip, _) :: rest ->
         let rec skip_skip = function
           | (Skip, _) :: rest -> skip_skip rest
@@ -580,12 +585,12 @@ module Transl = struct
         in
         let rec skip_sym index rest =
           (index <= Array.length rhs) &&
-          (loop rhs dot index rest ||
+          (loop rhs index rest ||
            skip_sym (index + 1) rest)
         in
         skip_sym index (skip_skip rest)
     in
-    loop (Production.rhs prod) pos 0 rfilter
+    loop (Production.rhs prod) 0 rfilter
 
   (* Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
@@ -922,6 +927,9 @@ module Enum = struct
     let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
     IndexSet.iter visit_leaf leaves;
     Hashtbl.fold (fun reduce filters acc -> (reduce, !filters) :: acc) table []
+
+  let totally_uncovered_lookaheads = ref IndexSet.empty
+  let partially_uncovered_lookaheads = ref IndexSet.empty
 
   let generalized_patterns =
     let minimum_filters filters =
