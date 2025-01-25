@@ -952,36 +952,51 @@ module Enum = struct
         IndexSet.add rhs.(pos) acc
       else acc
     in
-    maximal_patterns
-    |> List.concat_map (fun (reduce, filters) ->
-        filters
-        |> minimum_filters
-        |> List.map (fun (suffix, filter) ->
-            let lookaheads =
-              List.fold_left add_lookahead IndexSet.empty filter
-            in
-            (suffix, reduce, filter, lookaheads))
-      )
-    |> List.sort (fun (_, _, _, l1) (_, _, _, l2) ->
-        IndexSet.compare l1 l2
-      )
-    |> List.map (fun (s, r, f, _l) -> (s, r, f))
+    let grow_set r s = r := IndexSet.union s !r in
+    let patterns =
+      maximal_patterns
+      |> List.concat_map (fun (reduce, filters) ->
+          filters
+          |> minimum_filters
+          |> List.map (fun (suffix, filter) ->
+              let lookaheads =
+                List.fold_left add_lookahead IndexSet.empty filter
+              in
+              if IndexSet.is_singleton lookaheads
+              then grow_set totally_uncovered_lookaheads lookaheads
+              else grow_set partially_uncovered_lookaheads lookaheads;
+              (suffix, reduce, filter, lookaheads)
+            )
+        )
+      |> List.sort (fun (_, _, _, l1) (_, _, _, l2) ->
+          IndexSet.compare l1 l2
+        )
+      |> List.map (fun (s, r, f, _l) -> (s, r, f))
+    in
+    patterns
 
+  let totally_uncovered_lookaheads   = !totally_uncovered_lookaheads
+  let partially_uncovered_lookaheads = !partially_uncovered_lookaheads
 
   let () =
+    Printf.eprintf "Uncovered expected symbols:\n";
+    List.iteri (fun i sym ->
+        Printf.eprintf "%s%s"
+          (if i = 0 then "" else ", ")
+          (Symbol.name sym)
+      ) (List.rev (IndexSet.elements totally_uncovered_lookaheads));
+    Printf.eprintf "\n";
+    Printf.eprintf "Partially uncovered expected symbols:\n";
+    List.iteri (fun i sym ->
+        Printf.eprintf "%s%s"
+          (if i = 0 then "" else ", ")
+          (Symbol.name sym)
+      ) (List.rev (IndexSet.elements partially_uncovered_lookaheads));
+    Printf.eprintf "\n"
+
+  let () =
+    Printf.eprintf "%d patterns to cover:\n" (List.length generalized_patterns);
     List.iter (fun (suffix, reduce, filter) ->
-        let print_item (prod, pos) =
-          let comps = ref [] in
-          let rhs = Production.rhs prod in
-          for i = Array.length rhs - 1 downto pos do
-            comps := Symbol.name rhs.(i) :: !comps
-          done;
-          comps := "." :: !comps;
-          for i = pos - 1 downto 0 do
-            comps := Symbol.name rhs.(i) :: !comps
-          done;
-          Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
-        in
         begin match reduce with
         | [] ->
           List.iteri (fun i item ->
