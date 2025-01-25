@@ -85,8 +85,9 @@ module Reduction_NFA = struct
   (* Define states of the reduction NFA.
      - [Initial]: initial state.
      - [Suffix]: represents a stack suffix with a set of lookaheads.
-     - [Reduce]: represents a state during reduction with a stack suffix,
-                 set of lookaheads, nonterminal being reduced, and number of symbols to reduce.
+     - [Reduce]: represents a state during reduction with a stack suffix, set of
+                 lookaheads, the nonterminal to `goto` at the end of the
+                 reduction, and the number of symbols that remain to consume.
 
      Compared to the description in the thesis, the two main simplifications are:
      - The stack suffix is represented by a single list with the current state
