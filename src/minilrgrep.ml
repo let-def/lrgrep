@@ -437,11 +437,11 @@ let ast =
       try Front.Parser.lexer_definition Front.Lexer.main lexbuf
       with
       | Front.Lexer.Lexical_error {msg; file; line; col} ->
-        Printf.eprintf "Error %s:%d-%d: %s\n" file line col msg;
+        Printf.eprintf "%s:%d:%d: error: %s\n" file line col msg;
         exit 1
       | Front.Parser.Error ->
         let pos = lexbuf.lex_start_p in
-        Printf.eprintf "Error %s:%d-%d: %s\n"
+        Printf.eprintf "%s:%d:%d: warning: %s\n"
           pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol) "Parse error";
         exit 1
     in
