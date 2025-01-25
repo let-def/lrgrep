@@ -869,14 +869,14 @@ let () =
       let clause = Vector.get Recognizer.accept state in
       if clause = max_int then (
         let succ = (Vector.get Reduction_DFA.states state).transitions in
-        if IndexMap.is_empty succ then (
+        (* if IndexMap.is_empty succ then (
           Printf.eprintf "Found uncovered path:\n%s\n"
             (Lr1.list_to_string
                (List.rev_append
                   (Vector.get Reduction_DFA.path_prefix (fst (List.hd path)))
                   (List.map fst path)));
           List.iter (fun (_, st') -> print_suffixes st') path;
-        );
+        ); *)
         IndexMap.iter (fun lr1 state' -> traverse ((lr1, state) :: path) state') succ
       ) else
         used := IntSet.add clause !used
@@ -957,17 +957,21 @@ module Enum = struct
       match IndexSet.iter check_node states with
       | () ->
         assert (IndexSet.is_singleton states);
-        let state = IndexSet.choose states in
+        (*let state = IndexSet.choose states in
         Printf.eprintf "Leaf %d\n" (Index.to_int state);
         let suffixes = Vector.get Suffixes.of_state state in
         IndexSet.iter (fun suffix ->
             let _, suffix = Vector.get Suffixes.desc suffix in
             prerr_endline (Lr1.list_to_string (List.rev suffix.stack));
-            List.iter (fun it ->
-                prerr_endline (item_to_string it)
-              ) (Lr1.items (List.hd suffix.stack))
+            let rec visit_suffix suffix =
+              List.iter
+                (fun it -> prerr_endline (item_to_string it))
+                (Lr1.items (List.hd suffix.Reduction_DFA.stack));
+              List.iter visit_suffix suffix.Reduction_DFA.child
+            in
+            visit_suffix suffix
           ) suffixes;
-        ();
+        ();*)
         true
       | exception Exit -> false
     in
