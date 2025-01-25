@@ -384,16 +384,23 @@ module Suffixes = struct
   (* Map each DFA state to a set of suffix indices *)
   let of_state =
     let table = Hashtbl.create 7 in
-    let visit_suffix dfa suffix =
-      match Hashtbl.find_opt table suffix with
-      | Some index -> index
-      | None ->
-        let index = IndexBuffer.Gen.add desc (dfa, suffix) in
-        Hashtbl.add table suffix index;
-        index
-    in
     let visit_state dfa {Reduction_DFA.suffixes; _} =
-      IndexSet.of_list (List.map (visit_suffix dfa) suffixes)
+      let rec visit_suffix acc suffix =
+        let is =
+          match Hashtbl.find_opt table suffix with
+          | Some is -> is
+          | None ->
+            let index = IndexBuffer.Gen.add desc (dfa, suffix) in
+            let is =
+              List.fold_left visit_suffix (IndexSet.singleton index)
+              suffix.Reduction_DFA.child
+            in
+            Hashtbl.add table suffix is;
+            is
+        in
+        IndexSet.union is acc
+      in
+      List.fold_left visit_suffix IndexSet.empty suffixes
     in
     Vector.mapi visit_state Reduction_DFA.states
 
