@@ -875,7 +875,20 @@ let () =
         used := IntSet.add clause !used
     )
   in
-  traverse [] Reduction_DFA.initial
+  traverse [] Reduction_DFA.initial;
+  match ast with
+  | None -> ()
+  | Some ast ->
+    let open Kernel.Syntax in
+    List.iter (fun entry  ->
+        List.iteri (fun i clause ->
+            if not (IntSet.mem i !used) then (
+              Printf.eprintf "Clause line %d is unreachable\n"
+                (List.hd clause.patterns).expr.position.line
+            )
+          ) entry.clauses
+      ) ast.entrypoints
+
 
 (* Now we switch to enumeration support.
 
