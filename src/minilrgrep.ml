@@ -36,10 +36,10 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 (* Information module is the representation of the grammar and LR automaton we
    are going to use. *)
 module Info = Kernel.Info.Make(Grammar)
+open Info
 
 (* Helper function to display an item as string *)
 let item_to_string (prod, pos) =
-  let open Info in
   let comps = ref [] in
   let rhs = Production.rhs prod in
   for i = Array.length rhs - 1 downto pos do
@@ -82,8 +82,6 @@ let time = Stopwatch.enter Stopwatch.main "Reduction automaton"
 (* Module implementing the reduction NFA.
    The implementation follows section 2.3.2. *)
 module Reduction_NFA = struct
-  open Info
-
   (* Define states of the reduction NFA.
      - [Initial]: initial state.
      - [Suffix]: represents a stack suffix with a set of lookaheads.
@@ -170,8 +168,6 @@ end
    simpler to implement everything on top of the DFA.
 *)
 module Reduction_DFA = struct
-  open Info
-
   (* Explicit representation focusing on suffixes.
 
      A suffix [{stack; lookaheads}] abstracts the set of LR configurations
@@ -460,7 +456,6 @@ let ast =
    Since Minilrgrep only supports a subset of the DSL, many constructions are
    rejected during this step. *)
 module Transl = struct
-  open Info
   open Kernel.Syntax
 
   (* A more "semantic" representation of a filter.
@@ -883,8 +878,6 @@ module Enum = struct
      - For each suffix, construct a reduce-filter pattern that would match it
      - Generalize filters of patterns sharing common reduction targets
   *)
-
-  open Info
 
   let maximal_patterns =
     let irreducible_item (p, i) =
