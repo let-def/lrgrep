@@ -37,6 +37,20 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
    are going to use. *)
 module Info = Kernel.Info.Make(Grammar)
 
+(* Helper function to display an item as string *)
+let item_to_string (prod, pos) =
+  let open Info in
+  let comps = ref [] in
+  let rhs = Production.rhs prod in
+  for i = Array.length rhs - 1 downto pos do
+    comps := Symbol.name rhs.(i) :: !comps
+  done;
+  comps := "." :: !comps;
+  for i = pos - 1 downto 0 do
+    comps := Symbol.name rhs.(i) :: !comps
+  done;
+  Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
+
 (* Helper function to convert a set to a list, applying a function [f] to each
    element *)
 let list_from_set ss f =
@@ -965,16 +979,16 @@ module Enum = struct
           List.iteri (fun i item ->
               Printf.eprintf "%c /%s\n"
                 (if i = 0 then '|' else ' ')
-                (print_item item)
+                (item_to_string item)
             ) filter
         | _ ->
           let reduce = Misc.string_concat_map "; " Symbol.name reduce in
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "| [%s /%s" reduce (print_item item)
+                Printf.eprintf "| [%s /%s" reduce (item_to_string item)
               else
-                Printf.eprintf "\n   %s /%s" padding (print_item item)
+                Printf.eprintf "\n   %s /%s" padding (item_to_string item)
             ) filter;
           Printf.eprintf "]\n"
         end;
