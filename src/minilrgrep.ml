@@ -1,6 +1,12 @@
 open Utils
 open Fix.Indexing
 
+let (.:()) = Vector.get
+let (.:()<-) = Vector.set
+let (.@()<-) v i f =
+  let x = v.:(i) in
+  v.:(i) <- f x
+
 (* This file is a minimal implementation of LRgrep, supporting only
    Reduce-filter patterns (chapter 2) and with over-approximated coverage
    (to avoid dealing with reachability analysis (chapter 7)). *)
@@ -264,13 +270,13 @@ module Reduction_DFA = struct
   let () =
     let todo = ref [initial, []] in
     let propagate (x, path) =
-      match Vector.get path_suffix x with
+      match path_suffix.:(x) with
       | _ :: _ -> ()
       | [] ->
-        Vector.set path_suffix x path;
+        path_suffix.:(x) <- path;
         IndexMap.iter
           (fun lr1 y -> Misc.push todo (y, lr1 :: path))
-          (Vector.get states x).transitions
+          states.:(x).transitions
     in
     Misc.fixpoint ~propagate todo
 
@@ -279,10 +285,10 @@ module Reduction_DFA = struct
   let () =
     let todo = ref [] in
     let propagate (x, path) =
-      match Vector.get path_prefix x with
+      match path_prefix.:(x) with
       | _ :: _ -> ()
       | [] ->
-        Vector.set path_prefix x path;
+        path_prefix.:(x) <- path;
         List.iter (fun tr ->
             let y = Transition.target tr in
             Misc.push todo (y, x :: path)
@@ -334,7 +340,7 @@ module Item_closure = struct
           (IndexSet.add p x, xs)
       in
       let rec reduce states (x, xs) =
-        IndexSet.iter (fun st -> Misc.vector_set_union closure st x) states;
+        IndexSet.iter (fun st -> closure.@(st) <- IndexSet.union x) states;
         match xs with
         | [] -> ()
         | x :: xs ->
@@ -622,7 +628,7 @@ module Transl = struct
       let match_closed prod = match_item (prod, 0) in
       List.exists match_item (Lr1.items lr1) ||
       IndexSet.exists match_closed
-        (Vector.get Item_closure.closure lr1)
+        Item_closure.closure.:(lr1)
     in
     IndexSet.init_from_set Lr1.n match_lr1
 
@@ -632,14 +638,14 @@ module Transl = struct
     let table = Vector.make Symbol.n IndexSet.empty in
     Index.iter Lr1.n (fun lr1 -> match Lr1.incoming lr1 with
         | None -> ()
-        | Some sym -> Misc.vector_set_add table sym lr1);
+        | Some sym -> table.@(sym) <- IndexSet.add lr1);
     fun pos -> function
     | None ->
       (* A wildcard symbol matches all states *)
       Lr1.all
     | Some sym ->
       (* A normal symbol matches states by their incoming symbol *)
-      Vector.get table (parse_symbol pos sym)
+      table.:(parse_symbol pos sym)
 
   (* The subset of patterns supported by Minilrgrep can be summarized
      as a "sum of reduced products":
@@ -729,7 +735,7 @@ module Transl = struct
     | _ ->
       IndexSet.init_from_set Suffixes.n
         (fun suffix ->
-           let _, desc = Vector.get Suffixes.desc suffix in
+           let _, desc = Suffixes.desc.:(suffix) in
            match_stack (desc.stack, branch.filter))
 
   (* Produce a spec for each entry *)
@@ -753,7 +759,7 @@ module Transl = struct
   let () =
     if false then
     IndexSet.iter (fun suffix ->
-        let _, def = Vector.get Suffixes.desc suffix in
+        let _, def = Suffixes.desc.:(suffix) in
         Printf.eprintf "Covered suffix: %s\n"
           (Lr1.list_to_string (List.rev def.stack))
       ) covered
@@ -770,9 +776,9 @@ module Recognizer = struct
             let clause = br.Transl.clause in
             IndexSet.iter (fun suf ->
                 IndexSet.iter (fun dfa ->
-                    Vector.set accept dfa
-                      (Int.min clause (Vector.get accept dfa))
-                  ) (Vector.get states_of_suffix suf)
+                    accept.:(dfa) <-
+                      (Int.min clause accept.:(dfa))
+                  ) states_of_suffix.:(suf)
               ) suffixes
           ) spec
       ) Transl.branches
@@ -788,8 +794,8 @@ module Uncovered = struct
   (* Pass 1: disable prefixes of paths ending with covered states *)
   let () =
     let rec disable_outgoing_edge i =
-      let count = Vector.get outgoing i - 1 in
-      Vector.set outgoing i count;
+      let count = outgoing.:(i) - 1 in
+      outgoing.:(i) <- count;
       assert (count >= 0);
       if count = 0 then
         disable_node i
@@ -797,7 +803,7 @@ module Uncovered = struct
       if Boolvector.test enabled i then (
         Boolvector.clear enabled i;
         IndexSet.iter disable_outgoing_edge
-          (Vector.get Reduction_DFA.predecessors i)
+          Reduction_DFA.predecessors.:(i)
       )
     in
     Vector.iteri begin fun i suffixes ->
@@ -814,7 +820,7 @@ module Uncovered = struct
       if Boolvector.test enabled i && not (Boolvector.test vector i) then (
         Boolvector.set vector i;
         incr count;
-        IndexSet.iter visit (Vector.get Reduction_DFA.successors i)
+        IndexSet.iter visit Reduction_DFA.successors.:(i)
       )
     in
     visit Reduction_DFA.initial;
@@ -850,14 +856,14 @@ let () =
   close_out_noerr oc
 
 let print_suffix suffix =
-  let _, suffix = Vector.get Suffixes.desc suffix in
+  let _, suffix = Suffixes.desc.:(suffix) in
   prerr_endline (Lr1.list_to_string (List.rev suffix.stack));
   List.iter (fun it ->
       prerr_endline (item_to_string it)
     ) (Lr1.items (List.hd suffix.stack))
 
 let print_suffixes state =
-  let suffixes = Vector.get Suffixes.of_state state in
+  let suffixes = Suffixes.of_state.:(state) in
   IndexSet.iter print_suffix suffixes
 
 let () =
@@ -866,14 +872,14 @@ let () =
   let rec traverse path state =
     if not (Boolvector.test visited state) then (
       Boolvector.set visited state;
-      let clause = Vector.get Recognizer.accept state in
+      let clause = Recognizer.accept.:(state) in
       if clause = max_int then (
-        let succ = (Vector.get Reduction_DFA.states state).transitions in
+        let succ = Reduction_DFA.states.:(state).transitions in
         (* if IndexMap.is_empty succ then (
           Printf.eprintf "Found uncovered path:\n%s\n"
             (Lr1.list_to_string
                (List.rev_append
-                  (Vector.get Reduction_DFA.path_prefix (fst (List.hd path)))
+                  Reduction_DFA.path_prefix.:(fst (List.hd path))
                   (List.map fst path)));
           List.iter (fun (_, st') -> print_suffixes st') path;
         ); *)
@@ -887,7 +893,7 @@ let () =
   | None -> ()
   | Some ast ->
     let open Kernel.Syntax in
-    List.iter (fun entry  ->
+    List.iter (fun entry ->
         List.iteri (fun i clause ->
             if not (IntSet.mem i !used) then (
               Printf.eprintf "Clause line %d is unreachable\n"
@@ -937,7 +943,7 @@ module Enum = struct
         IndexSet.iter (fun j ->
             if Boolvector.test Uncovered.enabled j then
               f j)
-          (Vector.get Reduction_DFA.successors i)
+          Reduction_DFA.successors.:(i)
     end)
 
   (* Identify leaf components.
@@ -946,22 +952,22 @@ module Enum = struct
   let leaves =
     let check_component scc =
       let check_successor _ j =
-        if not (Index.equal (Vector.get SCC.component j) scc) then
+        if not (Index.equal SCC.component.:(j) scc) then
           raise Exit
       in
       let check_node i =
         if not (Boolvector.test Uncovered.enabled i) then raise Exit;
-        IndexMap.iter check_successor (Vector.get Reduction_DFA.states i).transitions
+        IndexMap.iter check_successor Reduction_DFA.states.:(i).transitions
       in
-      let states = Vector.get SCC.nodes scc in
+      let states = SCC.nodes.:(scc) in
       match IndexSet.iter check_node states with
       | () ->
         assert (IndexSet.is_singleton states);
         (*let state = IndexSet.choose states in
         Printf.eprintf "Leaf %d\n" (Index.to_int state);
-        let suffixes = Vector.get Suffixes.of_state state in
+        let suffixes = Suffixes.of_state.:(state) in
         IndexSet.iter (fun suffix ->
-            let _, suffix = Vector.get Suffixes.desc suffix in
+            let _, suffix = Suffixes.desc.:(suffix) in
             prerr_endline (Lr1.list_to_string (List.rev suffix.stack));
             let rec visit_suffix suffix =
               List.iter
@@ -1008,7 +1014,7 @@ module Enum = struct
     in
     let table = Hashtbl.create 7 in
     let visit_suffix i =
-      match Vector.get Suffixes.desc i with
+      match Suffixes.desc.:(i) with
       | _, {child = _ :: _; _} -> ()
       | _, {stack; _} ->
         (*Printf.printf "%s\n"
@@ -1023,8 +1029,8 @@ module Enum = struct
           end
         end
     in
-    let visit_node i = IndexSet.iter visit_suffix (Vector.get Suffixes.of_state i) in
-    let visit_leaf l = IndexSet.iter visit_node (Vector.get SCC.nodes l) in
+    let visit_node i = IndexSet.iter visit_suffix Suffixes.of_state.:(i) in
+    let visit_leaf l = IndexSet.iter visit_node SCC.nodes.:(l) in
     IndexSet.iter visit_leaf leaves;
     Hashtbl.fold (fun reduce filters acc -> (reduce, !filters) :: acc) table []
 
@@ -1115,9 +1121,9 @@ module Enum = struct
             ) filter;
           Printf.eprintf "]\n"
         end;
-        let dfa, _ = Vector.get Suffixes.desc suffix in
-        let path_suffix = Vector.get Reduction_DFA.path_suffix dfa in
-        let path_prefix = Vector.get Reduction_DFA.path_prefix (List.hd path_suffix) in
+        let dfa, _ = Suffixes.desc.:(suffix) in
+        let path_suffix = Reduction_DFA.path_suffix.:(dfa) in
+        let path_prefix = Reduction_DFA.path_prefix.:(List.hd path_suffix) in
         let path = List.rev_append path_prefix path_suffix in
         let print_lr1_seq path =
           let symbols = List.filter_map Lr1.incoming path in
