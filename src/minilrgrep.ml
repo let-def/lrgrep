@@ -765,10 +765,10 @@ module Transl = struct
       ) covered
 end
 
-module Recognizer = struct
+(*module Recognizer = struct
   let states_of_suffix = Misc.relation_reverse Suffixes.n Suffixes.of_state
 
-  let accept = Vector.make Reduction_DFA.n max_int
+  let accept = Vector.make Reduction_DFA.n IntSet.empty
 
   let () =
     List.iter (fun spec ->
@@ -782,7 +782,7 @@ module Recognizer = struct
               ) suffixes
           ) spec
       ) Transl.branches
-end
+  end*)
 
 (* Find uncovered states: states on a path ending with an uncovered suffix *)
 module Uncovered = struct
@@ -866,6 +866,7 @@ let print_suffixes state =
   let suffixes = Suffixes.of_state.:(state) in
   IndexSet.iter print_suffix suffixes
 
+(* FIXME
 let () =
   let used = ref IntSet.empty in
   let visited = Boolvector.make Reduction_DFA.n false in
@@ -901,7 +902,7 @@ let () =
             )
           ) entry.clauses
       ) ast.entrypoints
-
+*)
 
 (* Now we switch to enumeration support.
 
