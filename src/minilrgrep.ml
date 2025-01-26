@@ -859,7 +859,9 @@ module Recognizer = struct
     IntSet.diff (IntSet.init_interval 0 (clause_count - 1))
       reachable.:(Reduction_DFA.initial)
 
-  let relation = Array.make clause_count IntSet.empty
+  let shadowing = Array.make clause_count IntSet.empty
+
+  let shadowing_unreachable = Array.make clause_count false
 
   let () =
     Vector.iter (fun xs -> ignore (
@@ -867,7 +869,7 @@ module Recognizer = struct
             begin match hi with
               | None -> ()
               | Some hi ->
-                relation.(hi) <- IntSet.add lo relation.(hi);
+                shadowing.(hi) <- IntSet.add lo shadowing.(hi);
             end;
             Some lo
           ) None xs
@@ -881,12 +883,19 @@ module Recognizer = struct
               | lo :: rest when lo >= hi ->
                 record_overrides rest hi
               | lo :: _ ->
-                relation.(hi) <- IntSet.add lo relation.(hi);
+                shadowing.(hi) <- IntSet.add lo shadowing.(hi);
                 overriding
             in
             ignore (IntSet.fold_right record_overrides accepts reachable.:(succ))
           ) successors
-      ) Reduction_DFA.successors
+      ) Reduction_DFA.successors;
+    let rec traverse x =
+      if not shadowing_unreachable.(x) then (
+        shadowing_unreachable.(x) <- true;
+        IntSet.iter traverse shadowing.(x)
+      )
+    in
+    IntSet.iter traverse unreachable
 
 end
 
@@ -897,10 +906,12 @@ let () =
   p " rankdir=LR;\n";
   p " node[shape=rectangle];\n";
   Array.iteri (fun hi los ->
-      IntSet.iter (fun lo -> p  "st%d -> st%d\n" lo hi) los;
-    ) Recognizer.relation;
+      if Recognizer.shadowing_unreachable.(hi) then
+        IntSet.iter (fun lo -> p  "st%d -> st%d\n" lo hi) los;
+    ) Recognizer.shadowing;
   List.iteri (fun i (clause : Kernel.Syntax.clause) ->
       let position = (List.hd clause.patterns).expr.position in
+      if Recognizer.shadowing_unreachable.(i) then
       p " st%d[label=\"Clause line %d\n\" color=%S]\n"
         i position.line
         (if IntSet.mem i Recognizer.unreachable then "red" else "black")
