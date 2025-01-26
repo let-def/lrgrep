@@ -169,6 +169,7 @@ module type S1 = sig
   val init_subset : 'a element -> 'a element -> ('a element -> bool) -> 'a t
   val filter : ('a element -> bool) -> 'a t -> 'a t
   val filter_map : ('a element -> 'b element option) -> 'a t -> 'b t
+  val split: 'a element -> 'a t -> 'a t * bool * 'a t
 end
 
 module type S0 = sig

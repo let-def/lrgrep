@@ -53,6 +53,40 @@ let add i s =
   in
   add s
 
+let split i s =
+  let ioffset = i mod word_size in
+  let iaddr = i - ioffset
+  and imask = 1 lsl ioffset in
+  let rec split = function
+    | N ->
+      (N, false, N)
+    | C (addr, ss, qs) as s ->
+      if iaddr < addr then
+        (* Stop now. *)
+        (N, false, s)
+        
+      else if iaddr = addr then
+        (* Found appropriate cell, split bit field. *)
+        let found = ss land imask <> 0 in
+        let l_mask = imask - 1 in
+        let l =
+          match ss land l_mask with
+          | 0 -> N
+          | ss_l -> C (addr, ss_l, N)
+        in
+        let r =
+          match ss land lnot (l_mask lor imask) with
+          | 0 -> N
+          | ss_r -> C (addr, ss_r, qs)
+        in
+        (l, found, r)
+      else
+        (* Not there yet, continue. *)
+        let (l, f, r) = split qs in
+        (C (addr, ss, l), f, r)
+  in
+  split s
+
 let singleton i =
   add i N
 
