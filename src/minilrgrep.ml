@@ -765,6 +765,55 @@ module Transl = struct
       ) covered
 end
 
+let nt_inclusion =
+  let prod_by_lhs = Vector.make Nonterminal.n IndexSet.empty in
+  Index.iter Production.n
+    (fun prod -> prod_by_lhs.@(Production.lhs prod) <- IndexSet.add prod);
+  Vector.map (fun prods ->
+      Misc.indexset_bind prods
+        (fun prod ->
+           let rhs = Production.rhs prod in
+           let non_nullable = ref 0 in
+           for i = 0 to Array.length rhs - 1 do
+             if non_nullable_symbol rhs.(i) then incr non_nullable;
+           done;
+           match !non_nullable with
+           | 0 ->
+             Array.fold_left (fun set sym ->
+                 match Symbol.prj sym with
+                 | L _ -> assert false
+                 | R n -> IndexSet.add n set
+               ) IndexSet.empty rhs
+           | 1 ->
+             begin match Array.find_opt non_nullable_symbol rhs with
+               | None -> assert false
+               | Some sym ->
+                 match Symbol.prj sym with
+                 | L _ -> IndexSet.empty
+                 | R n -> IndexSet.singleton n
+             end
+           | _ -> IndexSet.empty
+        )
+    ) prod_by_lhs
+
+let () =
+  let oc = open_out_bin "nt.dot" in
+  let p fmt = Printf.fprintf oc fmt in
+  p "digraph G {\n";
+  p " rankdir=LR;\n";
+  p " node[shape=rectangle];\n";
+  let on_rhs = Vector.fold_left IndexSet.union IndexSet.empty nt_inclusion in
+  Vector.iteri begin fun nt nts ->
+    if not (IndexSet.is_empty nts) || IndexSet.mem nt on_rhs then (
+      p " st%d[label=%S];\n" (Index.to_int nt) (Nonterminal.to_string nt);
+      IndexSet.iter
+        (fun nt' -> p " st%d -> st%d;\n" (Index.to_int nt) (Index.to_int nt'))
+        nts
+    )
+  end nt_inclusion;
+  p "}\n";
+  close_out_noerr oc
+
 (*module Recognizer = struct
   let states_of_suffix = Misc.relation_reverse Suffixes.n Suffixes.of_state
 
