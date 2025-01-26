@@ -821,7 +821,7 @@ let () =
 module Recognizer = struct
   let states_of_suffix = Misc.relation_reverse Suffixes.n Suffixes.of_state
 
-  let accepting = Vector.make Reduction_DFA.n IntSet.empty
+  let accepts = Vector.make Reduction_DFA.n IntSet.empty
 
   let () =
     List.iter (fun spec ->
@@ -829,24 +829,27 @@ module Recognizer = struct
             let clause = br.Transl.clause in
             IndexSet.iter (fun suf ->
                 IndexSet.iter (fun dfa ->
-                    accepting.@(dfa) <- IntSet.add clause
+                    accepts.@(dfa) <- IntSet.add clause
                   ) states_of_suffix.:(suf)
               ) suffixes
           ) spec
       ) Transl.branches
 
-  let acceptable = Vector.map (fun set ->
-      match IntSet.minimum set with
-      | None -> IntSet.empty
-      | Some i -> IntSet.singleton i
-    ) accepting
+  let accepting = Vector.map IntSet.minimum accepts
+
+  let reachable =
+    Vector.map (function None -> IntSet.empty | Some x -> IntSet.singleton x) accepting
 
   let () =
-    Misc.fix_relation Reduction_DFA.predecessors acceptable
+    Misc.fix_relation Reduction_DFA.predecessors reachable
       ~propagate:(fun _ i st j ->
-          match IntSet.minimum accepting.:(st) with
-          | None -> IntSet.union i j
-          | Some c -> IntSet.union (IntSet.filter (fun c' -> c < c') i) j
+          IntSet.union (
+            match accepting.:(st) with
+            | None -> i
+            | Some c ->
+              let (l, _, _) = IntSet.split c i in
+              l
+          ) j
         )
 
   let clause_count =
@@ -854,38 +857,34 @@ module Recognizer = struct
 
   let unreachable =
     IntSet.diff (IntSet.init_interval 0 (clause_count - 1))
-      acceptable.:(Reduction_DFA.initial)
+      reachable.:(Reduction_DFA.initial)
 
   let relation = Array.make clause_count IntSet.empty
 
   let () =
-    Vector.iter (fun xs ->
-        let _ = IntSet.fold (fun i j ->
-            begin match j with
+    Vector.iter (fun xs -> ignore (
+        IntSet.fold_right (fun hi lo ->
+            begin match hi with
               | None -> ()
-              | Some j ->
-                relation.(i) <- IntSet.add j relation.(i);
+              | Some hi ->
+                relation.(hi) <- IntSet.add lo relation.(hi);
             end;
-            Some i
-          ) xs None
-        in
-        ()
-      ) accepting;
+            Some lo
+          ) None xs
+      )) accepts;
     Vector.iteri (fun st successors ->
-        let accepting = IntSet.elements accepting.:(st) in
-        IndexSet.iter (fun st' ->
-            let rec record_overrides overriding clause =
+        let accepts = List.rev (IntSet.elements accepts.:(st)) in
+        IndexSet.iter (fun succ ->
+            let rec record_overrides overriding hi =
               match overriding with
               | [] -> []
-              | clause' :: clauses when clause' >= clause ->
-                record_overrides clauses clause
-              | clause' :: _ ->
-                relation.(clause') <- IntSet.add clause relation.(clause');
+              | lo :: rest when lo >= hi ->
+                record_overrides rest hi
+              | lo :: _ ->
+                relation.(hi) <- IntSet.add lo relation.(hi);
                 overriding
             in
-            let _ = IntSet.fold_right record_overrides accepting acceptable.:(st')
-            in
-            ()
+            ignore (IntSet.fold_right record_overrides accepts reachable.:(succ))
           ) successors
       ) Reduction_DFA.successors
 
@@ -897,8 +896,8 @@ let () =
   p "digraph G {\n";
   p " rankdir=LR;\n";
   p " node[shape=rectangle];\n";
-  Array.iteri (fun i js ->
-      IntSet.iter (fun j -> p  "st%d -> st%d\n" i j) js;
+  Array.iteri (fun hi los ->
+      IntSet.iter (fun lo -> p  "st%d -> st%d\n" lo hi) los;
     ) Recognizer.relation;
   List.iteri (fun i (clause : Kernel.Syntax.clause) ->
       let position = (List.hd clause.patterns).expr.position in
