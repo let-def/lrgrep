@@ -516,6 +516,7 @@ module Transl = struct
     (* The clause being recognized.  If this branch succeeds, semantic action
        from clause number [clause] should be executed. *)
     clause: int;
+    position: position;
   }
 
   (* The default filter matches all states (restricting nothing) *)
@@ -691,13 +692,13 @@ module Transl = struct
     (* Special-case recognizing [_* ...] *)
     | Reduce {expr = {desc = Concat ({desc = Repetition {expr = {desc = Atom (_, None, _); _}; _}; _} :: rest); _}; _} ->
       let filter = List.fold_left flatten_concat (default_filter expr.position) rest in
-      [{clause; filter; reduce = Reduce_auto}]
+      [{clause; filter; reduce = Reduce_auto; position = expr.position}]
     | Reduce {expr; _} ->
       let filter = flatten_concat (default_filter expr.position) expr in
-      [{clause; filter; reduce = Reduce_yes}]
+      [{clause; filter; reduce = Reduce_yes; position = expr.position}]
     | _ ->
       let filter = flatten_concat (default_filter expr.position) expr in
-      [{clause; filter; reduce = Reduce_no}]
+      [{clause; filter; reduce = Reduce_no; position = expr.position}]
 
   (* Extract branches from an entry in the specification *)
   let extract_branches (entry : entry) =
@@ -744,8 +745,11 @@ module Transl = struct
     | None -> []
     | Some ast ->
       List.map (fun entry ->
-          List.map
-            (fun branch -> branch, compile_branch branch)
+          List.map (fun branch ->
+              let suffixes = compile_branch branch in
+              if IndexSet.is_empty suffixes then
+                warn branch.position "clause is unreachable";
+              (branch, suffixes))
             (extract_branches entry)
         ) ast.entrypoints
 
