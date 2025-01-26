@@ -818,10 +818,10 @@ let () =
   p "}\n";
   close_out_noerr oc
 
-(*module Recognizer = struct
+module Recognizer = struct
   let states_of_suffix = Misc.relation_reverse Suffixes.n Suffixes.of_state
 
-  let accept = Vector.make Reduction_DFA.n IntSet.empty
+  let accepting = Vector.make Reduction_DFA.n IntSet.empty
 
   let () =
     List.iter (fun spec ->
@@ -829,13 +829,85 @@ let () =
             let clause = br.Transl.clause in
             IndexSet.iter (fun suf ->
                 IndexSet.iter (fun dfa ->
-                    accept.:(dfa) <-
-                      (Int.min clause accept.:(dfa))
+                    accepting.@(dfa) <- IntSet.add clause
                   ) states_of_suffix.:(suf)
               ) suffixes
           ) spec
       ) Transl.branches
-  end*)
+
+  let acceptable = Vector.map (fun set ->
+      match IntSet.minimum set with
+      | None -> IntSet.empty
+      | Some i -> IntSet.singleton i
+    ) accepting
+
+  let () =
+    Misc.fix_relation Reduction_DFA.predecessors acceptable
+      ~propagate:(fun _ i st j ->
+          match IntSet.minimum accepting.:(st) with
+          | None -> IntSet.union i j
+          | Some c -> IntSet.union (IntSet.filter (fun c' -> c < c') i) j
+        )
+
+  let clause_count =
+    List.fold_left Int.max (-1) (List.map List.length Transl.branches) + 1
+
+  let unreachable =
+    IntSet.diff (IntSet.init_interval 0 (clause_count - 1))
+      acceptable.:(Reduction_DFA.initial)
+
+  let relation = Array.make clause_count IntSet.empty
+
+  let () =
+    Vector.iter (fun xs ->
+        let _ = IntSet.fold (fun i j ->
+            begin match j with
+              | None -> ()
+              | Some j ->
+                relation.(i) <- IntSet.add j relation.(i);
+            end;
+            Some i
+          ) xs None
+        in
+        ()
+      ) accepting;
+    Vector.iteri (fun st successors ->
+        let accepting = IntSet.elements accepting.:(st) in
+        IndexSet.iter (fun st' ->
+            let rec record_overrides overriding clause =
+              match overriding with
+              | [] -> []
+              | clause' :: clauses when clause' >= clause ->
+                record_overrides clauses clause
+              | clause' :: _ ->
+                relation.(clause') <- IntSet.add clause relation.(clause');
+                overriding
+            in
+            let _ = IntSet.fold_right record_overrides accepting acceptable.:(st')
+            in
+            ()
+          ) successors
+      ) Reduction_DFA.successors
+
+end
+
+let () =
+  let oc = open_out_bin "overriding.dot" in
+  let p fmt = Printf.fprintf oc fmt in
+  p "digraph G {\n";
+  p " rankdir=LR;\n";
+  p " node[shape=rectangle];\n";
+  Array.iteri (fun i js ->
+      IntSet.iter (fun j -> p  "st%d -> st%d\n" i j) js;
+    ) Recognizer.relation;
+  List.iteri (fun i (clause : Kernel.Syntax.clause) ->
+      let position = (List.hd clause.patterns).expr.position in
+      p " st%d[label=\"Clause line %d\n\" color=%S]\n"
+        i position.line
+        (if IntSet.mem i Recognizer.unreachable then "red" else "black")
+    ) (List.hd (Option.get ast).entrypoints).clauses;
+  p "}\n";
+  close_out_noerr oc
 
 (* Find uncovered states: states on a path ending with an uncovered suffix *)
 module Uncovered = struct
