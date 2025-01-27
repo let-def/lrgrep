@@ -81,9 +81,9 @@ let warn (pos : Kernel.Syntax.position) fmt =
 
 (* Helper to check if a symbol is not nullable *)
 let non_nullable_symbol sym =
-  match Info.Symbol.prj sym with
+  match Symbol.prj sym with
   | L _ -> true
-  | R n -> not (Info.Nonterminal.nullable n)
+  | R n -> not (Nonterminal.nullable n)
 
 (* Module implementing the reduction NFA.
    The implementation follows section 2.3.2. *)
@@ -978,12 +978,12 @@ let () =
         (Index.to_int i)
         (Misc.string_concat_map "\n"
            (fun suffix ->
-              Misc.string_concat_map " " Info.Symbol.name
-                (List.filter_map Info.Lr1.incoming (List.rev suffix.Reduction_DFA.stack)))
+              Misc.string_concat_map " " Symbol.name
+                (List.filter_map Lr1.incoming (List.rev suffix.Reduction_DFA.stack)))
            desc.Reduction_DFA.suffixes);
       IndexMap.iter begin fun lr1 j ->
         if Boolvector.test Uncovered.enabled j then
-          p " st%d -> st%d [label=%S];\n" (Index.to_int i) (Index.to_int j) (Info.Lr1.to_string lr1)
+          p " st%d -> st%d [label=%S];\n" (Index.to_int i) (Index.to_int j) (Lr1.to_string lr1)
       end desc.Reduction_DFA.transitions
     )
   end Reduction_DFA.states;
