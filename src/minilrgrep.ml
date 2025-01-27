@@ -317,36 +317,40 @@ module Reduction_DFA = struct
   let () = Stopwatch.leave time
 end
 
-(* Item closure aware of truncated actions *)
-module Item_closure = struct
+(* Reverse the action of reductions.
+   Pre-compute:
+   - item closure for each state [st]
+     (items of the form [(prod, 0)]: reducing [prod] is a way to follow a goto
+     transition from [st])
+   - paths that permit following a give goto transition
+*)
+module Unreductions = struct
   let time = Stopwatch.enter time "Item closure"
 
-  let closure = Vector.make Info.Lr1.n IndexSet.empty
+  let prods_by_lr1 = Vector.make Lr1.n IndexSet.empty
+
+  let paths = Vector.make Transition.goto []
 
   let () = Index.iter Lr1.n (fun lr1 ->
       let prods =
-        IndexSet.elements (Info.Reduction.from_lr1 lr1)
-        |> List.map Info.Reduction.production
-        |> List.sort (fun p1 p2 -> Int.compare (Production.length p1) (Production.length p2))
+        IndexSet.elements (Reduction.from_lr1 lr1)
+        |> List.map Reduction.production
+        |> List.sort (fun p1 p2 ->
+            Int.compare (Production.length p1)
+                        (Production.length p2))
       in
-      let rec steps depth = function
-        | [] -> (IndexSet.empty, [])
-        | (p :: _) as ps when Production.length p > depth ->
-          let x, xs = steps (depth + 1) ps in
-          (IndexSet.empty, x :: xs)
-        | p :: ps ->
-          assert (Production.length p = depth);
-          let x, xs = steps depth ps in
-          (IndexSet.add p x, xs)
-      in
-      let rec reduce states (x, xs) =
-        IndexSet.iter (fun st -> closure.@(st) <- IndexSet.union x) states;
-        match xs with
+      let rec steps depth lr1 path = function
         | [] -> ()
-        | x :: xs ->
-          reduce (Misc.indexset_bind states Lr1.predecessors) (x, xs)
+        | p :: ps when Production.length p = depth ->
+          prods_by_lr1.@(lr1) <- IndexSet.add p;
+          paths.@(Transition.find_goto lr1 (Production.lhs p)) <- List.cons path;
+          steps depth lr1 path ps
+        | ps ->
+          List.iter (fun tr ->
+              steps (depth + 1) (Transition.source tr) (tr :: path) ps
+            ) (Transition.predecessors lr1)
       in
-      reduce (IndexSet.singleton lr1) (steps 0 prods)
+      steps 0 lr1 [] prods
     )
 
   let () = Stopwatch.leave time
@@ -629,7 +633,7 @@ module Transl = struct
       let match_closed prod = match_item (prod, 0) in
       List.exists match_item (Lr1.items lr1) ||
       IndexSet.exists match_closed
-        Item_closure.closure.:(lr1)
+        Unreductions.prods_by_lr1.:(lr1)
     in
     IndexSet.init_from_set Lr1.n match_lr1
 
@@ -769,10 +773,13 @@ module Transl = struct
       ) covered
 end
 
-let nt_inclusion =
-  let prod_by_lhs = Vector.make Nonterminal.n IndexSet.empty in
+let prod_by_lhs = Vector.make Nonterminal.n IndexSet.empty
+
+let () =
   Index.iter Production.n
-    (fun prod -> prod_by_lhs.@(Production.lhs prod) <- IndexSet.add prod);
+    (fun prod -> prod_by_lhs.@(Production.lhs prod) <- IndexSet.add prod)
+
+let nt_inclusion =
   Vector.map (fun prods ->
       Misc.indexset_bind prods
         (fun prod ->
@@ -1038,6 +1045,95 @@ let () =
           ) entry.clauses
       ) ast.entrypoints
 *)
+
+module Sentence = struct
+  let time = Stopwatch.enter time "Setting up sentence generator"
+  type unreduce = {
+    path: Transition.any index list;
+    goto: Transition.goto index;
+    mutable incoming: int;
+    mutable cost: int;
+  }
+
+  module Heap = Heap.Make(struct type _ t = int let compare = Int.compare end)
+
+  let transition_cost = Vector.make Transition.goto max_int
+
+  let transition_deps = Vector.make Transition.goto []
+
+  let todo : (unit, Transition.goto index) Heap.t ref = ref Heap.empty
+
+  let schedule {path = _; incoming = _; goto; cost} =
+    let cost' = transition_cost.:(goto) in
+    if cost < cost' then (
+      transition_cost.:(goto) <- cost;
+      todo := Heap.insert cost goto !todo
+    )
+
+  let relax cost goto =
+    List.iter (fun unreduce ->
+        let incoming = unreduce.incoming - 1 in
+        unreduce.incoming <- incoming;
+        unreduce.cost <- unreduce.cost + cost;
+        if incoming = 0
+        then schedule unreduce
+        else assert (incoming > 0)
+      ) transition_deps.:(goto)
+
+  let transition_reds = Vector.mapi begin fun goto paths ->
+      List.map begin fun path ->
+        let (incoming, cost) = List.fold_left (fun (incoming, cost) tr ->
+            match Transition.split tr with
+            | R _sh -> (incoming, cost + 1)
+            | L _gt -> (incoming + 1, cost)
+          ) (0, 0) path
+        in
+        let unreduce = { path; goto; incoming; cost } in
+        if incoming = 0 then schedule unreduce else
+          List.iter (fun tr ->
+              match Transition.split tr with
+              | R _  -> ()
+              | L gt -> transition_deps.@(gt) <- List.cons unreduce
+            ) path;
+        unreduce
+      end paths
+    end Unreductions.paths
+
+  let count = ref 0
+
+  let rec loop heap = match Heap.pop heap with
+    | None -> todo := Heap.empty
+    | Some (k, v, heap') ->
+      incr count;
+      let k' = transition_cost.:(v) in
+      if k' < k then
+        loop heap'
+      else (
+        assert (k = k');
+        todo := heap';
+        relax k v;
+        loop !todo
+      )
+
+  let () = loop !todo
+
+  let () = Stopwatch.leave time
+
+  let () =
+    Printf.eprintf "%d loops\n" !count;
+    Vector.iteri (fun goto cost ->
+        if cost = max_int then
+          let tr = Transition.of_goto goto in
+          Printf.eprintf "Failed to synthesize %s - %s -> %s, paths:\n"
+            (Lr1.to_string (Transition.source tr))
+            (Symbol.name   (Transition.symbol tr))
+            (Lr1.to_string (Transition.target tr));
+          List.iter (fun path ->
+              Printf.eprintf "- %s\n"
+                (Misc.string_concat_map " " Lr1.to_string (List.map Transition.target path))
+          ) Unreductions.paths.:(goto)
+        ) transition_cost
+end
 
 (* Now we switch to enumeration support.
 
