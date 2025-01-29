@@ -1008,44 +1008,6 @@ let print_suffixes state =
   let suffixes = Suffixes.of_state.:(state) in
   IndexSet.iter print_suffix suffixes
 
-(* FIXME
-let () =
-  let used = ref IntSet.empty in
-  let visited = Boolvector.make Reduction_DFA.n false in
-  let rec traverse path state =
-    if not (Boolvector.test visited state) then (
-      Boolvector.set visited state;
-      let clause = Recognizer.accept.:(state) in
-      if clause = max_int then (
-        let succ = Reduction_DFA.states.:(state).transitions in
-        (* if IndexMap.is_empty succ then (
-          Printf.eprintf "Found uncovered path:\n%s\n"
-            (Lr1.list_to_string
-               (List.rev_append
-                  Reduction_DFA.path_prefix.:(fst (List.hd path))
-                  (List.map fst path)));
-          List.iter (fun (_, st') -> print_suffixes st') path;
-        ); *)
-        IndexMap.iter (fun lr1 state' -> traverse ((lr1, state) :: path) state') succ
-      ) else
-        used := IntSet.add clause !used
-    )
-  in
-  traverse [] Reduction_DFA.initial;
-  match ast with
-  | None -> ()
-  | Some ast ->
-    let open Kernel.Syntax in
-    List.iter (fun entry ->
-        List.iteri (fun i clause ->
-            if not (IntSet.mem i !used) then (
-              Printf.eprintf "Clause line %d is unreachable\n"
-                (List.hd clause.patterns).expr.position.line
-            )
-          ) entry.clauses
-      ) ast.entrypoints
-*)
-
 module Sentence = struct
   let time = Stopwatch.enter time "Setting up sentence generator"
   type unreduce = {
