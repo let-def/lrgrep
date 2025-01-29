@@ -283,7 +283,12 @@ module Reduction_DFA = struct
   let path_prefix = Vector.make Lr1.n []
 
   let () =
-    let todo = ref [] in
+    let todo =
+      Hashtbl.fold (fun _ lr1 acc -> lr1 :: acc) Lr1.entrypoints []
+      |> List.sort Index.compare
+      |> List.map (fun lr1 -> (lr1, []))
+      |> ref
+    in
     let propagate (x, path) =
       match path_prefix.:(x) with
       | _ :: _ -> ()
@@ -294,7 +299,6 @@ module Reduction_DFA = struct
             Misc.push todo (y, x :: path)
           ) (Transition.successors x)
     in
-    Hashtbl.iter (fun _ lr1 -> Misc.push todo (lr1, [])) Lr1.entrypoints;
     Misc.fixpoint ~propagate todo
 
   let () =
