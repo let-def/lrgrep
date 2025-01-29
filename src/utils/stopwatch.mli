@@ -1,5 +1,7 @@
 type t
 
+val output : (string -> unit) ref
+
 val create : unit -> t
 
 val reset : t -> unit
