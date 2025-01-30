@@ -193,6 +193,8 @@ module Index : sig
 
   val equal : 'n index -> 'n index -> bool
   val compare : 'n index -> 'n index -> int
+  val minimum : 'n index -> 'n index -> 'n index
+  val maximum : 'n index -> 'n index -> 'n index
 end
 
 (**A vector of type [(n, a) vector] is a (fixed-size) array whose indices lie

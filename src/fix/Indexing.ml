@@ -206,6 +206,8 @@ module Index = struct
 
   let equal = Int.equal
   let compare = Int.compare
+  let minimum = Int.min
+  let maximum = Int.max
 
   module Unsafe = struct
     module type T = sig type 'a t end
