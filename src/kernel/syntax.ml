@@ -49,6 +49,8 @@ type ocaml_code = location * string
 (** A position in the input file. *)
 type position = {line: int; col: int}
 
+let invalid_position = {line = -1; col = -1}
+
 (** A grammar symbol (a terminal or a non-terminal) *)
 type symbol =
   | Name of string
