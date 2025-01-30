@@ -11,4 +11,4 @@
 (executable
  (name minilrgrep)
  (modules minilrgrep)
- (libraries front fix cmon utils menhirSdk valmari support))
+ (libraries unix front fix cmon utils menhirSdk valmari support))
