@@ -49,6 +49,12 @@ module Empty = struct
   let n = Cardinal (lazy 0)
 end
 
+module Unit = struct
+  type n = unit
+  let n = Cardinal (lazy 1)
+  let element = 0
+end
+
 module Const (X : sig val cardinal : int end) : CARDINAL = struct
   type n = unit
   let () = assert (X.cardinal >= 0)
