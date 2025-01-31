@@ -447,9 +447,9 @@ module Unreductions = struct
           paths.@(Transition.find_goto lr1 (Production.lhs p)) <- List.cons path;
           steps depth lr1 path ps
         | ps ->
-          List.iter (fun tr ->
-              steps (depth + 1) (Transition.source tr) (tr :: path) ps
-            ) (Transition.predecessors lr1)
+          List.iter
+            (fun tr -> steps (depth + 1) (Transition.source tr) (tr :: path) ps)
+            (Transition.predecessors lr1)
       in
       steps 0 lr1 [] prods
     )
@@ -1053,33 +1053,64 @@ module Analyze = struct
     Boolvector.test table
 end
 
-let () =
-  if clause_shadow then
-    let shadowers = Vector.make Transl.Clause.n IndexSet.empty in
-    Index.iter Reduction_DFA.n begin fun st ->
-      let accepts = Analyze.accepts.:(st) in
-      let cs =
-        match Analyze.Clause_or_uncovered.prj (Analyze.highest_accepted st) with
-        | None -> IndexSet.empty
-        | Some c -> IndexSet.singleton c
-      in
-      IndexSet.iter (fun c' ->
-          if not (Analyze.is_clause_reachable c') then (
-            let l,_,_ = IndexSet.split c' accepts in
-            shadowers.@(c') <- IndexSet.union (IndexSet.union cs l)
-          )
-        ) accepts;
-    end;
-    Vector.iteri (fun c cs ->
-        if not (IndexSet.is_empty cs) then (
-          let print_clause c =
-            Printf.sprintf "line %d" (Transl.Clause.position c).line
-          in
-          Printf.eprintf "Clause %s is unreachable (shadowed, for instance, by clauses %s)\n"
-            (print_clause c)
-            (string_of_indexset ~index:print_clause cs)
-        )
-      ) shadowers
+(** Computes which clauses are shadowed by clauses with higher priority.
+    This is used to help the author of a specification understands why a certain
+    clause is unreachable ([not (Analysis.is_clause_reachable c)]).
+
+    The exact answer is difficult to compute and to interpret, because the
+    actual shadowing relation is almost as complex as the transition relation
+    of the DFA.
+
+    Instead, we print only a few of the occluders of each clause.  The author
+    can then adjust them and, by repeating, the analysis converge toward a
+    satisfying solution.
+*)
+module Shadowing() = struct
+  (** Create a vector to store some of the occluders for each clause. *)
+  let occluders = Vector.make Transl.Clause.n IndexSet.empty
+
+  (** Find occluders visible from a specific state. *)
+  let process_state st =
+    (* Get the clauses accepted by the current DFA state. *)
+    let accepts = Analyze.accepts.:(st) in
+    (* Determine the highest clause accepted by stacks going through the current
+       state. *)
+    let cs =
+      match Analyze.Clause_or_uncovered.prj (Analyze.highest_accepted st) with
+      | None -> IndexSet.empty (* No clause accepted *)
+      | Some c -> IndexSet.singleton c (* Single clause accepted *)
+    in
+    (* Iterate over each clause accepted by the state. *)
+    IndexSet.iter begin fun c' ->
+      (* Check if the clause is not reachable. *)
+      if not (Analyze.is_clause_reachable c') then
+        (* Split the accepted clauses: occluders can only be clauses with
+           lower indices. *)
+        let l, _, _ = IndexSet.split c' accepts in
+        occluders.@(c') <- IndexSet.union (IndexSet.union cs l)
+    end accepts
+
+  (** Iterate over all states to populate [occluders] *)
+  let () = Index.iter Reduction_DFA.n process_state
+
+  (** Print the results of the analysis by iterating over each clause *)
+  let () = Vector.iteri begin fun c cs ->
+      (* Check if the clause has any shadowers. *)
+      if not (IndexSet.is_empty cs) then (
+        (* Function to print the clause position. *)
+        let print_clause c =
+          Printf.sprintf "line %d" (Transl.Clause.position c).line
+        in
+        (* Print the unreachable clause and its shadowers. *)
+        Printf.eprintf "Clause %s is unreachable. It is shadowed at least by clauses %s.\n"
+          (print_clause c)
+          (string_concat_map ", " print_clause (IndexSet.elements cs))
+      )
+    end occluders
+end
+
+(** Only proceed with the shadowing analysis if the [clause_shadow] flag is set. *)
+let () = if clause_shadow then let module _ = Shadowing() in ()
 
 module Sentence = struct
   let time = Stopwatch.enter time "Setting up sentence generator"
