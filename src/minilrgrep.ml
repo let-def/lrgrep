@@ -525,8 +525,7 @@ end
    We now switch to processing the error specification. *)
 
 (** Handle parsing using LRGrep's parser. *)
-let ast =
-  match spec_file with
+let ast = match spec_file with
   | None -> None
   | Some spec_file ->
     (* Open the specification file *)
@@ -595,9 +594,6 @@ module Transl = struct
     | Reduce_auto (* Special case for supporting [_* / ...] syntax which lets
                      LRGrep finds out what needs to be reduced, if necessary,
                      for a pattern to match *)
-
-  (** The finite set of clauses *)
-  module Clause = Gensym()
 
   (** Semantic representation of a branch. *)
   type branch = {
@@ -795,6 +791,7 @@ module Transl = struct
       | (_, pos) :: _ -> error pos "lookahead constraints are not supported"
     in
     let extract_clause (clause : clause) =
+      (List.hd clause.patterns).expr.position,
       List.concat_map extract_pattern clause.patterns
     in
     List.map extract_clause entry.clauses
@@ -830,39 +827,45 @@ module Transl = struct
         warn branch.position "pattern is unreachable";
       (branch, suffixes)
     in
-    let compile_clause branches =
-      (Clause.fresh (), List.map compile_branch branches)
+    let compile_clause (position, branches) =
+      (position, List.map compile_branch branches)
     in
-    List.map compile_clause clauses
+    Array.of_list (List.map compile_clause clauses)
 
-  (** Branches of the entry to work with *)
-  let branches : (Clause.n index * compiled_branch list) list =
-    match !entry, ast with
-    | "", None -> []
-    | entry, None ->
-      error invalid_position
-        "-entry %S has been provided, but no specification was given\n" entry
-    | "", Some ast ->
-      begin match ast.entrypoints with
-      | [] -> []
-      | [x] -> compile_entry x
-      | x :: xs ->
-        warn (snd x.error)
-          "processing only the first entry (%S); pass `-entry <name>` to process another entry (%s)"
-          x.name (string_concat_map ", " (fun x -> x.name) xs);
-        compile_entry x
-      end
-    | name, Some ast ->
-      begin match List.find_opt (fun x -> x.name = name) ast.entrypoints with
-        | None ->
-          error invalid_position
-            "unknown entry %S; pass `-entry <name>` to process another entry (%s)"
-            name (string_concat_map ", " (fun x -> x.name) ast.entrypoints)
-        | Some x -> compile_entry x
-      end
+  (** Clauses of the compiled entry *)
+  module Clause = struct
+    include Vector.Of_array(struct
+        type a = position * compiled_branch list
+        let array =
+          match !entry, ast with
+          | "", None -> [||]
+          | entry, None ->
+            error invalid_position
+              "-entry %S has been provided, but no specification was given\n" entry
+          | "", Some ast ->
+            begin match ast.entrypoints with
+              | [] -> [||]
+              | [x] -> compile_entry x
+              | x :: xs ->
+                warn (snd x.error)
+                  "processing only the first entry (%S); pass `-entry <name>` to process another entry (%s)"
+                  x.name (string_concat_map ", " (fun x -> x.name) xs);
+                compile_entry x
+            end
+          | name, Some ast ->
+            begin match List.find_opt (fun x -> x.name = name) ast.entrypoints with
+              | None ->
+                error invalid_position
+                  "unknown entry %S; pass `-entry <name>` to process another entry (%s)"
+                  name (string_concat_map ", " (fun x -> x.name) ast.entrypoints)
+              | Some x -> compile_entry x
+            end
+      end)
+    let n = Vector.length vector
 
-  (** Add a "fake" last clause to represent uncovered cases *)
-  let uncovered_clause = Clause.fresh ()
+    let position c = fst vector.:(c)
+    let branches c = snd vector.:(c)
+  end
 end
 
 (** Compute a graph representing inclusion between non-terminals.
@@ -949,15 +952,26 @@ module Analyze = struct
   let accepts : (Reduction_DFA.n, Transl.Clause.n indexset) vector =
     let table = Vector.make Reduction_DFA.n IndexSet.empty in
     (* Accumulate clauses recognizing suffixes reached by states *)
-    List.iter begin fun (clause, branches) ->
-      List.iter (fun (_brancy, suffixes) ->
+    Vector.iteri begin fun clause (_position, branches) ->
+      List.iter (fun (_branch, suffixes) ->
           IndexSet.iter (fun suf ->
               IndexSet.iter (fun dfa -> table.@(dfa) <- IndexSet.add clause)
                 (Suffix.to_dfa suf)
             ) suffixes
         ) branches
-    end Transl.branches;
+    end Transl.Clause.vector;
     table
+
+  module Clause_or_uncovered = struct
+    include Sum(Transl.Clause)(Unit)
+    let of_clause = inj_l
+    let uncovered = inj_r Unit.element
+
+    let prj c = match prj c with
+      | L c -> Some c
+      | R _ -> None
+  end
+  type clause_or_uncovered = Clause_or_uncovered.n
 
   (** The clause actually accepted by a DFA state.
       Earlier clauses (with lower indices) have the priority, so the minimal
@@ -979,7 +993,7 @@ module Analyze = struct
     else (* A higher-clause was discovered to be reachable *)
       match accepting state with
       | None -> path_clause (* Not an accepting state: just propagate *)
-      | Some c -> Index.minimum c path_clause (* Cannot reach higher than [c] *)
+      | Some c -> Index.minimum (Clause_or_uncovered.of_clause c) path_clause (* Cannot reach higher than [c] *)
 
   (** Compute the highest clause accepted by a state reachable from a DFA state.
 
@@ -992,14 +1006,14 @@ module Analyze = struct
       To compute this, we start assuming all clauses but the leaves
       reaches only the lowest clause, and back-propagates from the leaves
       until reaching a fixed-point. *)
-  let highest_reachable : (Reduction_DFA.n, Transl.Clause.n index) vector =
+  let highest_reachable : (Reduction_DFA.n, clause_or_uncovered index) vector =
     (* Initialize the table, starting from leaves *)
     let init_leaves st =
       if Reduction_DFA.is_leaf st then
         match accepting st with
-        | None -> Transl.uncovered_clause
-        | Some c -> c
-      else Index.of_int Transl.Clause.n 0
+        | None -> Clause_or_uncovered.uncovered
+        | Some c -> Clause_or_uncovered.of_clause c
+      else Index.of_int Clause_or_uncovered.n 0
     in
     let table = Vector.init Reduction_DFA.n init_leaves in
     Misc.fix_relation Reduction_DFA.predecessors table
@@ -1008,9 +1022,9 @@ module Analyze = struct
 
   (** Dual analysis: compute the highest clause accepted by paths reaching a
       state from the initial state. *)
-  let highest_reached : (Reduction_DFA.n, Transl.Clause.n index) vector =
-    let table = Vector.make Reduction_DFA.n (Index.of_int Transl.Clause.n 0) in
-    table.:(Reduction_DFA.initial) <- Transl.uncovered_clause;
+  let highest_reached : (Reduction_DFA.n, clause_or_uncovered index) vector =
+    let table = Vector.make Reduction_DFA.n (Index.of_int Clause_or_uncovered.n 0) in
+    table.:(Reduction_DFA.initial) <- Clause_or_uncovered.uncovered;
     Misc.fix_relation Reduction_DFA.successors table
       ~propagate:refine_reachable_clause;
     table
@@ -1023,7 +1037,7 @@ module Analyze = struct
   (** A state is uncovered if [highest_accepted = uncovered]: there is at least
       one path from the initial state to a leaf passing by this state not
       accepting any clause. *)
-  let is_uncovered st = Index.equal Transl.uncovered_clause (highest_accepted st )
+  let is_uncovered st = Index.equal Clause_or_uncovered.uncovered (highest_accepted st )
 
   (** Find reachable clauses: those accepted by a state reachable by a path
       accepting no clause of lower priority. *)
@@ -1031,7 +1045,9 @@ module Analyze = struct
     let table = Boolvector.make Transl.Clause.n false in
     Index.iter Reduction_DFA.n begin fun st ->
       match accepting st with
-      | Some c when Index.equal c (highest_accepted st) -> Boolvector.set table c
+      | Some c ->
+        if Index.equal (Clause_or_uncovered.of_clause c) (highest_accepted st) then
+          Boolvector.set table c
       | _ -> ()
     end;
     Boolvector.test table
@@ -1184,7 +1200,7 @@ module Enum = struct
         end
     in
     Vector.iteri (fun st suffixes ->
-        if Reduction_DFA.is_leaf st then
+        if Reduction_DFA.is_leaf st && Analyze.is_uncovered st then
           IndexSet.iter visit_suffix suffixes)
       Suffix.of_dfa;
     Hashtbl.fold (fun reduce filters acc -> (reduce, !filters) :: acc) table []
