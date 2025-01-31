@@ -1053,6 +1053,34 @@ module Analyze = struct
     Boolvector.test table
 end
 
+let () =
+  if clause_shadow then
+    let shadowers = Vector.make Transl.Clause.n IndexSet.empty in
+    Index.iter Reduction_DFA.n begin fun st ->
+      let accepts = Analyze.accepts.:(st) in
+      let cs =
+        match Analyze.Clause_or_uncovered.prj (Analyze.highest_accepted st) with
+        | None -> IndexSet.empty
+        | Some c -> IndexSet.singleton c
+      in
+      IndexSet.iter (fun c' ->
+          if not (Analyze.is_clause_reachable c') then (
+            let l,_,_ = IndexSet.split c' accepts in
+            shadowers.@(c') <- IndexSet.union (IndexSet.union cs l)
+          )
+        ) accepts;
+    end;
+    Vector.iteri (fun c cs ->
+        if not (IndexSet.is_empty cs) then (
+          let print_clause c =
+            Printf.sprintf "line %d" (Transl.Clause.position c).line
+          in
+          Printf.eprintf "Clause %s is unreachable (shadowed, for instance, by clauses %s)\n"
+            (print_clause c)
+            (string_of_indexset ~index:print_clause cs)
+        )
+      ) shadowers
+
 module Sentence = struct
   let time = Stopwatch.enter time "Setting up sentence generator"
   type unreduce = {
