@@ -1112,50 +1112,76 @@ end
 (** Only proceed with the shadowing analysis if the [clause_shadow] flag is set. *)
 let () = if clause_shadow then let module _ = Shadowing() in ()
 
+(** Module to generate a sentence from an LR(1) stack.
+
+    This is done by pre-computing the shortest inputs that can cause each
+    transition to be taken.
+
+    This is an approximation that ignores lookahead constraints: some generated
+    sentences might be slightly invalid. See [Reachability] for a complete
+    alternative. *)
 module Sentence = struct
+
+  (** Start timing the sentence generation process. *)
   let time = Stopwatch.enter time "Setting up sentence generator"
+
+  (** The code work by reversing the effect of a reduction, replacing a goto
+      transition by the stack suffix that would permit reducing it. *)
   type unreduce = {
-    path: Transition.any index list;
-    goto: Transition.goto index;
-    mutable incoming: int;
-    mutable cost: int;
+    goto: Transition.goto index;     (** This [goto] transition... *)
+    path: Transition.any index list; (** is reachable by reducing a stack suffixed by [path]. *)
+    mutable unknowns: int;           (** Remaining number of transitions with unknown cost. *)
+    mutable cost: int;               (** Cost of the known parts of the path. *)
   }
 
-  module Heap = Heap.Make(struct type _ t = int let compare = Int.compare end)
+  (* The actual cost of an "unreduction" is [cost] + v[0] ... v[unknowns-1].
+     If [unknowns] is 0, [cost] is the minimal cost.
+     When running, the solver decreases [unknowns] until reaching a fixed-point.
+     If [unknowns] is not 0 at the end of the run, the path has an infinite cost
+     (there is no input that permit to takes it). This happens because
+     conflicts resolution made some parts of the automaton unreachable. *)
 
+  (** A heap data structure for managing transitions to be processed.
+
+      The algorithm used to solve this problem is the application of Dijkstra's
+      shortest paths algorithm to and-or graphs, described by Knuth in
+      "A Generalization of Dijkstra’s Algorithm." *)
+  module Heap = Heap.Make(struct
+      type _ t = int
+      let compare = Int.compare
+    end)
+
+  (** Vector to store the cost of reaching each goto transition.
+      It is initialized with [max_int], representing an infinite cost. *)
   let transition_cost = Vector.make Transition.goto max_int
 
+  (** Vector to store the dependencies for each goto transition. *)
   let transition_deps = Vector.make Transition.goto []
 
+  (** Heap to manage transitions to be processed. *)
   let todo : (unit, Transition.goto index) Heap.t ref = ref Heap.empty
 
-  let schedule {path = _; incoming = _; goto; cost} =
+  (** Schedule an unreduce record for processing. *)
+  let schedule {path = _; unknowns; goto; cost} =
+    assert (unknowns = 0);
     let cost' = transition_cost.:(goto) in
     if cost < cost' then (
       transition_cost.:(goto) <- cost;
       todo := Heap.insert cost goto !todo
     )
 
-  let relax cost goto =
-    List.iter (fun unreduce ->
-        let incoming = unreduce.incoming - 1 in
-        unreduce.incoming <- incoming;
-        unreduce.cost <- unreduce.cost + cost;
-        if incoming = 0
-        then schedule unreduce
-        else assert (incoming > 0)
-      ) transition_deps.:(goto)
-
+  (** Compute the "unreduces" for each goto transition, initializing the minimal
+      cost, the number of unknowns and registering the dependencies. *)
   let transition_reds = Vector.mapi begin fun goto paths ->
       List.map begin fun path ->
-        let (incoming, cost) = List.fold_left (fun (incoming, cost) tr ->
+        let (unknowns, cost) = List.fold_left (fun (unknowns, cost) tr ->
             match Transition.split tr with
-            | R _sh -> (incoming, cost + 1)
-            | L _gt -> (incoming + 1, cost)
+            | R _sh -> (unknowns, cost + 1)
+            | L _gt -> (unknowns + 1, cost)
           ) (0, 0) path
         in
-        let unreduce = { path; goto; incoming; cost } in
-        if incoming = 0 then schedule unreduce else
+        let unreduce = { path; goto; unknowns; cost } in
+        if unknowns = 0 then schedule unreduce else
           List.iter (fun tr ->
               match Transition.split tr with
               | R _  -> ()
@@ -1165,28 +1191,44 @@ module Sentence = struct
       end paths
     end Unreductions.paths
 
-  let count = ref 0
-
-  let rec loop heap = match Heap.pop heap with
-    | None -> todo := Heap.empty
-    | Some (k, v, heap') ->
-      incr count;
-      let k' = transition_cost.:(v) in
-      if k' < k then
-        loop heap'
-      else (
-        assert (k = k');
+  let () =
+    (* Relax the dependencies after solving the cost of a goto transition. *)
+    let relax cost goto =
+      List.iter (fun unreduce ->
+          assert (unreduce.unknowns > 0);
+          unreduce.unknowns <- unreduce.unknowns - 1;
+          unreduce.cost <- unreduce.cost + cost;
+          if unreduce.unknowns = 0 then
+            (* All unknowns has been solved, this determined a new path reaching a
+               goto transition. Propagate further. *)
+            schedule unreduce;
+        ) transition_deps.:(goto)
+    in
+    (* Main loop function to process the heap of transitions. *)
+    let rec loop () =
+      match Heap.pop !todo with
+      | None -> ()
+      | Some (k, v, heap') ->
         todo := heap';
-        relax k v;
-        loop !todo
-      )
+        let k' = transition_cost.:(v) in
+        if k < k' then (
+          (* A cheaper path has been found.
+             By construction, Dijkstra's algorithm guarantee that the lowest
+             cost is found the first time a transition is visited. Therefore
+             [k'] must be [max_int], its initial value, otherwise something went
+             wrong. *)
+          assert (k' = max_int);
+          relax k v
+        );
+        loop ()
+    in
+    ()
 
-  let () = loop !todo
-
+  (** End timing the sentence generation process. *)
   let () = Stopwatch.leave time
 
+  (** Print the number of loops performed and the cost of reaching each goto transition. *)
   let () =
-    Printf.eprintf "%d loops\n" !count;
     Vector.iteri (fun goto cost ->
         if cost = max_int then
           let tr = Transition.of_goto goto in
@@ -1197,8 +1239,8 @@ module Sentence = struct
           List.iter (fun path ->
               Printf.eprintf "- %s\n"
                 (Misc.string_concat_map " " Lr1.to_string (List.map Transition.target path))
-          ) Unreductions.paths.:(goto)
-        ) transition_cost
+            ) Unreductions.paths.:(goto)
+      ) transition_cost
 end
 
 (* Now we switch to enumeration support.
