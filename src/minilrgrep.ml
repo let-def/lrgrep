@@ -1211,36 +1211,43 @@ module Sentence = struct
       | Some (k, v, heap') ->
         todo := heap';
         let k' = transition_cost.:(v) in
-        if k < k' then (
+        if k = k' then (
           (* A cheaper path has been found.
              By construction, Dijkstra's algorithm guarantee that the lowest
              cost is found the first time a transition is visited. Therefore
              [k'] must be [max_int], its initial value, otherwise something went
              wrong. *)
-          assert (k' = max_int);
           relax k v
         );
         loop ()
     in
-    ()
+    loop ()
 
   (** End timing the sentence generation process. *)
   let () = Stopwatch.leave time
 
   (** Print the number of loops performed and the cost of reaching each goto transition. *)
   let () =
-    Vector.iteri (fun goto cost ->
-        if cost = max_int then
+    Vector.iteri (fun goto reds ->
+        if transition_cost.:(goto) = max_int then
           let tr = Transition.of_goto goto in
-          Printf.eprintf "Failed to synthesize %s - %s -> %s, paths:\n"
+          Printf.eprintf "Failed to synthesize %s -> %s, paths:\n"
             (Lr1.to_string (Transition.source tr))
-            (Symbol.name   (Transition.symbol tr))
             (Lr1.to_string (Transition.target tr));
-          List.iter (fun path ->
+          List.iter (fun unr ->
               Printf.eprintf "- %s\n"
-                (Misc.string_concat_map " " Lr1.to_string (List.map Transition.target path))
-            ) Unreductions.paths.:(goto)
-      ) transition_cost
+                (Misc.string_concat_map " " (fun tr ->
+                     let lr1 = Lr1.to_string (Transition.target tr) in
+                     let cost =
+                       match Transition.split tr with
+                       | R _ -> 1
+                       | L g -> transition_cost.:(g)
+                     in
+                     lr1 ^ "(" ^ string_of_int cost ^ ")"
+                   ) unr.path);
+              Printf.eprintf " cost:%d unknowns:%d\n" unr.cost unr.unknowns
+            ) reds
+      ) transition_reds
 end
 
 (* Now we switch to enumeration support.
