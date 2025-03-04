@@ -211,11 +211,11 @@ struct
             Transition.shift_symbol shift :: acc
           | L goto ->
             (* It is a goto transition *)
-            let nullable, non_nullable = Tree.goto_equations goto in
+            let eqn = Tree.goto_equations goto in
             let c_pre = (Tree.pre_classes node).(i_pre) in
             let c_post = (Tree.post_classes node).(i_post) in
-            if not (IndexSet.is_empty nullable) &&
-              IndexSet.quick_subset c_post nullable &&
+            if not (IndexSet.is_empty eqn.nullable_lookaheads) &&
+              IndexSet.quick_subset c_post eqn.nullable_lookaheads &&
               not (IndexSet.disjoint c_pre c_post) then
               (* If a nullable reduction is possible, don't do anything *)
               acc
@@ -224,7 +224,7 @@ struct
                goto transition and recursively visit one of minimal cost *)
               let current_cost = Cells.cost cell in
               match
-              List.find_map (fun (node', lookahead) ->
+              List.find_map (fun ({lookahead; _}, node') ->
                 if IndexSet.disjoint c_post lookahead then
                   (* The post lookahead class does not permit reducing this
                        production *)
@@ -254,7 +254,7 @@ struct
                         Some (Cells.encode_offset node' offset)
                       else
                         None
-              ) non_nullable
+              ) eqn.non_nullable
               with
               | None ->
                 Printf.eprintf "abort, cost = %d\n%!" current_cost;

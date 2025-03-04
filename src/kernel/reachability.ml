@@ -82,7 +82,12 @@ module type S = sig
     val split : n index -> (Transition.any index, n index * n index) either
 
     (* Returns the nullable terminals and non-nullable equations for a given goto transition *)
-    val goto_equations : Transition.goto index -> Terminal.set * (n index * Terminal.set) list
+    type equations = {
+      nullable_lookaheads: Terminal.set;
+      nullable: reduction list;
+      non_nullable: (reduction * n index) list;
+    }
+    val goto_equations : Transition.goto index -> equations
 
     (* Returns the pre-classes for a given node *)
     val pre_classes : n index -> Terminal.set array
@@ -506,6 +511,12 @@ struct
   module Tree = struct
     include ConsedTree()
 
+    type equations = {
+      nullable_lookaheads: Terminal.set;
+      nullable: reduction list;
+      non_nullable: (reduction * n index) list;
+    }
+
     let goto_equations =
       (* Explicit representation of the rhs of equation (7).
          This equation defines ccost(s, A) as the minimum of a set of
@@ -537,19 +548,25 @@ struct
       in
       (* Compute the nullable terminal set and non_nullable list for a single
          reduction, optimizing the matrix-product chain.  *)
-      let solve_ccost_path {steps; lookahead; _} =
-        let dimensions = first_dim :: List.map transition_size steps in
+      let solve_ccost_path red =
+        let dimensions = first_dim :: List.map transition_size red.steps in
         match Mcop.dynamic_solution (Array.of_list dimensions) with
-        | exception Mcop.Empty -> Either.Left lookahead
+        | exception Mcop.Empty -> Either.Left red
         | solution ->
-          let steps = Array.of_list steps in
+          let steps = Array.of_list red.steps in
           let solution = Mcop.map_solution (fun i -> steps.(i)) solution in
-          Either.Right (import_mcop solution, lookahead)
+          Either.Right (red, import_mcop solution)
       in
       let nullable, non_nullable =
         List.partition_map solve_ccost_path (unreduce tr)
       in
-      (List.fold_left IndexSet.union IndexSet.empty nullable, non_nullable)
+      {
+        nullable_lookaheads =
+          List.fold_left (fun set red -> IndexSet.union red.lookahead set)
+            IndexSet.empty nullable;
+        nullable;
+        non_nullable;
+      }
 
     include FreezeTree()
 
@@ -885,9 +902,9 @@ struct
       let node = Tree.leaf (Transition.of_goto tr) in
       let pre = Tree.pre_classes node in
       let post = Tree.post_classes node in
-      let nullable, non_nullable = Tree.goto_equations tr in
+      let eqn = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
-      if not (IndexSet.is_empty nullable) then (
+      if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
         let offset_of = Cells.offset node in
         (* We use:
            - [c_pre] and [i_pre] for a class in the pre partition and its index
@@ -899,13 +916,13 @@ struct
             visit_root (Cells.encode_offset node (offset_of i_pre i_post)) 0
         in
         let update_col i_post c_post =
-          if quick_subset c_post nullable then
+          if quick_subset c_post eqn.nullable_lookaheads then
             Array.iteri (update_cell i_post c_post) pre
         in
         Array.iteri update_col post
       );
       (* Register dependencies to other reductions *)
-      List.iter begin fun (node', lookahead) ->
+      List.iter begin fun ({lookahead; _}, node') ->
         match Coercion.pre pre (Tree.pre_classes node') with
         | None ->
           (* The goto transition is unreachable because of conflict resolution.
@@ -916,7 +933,7 @@ struct
           let coerce_post = Coercion.infix post' post ~lookahead in
           dependents.@(node') <-
             List.cons (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
-      end non_nullable
+      end eqn.non_nullable
 
     (* Record dependencies on a inner node. *)
     let record_inner node =

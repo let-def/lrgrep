@@ -49,7 +49,12 @@ module type S = sig
     val split : n index -> (Transition.any index, n index * n index) either
 
     (* Returns the nullable terminals and non-nullable equations for a given goto transition *)
-    val goto_equations : Transition.goto index -> Terminal.set * (n index * Terminal.set) list
+    type equations = {
+      nullable_lookaheads: Terminal.set;
+      nullable: reduction list;
+      non_nullable: (reduction * n index) list;
+    }
+    val goto_equations : Transition.goto index -> equations
 
     (* Returns the pre-classes for a given node *)
     val pre_classes : n index -> Terminal.set array
