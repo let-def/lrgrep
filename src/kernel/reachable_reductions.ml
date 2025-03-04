@@ -421,7 +421,7 @@ struct
         let rb, _ = rejectable st in
         let rc = Vector.get reject_before st in
         let r = IndexSet.union ra (IndexSet.union rb rc) in
-        vector_set_union table (Goto_star.index_of st) r
+        table.@(Goto_star.index_of st) <- IndexSet.union r
       );
     table
 
@@ -547,7 +547,7 @@ struct
         | [] -> ()
         | epsilon :: _ ->
           List.iter
-            (fun (tgt, _) -> vector_set_add epsilon_predecessors tgt src)
+            (fun (tgt, _) -> epsilon_predecessors.@(tgt) <- IndexSet.add src)
             epsilon
       ) Reach.states;
     let table =

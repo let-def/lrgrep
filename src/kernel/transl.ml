@@ -57,7 +57,7 @@ struct
       Index.iter Lr1.n (fun lr1 ->
           match Lr1.incoming lr1 with
           | None -> ()
-          | Some sym -> vector_set_add table sym lr1
+          | Some sym -> table.@(sym) <- IndexSet.add lr1
         );
       Vector.get table
 
@@ -145,7 +145,7 @@ struct
     let prod_by_lhs =
       let table = Vector.make Nonterminal.n IndexSet.empty in
       Index.rev_iter Production.n (fun prod ->
-          vector_set_add table (Production.lhs prod) prod);
+          table.@(Production.lhs prod) <- IndexSet.add prod);
       Vector.get table
 
     let left_rec_nt_reflexive_closure =

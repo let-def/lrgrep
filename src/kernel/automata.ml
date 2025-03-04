@@ -1317,7 +1317,7 @@ struct
         match transport_state source.index with
         | None -> ()
         | Some index ->
-          vector_set_union unhandled index source.visited_labels
+          unhandled.@(index) <- IndexSet.union source.visited_labels
       end BigDFA.states;
       (* Remove the ones for which transitions exist *)
       Index.rev_iter transitions begin fun tr ->
@@ -1326,7 +1326,7 @@ struct
         let visited = Vector.get unhandled index in
         let visited = IndexSet.diff visited label.filter in
         Vector.set unhandled index visited;
-        vector_set_add outgoing index tr;
+        outgoing.@(index) <- IndexSet.add tr
       end
 
     let outgoing = Vector.get outgoing

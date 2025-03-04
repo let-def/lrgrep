@@ -273,10 +273,8 @@ struct
                 reachable := IndexSet.add (index_shift src_first pre) !reachable
             done;
             let reachable = !reachable in
-            Array.iter
-              (fun index ->
-                vector_set_union table
-                  (index_shift tgt_first index) reachable)
+            Array.iter (fun index ->
+                table.@(index_shift tgt_first index) <- IndexSet.union reachable)
               coercion.forward.(post)
           done
         in
@@ -398,7 +396,7 @@ struct
   let lrcs_of_lr1 =
     let table = Vector.make Lr1.n IndexSet.empty in
     Index.iter n
-      (fun lrc -> vector_set_add table (lr1_of_lrc lrc) lrc);
+      (fun lrc -> table.@(lr1_of_lrc lrc) <- IndexSet.add lrc);
     Vector.get table
 
   (* Map from LR1 states to their first minimized state *)
@@ -409,7 +407,7 @@ struct
   let all_successors =
     let table = Vector.make n IndexSet.empty in
     Index.iter MDFA.transitions
-      (fun tr -> vector_set_add table (MDFA.target tr) (MDFA.source tr));
+      (fun tr -> table.@(MDFA.target tr) <- IndexSet.add (MDFA.source tr));
     Vector.get table
 
   (* Step timing after minimizing LRC states *)

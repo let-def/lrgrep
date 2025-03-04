@@ -112,15 +112,26 @@ let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
   IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
 
-(** [vector_set_add v i elt] adds element [elt] to the [i]'th set of [v],
-    a vector of sets. *)
-let vector_set_add vec index value =
-  Vector.set vec index (IndexSet.add value (Vector.get vec index))
+(* Vector get *)
+let (.:()) = Vector.get
 
-(** [vector_set_union v i set] adds elements of [set] to the [i]'th set of [v],
-    a vector of sets. *)
-let vector_set_union vec index value =
-  Vector.set vec index (IndexSet.union value (Vector.get vec index))
+(* Vector set *)
+let (.:()<-) = Vector.set
+
+(* Vector update cell *)
+let (.@()<-) v i f = v.:(i) <- f v.:(i)
+
+(*
+  (** [vector_set_add v i elt] adds element [elt] to the [i]'th set of [v],
+      a vector of sets. *)
+  let vector_set_add vec index value =
+    Vector.set vec index (IndexSet.add value (Vector.get vec index))
+
+  (** [vector_set_union v i set] adds elements of [set] to the [i]'th set of [v],
+      a vector of sets. *)
+  let vector_set_union vec index value =
+    Vector.set vec index (IndexSet.union value (Vector.get vec index))
+*)
 
 (** [tabulate_finset n f] tabulates function [f] over all indices in the
     finite set of cardinal [n] *)
@@ -130,7 +141,7 @@ let tabulate_finset n f =
 let relation_reverse' n f =
   let rev = Vector.make n IndexSet.empty in
   Index.rev_iter n (fun src ->
-      IndexSet.rev_iter (fun tgt -> vector_set_add rev tgt src)
+      IndexSet.rev_iter (fun tgt -> rev.@(tgt) <- IndexSet.add src)
         (f src)
     );
   rev
@@ -138,7 +149,7 @@ let relation_reverse' n f =
 let relation_reverse n rel =
   let rev = Vector.make n IndexSet.empty in
   Vector.rev_iteri (fun src tgts ->
-      IndexSet.rev_iter (fun tgt -> vector_set_add rev tgt src) tgts
+      IndexSet.rev_iter (fun tgt -> rev.@(tgt) <- IndexSet.add src) tgts
     ) rel;
   rev
 
@@ -148,15 +159,15 @@ let fix_relation  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vecto
   let n = Vector.length values in
   let marks = IndexMarks.make n in
   let update i =
-    let value = Vector.get values i in
+    let value = values.:(i) in
     IndexSet.rev_iter (fun j ->
-        let value' = Vector.get values j in
+        let value' = values.:(j) in
         let value'' = propagate i value j value' in
         if value' != value'' then (
-          Vector.set values j value'';
+          values.:(j) <- value'';
           IndexMarks.mark marks j
         )
-      ) (Vector.get relation i)
+      ) relation.:(i)
   in
   Index.iter n update;
   while not (IndexMarks.is_empty marks) do
@@ -319,4 +330,3 @@ let rec fixpoint ?counter ~propagate todo = match !todo with
     todo := [];
     List.iter propagate todo';
     fixpoint ?counter ~propagate todo
-
