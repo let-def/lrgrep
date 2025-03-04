@@ -57,28 +57,61 @@ module type S = sig
     val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
   end
 
-  module Tree : sig
-    include CARDINAL
+  module Expansions : sig
+    type inner
+    val inner : inner cardinal
 
-    (* Returns the leaf node corresponding to a given transition *)
-    val leaf : Transition.any index -> n index
+    type view = (Transition.any index, inner index) either
 
-    (* Splits a node into its left and right children if it is an inner node *)
-    val split : n index -> (Transition.any index, n index * n index) either
+    val split : inner index -> view * view
 
     (* Returns the nullable terminals and non-nullable equations for a given goto transition *)
     type equations = {
       nullable_lookaheads: Terminal.set;
       nullable: reduction list;
-      non_nullable: (reduction * n index) list;
+      non_nullable: (reduction * view) list;
     }
-    val goto_equations : Transition.goto index -> equations
+    val expand : Transition.goto index -> equations
 
     (* Returns the pre-classes for a given node *)
-    val pre_classes : n index -> Terminal.set array
+    val pre_classes : inner index -> Terminal.set array
 
     (* Returns the post-classes for a given node *)
-    val post_classes : n index -> Terminal.set array
+    val post_classes : inner index -> Terminal.set array
+  end
+
+  (* A value of type row represents the index of a row of a matrix.
+     A row of node [n] belongs to the interval
+       0 .. Array.length (Tree.pre_classes n) - 1 *)
+  type row = int
+
+  (* A value of type column represents the index of a column of a matrix.
+     A column of node [n] belongs to the interval
+       0 .. Array.length (Tree.post_classes n) - 1 *)
+  type column = int
+
+  module type CELL = sig
+    type node
+
+    include CARDINAL
+
+    (* Get the cell corresponding to a node, a row, and a column *)
+    val encode : node index -> pre:row -> post:column -> n index
+
+    (* Get the node, row, and column corresponding to a cell *)
+    val decode : n index -> node index * row * column
+
+    val first_cell : node index -> n index
+  end
+
+  module GotoCell : CELL with type node := Transition.goto
+
+  module InnerCell : CELL with type node := Expansions.inner
+
+  module Cell : sig
+    module Node : SUM with type l = Transition.goto and type r = Expansions.inner
+    include SUM with type l = GotoCell.n and type r = InnerCell.n
+    include CELL with type n := n and type node := Node.n
   end
 
   (* Identify each cell of compact cost matrices.
@@ -87,17 +120,6 @@ module type S = sig
   module Cell : sig
     include CARDINAL
 
-    (* A value of type row represents the index of a row of a matrix.
-       A row of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) - 1
-    *)
-    type row = int
-
-    (* A value of type column represents the index of a column of a matrix.
-       A column of node [n] belongs to the interval
-         0 .. Array.length (Tree.post_classes n) - 1
-    *)
-    type column = int
 
     (* Get the cell corresponding to a node, a row, and a column *)
     val encode : Tree.n index -> pre:row -> post:column -> n index

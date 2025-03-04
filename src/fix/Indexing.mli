@@ -115,6 +115,8 @@ module type SUM = sig
   include CARDINAL
   val inj_l : l index -> n index
   val inj_r : r index -> n index
+
+  val inj : (l index, r index) either -> n index
   val prj : n index -> (l index, r index) either
 end
 
