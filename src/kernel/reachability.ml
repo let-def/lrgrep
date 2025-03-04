@@ -39,6 +39,25 @@ module type S = sig
   module Info : Info.S
   open Info
 
+  type reduction = {
+    (* The production that is being reduced *)
+    production: Production.t;
+
+    (* The set of lookahead terminals that allow this reduction to happen *)
+    lookahead: Terminal.set;
+
+    (* The shape of the stack, all the transitions that are replaced by the
+       goto transition when the reduction is performed *)
+    steps: Transition.any index list;
+
+    (* The lr1 state at the top of the stack before reducing.
+       That is [state] can reduce [production] when the lookahead terminal
+       is in [lookahead]. *)
+    state: Lr1.t;
+  }
+
+  (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
+  val unreduce : Transition.goto index -> reduction list
   module Classes : sig
     (* Returns the classes of terminals for a given goto transition *)
     val for_edge : Transition.goto index -> Terminal.set array
@@ -149,39 +168,27 @@ struct
      It serves the same purpose as the [reduce(s, A → α)] function from the
      paper but is more convenient for the rest of the implementation.
   *)
-  module Unreduce : sig
 
-    type t = {
-      (* The production that is being reduced *)
-      production: Production.t;
+  type reduction = {
+    (* The production that is being reduced *)
+    production: Production.t;
 
-      (* The set of lookahead terminals that allow this reduction to happen *)
-      lookahead: Terminal.set;
+    (* The set of lookahead terminals that allow this reduction to happen *)
+    lookahead: Terminal.set;
 
-      (* The shape of the stack, all the transitions that are replaced by the
-         goto transition when the reduction is performed *)
-      steps: Transition.any index list;
+    (* The shape of the stack, all the transitions that are replaced by the
+       goto transition when the reduction is performed *)
+    steps: Transition.any index list;
 
-      (* The lr1 state at the top of the stack before reducing.
-         That is [state] can reduce [production] when the lookahead terminal
-         is in [lookahead]. *)
-      state: Lr1.t;
-    }
+    (* The lr1 state at the top of the stack before reducing.
+       That is [state] can reduce [production] when the lookahead terminal
+       is in [lookahead]. *)
+    state: Lr1.t;
+  }
 
-    (* [goto_transition tr] lists all the reductions that ends up
-       following [tr]. *)
-    val goto_transition: Transition.goto index -> t list
-  end = struct
-
-    type t = {
-      production: Production.t;
-      lookahead: Terminal.set;
-      steps: Transition.any index list;
-      state: Lr1.t;
-    }
-
-    let table = Vector.make Transition.goto []
-
+  (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
+  let unreduce : Transition.goto index -> reduction list =
+    let table = Vector.make Transition.goto [] in
     (* [add_reduction lr1 (production, lookahead)] populates [table] by
        simulating the reduction [production], starting from [lr1] when
        lookahead is in [lookahead] *)
@@ -205,24 +212,12 @@ struct
               List.cons { production; lookahead; steps; state=lr1 }
           ) states
       end
-
-    let lr1_reductions = Grammar.Lr1.get_reductions
-
-    let has_default_reduction lr1 =
-      match Grammar.Lr1.transitions lr1 with
-      | _ :: _ -> None
-      | [] ->
-        match lr1_reductions lr1 with
-        | [] -> None
-        | (_, p) :: ps when List.for_all (fun (_, p') -> p' = p) ps ->
-          Some p
-        | _ -> None
-
+    in
     (* [get_reductions lr1] returns the list of productions and the lookahead
        sets that allow reducing them from state [lr1] *)
     let get_reductions lr1 =
       let lr1 = Lr1.to_g lr1 in
-      match has_default_reduction lr1 with
+      match Grammar.Lr1.default_reduction lr1 with
       | Some prod ->
         (* State has a default reduction, the lookahead can be any terminal *)
         [prod, Terminal.all]
@@ -233,7 +228,7 @@ struct
             | `ERROR -> acc
             | _ -> ((t, p) :: acc)
           in
-          List.fold_left add [] (lr1_reductions lr1)
+          List.fold_left add [] (Grammar.Lr1.get_reductions lr1)
         in
         (* Regroup lookahead tokens by production *)
         Utils.Misc.group_by raw
@@ -247,14 +242,11 @@ struct
               in
               (p, set)
             )
-
-    let () =
-      (* Populate [table] with the reductions of all state *)
-      Index.iter Lr1.n
-        (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1))
-
-    let goto_transition tr = table.:(tr)
-  end
+    in
+    (* Populate [table] with the reductions of all state *)
+    Index.iter Lr1.n
+      (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1));
+    Vector.get table
 
   (* ---------------------------------------------------------------------- *)
 
@@ -295,8 +287,8 @@ struct
         match Node.prj i with
         | L lr1 -> visit_lr1 f lr1
         | R e -> List.iter
-                   (fun {Unreduce. state; _} -> f (Node.inj_l state))
-                   (Unreduce.goto_transition e)
+                   (fun {state; _} -> f (Node.inj_l state))
+                   (unreduce e)
 
       let iter f = Index.iter Node.n f
     end
@@ -318,7 +310,7 @@ struct
         | L lr1 ->
           Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1
         | R edge ->
-          List.iter (fun {Unreduce. lookahead; state; _} ->
+          List.iter (fun {lookahead; state; _} ->
               let base = classes.:(Node.inj_l state) in
               (* Comment the code below to have a partial order on partitions
                  (remove the ↑Z in equation (6) *)
@@ -329,7 +321,7 @@ struct
               in
               (* Stop commenting here *)
               acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
-            ) (Unreduce.goto_transition edge)
+            ) (unreduce edge)
       end;
       !acc
 
@@ -353,9 +345,9 @@ struct
           | R e ->
             let coarse = ref IndexSet.empty in
             List.iter
-              (fun {Unreduce. lookahead; _} ->
+              (fun {lookahead; _} ->
                  coarse := IndexSet.union lookahead !coarse)
-              (Unreduce.goto_transition e);
+              (unreduce e);
             classes.:(node) <-
               partition_sets (IndexSet.Set.map (IndexSet.inter !coarse) coarse_classes)
         end nodes;
@@ -545,7 +537,7 @@ struct
       in
       (* Compute the nullable terminal set and non_nullable list for a single
          reduction, optimizing the matrix-product chain.  *)
-      let solve_ccost_path {Unreduce. steps; lookahead; _} =
+      let solve_ccost_path {steps; lookahead; _} =
         let dimensions = first_dim :: List.map transition_size steps in
         match Mcop.dynamic_solution (Array.of_list dimensions) with
         | exception Mcop.Empty -> Either.Left lookahead
@@ -555,7 +547,7 @@ struct
           Either.Right (import_mcop solution, lookahead)
       in
       let nullable, non_nullable =
-        List.partition_map solve_ccost_path (Unreduce.goto_transition tr)
+        List.partition_map solve_ccost_path (unreduce tr)
       in
       (List.fold_left IndexSet.union IndexSet.empty nullable, non_nullable)
 

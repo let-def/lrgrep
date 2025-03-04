@@ -1,10 +1,29 @@
 open Fix.Indexing
 open Utils.Misc
 
-
 module type S = sig
   module Info : Info.S
   open Info
+
+  type reduction = {
+    (* The production that is being reduced *)
+    production: Production.t;
+
+    (* The set of lookahead terminals that allow this reduction to happen *)
+    lookahead: Terminal.set;
+
+    (* The shape of the stack, all the transitions that are replaced by the
+       goto transition when the reduction is performed *)
+    steps: Transition.any index list;
+
+    (* The lr1 state at the top of the stack before reducing.
+       That is [state] can reduce [production] when the lookahead terminal
+       is in [lookahead]. *)
+    state: Lr1.t;
+  }
+
+  (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
+  val unreduce : Transition.goto index -> reduction list
 
   module Classes : sig
     (* Returns the classes of terminals for a given goto transition *)
