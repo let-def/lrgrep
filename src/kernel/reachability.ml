@@ -115,38 +115,6 @@ module type S = sig
     val post_classes : n index -> Terminal.set array
   end
 
-  (* A value of type row represents the index of a row of a matrix.
-     A row of node [n] belongs to the interval
-       0 .. Array.length (Tree.pre_classes n) - 1 *)
-  type row = int
-
-  (* A value of type column represents the index of a column of a matrix.
-     A column of node [n] belongs to the interval
-       0 .. Array.length (Tree.post_classes n) - 1 *)
-  type column = int
-
-  module type CELL = sig
-    type node
-
-    include CARDINAL
-
-    (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : node index -> pre:row -> post:column -> n index
-
-    (* Get the node, row, and column corresponding to a cell *)
-    val decode : n index -> node index * row * column
-  end
-
-  module GotoCell : CELL with type node := Transition.goto
-
-  module InnerCell : CELL with type node := Expansions.inner
-
-  module Cell : sig
-    module Node : SUM with type l = Transition.goto and type r = Expansions.inner
-    include SUM with type l = GotoCell.n and type r = InnerCell.n
-    include CELL with type n := n and type node := Node.n
-  end
-
   (* Identify each cell of compact cost matrices.
      A [Cell.n index] can be thought of as a triple made of a tree node and two indices
      (row, col) of the compact cost matrix associated to the node. *)
@@ -451,6 +419,89 @@ struct
 
   (* ---------------------------------------------------------------------- *)
 
+  (* We now construct the DAG (as a tree with hash-consing) of all matrix
+     products.
+
+     Each occurrence of [ccost(s,x)] is mapped to a leaf.
+     Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
+     that the chain of multiplication are re-associated.
+  *)
+  module ConsedTree () : sig
+    (* The finite set of nodes of the tree.
+       The set is not frozen yet: as long as its cardinal has not been
+       observed, new nodes can be added. *)
+    include CARDINAL
+
+    (* The set of inner nodes *)
+    module Inner : CARDINAL
+
+    (* [leaf tr] returns the node that corresponds [cost(s,x)]
+       where [s = source tr] and [x = symbol tr]. *)
+    val leaf : Transition.any index -> n index
+
+    (* [node l r] returns the inner-node that corresponds to
+       the matrix product [l * r]  *)
+    val node : n index -> n index -> n index
+
+    (* Get the tree node that corresponds to an inner node *)
+    val inject : Inner.n index -> n index
+
+    (* Determines whether a node is a leaf or an inner node *)
+    val split : n index -> (Transition.any index, Inner.n index) either
+
+    (* Once all nodes have been added, the DAG needs to be frozen *)
+    module FreezeTree() : sig
+      val define : Inner.n index -> n index * n index
+    end
+  end = struct
+    (* The fresh finite set of all inner nodes *)
+    module Inner = Gensym()
+    (* The nodes of the trees is the disjoint sum of all transitions
+       (the leaves) and the inner nodes. *)
+    include (val sum Transition.any Inner.n)
+
+    let leaf = inj_l
+    let inject = inj_r
+    let split = prj
+
+    (* An inner node is made of the index of its left and right children *)
+    type pack = n index * n index
+    let pack t u = (t, u)
+    let unpack x = x
+
+    (* The node table is used to give a unique index to each inner node *)
+    let node_table : (pack, Inner.n index) Hashtbl.t = Hashtbl.create 7
+
+    (* Returns the index of an inner node, or allocate one for a new node *)
+    let node l r =
+      let p = pack l r in
+      let node_index =
+        try Hashtbl.find node_table p
+        with Not_found ->
+          let i = Inner.fresh () in
+          Hashtbl.add node_table p i;
+          i
+      in
+      inj_r node_index
+
+    (* When all nodes have been created, the set of nodes can be frozen.
+       A reverse index is created to get the children of an inner node. *)
+    module FreezeTree() =
+    struct
+      let rev_index = Vector.make' Inner.n
+          (fun () -> let dummy = Index.of_int n 0 in (dummy, dummy))
+
+      let define ix = rev_index.:(ix)
+
+      let () =
+        Hashtbl.iter
+          (fun pair index -> rev_index.:(index) <- unpack pair)
+          node_table
+    end
+  end
+
+  (* ---------------------------------------------------------------------- *)
+
   (* This module implements efficient representations of the coerce matrices,
      as mentioned in section 6.5.
 
@@ -562,44 +613,17 @@ struct
 
   (* ---------------------------------------------------------------------- *)
 
-  (* We now construct the DAG (as a tree with hash-consing) of all matrix
-     products.
-
-     Each occurrence of [ccost(s,x)] is mapped to a leaf.
-     Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
-     that the chain of multiplication are re-associated.
-  *)
-  module Expansions =
-  struct
-    module Inner = Gensym()
-    type inner = Inner.n
-    let inner = Inner.n
-
-    module Sum = Sum(struct
-        type n = Transition.any
-        let n = Transition.any
-      end)(Inner)
-
-    let table = Hashtbl.create 7
-
-    let index_of l r =
-      let key = (l, r) in
-      match Hashtbl.find_opt table key with
-      | Some ix -> ix
-      | None ->
-        let ix = Inner.fresh() in
-        Hashtbl.add table key ix;
-        ix
-
-    type view = (Transition.any index, inner index) either
+  (* The hash-consed tree of all matrix equations (products and minimums). *)
+  module Tree = struct
+    include ConsedTree()
 
     type equations = {
       nullable_lookaheads: Terminal.set;
       nullable: reduction list;
-      non_nullable: (reduction * view) list;
+      non_nullable: (reduction * n index) list;
     }
 
-    let expand =
+    let goto_equations =
       (* Explicit representation of the rhs of equation (7).
          This equation defines ccost(s, A) as the minimum of a set of
          sub-matrices.
@@ -625,9 +649,8 @@ struct
       in
       (* Import the solution to a matrix-chain ordering problem as a sub-tree *)
       let rec import_mcop = function
-        | Mcop.Matrix l -> L l
-        | Mcop.Product (l, r) ->
-          R (index_of (import_mcop l) (import_mcop r))
+        | Mcop.Matrix l -> leaf l
+        | Mcop.Product (l, r) -> node (import_mcop l) (import_mcop r)
       in
       (* Compute the nullable terminal set and non_nullable list for a single
          reduction, optimizing the matrix-product chain.  *)
@@ -651,66 +674,86 @@ struct
         non_nullable;
       }
 
-    let define = Vector.make' inner
-        (fun () -> let i = R (Index.of_int inner 0) in (i, i))
+    include FreezeTree()
 
     (* Pre-compute classes before (pre) and after (post) a node *)
 
-    let table_pre = Vector.make inner [||]
-    let table_post = Vector.make inner [||]
+    let table_pre = Vector.make Inner.n [||]
+    let table_post = Vector.make Inner.n [||]
 
-    let pre_classes = function
+    let pre_classes t = match split t with
       | L tr -> Classes.pre_transition tr
-      | R nd -> table_pre.:(nd)
+      | R ix -> table_pre.:(ix)
 
-    let post_classes = function
+    let post_classes t = match split t with
       | L tr -> Classes.post_transition tr
-      | R nd -> table_post.:(nd)
+      | R ix -> table_post.:(ix)
 
     let () =
-      Hashtbl.iter (fun lr i -> define.:(i) <- lr) table;
       (* Nodes are allocated in topological order.
          When iterating over all nodes, children are visited before parents. *)
-      Vector.iteri (fun inner (l, r) ->
-          table_pre.:(inner) <- pre_classes l;
-          table_post.:(inner) <- post_classes r;
-        ) define
+      Index.iter Inner.n @@ fun node ->
+      let l, r = define node in
+      table_pre.:(node) <- pre_classes l;
+      table_post.:(node) <- post_classes r
 
-    let split = Vector.get define
+    let split i = match split i with
+      | L _ as result -> result
+      | R n -> R (define n)
   end
 
+  (* ---------------------------------------------------------------------- *)
 
-  (* A value of type row represents the index of a row of a matrix.
-     A row of node [n] belongs to the interval
-       0 .. Array.length (Tree.pre_classes n) - 1 *)
-  type row = int
+  (* Representation of matrix cells, the variables of the data flow problem.
+     There will be a lot of them. Actually, on large grammars, most of the
+     memory is consumed by cost matrices.
 
-  (* A value of type column represents the index of a column of a matrix.
-     A column of node [n] belongs to the interval
-       0 .. Array.length (Tree.post_classes n) - 1 *)
-  type column = int
+     Therefore we want a rather compact encoding.
+     We use a two-level encoding:
+     - first the [table] vector maps a node index to a "compact cost matrix"
+     - each "compact cost matrix" is represented as a 1-dimensional array of
+       integers, of dimension |pre_classes n| * |post_classes n|
 
-  module type CELL = sig
-    type node
+     This module defines conversion functions between three different
+     representations of cells:
 
+     [Cell.t] identify a cell as a single integer
+     <=>
+     [Tree.n index * Cells.offset] identify a cell as a pair of a node and an
+     offset in the array of costs
+     <=>
+     [Tree.n index * Cells.row * Cells.column] identify a cell as a triple of
+     a node, a row index and a column index of the compact cost matrix
+  *)
+  module Cell : sig
     include CARDINAL
 
+    (* A value of type row represents the index of a row of a matrix.
+       A row of node [n] belongs to the interval
+         0 .. Array.length (Tree.pre_classes n) - 1
+    *)
+    type row = int
+
+    (* A value of type column represents the index of a column of a matrix.
+       A column of node [n] belongs to the interval
+         0 .. Array.length (Tree.post_classes n) - 1
+    *)
+    type column = int
+
     (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : node index -> pre:row -> post:column -> n index
+    val encode : Tree.n index -> pre:row -> post:column -> n index
 
     (* Get the node, row, and column corresponding to a cell *)
-    val decode : n index -> node index * row * column
+    val decode : n index -> Tree.n index * row * column
 
-    val first_cell : node index -> n index
-  end
+    (* Index of the first cell of matrix associated to a node *)
+    val first_cell : Tree.n index -> n index
 
-  module MakeCell(N : sig
-      include CARDINAL
-      val pre_classes : n index -> int
-      val post_classes : n index -> int
-    end)
-    : CELL with type node := N.n =
-  struct
+    val cell_index : n index -> int
+  end = struct
+    type row = int
+    type column = int
+
     let n, pre_bits, post_bits =
       let max_pre = ref 0 in
       let max_post = ref 0 in
@@ -721,9 +764,9 @@ struct
         do incr i; done;
         !i
       in
-      Index.iter N.n begin fun node ->
-        let pre = N.pre_classes node in
-        let post = N.post_classes node in
+      Index.iter Tree.n begin fun node ->
+        let pre = Array.length (Tree.pre_classes node) in
+        let post = Array.length (Tree.post_classes node) in
         n := !n + pre * post;
         max_pre := Int.max pre !max_pre;
         max_post := Int.max post !max_post;
@@ -736,11 +779,11 @@ struct
 
     let first_cell =
       let index = ref 0 in
-      Vector.init N.n @@ fun node ->
+      Vector.init Tree.n @@ fun node ->
       let first_index = !index in
       let base = (node :> int) lsl (pre_bits + post_bits) in
-      let pre_count = N.pre_classes node in
-      let post_count = N.post_classes node in
+      let pre_count = Array.length (Tree.pre_classes node) in
+      let post_count = Array.length (Tree.post_classes node) in
       for pre = 0 to pre_count - 1 do
         let base = base lor (pre lsl post_bits) in
         for post = 0 to post_count - 1 do
@@ -755,69 +798,19 @@ struct
       let post = i land (post_bits - 1) in
       let i = i lsr post_bits in
       let pre = i land (pre_bits - 1) in
-      (Index.of_int N.n (i lsr pre_bits), pre, post)
+      (Index.of_int Tree.n (i lsr pre_bits), pre, post)
 
     let encode i =
       let first = first_cell.:(i) in
-      let post_count = N.post_classes i in
+      let post_count = Array.length (Tree.post_classes i) in
       fun ~pre ~post ->
         Index.of_int n (first + pre * post_count + post)
 
-    (*let cell_index ix =
+    let cell_index ix =
       let n = mapping.:(ix) lsr (pre_bits + post_bits) in
-      (ix :> int) - first_cell.:(Index.of_int Tree.n n)*)
+      (ix :> int) - first_cell.:(Index.of_int Tree.n n)
 
     let first_cell i = Index.of_int n first_cell.:(i)
-  end
-
-  module GotoSet = struct
-    type n = Transition.goto
-    let n = Transition.goto
-    let pre_classes gt =
-      Array.length (Classes.pre_transition (Transition.of_goto gt))
-    let post_classes gt =
-      Array.length (Classes.post_transition (Transition.of_goto gt))
-  end
-
-  module GotoCell = MakeCell(GotoSet)
-
-  module InnerSet = struct
-    type n = Expansions.inner
-    let n = Expansions.inner
-    let pre_classes i =
-      Array.length (Expansions.pre_classes (R i))
-    let post_classes i =
-      Array.length (Expansions.post_classes (R i))
-  end
-
-  module InnerCell = MakeCell(InnerSet)
-
-  module Cell = struct
-    module Node = Sum(GotoSet)(InnerSet)
-    include Sum(GotoCell)(InnerCell)
-
-    let encode i = (*: node index -> pre:row -> post:column -> n index*)
-      match Node.prj i with
-      | L l ->
-        let f = GotoCell.encode l in
-        fun ~pre ~post -> inj_l (f ~pre ~post)
-      | R r ->
-        let f = InnerCell.encode r in
-        fun ~pre ~post -> inj_r (f ~pre ~post)
-
-    let decode i =
-      match prj i with
-      | L l ->
-        let l, pre, post = GotoCell.decode l in
-        (Node.inj_l l, pre, post)
-      | R r ->
-        let r, pre, post = InnerCell.decode r in
-        (Node.inj_r r, pre, post)
-
-    let first_cell n =
-      match Node.prj n with
-      | L l -> inj_l (GotoCell.first_cell l)
-      | R r -> inj_r (InnerCell.first_cell r)
   end
 
   (* ---------------------------------------------------------------------- *)
@@ -838,7 +831,7 @@ struct
       (* Equation (8): this node appears in some inner product.
          The dependency stores the index of the parent node as well as the
          coercion matrix. *)
-      | Inner of Expansions.inner index * Coercion.infix
+      | Inner of Tree.Inner.n index * Coercion.infix
 
     let dependents : (Tree.n, reverse_dependency list) vector =
       (* Store enough information with each node of the tree to compute

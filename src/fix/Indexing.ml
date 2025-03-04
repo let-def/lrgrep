@@ -92,8 +92,6 @@ module type SUM = sig
   include CARDINAL
   val inj_l : l index -> n index
   val inj_r : r index -> n index
-
-  val inj : (l index, r index) either -> n index
   val prj : n index -> (l index, r index) either
 end
 
@@ -123,10 +121,6 @@ module Sum (L : CARDINAL)(R : CARDINAL) = struct
   (* Injections. The two sets are numbered side by side. *)
   let inj_l x = x
   let inj_r y = l + y
-
-  let inj = function
-    | L x -> inj_l x
-    | R y -> inj_r y
 
   (* Projection. *)
   let prj x = if x < l then L x else R (x - l)
