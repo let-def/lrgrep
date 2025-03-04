@@ -255,7 +255,7 @@ struct
       | Some _ ->
         let process_transition tr =
           let node = Reachability.Tree.leaf tr in
-          let cells = Vector.get Reachability.Cells.table node in
+          let encode = Reachability.Cell.encode node in
           let pre_classes = Reachability.Classes.pre_transition tr in
           let post_classes = Reachability.Classes.post_transition tr in
           let coercion =
@@ -268,8 +268,7 @@ struct
           for post = 0 to post_classes - 1 do
             let reachable = ref IndexSet.empty in
             for pre = 0 to pre_classes - 1 do
-              let index = Reachability.Cells.table_index ~post_classes ~pre ~post in
-              if cells.(index) < max_int then
+              if Reachability.Analysis.cost (encode ~pre ~post) < max_int then
                 reachable := IndexSet.add (index_shift src_first pre) !reachable
             done;
             let reachable = !reachable in

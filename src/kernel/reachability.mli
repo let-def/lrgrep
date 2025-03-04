@@ -39,6 +39,24 @@ module type S = sig
     val post_transition : Transition.any index -> Terminal.set array
   end
 
+  module Coercion : sig
+    type pre = Pre_identity | Pre_singleton of int
+
+    (* Compute the pre coercion from a partition of the form
+         P = first(cost(s, A))
+       to a partition of the form
+         Q = first(ccost(s, A → ϵ•α)))
+    *)
+    val pre : 'a indexset array -> 'a indexset array -> pre option
+
+    type forward = int array array
+    type backward = int array
+    type infix = { forward : forward; backward : backward; }
+
+    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
+    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
+  end
+
   module Tree : sig
     include CARDINAL
 
@@ -63,19 +81,11 @@ module type S = sig
     val post_classes : n index -> Terminal.set array
   end
 
-  module Cells : sig
-    (* A value of type t identifies a single cell. It is an integer that
-       encodes the node index and the offset of the cell inside the matrix of
-       that node.
-    *)
-    type t = private int
-
-    (* A value of type offset represents an index of a compact cost matrix.
-       An offset of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) *
-              Array.length (Tree.post_classes n) - 1
-    *)
-    type offset = int
+  (* Identify each cell of compact cost matrices.
+     A [Cell.n index] can be thought of as a triple made of a tree node and two indices
+     (row, col) of the compact cost matrix associated to the node. *)
+  module Cell : sig
+    include CARDINAL
 
     (* A value of type row represents the index of a row of a matrix.
        A row of node [n] belongs to the interval
@@ -89,54 +99,16 @@ module type S = sig
     *)
     type column = int
 
-    (* The table that stores all compact cost matrices *)
-    val table : (Tree.n, int array) vector
-
-    (* Total number of cells *)
-    val count : int
-
-    (* Cost of a cell *)
-    val cost : t -> int
-
-    (* Compute an index in a table *)
-    val table_index : post_classes:int -> pre:int -> post:int -> int
-
-    (* Compute a linear offset from a node, a row, and a column *)
-    val offset : Tree.n index -> row -> column -> offset
-
-    (* Get the cell corresponding to a node and offset *)
-    val encode_offset : Tree.n index -> offset -> t
-
-    (* Get the node and offset corresponding to a cell *)
-    val decode_offset : t -> Tree.n index * offset
-
     (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : Tree.n index -> row -> column -> t
+    val encode : Tree.n index -> pre:row -> post:column -> n index
 
     (* Get the node, row, and column corresponding to a cell *)
-    val decode : t -> Tree.n index * row * column
+    val decode : n index -> Tree.n index * row * column
   end
 
-  module Coercion : sig
-    type pre = Pre_identity | Pre_singleton of int
-
-    (* Compute the pre coercion from a partition of the form
-         P = first(cost(s, A))
-       to a partition of the form
-         Q = first(ccost(s, A → ϵ•α)))
-    *)
-    val pre : 'a indexset array -> 'a indexset array -> pre option
-
-    type forward = int array array
-    type backward = int array
-    type infix = { forward : forward; backward : backward; }
-
-    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
-    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
-  end
-
-  module Finite : sig
-    val get : Cells.t -> bool
+  module Analysis : sig
+    val cost : Cell.n index -> int
+    val finite : Cell.n index -> bool
   end
 end
 

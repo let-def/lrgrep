@@ -195,13 +195,13 @@ struct
         in
         let coercion = Coercion.infix (Classes.post_transition tr) (Classes.for_lr1 yl) in
         let yi = coercion.backward.(yi) in
-        Cells.encode (Tree.leaf tr) xi yi :: cells_of_lrc_list tail
+        Cell.encode (Tree.leaf tr) ~pre:xi ~post:yi :: cells_of_lrc_list tail
 
     exception Break of Terminal.t list
 
     let rec prepend_word cell acc =
       let open Reachability in
-      let node, i_pre, i_post = Cells.decode cell in
+      let node, i_pre, i_post = Cell.decode cell in
       match Tree.split node with
       | L tr ->
         (* The node corresponds to a transition *)
@@ -222,7 +222,7 @@ struct
             else
               (* Otherwise look at all equations that define the cost of the
                goto transition and recursively visit one of minimal cost *)
-              let current_cost = Cells.cost cell in
+              let current_cost = Analysis.cost cell in
               match
               List.find_map (fun ({lookahead; _}, node') ->
                 if IndexSet.disjoint c_post lookahead then
@@ -230,7 +230,7 @@ struct
                        production *)
                   None
                 else
-                  let costs = Vector.get Cells.table node' in
+                  let encode = Cell.encode node' in
                   match Tree.pre_classes node' with
                   | [|c_pre'|] when IndexSet.disjoint c_pre' c_pre ->
                     (* The pre lookahead class does not allow to enter this
@@ -248,10 +248,10 @@ struct
                     with
                     | exception Not_found -> None
                     | i_pre', i_post' ->
-                      let offset = Cells.offset node' i_pre' i_post' in
-                      if costs.(offset) = current_cost then
+                      let index = encode ~pre:i_pre' ~post:i_post' in
+                      if Analysis.cost index = current_cost then
                         (* We found a candidate of minimal cost *)
-                        Some (Cells.encode_offset node' offset)
+                        Some index
                       else
                         None
               ) eqn.non_nullable
@@ -267,20 +267,20 @@ struct
         (* It is an inner node.
          We decompose the problem in a left-hand and a right-hand
          sub-problems, and find sub-solutions of minimal cost *)
-        let current_cost = Cells.cost cell in
+        let current_cost = Analysis.cost cell in
         let coercion =
           Coercion.infix (Tree.post_classes l) (Tree.pre_classes r)
         in
-        let l_index = Cells.encode l in
-        let r_index = Cells.encode r in
+        let l_index = Cell.encode l in
+        let r_index = Cell.encode r in
         begin try
           Array.iteri (fun i_post_l all_pre_r ->
-            let l_cost = Cells.cost (l_index i_pre i_post_l) in
+            let l_cost = Analysis.cost (l_index ~pre:i_pre ~post:i_post_l) in
             Array.iter (fun i_pre_r ->
-              let r_cost = Cells.cost (r_index i_pre_r i_post) in
+              let r_cost = Analysis.cost (r_index ~pre:i_pre_r ~post:i_post) in
               if l_cost + r_cost = current_cost then (
-                let acc = prepend_word (r_index i_pre_r i_post) acc in
-                let acc = prepend_word (l_index i_pre i_post_l) acc in
+                let acc = prepend_word (r_index ~pre:i_pre_r ~post:i_post) acc in
+                let acc = prepend_word (l_index ~pre:i_pre ~post:i_post_l) acc in
                 raise (Break acc)
               )
             ) all_pre_r

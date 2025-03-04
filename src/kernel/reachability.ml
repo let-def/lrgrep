@@ -58,6 +58,7 @@ module type S = sig
 
   (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
   val unreduce : Transition.goto index -> reduction list
+
   module Classes : sig
     (* Returns the classes of terminals for a given goto transition *)
     val for_edge : Transition.goto index -> Terminal.set array
@@ -70,6 +71,24 @@ module type S = sig
 
     (* Returns the classes of terminals after taking a transition *)
     val post_transition : Transition.any index -> Terminal.set array
+  end
+
+  module Coercion : sig
+    type pre = Pre_identity | Pre_singleton of int
+
+    (* Compute the pre coercion from a partition of the form
+         P = first(cost(s, A))
+       to a partition of the form
+         Q = first(ccost(s, A → ϵ•α)))
+    *)
+    val pre : 'a indexset array -> 'a indexset array -> pre option
+
+    type forward = int array array
+    type backward = int array
+    type infix = { forward : forward; backward : backward; }
+
+    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
+    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
   end
 
   module Tree : sig
@@ -96,58 +115,34 @@ module type S = sig
     val post_classes : n index -> Terminal.set array
   end
 
-  module Cells : sig
-    type t = private int
-    type offset = int
+  (* Identify each cell of compact cost matrices.
+     A [Cell.n index] can be thought of as a triple made of a tree node and two indices
+     (row, col) of the compact cost matrix associated to the node. *)
+  module Cell : sig
+    include CARDINAL
+
+    (* A value of type row represents the index of a row of a matrix.
+       A row of node [n] belongs to the interval
+         0 .. Array.length (Tree.pre_classes n) - 1
+    *)
     type row = int
+
+    (* A value of type column represents the index of a column of a matrix.
+       A column of node [n] belongs to the interval
+         0 .. Array.length (Tree.post_classes n) - 1
+    *)
     type column = int
 
-    (* The table that stores all compact cost matrices *)
-    val table : (Tree.n, int array) vector
-
-    (* Total number of cells *)
-    val count : int
-
-    (* Cost of a cell *)
-    val cost : t -> int
-
-    (* Compute an index in a table *)
-    val table_index : post_classes:int -> pre:int -> post:int -> int
-
-    (* Compute a linear offset from a node, a row, and a column *)
-    val offset : Tree.n index -> row -> column -> offset
-
-    (* Get the cell corresponding to a node and offset *)
-    val encode_offset : Tree.n index -> offset -> t
-
-    (* Get the node and offset corresponding to a cell *)
-    val decode_offset : t -> Tree.n index * offset
-
     (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : Tree.n index -> row -> column -> t
+    val encode : Tree.n index -> pre:row -> post:column -> n index
 
     (* Get the node, row, and column corresponding to a cell *)
-    val decode : t -> Tree.n index * row * column
+    val decode : n index -> Tree.n index * row * column
   end
 
-  module Coercion : sig
-    type pre = Pre_identity | Pre_singleton of int
-
-    (* Compute the pre coercion from a partition of the form P = first(cost(s, A))
-       to a partition of the form Q = first(ccost(s, A → ϵ•α)))
-    *)
-    val pre : 'a indexset array -> 'a indexset array -> pre option
-
-    type forward = int array array
-    type backward = int array
-    type infix = { forward : forward; backward : backward; }
-
-    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
-    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
-  end
-
-  module Finite : sig
-    val get : Cells.t -> bool
+  module Analysis : sig
+    val cost : Cell.n index -> int
+    val finite : Cell.n index -> bool
   end
 end
 
@@ -507,251 +502,6 @@ struct
 
   (* ---------------------------------------------------------------------- *)
 
-  (* The hash-consed tree of all matrix equations (products and minimums). *)
-  module Tree = struct
-    include ConsedTree()
-
-    type equations = {
-      nullable_lookaheads: Terminal.set;
-      nullable: reduction list;
-      non_nullable: (reduction * n index) list;
-    }
-
-    let goto_equations =
-      (* Explicit representation of the rhs of equation (7).
-         This equation defines ccost(s, A) as the minimum of a set of
-         sub-matrices.
-
-         Matrices of the form [creduce(s, A → α)] are represented by a
-         [TerminalSet.t], following section 6.5.
-
-         [goto_equations] are represented as pair [(nullable, non_nullable)]
-         such that, for each sub-equation [ccost(s, A→ϵ•α) · creduce(s, A→α)]:
-         - if [α = ϵ] (an empty production can reduce A),
-           [nullable] contains the terminals [creduce(s, A → α)]
-         - otherwise,
-           [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
-      *)
-      tabulate_finset Transition.goto @@ fun tr ->
-      (* Number of rows in the compact cost matrix for tr *)
-      let first_dim =
-        Array.length (Classes.pre_transition (Transition.of_goto tr))
-      in
-      (* Number of columns in the compact cost matrix for a transition tr' *)
-      let transition_size tr' =
-        Array.length (Classes.post_transition tr')
-      in
-      (* Import the solution to a matrix-chain ordering problem as a sub-tree *)
-      let rec import_mcop = function
-        | Mcop.Matrix l -> leaf l
-        | Mcop.Product (l, r) -> node (import_mcop l) (import_mcop r)
-      in
-      (* Compute the nullable terminal set and non_nullable list for a single
-         reduction, optimizing the matrix-product chain.  *)
-      let solve_ccost_path red =
-        let dimensions = first_dim :: List.map transition_size red.steps in
-        match Mcop.dynamic_solution (Array.of_list dimensions) with
-        | exception Mcop.Empty -> Either.Left red
-        | solution ->
-          let steps = Array.of_list red.steps in
-          let solution = Mcop.map_solution (fun i -> steps.(i)) solution in
-          Either.Right (red, import_mcop solution)
-      in
-      let nullable, non_nullable =
-        List.partition_map solve_ccost_path (unreduce tr)
-      in
-      {
-        nullable_lookaheads =
-          List.fold_left (fun set red -> IndexSet.union red.lookahead set)
-            IndexSet.empty nullable;
-        nullable;
-        non_nullable;
-      }
-
-    include FreezeTree()
-
-    (* Pre-compute classes before (pre) and after (post) a node *)
-
-    let table_pre = Vector.make Inner.n [||]
-    let table_post = Vector.make Inner.n [||]
-
-    let pre_classes t = match split t with
-      | L tr -> Classes.pre_transition tr
-      | R ix -> table_pre.:(ix)
-
-    let post_classes t = match split t with
-      | L tr -> Classes.post_transition tr
-      | R ix -> table_post.:(ix)
-
-    let () =
-      (* Nodes are allocated in topological order.
-         When iterating over all nodes, children are visited before parents. *)
-      Index.iter Inner.n @@ fun node ->
-      let l, r = define node in
-      table_pre.:(node) <- pre_classes l;
-      table_post.:(node) <- post_classes r
-
-    let split i = match split i with
-      | L _ as result -> result
-      | R n -> R (define n)
-
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* Representation of matrix cells, the variables of the data flow problem.
-     There will be a lot of them. Actually, on large grammars, most of the
-     memory is consumed by cost matrices.
-
-     Therefore we want a rather compact encoding.
-     We use a two-level encoding:
-     - first the [table] vector maps a node index to a "compact cost matrix"
-     - each "compact cost matrix" is represented as a 1-dimensional array of
-       integers, of dimension |pre_classes n| * |post_classes n|
-
-     This module defines conversion functions between three different
-     representations of cells:
-
-     [Cells.t] identify a cell as a single integer
-     <=>
-     [Tree.n index * Cells.offset] identify a cell as a pair of a node and an
-     offset in the array of costs
-     <=>
-     [Tree.n index * Cells.row * Cells.column] identify a cell as a triple of
-     a node, a row index and a column index of the compact cost matrix
-  *)
-  module Cells : sig
-
-    (* The table that stores all compact cost matrices.
-       [Vector.get table n] is the matrix of node [n], represented as a linear
-       array of length |pre(n)| * |post(n)|.
-    *)
-    val table : (Tree.n, int array) vector
-
-    (* A value of type t identifies a single cell. It is an integer that
-       encodes the node index and the offset of the cell inside the matrix of
-       that node.
-    *)
-    type t = private int
-
-    (* A value of type offset represents an index of a compact cost matrix.
-       An offset of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) *
-              Array.length (Tree.post_classes n) - 1
-    *)
-    type offset = int
-
-    (* A value of type row represents the index of a row of a matrix.
-       A row of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) - 1
-    *)
-    type row = int
-
-    (* A value of type column represents the index of a column of a matrix.
-       A column of node [n] belongs to the interval
-         0 .. Array.length (Tree.post_classes n) - 1
-    *)
-    type column = int
-
-    (* Total number of cells *)
-    val count : int
-
-    (* Cost of a cell (initialized to max_int representing +inf, updated by the
-       DataFlow solver). *)
-    val cost : t -> int
-
-    (* Compute an index in a table *)
-    val table_index : post_classes:int -> pre:int -> post:int -> int
-
-    (* Compute a linear offset from a node a row and a column *)
-    val offset : Tree.n index -> row -> column -> offset
-
-    (* Get the cell corresponding to a node and offset *)
-    val encode_offset : Tree.n index -> offset -> t
-
-    (* Get the node and offset corresponding to a cell *)
-    val decode_offset : t -> Tree.n index * offset
-
-    (* Get the cell corresponding to a node, a row and a column *)
-    val encode : Tree.n index -> row -> column -> t
-
-    (* Get the cell corresponding to a node, a row and a column *)
-    val decode : t -> Tree.n index * row * column
-
-  end = struct
-    type t = int
-    type offset = int
-    type row = int
-    type column = int
-
-    let count = ref 0
-
-    let table =
-      let init_node node =
-        let node_count =
-          Array.length (Tree.pre_classes node) *
-          Array.length (Tree.post_classes node)
-        in
-        count := !count + node_count;
-        Array.make node_count max_int
-      in
-      Vector.init Tree.n init_node
-
-    let count = !count
-
-    (* Determine how many bits are needed to represent a node index.
-       A cell is then represented as [(offset lsl shift) lor (node)]. *)
-    let shift =
-      let rec loop i =
-        if cardinal Tree.n <= 1 lsl i
-        then i
-        else loop (i + 1)
-      in
-      loop 0
-
-    let encode_offset node cell =
-      Index.to_int node lor (cell lsl shift)
-
-    let table_index ~post_classes ~pre ~post =
-      pre * post_classes + post
-
-    let offset node =
-      let post_classes = Array.length (Tree.post_classes node) in
-      fun pre post -> table_index ~post_classes ~pre ~post
-
-    let encode node =
-      let offset_of = offset node in
-      fun i_pre i_post -> encode_offset node (offset_of i_pre i_post)
-
-    let decode_offset i =
-      let node = Index.of_int Tree.n (i land (1 lsl shift - 1)) in
-      (node, i lsr shift)
-
-    let decode i =
-      let node, offset = decode_offset i in
-      let sz = Array.length (Tree.post_classes node) in
-      (node, offset / sz, offset mod sz)
-
-    (* Sanity checks
-
-      let decode i =
-        let n, b, a as result = decode i in
-        assert (i = encode n b a);
-        result
-
-      and encode node i_pre i_post =
-        let result = encode node i_pre i_post in
-        assert (decode result = (node, i_pre, i_post));
-        result
-    *)
-
-    let cost t =
-      let node, offset = decode_offset t in
-      table.:(node).(offset)
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
   (* This module implements efficient representations of the coerce matrices,
      as mentioned in section 6.5.
 
@@ -863,6 +613,208 @@ struct
 
   (* ---------------------------------------------------------------------- *)
 
+  (* The hash-consed tree of all matrix equations (products and minimums). *)
+  module Tree = struct
+    include ConsedTree()
+
+    type equations = {
+      nullable_lookaheads: Terminal.set;
+      nullable: reduction list;
+      non_nullable: (reduction * n index) list;
+    }
+
+    let goto_equations =
+      (* Explicit representation of the rhs of equation (7).
+         This equation defines ccost(s, A) as the minimum of a set of
+         sub-matrices.
+
+         Matrices of the form [creduce(s, A → α)] are represented by a
+         [TerminalSet.t], following section 6.5.
+
+         [goto_equations] are represented as pair [(nullable, non_nullable)]
+         such that, for each sub-equation [ccost(s, A→ϵ•α) · creduce(s, A→α)]:
+         - if [α = ϵ] (an empty production can reduce A),
+           [nullable] contains the terminals [creduce(s, A → α)]
+         - otherwise,
+           [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
+      *)
+      tabulate_finset Transition.goto @@ fun tr ->
+      (* Number of rows in the compact cost matrix for tr *)
+      let first_dim =
+        Array.length (Classes.pre_transition (Transition.of_goto tr))
+      in
+      (* Number of columns in the compact cost matrix for a transition tr' *)
+      let transition_size tr' =
+        Array.length (Classes.post_transition tr')
+      in
+      (* Import the solution to a matrix-chain ordering problem as a sub-tree *)
+      let rec import_mcop = function
+        | Mcop.Matrix l -> leaf l
+        | Mcop.Product (l, r) -> node (import_mcop l) (import_mcop r)
+      in
+      (* Compute the nullable terminal set and non_nullable list for a single
+         reduction, optimizing the matrix-product chain.  *)
+      let solve_ccost_path red =
+        let dimensions = first_dim :: List.map transition_size red.steps in
+        match Mcop.dynamic_solution (Array.of_list dimensions) with
+        | exception Mcop.Empty -> Either.Left red
+        | solution ->
+          let steps = Array.of_list red.steps in
+          let solution = Mcop.map_solution (fun i -> steps.(i)) solution in
+          Either.Right (red, import_mcop solution)
+      in
+      let nullable, non_nullable =
+        List.partition_map solve_ccost_path (unreduce tr)
+      in
+      {
+        nullable_lookaheads =
+          List.fold_left (fun set red -> IndexSet.union red.lookahead set)
+            IndexSet.empty nullable;
+        nullable;
+        non_nullable;
+      }
+
+    include FreezeTree()
+
+    (* Pre-compute classes before (pre) and after (post) a node *)
+
+    let table_pre = Vector.make Inner.n [||]
+    let table_post = Vector.make Inner.n [||]
+
+    let pre_classes t = match split t with
+      | L tr -> Classes.pre_transition tr
+      | R ix -> table_pre.:(ix)
+
+    let post_classes t = match split t with
+      | L tr -> Classes.post_transition tr
+      | R ix -> table_post.:(ix)
+
+    let () =
+      (* Nodes are allocated in topological order.
+         When iterating over all nodes, children are visited before parents. *)
+      Index.iter Inner.n @@ fun node ->
+      let l, r = define node in
+      table_pre.:(node) <- pre_classes l;
+      table_post.:(node) <- post_classes r
+
+    let split i = match split i with
+      | L _ as result -> result
+      | R n -> R (define n)
+  end
+
+  (* ---------------------------------------------------------------------- *)
+
+  (* Representation of matrix cells, the variables of the data flow problem.
+     There will be a lot of them. Actually, on large grammars, most of the
+     memory is consumed by cost matrices.
+
+     Therefore we want a rather compact encoding.
+     We use a two-level encoding:
+     - first the [table] vector maps a node index to a "compact cost matrix"
+     - each "compact cost matrix" is represented as a 1-dimensional array of
+       integers, of dimension |pre_classes n| * |post_classes n|
+
+     This module defines conversion functions between three different
+     representations of cells:
+
+     [Cell.t] identify a cell as a single integer
+     <=>
+     [Tree.n index * Cells.offset] identify a cell as a pair of a node and an
+     offset in the array of costs
+     <=>
+     [Tree.n index * Cells.row * Cells.column] identify a cell as a triple of
+     a node, a row index and a column index of the compact cost matrix
+  *)
+  module Cell : sig
+    include CARDINAL
+
+    (* A value of type row represents the index of a row of a matrix.
+       A row of node [n] belongs to the interval
+         0 .. Array.length (Tree.pre_classes n) - 1
+    *)
+    type row = int
+
+    (* A value of type column represents the index of a column of a matrix.
+       A column of node [n] belongs to the interval
+         0 .. Array.length (Tree.post_classes n) - 1
+    *)
+    type column = int
+
+    (* Get the cell corresponding to a node, a row, and a column *)
+    val encode : Tree.n index -> pre:row -> post:column -> n index
+
+    (* Get the node, row, and column corresponding to a cell *)
+    val decode : n index -> Tree.n index * row * column
+
+    (* Index of the first cell of matrix associated to a node *)
+    val first_cell : Tree.n index -> n index
+
+    val cell_index : n index -> int
+  end = struct
+    type row = int
+    type column = int
+
+    let n, pre_bits, post_bits =
+      let max_pre = ref 0 in
+      let max_post = ref 0 in
+      let n = ref 0 in
+      let bits_needed n =
+        let i = ref 0 in
+        while 1 lsl !i <= n
+        do incr i; done;
+        !i
+      in
+      Index.iter Tree.n begin fun node ->
+        let pre = Array.length (Tree.pre_classes node) in
+        let post = Array.length (Tree.post_classes node) in
+        n := !n + pre * post;
+        max_pre := Int.max pre !max_pre;
+        max_post := Int.max post !max_post;
+      end;
+      (!n, bits_needed !max_pre, bits_needed !max_post)
+
+    include Const(struct let cardinal = n end)
+
+    let mapping = Vector.make n 0
+
+    let first_cell =
+      let index = ref 0 in
+      Vector.init Tree.n @@ fun node ->
+      let first_index = !index in
+      let base = (node :> int) lsl (pre_bits + post_bits) in
+      let pre_count = Array.length (Tree.pre_classes node) in
+      let post_count = Array.length (Tree.post_classes node) in
+      for pre = 0 to pre_count - 1 do
+        let base = base lor (pre lsl post_bits) in
+        for post = 0 to post_count - 1 do
+          mapping.:(Index.of_int n !index) <- base lor post;
+          incr index
+        done
+      done;
+      first_index
+
+    let decode ix =
+      let i = mapping.:(ix) in
+      let post = i land (post_bits - 1) in
+      let i = i lsr post_bits in
+      let pre = i land (pre_bits - 1) in
+      (Index.of_int Tree.n (i lsr pre_bits), pre, post)
+
+    let encode i =
+      let first = first_cell.:(i) in
+      let post_count = Array.length (Tree.post_classes i) in
+      fun ~pre ~post ->
+        Index.of_int n (first + pre * post_count + post)
+
+    let cell_index ix =
+      let n = mapping.:(ix) lsr (pre_bits + post_bits) in
+      (ix :> int) - first_cell.:(Index.of_int Tree.n n)
+
+    let first_cell i = Index.of_int n first_cell.:(i)
+  end
+
+  (* ---------------------------------------------------------------------- *)
+
   (* Represent the data flow problem to solve *)
   module Solver = struct
     let min_cost a b : int =
@@ -895,7 +847,7 @@ struct
       let node = Tree.leaf (Transition.of_shift tr) in
       (*sanity*)assert (Array.length (Tree.pre_classes node) = 1);
       (*sanity*)assert (Array.length (Tree.post_classes node) = 1);
-      visit_root (Cells.encode_offset node 0) 1
+      visit_root (Cell.first_cell node) 1
 
     (* Record dependencies on a goto transition.  *)
     let record_goto ~visit_root tr =
@@ -905,15 +857,15 @@ struct
       let eqn = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
       if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
-        let offset_of = Cells.offset node in
         (* We use:
            - [c_pre] and [i_pre] for a class in the pre partition and its index
            - [c_post] and [i_post] for a class in the post partition and its
              index
         *)
+        let encode = Cell.encode node in
         let update_cell i_post c_post i_pre c_pre =
           if not (IndexSet.disjoint c_pre c_post) then
-            visit_root (Cells.encode_offset node (offset_of i_pre i_post)) 0
+            visit_root (encode ~pre:i_pre ~post:i_post) 0
         in
         let update_col i_post c_post =
           if quick_subset c_post eqn.nullable_lookaheads then
@@ -948,9 +900,11 @@ struct
       dependents.@(l) <- List.cons dep;
       dependents.@(r) <- List.cons dep
 
+    let costs = Vector.make Cell.n max_int
+
     (* A graph representation suitable for the DataFlow solver *)
     module Graph = struct
-      type variable = Cells.t
+      type variable = Cell.n index
 
       (* We cheat a bit. Normally a root is either the cell corresponding to a
          shift transition (initialized to 1) or the cells corresponding to the
@@ -979,7 +933,7 @@ struct
            in relaxing the node.
            This guarantees that the additions below do not overflow. *)
         assert (cost < max_int);
-        let node, i_pre, i_post = Cells.decode index in
+        let node, i_pre, i_post = Cell.decode index in
         let update_dep = function
           | Leaf (parent, pre, post) ->
             (* This change might improve one of the cost(s,x) *)
@@ -990,9 +944,9 @@ struct
               | Coercion.Pre_singleton i -> i
               | Coercion.Pre_identity -> i_pre
             in
-            let parent_index = Cells.encode parent in
+            let encode = Cell.encode parent in
             Array.iter
-              (fun i_post' -> f (parent_index i_pre' i_post') cost)
+              (fun i_post' -> f (encode ~pre:i_pre' ~post:i_post') cost)
               post.(i_post)
           | Inner (parent, inner) ->
             (* This change updates the cost of an occurrence of equation 8,
@@ -1000,20 +954,19 @@ struct
                We have to find whether the change comes from the [l] or the [r]
                node to update the right-hand cells of the parent *)
             let l, r = Tree.define parent in
-            let parent_index = Cells.encode (Tree.inject parent) in
+            let encode_p = Cell.encode (Tree.inject parent) in
             if l = node then (
               (* The left term has been updated *)
-              let r_costs = Cells.table.:(r) in
-              let offset_of = Cells.offset r in
+              let encode = Cell.encode r in
               for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
                 let r_cost = Array.fold_left
                     (fun r_cost i_pre' ->
-                       min_cost r_cost r_costs.(offset_of i_pre' i_post'))
+                       min_cost r_cost costs.:(encode ~pre:i_pre' ~post:i_post'))
                     max_int inner.Coercion.forward.(i_post)
                 in
-                if r_cost < max_int then (
-                  f (parent_index i_pre i_post') (cost + r_cost)
-                )
+                if r_cost < max_int then
+                  f (encode_p ~pre:i_pre ~post:i_post')
+                    (cost + r_cost)
               done
             ) else (
               (* The right term has been updated *)
@@ -1021,13 +974,12 @@ struct
               match inner.Coercion.backward.(i_pre) with
               | -1 -> ()
               | l_post ->
-                let l_costs = Cells.table.:(l) in
-                let offset_of = Cells.offset l in
+                let encode_l = Cell.encode l in
                 for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
-                  let l_cost = l_costs.(offset_of i_pre l_post) in
-                  if l_cost < max_int then (
-                    f (parent_index i_pre i_post) (l_cost + cost)
-                  )
+                  let l_cost = costs.:(encode_l ~pre:i_pre ~post:l_post) in
+                  if l_cost < max_int then
+                    f (encode_p ~pre:i_pre ~post:i_post)
+                      (l_cost + cost)
                 done
             )
         in
@@ -1041,54 +993,20 @@ struct
 
     (* Implement the interfaces required by DataFlow.ForCustomMaps *)
 
-    module CostMap = struct
-      (* Access the cost table using cells *)
-      let get index =
-        let node, offset = Cells.decode_offset index in
-        Cells.table.:(node).(offset)
-
-      let set index v =
-        let node, offset = Cells.decode_offset index in
-        Cells.table.:(node).(offset) <- v
-    end
-
-    module MarkMap() = struct
-      (* Associate a boolean value to each cell.
-         For efficiency, we use a "bytes" for each node, each cell
-         corresponding to a single byte.
-         We could instead use bits, encoding 8 cells per byte, but the gain is
-         negligible.
-         Memory use is anyway dominated by the cost_table, so in the best case
-         this optimization would reduce memory consumption by 1/9, and this
-         does not translate to any observable performance improvement.
-      *)
-      let data = Vector.map
-          (fun costs -> Bytes.make ((Array.length costs + 7) / 8) '\x00')
-          Cells.table
-
-      let decompose cell =
-        (cell lsr 3, 1 lsl (cell land 7))
-
-      let get var =
-        let node, cell = Cells.decode_offset var in
-        let offset, mask = decompose cell in
-        Char.code (Bytes.get data.:(node) offset) land mask <> 0
-
-      let set var value =
-        let node, cell = Cells.decode_offset var in
-        let offset, mask = decompose cell in
-        let bits = Char.code (Bytes.get data.:(node) offset) in
-        let bits' =
-          if value then
-            bits lor mask
-          else
-            bits land lnot mask
-        in
-        Bytes.set data.:(node) offset (Char.unsafe_chr bits')
+    module BoolMap() = struct
+      let table = Boolvector.make Cell.n false
+      let get t = Boolvector.test table t
+      let set t x =
+        if x
+        then Boolvector.set table t
+        else Boolvector.clear table t
     end
 
     (* Run the solver for shortest paths *)
-    include Fix.DataFlow.ForCustomMaps(Property)(Graph)(CostMap)(MarkMap())
+    include Fix.DataFlow.ForCustomMaps(Property)(Graph)(struct
+        let get i = Vector.get costs i
+        let set i x = Vector.set costs i x
+      end)(BoolMap())
 
     (* Run the solver for finite languages *)
     module Bool_or = struct
@@ -1096,10 +1014,10 @@ struct
       let leq_join = (||)
     end
 
-    module Finite = MarkMap()
+    module Finite = BoolMap()
 
     module FiniteGraph = struct
-      type variable = Cells.t
+      type variable = Cell.n index
 
       let count = Vector.init Transition.goto (fun gt ->
           let tr = Transition.of_goto gt in
@@ -1115,14 +1033,14 @@ struct
                 | Inner _ -> ()
                 | Leaf (parent, pre, post) ->
                   let node = Tree.leaf (Transition.of_goto parent) in
-                  let post_classes = Array.length (Tree.post_classes node) in
-                  let table = Cells.table.:(node) in
+                  let encode = Cell.encode node in
                   let count = count.:(parent) in
                   let update_pre pre =
                     Array.iter (Array.iter (fun post ->
-                        let index = Cells.table_index ~post_classes ~pre ~post in
-                        if table.(index) < max_int then
-                          count.(index) <- count.(index) + 1
+                        let index = encode ~pre ~post in
+                        if costs.:(index) < max_int then
+                          let offset = Cell.cell_index index in
+                          count.(offset) <- count.(offset) + 1
                       )) post
                   in
                   match pre with
@@ -1138,15 +1056,19 @@ struct
       let foreach_root visit_root =
         Index.iter Transition.shift (fun sh ->
             let node = Tree.leaf (Transition.of_shift sh) in
-            visit_root (Cells.encode_offset node 0) true
+            visit_root (Cell.first_cell node) true
           );
         Index.iter Transition.goto (fun gt ->
             let node = Tree.leaf (Transition.of_goto gt) in
             let count = count.:(gt) in
-            Array.iteri (fun i cost ->
-                if cost < max_int && count.(i) = 0 then
-                  visit_root (Cells.encode_offset node i) true
-              ) Cells.table.:(node)
+            let pre_count = Array.length (Tree.pre_classes node) in
+            let post_count = Array.length (Tree.post_classes node) in
+            let first = (Cell.first_cell node :> int) in
+            for i = 0 to pre_count * post_count - 1 do
+              let index = Index.of_int Cell.n (first + i) in
+              if costs.:(index) < max_int && count.(i) = 0 then
+                visit_root index true
+            done
           )
 
       (* Visit all the successors of a cell.
@@ -1157,43 +1079,41 @@ struct
       *)
       let foreach_successor index finite f =
         if finite then
-          let node, i_pre, i_post = Cells.decode index in
+          let node, i_pre, i_post = Cell.decode index in
           let update_dep = function
             | Leaf (parent, pre, post) ->
               let count = count.:(parent) in
-              let parent = Tree.leaf (Transition.of_goto parent) in
+              let encode = Cell.encode (Tree.leaf (Transition.of_goto parent)) in
               let i_pre' = match pre with
                 | Coercion.Pre_singleton i -> i
                 | Coercion.Pre_identity -> i_pre
               in
-              let parent_index = Cells.encode parent in
-              Array.iter
-                (fun i_post' ->
-                   let index = parent_index i_pre' i_post' in
-                   let _, offset = Cells.decode_offset index in
-                   count.(offset) <- count.(offset) - 1;
-                   assert (count.(offset) >= 0);
-                   if count.(offset) = 0 then
-                     f index true)
-                post.(i_post)
+              Array.iter begin fun i_post' ->
+                let index = encode ~pre:i_pre' ~post:i_post' in
+                let offset = Cell.cell_index index in
+                count.(offset) <- count.(offset) - 1;
+                assert (count.(offset) >= 0);
+                if count.(offset) = 0 then
+                  f index true
+              end post.(i_post)
             | Inner (parent, inner) ->
               (* This change updates the cost of an occurrence of equation 8,
                  of the form l . coercion . r
                  We have to find whether the change comes from the [l] or the [r]
                  node to update the right-hand cells of the parent *)
               let l, r = Tree.define parent in
-              let parent_index = Cells.encode (Tree.inject parent) in
+              let encode_p = Cell.encode (Tree.inject parent) in
               if l = node then (
+                let encode_r = Cell.encode r in
                 (* The left term has been updated *)
                 for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
-                  let r_index = Cells.encode r in
                   let r_finite =
                     Array.for_all
-                      (fun i_pre' -> Finite.get (r_index i_pre' i_post'))
+                      (fun i_pre' -> Finite.get (encode_r ~pre:i_pre' ~post:i_post'))
                       inner.Coercion.forward.(i_post)
                   in
                   if r_finite then
-                    f (parent_index i_pre i_post') true
+                    f (encode_p ~pre:i_pre ~post:i_post') true
                 done
               ) else (
                 (*sanity*)assert (r = node);
@@ -1201,20 +1121,23 @@ struct
                 match inner.Coercion.backward.(i_pre) with
                 | -1 -> ()
                 | l_post ->
-                  let l_index = Cells.encode l in
+                  let encode_l = Cell.encode l in
                   for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
-                    let l_finite = Finite.get (l_index i_pre l_post) in
+                    let l_finite = Finite.get (encode_l ~pre:i_pre ~post:l_post) in
                     if l_finite then
-                      f (parent_index i_pre i_post) true
+                      f (encode_p ~pre:i_pre ~post:i_post) true
                   done
               )
           in
           List.iter update_dep dependents.:(node)
     end
-    include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(MarkMap())
+    include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(BoolMap())
   end
 
-  module Finite = Solver.Finite
+  module Analysis = struct
+    let cost = Vector.get Solver.costs
+    let finite = Solver.Finite.get
+  end
 
   let () = Stopwatch.leave time
 end
