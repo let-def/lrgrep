@@ -139,8 +139,8 @@ module type S = sig
     val items : t -> (Production.t * int) list
 
     (* If the state is an initial state, returns the pseudo (start)
-       non-terminal that it recognizes. *)
-    val entrypoint : t -> Nonterminal.t option
+       production that it recognizes this entrypoint. *)
+    val is_entrypoint : t -> Production.t option
   end
 
   module Lr1 : sig
@@ -192,6 +192,7 @@ module type S = sig
     (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
     val intersect : set -> set -> set
 
+    val is_entrypoint : t -> Production.t option
     val entrypoints : (string, t) Hashtbl.t
     val all_entrypoints : set
   end
@@ -251,6 +252,10 @@ module type S = sig
     (* [predecessors s] returns all the transitions [tr] such that
        [target tr = s] *)
     val predecessors : Lr1.t -> any index list
+
+    (* Accepting transitions are goto transitions from an initial state to an
+       accepting state, recognizing one of the grammar entrypoint. *)
+    val accepting : goto indexset
   end
 
   module Reduction : sig
@@ -404,17 +409,17 @@ struct
         (fun (p,pos) -> (Production.of_g p, pos))
         (Grammar.Lr0.items (to_g lr0))
 
-    let entrypoint lr0 =
-      match incoming lr0 with
-      | Some _ -> None
-      | None -> (
-          match items lr0 with
-          | [p, 0] ->
-            let p = Production.to_g p in
-            assert (Grammar.Production.kind p = `START);
-            Some (Nonterminal.of_g (Grammar.Production.lhs p))
-          | _ -> assert false
-        )
+    let is_entrypoint lr0 =
+      match items lr0 with
+      | [p, 0] ->
+        assert (Production.kind p = `START);
+        assert (Nonterminal.kind (Production.lhs p) = `START);
+        assert (match Production.rhs p with
+            | [|n|] -> Symbol.is_nonterminal n
+            | _ -> false
+          );
+        Some p
+      | _ -> None
   end
 
   (** [Transitions] module, defined below, depends on the set of Lr1 states
@@ -555,9 +560,30 @@ struct
     let find_goto_target source nt =
       target (of_goto (find_goto source nt))
 
+    (* Accepting transitions are goto transitions from an initial state to an
+       accepting state, recognizing one of the grammar entrypoint. *)
+    let accepting =
+      let acc = ref IndexSet.empty in
+      Index.rev_iter Prelr1.n begin fun lr1 ->
+        let lr0 = Lr0.of_g (Grammar.Lr1.lr0 (Prelr1.to_g lr1)) in
+        match Lr0.is_entrypoint lr0 with
+        | None -> ()
+        | Some prod ->
+          let sym =
+            match Symbol.prj (Production.rhs prod).(0) with
+            | L _ -> assert false
+            | R nt -> nt
+          in
+          acc := List.fold_right (fun tr acc ->
+              match split tr with
+              | L gt when goto_symbol gt = sym -> IndexSet.add gt acc
+              | _ -> acc
+            ) (successors lr1) !acc
+      end;
+      !acc
+
     let () = Stopwatch.step time "Transition"
   end
-
 
   module Lr1 = struct
     include Prelr1
@@ -577,10 +603,8 @@ struct
       match Lr0.incoming lr0 with
       | Some sym -> Symbol.name sym
       | None ->
-        let entrypoint = Option.get (Lr0.entrypoint lr0) in
-        let name = Bytes.of_string (Nonterminal.to_string entrypoint) in
-        Bytes.set name (Bytes.length name - 1) ':';
-        Bytes.unsafe_to_string name
+        let entrypoint = Option.get (Lr0.is_entrypoint lr0) in
+        (Symbol.name (Production.rhs entrypoint).(0) ^ ":")
 
     let symbol_to_string lr1 =
       match incoming lr1 with
@@ -656,21 +680,15 @@ struct
       else if b == all then a
       else IndexSet.inter a b
 
+    let is_entrypoint lr1 = Lr0.is_entrypoint (to_lr0 lr1)
+
     let entrypoints =
       let table = Hashtbl.create 7 in
       Index.iter n (fun lr1 ->
-        match Lr0.entrypoint (to_lr0 lr1) with
+        match is_entrypoint lr1 with
         | None -> ()
-        | Some nt ->
-          let name = Nonterminal.to_string nt in
-          (* When "n" is a non-terminal marked %start, Menhir generates a special
-             symbol "n'" that represents the use of "n" as a start symbol. "n" is
-             kept for uses as a normal non-terminal elsewhere in the grammar.
-             To refer to "n" as a start-symbol we have to look for "n'".
-             Here we do the converse, chopping of a "'" to find the source
-             nonterminal . *)
-          let name = String.sub name 0 (String.length name - 1) in
-          Hashtbl.add table name lr1
+        | Some prod ->
+          Hashtbl.add table (Symbol.name (Production.rhs prod).(0)) lr1
       );
       table
 

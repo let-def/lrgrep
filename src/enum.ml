@@ -371,8 +371,9 @@ struct
       Form_generator.finish (loop reds)
 
     let get_entrypoint lrc =
-      Nonterminal.to_string
-        (Option.get (Lr0.entrypoint (Lr1.to_lr0 (Lrc.lr1_of_lrc lrc))))
+      match Lr1.is_entrypoint (Lrc.lr1_of_lrc lrc) with
+      | None -> assert false
+      | Some p -> Symbol.name (Production.rhs p).(0)
 
     let rec select_one = function
       | [] -> []
