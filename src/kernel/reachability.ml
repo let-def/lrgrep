@@ -110,7 +110,7 @@ module type S = sig
     type pre = Pre_identity | Pre_singleton of int
 
     (* Compute the pre coercion from a partition of the form P = first(cost(s, A))
-       to a partition of the form Q = first(ccost(𝑠, 𝐴 → 𝜖•𝛼)))
+       to a partition of the form Q = first(ccost(s, A → ϵ•α)))
     *)
     val pre : 'a indexset array -> 'a indexset array -> pre option
 
@@ -120,6 +120,10 @@ module type S = sig
 
     (* Compute the infix coercion from two partitions P Q such that Q <= P *)
     val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
+  end
+
+  module Finite : sig
+    val get : Cells.t -> bool
   end
 end
 
@@ -142,7 +146,7 @@ struct
      It lists the different reductions that lead to following a goto
      transition, reversing the effect of a single reduction.
 
-     It serves the same purpose as the [reduce(𝑠, 𝐴 → 𝛼)] function from the
+     It serves the same purpose as the [reduce(s, A → α)] function from the
      paper but is more convenient for the rest of the implementation.
   *)
   module Unreduce : sig
@@ -197,8 +201,8 @@ struct
             ) rhs [lr1, []]
         in
         List.iter (fun (source, steps) ->
-            Vector.set_cons table (Transition.find_goto source lhs)
-              { production; lookahead; steps; state=lr1 }
+            table.@(Transition.find_goto source lhs) <-
+              List.cons { production; lookahead; steps; state=lr1 }
           ) states
       end
 
@@ -249,7 +253,7 @@ struct
       Index.iter Lr1.n
         (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1))
 
-    let goto_transition tr = Vector.get table tr
+    let goto_transition tr = table.:(tr)
   end
 
   (* ---------------------------------------------------------------------- *)
@@ -301,7 +305,7 @@ struct
 
     (* Associate a class to each node *)
 
-    let classes = Vector.make Node.n []
+    let classes = Vector.make Node.n IndexSet.Set.empty
 
     (* Evaluate classes for a node, directly computing equation 4-6.
        (compute follow for a goto node, first for an lr1 node)
@@ -312,30 +316,36 @@ struct
       let acc = ref acc in
       begin match Node.prj node with
         | L lr1 ->
-          Gr.visit_lr1 (fun n -> acc := Vector.get classes n @ !acc) lr1
+          Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1
         | R edge ->
           List.iter (fun {Unreduce. lookahead; state; _} ->
-              let base = Vector.get classes (Node.inj_l state) in
+              let base = classes.:(Node.inj_l state) in
               (* Comment the code below to have a partial order on partitions
                  (remove the ↑Z in equation (6) *)
               let base =
                 if lookahead != Terminal.all
-                then List.map (IndexSet.inter lookahead) base
+                then IndexSet.Set.map (IndexSet.inter lookahead) base
                 else base
               in
               (* Stop commenting here *)
-              acc := (lookahead :: base) @ !acc
+              acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
             ) (Unreduce.goto_transition edge)
       end;
       !acc
 
+    let partition_sets sets =
+      sets
+      |> IndexSet.Set.elements
+      |> IndexRefine.partition
+      |> IndexSet.Set.of_list
+
     let visit_scc _ nodes =
       (* Compute approximation for an SCC, as described in section 6.2 *)
       let coarse_classes =
-        IndexRefine.partition (List.fold_left classes_of [] nodes)
+        partition_sets (List.fold_left classes_of IndexSet.Set.empty nodes)
       in
       match nodes with
-      | [node] -> Vector.set classes node coarse_classes
+      | [node] -> classes.:(node) <- coarse_classes
       | nodes ->
         List.iter begin fun node ->
           match Node.prj node with
@@ -346,19 +356,16 @@ struct
               (fun {Unreduce. lookahead; _} ->
                  coarse := IndexSet.union lookahead !coarse)
               (Unreduce.goto_transition e);
-            Vector.set classes node (
-              coarse_classes
-              |> List.map (IndexSet.inter !coarse)
-              |> IndexRefine.partition
-            )
+            classes.:(node) <-
+              partition_sets (IndexSet.Set.map (IndexSet.inter !coarse) coarse_classes)
         end nodes;
         List.iter begin fun node ->
           match Node.prj node with
           | R _ -> ()
           | L lr1 ->
-            let acc = ref [] in
-            Gr.visit_lr1 (fun n -> acc := Vector.get classes n @ !acc) lr1;
-            Vector.set classes node (IndexRefine.partition !acc)
+            let acc = ref IndexSet.Set.empty in
+            Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1;
+            classes.:(node) <- partition_sets !acc
         end nodes
 
     let () = Scc.rev_topological_iter visit_scc
@@ -369,20 +376,26 @@ struct
         match Lr1.incoming lr1 with
         | Some sym when Symbol.is_nonterminal sym -> ()
         | None | Some _ ->
-          Vector.set classes (Node.inj_l lr1) [Terminal.all]
+          classes.:(Node.inj_l lr1) <- IndexSet.Set.singleton Terminal.all
       )
 
     (* We now have the final approximation.
        Classes will be identified and accessed by their index,
        random access is important.
     *)
-    let classes = Vector.map Array.of_list classes
+    let classes =
+      let prepare l =
+        let a = Array.of_seq (IndexSet.Set.to_seq l) in
+        Array.sort IndexSet.compare_minimum a;
+        a
+      in
+      Vector.map prepare classes
 
     let for_edge nte =
-      Vector.get classes (Node.inj_r nte)
+      classes.:(Node.inj_r nte)
 
     let for_lr1 st =
-      Vector.get classes (Node.inj_l st)
+      classes.:(Node.inj_l st)
 
     (* Precompute the singleton partitions, e.g. { {t}, T/{t} } for each t *)
     let t_singletons =
@@ -398,7 +411,7 @@ struct
     *)
     let pre_transition tr =
       match Symbol.desc (Transition.symbol tr) with
-      | T t -> Vector.get t_singletons t
+      | T t -> t_singletons.:(t)
       | N _ -> for_lr1 (Transition.source tr)
 
     (* Just after taking a transition [tr], the lookahead has to belong to
@@ -418,7 +431,7 @@ struct
      products.
 
      Each occurrence of [ccost(s,x)] is mapped to a leaf.
-     Occurrences of [(ccost(𝑠, 𝐴 → 𝛼•𝑥𝛽)] are mapped to inner nodes, except
+     Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
      that the chain of multiplication are re-associated.
   *)
   module ConsedTree () : sig
@@ -486,11 +499,11 @@ struct
       let rev_index = Vector.make' Inner.n
           (fun () -> let dummy = Index.of_int n 0 in (dummy, dummy))
 
-      let define ix = Vector.get rev_index ix
+      let define ix = rev_index.:(ix)
 
       let () =
         Hashtbl.iter
-          (fun pair index -> Vector.set rev_index index (unpack pair))
+          (fun pair index -> rev_index.:(index) <- unpack pair)
           node_table
     end
   end
@@ -503,18 +516,18 @@ struct
 
     let goto_equations =
       (* Explicit representation of the rhs of equation (7).
-         This equation defines ccost(𝑠, 𝐴) as the minimum of a set of
+         This equation defines ccost(s, A) as the minimum of a set of
          sub-matrices.
 
-         Matrices of the form [creduce(𝑠, 𝐴 → 𝛼)] are represented by a
+         Matrices of the form [creduce(s, A → α)] are represented by a
          [TerminalSet.t], following section 6.5.
 
          [goto_equations] are represented as pair [(nullable, non_nullable)]
-         such that, for each sub-equation [ccost(𝑠, 𝐴→𝜖•𝛼) · creduce(𝑠, 𝐴→𝛼)]:
-         - if [𝛼 = 𝜖] (an empty production can reduce A),
-           [nullable] contains the terminals [creduce(𝑠, 𝐴 → 𝛼)]
+         such that, for each sub-equation [ccost(s, A→ϵ•α) · creduce(s, A→α)]:
+         - if [α = ϵ] (an empty production can reduce A),
+           [nullable] contains the terminals [creduce(s, A → α)]
          - otherwise,
-           [non_nullable] contains the pair [ccost(𝑠, 𝐴→𝜖•𝛼)], [creduce(𝑠, 𝐴→𝛼)}
+           [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
       *)
       tabulate_finset Transition.goto @@ fun tr ->
       (* Number of rows in the compact cost matrix for tr *)
@@ -555,19 +568,19 @@ struct
 
     let pre_classes t = match split t with
       | L tr -> Classes.pre_transition tr
-      | R ix -> Vector.get table_pre ix
+      | R ix -> table_pre.:(ix)
 
     let post_classes t = match split t with
       | L tr -> Classes.post_transition tr
-      | R ix -> Vector.get table_post ix
+      | R ix -> table_post.:(ix)
 
     let () =
       (* Nodes are allocated in topological order.
          When iterating over all nodes, children are visited before parents. *)
       Index.iter Inner.n @@ fun node ->
       let l, r = define node in
-      Vector.set table_pre node (pre_classes l);
-      Vector.set table_post node (post_classes r)
+      table_pre.:(node) <- pre_classes l;
+      table_post.:(node) <- post_classes r
 
     let split i = match split i with
       | L _ as result -> result
@@ -725,7 +738,7 @@ struct
 
     let cost t =
       let node, offset = decode_offset t in
-      (Vector.get table node).(offset)
+      table.:(node).(offset)
   end
 
   (* ---------------------------------------------------------------------- *)
@@ -749,14 +762,14 @@ struct
   module Coercion = struct
 
     (* Pre coercions are used to handle the minimum in equation (7):
-       ccost(𝑠, 𝐴 → 𝜖•𝛼) · creduce(𝑠, 𝐴 → 𝛼)
+       ccost(s, A → ϵ•α) · creduce(s, A → α)
 
-       If 𝛼 begins with a terminal, it will have only one class.
+       If α begins with a terminal, it will have only one class.
        This is handled by the [Pre_singleton x] constructor that indicates that
        this only class should be coerced to class [x].
 
-       If 𝛼 begins with a non-terminal, [Pre_identity] is used: ccost(𝑠, 𝐴) and
-       ccost(𝑠, 𝐴 → 𝜖•𝛼) are guaranteed to have the same "first" classes.
+       If α begins with a non-terminal, [Pre_identity] is used: ccost(s, A) and
+       ccost(s, A → ϵ•α) are guaranteed to have the same "first" classes.
     *)
     type pre =
       | Pre_identity
@@ -765,9 +778,9 @@ struct
     (* Compute the pre coercion from a partition of the form
          P = first(cost(s, A))
        to a partition of the form
-         Q = first(ccost(𝑠, 𝐴 → 𝜖•𝛼)))
+         Q = first(ccost(s, A → ϵ•α)))
 
-       If 𝛼 starts with a terminal, we look only for the
+       If α starts with a terminal, we look only for the
     *)
     let pre outer inner =
       if outer == inner then
@@ -787,7 +800,7 @@ struct
       )
 
     (* The type infix is the general representation for the coercion matrices
-       coerce(𝑃, 𝑄) appearing in 𝑀1 · coerce(𝑃, 𝑄) · 𝑀2
+       coerce(P, Q) appearing in M1 · coerce(P, Q) · M2
 
        Since Q is finer than P, a class of P maps to multiple classes of Q.
        This is represented by the forward array: a class p in P maps to all
@@ -909,8 +922,8 @@ struct
         | Some coerce_pre ->
           let post' = Tree.post_classes node' in
           let coerce_post = Coercion.infix post' post ~lookahead in
-          Vector.set_cons dependents node'
-            (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
+          dependents.@(node') <-
+            List.cons (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
       end non_nullable
 
     (* Record dependencies on a inner node. *)
@@ -923,8 +936,8 @@ struct
       let coercion = Coercion.infix c1 c2 in
       let dep = Inner (node, coercion) in
       assert (Array.length c2 = Array.length coercion.Coercion.backward);
-      Vector.set_cons dependents l dep;
-      Vector.set_cons dependents r dep
+      dependents.@(l) <- List.cons dep;
+      dependents.@(r) <- List.cons dep
 
     (* A graph representation suitable for the DataFlow solver *)
     module Graph = struct
@@ -981,7 +994,7 @@ struct
             let parent_index = Cells.encode (Tree.inject parent) in
             if l = node then (
               (* The left term has been updated *)
-              let r_costs = Vector.get Cells.table r in
+              let r_costs = Cells.table.:(r) in
               let offset_of = Cells.offset r in
               for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
                 let r_cost = Array.fold_left
@@ -999,7 +1012,7 @@ struct
               match inner.Coercion.backward.(i_pre) with
               | -1 -> ()
               | l_post ->
-                let l_costs = Vector.get Cells.table l in
+                let l_costs = Cells.table.:(l) in
                 let offset_of = Cells.offset l in
                 for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
                   let l_cost = l_costs.(offset_of i_pre l_post) in
@@ -1009,7 +1022,7 @@ struct
                 done
             )
         in
-        List.iter update_dep (Vector.get dependents node)
+        List.iter update_dep dependents.:(node)
     end
 
     module Property = struct
@@ -1023,14 +1036,14 @@ struct
       (* Access the cost table using cells *)
       let get index =
         let node, offset = Cells.decode_offset index in
-        (Vector.get Cells.table node).(offset)
+        Cells.table.:(node).(offset)
 
       let set index v =
         let node, offset = Cells.decode_offset index in
-        (Vector.get Cells.table node).(offset) <- v
+        Cells.table.:(node).(offset) <- v
     end
 
-    module MarkMap = struct
+    module MarkMap() = struct
       (* Associate a boolean value to each cell.
          For efficiency, we use a "bytes" for each node, each cell
          corresponding to a single byte.
@@ -1041,22 +1054,158 @@ struct
          does not translate to any observable performance improvement.
       *)
       let data = Vector.map
-          (fun costs -> Bytes.make (Array.length costs) '\x00')
+          (fun costs -> Bytes.make ((Array.length costs + 7) / 8) '\x00')
           Cells.table
+
+      let decompose cell =
+        (cell lsr 3, 1 lsl (cell land 7))
 
       let get var =
         let node, cell = Cells.decode_offset var in
-        Bytes.get (Vector.get data node) cell <> '\x00'
+        let offset, mask = decompose cell in
+        Char.code (Bytes.get data.:(node) offset) land mask <> 0
 
       let set var value =
         let node, cell = Cells.decode_offset var in
-        Bytes.set (Vector.get data node) cell
-          (if value then '\x01' else '\x00')
+        let offset, mask = decompose cell in
+        let bits = Char.code (Bytes.get data.:(node) offset) in
+        let bits' =
+          if value then
+            bits lor mask
+          else
+            bits land lnot mask
+        in
+        Bytes.set data.:(node) offset (Char.unsafe_chr bits')
     end
 
-    (* Run the solver *)
-    include Fix.DataFlow.ForCustomMaps(Property)(Graph)(CostMap)(MarkMap)
+    (* Run the solver for shortest paths *)
+    include Fix.DataFlow.ForCustomMaps(Property)(Graph)(CostMap)(MarkMap())
+
+    (* Run the solver for finite languages *)
+    module Bool_or = struct
+      type property = bool
+      let leq_join = (||)
+    end
+
+    module Finite = MarkMap()
+
+    module FiniteGraph = struct
+      type variable = Cells.t
+
+      let count = Vector.init Transition.goto (fun gt ->
+          let tr = Transition.of_goto gt in
+          Array.make (
+            Array.length (Classes.pre_transition tr) *
+            Array.length (Classes.post_transition tr)
+          ) 0
+        )
+
+      let () =
+        Vector.iter (fun deps ->
+            List.iter (function
+                | Inner _ -> ()
+                | Leaf (parent, pre, post) ->
+                  let node = Tree.leaf (Transition.of_goto parent) in
+                  let post_classes = Array.length (Tree.post_classes node) in
+                  let table = Cells.table.:(node) in
+                  let count = count.:(parent) in
+                  let update_pre pre =
+                    Array.iter (Array.iter (fun post ->
+                        let index = Cells.table_index ~post_classes ~pre ~post in
+                        if table.(index) < max_int then
+                          count.(index) <- count.(index) + 1
+                      )) post
+                  in
+                  match pre with
+                  | Coercion.Pre_singleton i -> update_pre i
+                  | Coercion.Pre_identity ->
+                    let pre_classes = Tree.pre_classes node in
+                    for i = 0 to Array.length pre_classes - 1 do
+                      update_pre i
+                    done
+              ) deps
+          ) dependents
+
+      let foreach_root visit_root =
+        Index.iter Transition.shift (fun sh ->
+            let node = Tree.leaf (Transition.of_shift sh) in
+            visit_root (Cells.encode_offset node 0) true
+          );
+        Index.iter Transition.goto (fun gt ->
+            let node = Tree.leaf (Transition.of_goto gt) in
+            let count = count.:(gt) in
+            Array.iteri (fun i cost ->
+                if cost < max_int && count.(i) = 0 then
+                  visit_root (Cells.encode_offset node i) true
+              ) Cells.table.:(node)
+          )
+
+      (* Visit all the successors of a cell.
+         This amounts to:
+         - finding the node the cell belongs to
+         - looking at the reverse dependencies of this node
+         - visiting all cells that are affected in the dependencies
+      *)
+      let foreach_successor index finite f =
+        if finite then
+          let node, i_pre, i_post = Cells.decode index in
+          let update_dep = function
+            | Leaf (parent, pre, post) ->
+              let count = count.:(parent) in
+              let parent = Tree.leaf (Transition.of_goto parent) in
+              let i_pre' = match pre with
+                | Coercion.Pre_singleton i -> i
+                | Coercion.Pre_identity -> i_pre
+              in
+              let parent_index = Cells.encode parent in
+              Array.iter
+                (fun i_post' ->
+                   let index = parent_index i_pre' i_post' in
+                   let _, offset = Cells.decode_offset index in
+                   count.(offset) <- count.(offset) - 1;
+                   assert (count.(offset) >= 0);
+                   if count.(offset) = 0 then
+                     f index true)
+                post.(i_post)
+            | Inner (parent, inner) ->
+              (* This change updates the cost of an occurrence of equation 8,
+                 of the form l . coercion . r
+                 We have to find whether the change comes from the [l] or the [r]
+                 node to update the right-hand cells of the parent *)
+              let l, r = Tree.define parent in
+              let parent_index = Cells.encode (Tree.inject parent) in
+              if l = node then (
+                (* The left term has been updated *)
+                for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
+                  let r_index = Cells.encode r in
+                  let r_finite =
+                    Array.for_all
+                      (fun i_pre' -> Finite.get (r_index i_pre' i_post'))
+                      inner.Coercion.forward.(i_post)
+                  in
+                  if r_finite then
+                    f (parent_index i_pre i_post') true
+                done
+              ) else (
+                (*sanity*)assert (r = node);
+                (* The right term has been updated *)
+                match inner.Coercion.backward.(i_pre) with
+                | -1 -> ()
+                | l_post ->
+                  let l_index = Cells.encode l in
+                  for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
+                    let l_finite = Finite.get (l_index i_pre l_post) in
+                    if l_finite then
+                      f (parent_index i_pre i_post) true
+                  done
+              )
+          in
+          List.iter update_dep dependents.:(node)
+    end
+    include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(MarkMap())
   end
+
+  module Finite = Solver.Finite
 
   let () = Stopwatch.leave time
 end
