@@ -138,6 +138,14 @@ module type S = sig
 
     (* Get the node, row, and column corresponding to a cell *)
     val decode : n index -> Tree.n index * row * column
+
+    type goto
+    val goto : goto cardinal
+    val is_goto : n index -> goto index option
+    val of_goto : goto index -> n index
+    val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
+    val goto_decode : goto index -> Transition.goto index * row * column
+    val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
   end
 
   module Analysis : sig
@@ -689,6 +697,9 @@ struct
       | L tr -> Classes.post_transition tr
       | R ix -> table_post.:(ix)
 
+    let pre_count t = Array.length (pre_classes t)
+    let post_count t = Array.length (post_classes t)
+
     let () =
       (* Nodes are allocated in topological order.
          When iterating over all nodes, children are visited before parents. *)
@@ -749,7 +760,13 @@ struct
     (* Index of the first cell of matrix associated to a node *)
     val first_cell : Tree.n index -> n index
 
-    val cell_index : n index -> int
+    type goto
+    val goto : goto cardinal
+    val is_goto : n index -> goto index option
+    val of_goto : goto index -> n index
+    val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
+    val goto_decode : goto index -> Transition.goto index * row * column
+    val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
   end = struct
     type row = int
     type column = int
@@ -765,8 +782,8 @@ struct
         !i
       in
       Index.iter Tree.n begin fun node ->
-        let pre = Array.length (Tree.pre_classes node) in
-        let post = Array.length (Tree.post_classes node) in
+        let pre = Tree.pre_count node in
+        let post = Tree.post_count node in
         n := !n + pre * post;
         max_pre := Int.max pre !max_pre;
         max_post := Int.max post !max_post;
@@ -782,8 +799,8 @@ struct
       Vector.init Tree.n @@ fun node ->
       let first_index = !index in
       let base = (node :> int) lsl (pre_bits + post_bits) in
-      let pre_count = Array.length (Tree.pre_classes node) in
-      let post_count = Array.length (Tree.post_classes node) in
+      let pre_count = Tree.pre_count node in
+      let post_count = Tree.post_count node in
       for pre = 0 to pre_count - 1 do
         let base = base lor (pre lsl post_bits) in
         for post = 0 to post_count - 1 do
@@ -802,26 +819,64 @@ struct
 
     let encode i =
       let first = first_cell.:(i) in
-      let post_count = Array.length (Tree.post_classes i) in
+      let post_count = Tree.post_count i in
       fun ~pre ~post ->
         Index.of_int n (first + pre * post_count + post)
 
-    let cell_index ix =
-      let n = mapping.:(ix) lsr (pre_bits + post_bits) in
-      (ix :> int) - first_cell.:(Index.of_int Tree.n n)
+    let first_goto_node, first_goto_cell, last_goto_cell =
+      match cardinal Transition.goto with
+      | 0 -> (0, 0, -1)
+      | n ->
+        let tr i = Transition.of_goto (Index.of_int Transition.goto i) in
+        let first_goto_node = Tree.leaf (tr 0) in
+        let first = first_cell.:(first_goto_node) in
+        let last = Tree.leaf (tr (n - 1)) in
+        let next = Index.of_int Tree.n ((last :> int) + 1) in
+        ((first_goto_node :> int), first, first_cell.:(next) - 1)
+
+    module Goto = Const(struct
+        let cardinal = last_goto_cell - first_goto_cell + 1
+      end)
+
+    type goto = Goto.n
+    let goto = Goto.n
+
+    let is_goto (i : n index) =
+      let i = (i :> int) in
+      if first_goto_cell <= i && i <= last_goto_cell
+      then Some (Index.of_int goto (i - first_goto_cell))
+      else None
+
+    let of_goto (g : goto index) =
+      Index.of_int n (first_goto_cell + (g :> int))
+
+    let goto_decode (g : goto index) =
+      let n, pre, post = decode (of_goto g) in
+      let gt = Index.of_int Transition.goto ((n :> int) - first_goto_cell) in
+      (gt, pre, post)
+
+    let goto_encode i =
+      let node = Tree.leaf (Transition.of_goto i) in
+      let first = first_cell.:(node) - first_goto_cell in
+      let post_count = Tree.post_count node in
+      fun ~pre ~post ->
+        Index.of_int goto (first + pre * post_count + post)
+
+    let iter_goto (gt : Transition.goto index) f =
+      let i = (gt :> int) in
+      let index_of i = first_cell.:(Index.of_int Tree.n (first_goto_node + i)) in
+      for j = index_of i to index_of (i + 1) - 1 do
+        f (Index.of_int goto (j - first_goto_cell))
+      done
 
     let first_cell i = Index.of_int n first_cell.:(i)
+
   end
 
-  (* ---------------------------------------------------------------------- *)
-
-  (* Represent the data flow problem to solve *)
-  module Solver = struct
-    let min_cost a b : int =
-      if a < b then a else b
+  module Reverse_dependencies = struct
 
     (* Reverse dependencies record in which equations a node appears *)
-    type reverse_dependency =
+    type t =
       (* Equation (7): this node appears in the RHS of the definition of a
          goto transition.
          The dependency is accompanied with pre-coercion (see [Coercion.pre])
@@ -833,7 +888,7 @@ struct
          coercion matrix. *)
       | Inner of Tree.Inner.n index * Coercion.infix
 
-    let dependents : (Tree.n, reverse_dependency list) vector =
+    let occurrences : (Tree.n, t list) vector =
       (* Store enough information with each node of the tree to compute
          which cells are affected if a cell of this node changes.
 
@@ -841,22 +896,117 @@ struct
       *)
       Vector.make Tree.n []
 
-    (* No need to record dependencies on a shift transition: its cost is
-       constant.  However we initialize it to 1. *)
-    let record_shift ~visit_root tr =
+    let () =
+      Index.iter Transition.goto begin fun tr ->
+        (* Record dependencies of a goto transition.  *)
+        let node = Tree.leaf (Transition.of_goto tr) in
+        let pre = Tree.pre_classes node in
+        let post = Tree.post_classes node in
+        (* Register dependencies to other reductions *)
+        List.iter begin fun ({lookahead; _}, node') ->
+          match Coercion.pre pre (Tree.pre_classes node') with
+          | None ->
+            (* The goto transition is unreachable because of conflict
+               resolution.  Don't register any dependency. *)
+            ()
+          | Some coerce_pre ->
+            let post' = Tree.post_classes node' in
+            let coerce_post = Coercion.infix post' post ~lookahead in
+            occurrences.@(node') <-
+              List.cons (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
+        end (Tree.goto_equations tr).non_nullable
+      end;
+      (* Record dependencies on a inner node. *)
+      Index.iter Tree.Inner.n begin fun node ->
+        let (l, r) = Tree.define node in
+        (*(*sanity*)assert (Tree.pre_classes l == Tree.pre_classes node);*)
+        (*(*sanity*)assert (Tree.post_classes r == Tree.post_classes node);*)
+        let c1 = Tree.post_classes l in
+        let c2 = Tree.pre_classes r in
+        let coercion = Coercion.infix c1 c2 in
+        let dep = Inner (node, coercion) in
+        assert (Array.length c2 = Array.length coercion.Coercion.backward);
+        occurrences.@(l) <- List.cons dep;
+        occurrences.@(r) <- List.cons dep
+      end
+
+    let visit_occurrences index
+        ~visit_goto
+        ~from_left ~acc ~acc_right
+        ~from_right
+      =
+      let node, i_pre, i_post = Cell.decode index in
+      let update_dep = function
+        | Leaf (parent, pre, post) ->
+          (* If the production begins with a terminal,
+             we have to map the class *)
+          let i_pre' = match pre with
+            | Coercion.Pre_singleton i -> i
+            | Coercion.Pre_identity -> i_pre
+          in
+          let encode = Cell.goto_encode parent in
+          Array.iter (fun i_post' -> visit_goto (encode ~pre:i_pre' ~post:i_post'))
+            post.(i_post)
+        | Inner (parent, inner) ->
+          (* This change updates the cost of an occurrence of equation 8,
+             of the form l . coercion . r
+             We have to find whether the change comes from the [l] or the [r]
+             node to update the right-hand cells of the parent *)
+          let l, r = Tree.define parent in
+          let encode_p = Cell.encode (Tree.inject parent) in
+          if l = node then (
+            (* The left term has been updated *)
+            let encode_r = Cell.encode r in
+            for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
+              let acc =
+                Array.fold_left
+                  (fun acc i_pre' ->
+                     acc_right acc (encode_r ~pre:i_pre' ~post:i_post'))
+                  acc inner.Coercion.forward.(i_post)
+              in
+              from_left
+                ~right:acc
+                ~parent:(encode_p ~pre:i_pre ~post:i_post')
+            done
+          ) else (
+            (* The right term has been updated *)
+            (*sanity*)assert (r = node);
+            match inner.Coercion.backward.(i_pre) with
+            | -1 -> ()
+            | l_post ->
+              let encode_l = Cell.encode l in
+              for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
+                from_right
+                  ~left:(encode_l ~pre:i_pre ~post:l_post)
+                  ~parent:(encode_p ~pre:i_pre ~post:i_post)
+              done
+          )
+      in
+      List.iter update_dep occurrences.:(node)
+  end
+
+  (* ---------------------------------------------------------------------- *)
+
+  (* Represent the data flow problem to solve *)
+  module Solver = struct
+    let min_cost a b : int =
+      if a < b then a else b
+
+    (* Initialize shift transitions to cost 1. *)
+    let initialize_shift ~visit_root tr =
       let node = Tree.leaf (Transition.of_shift tr) in
       (*sanity*)assert (Array.length (Tree.pre_classes node) = 1);
       (*sanity*)assert (Array.length (Tree.post_classes node) = 1);
       visit_root (Cell.first_cell node) 1
 
     (* Record dependencies on a goto transition.  *)
-    let record_goto ~visit_root tr =
+    let initialize_goto ~visit_root tr =
       let node = Tree.leaf (Transition.of_goto tr) in
-      let pre = Tree.pre_classes node in
-      let post = Tree.post_classes node in
       let eqn = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
       if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
+        let pre = Tree.pre_classes node in
+        let post = Tree.post_classes node in
         (* We use:
            - [c_pre] and [i_pre] for a class in the pre partition and its index
            - [c_post] and [i_post] for a class in the post partition and its
@@ -872,33 +1022,7 @@ struct
             Array.iteri (update_cell i_post c_post) pre
         in
         Array.iteri update_col post
-      );
-      (* Register dependencies to other reductions *)
-      List.iter begin fun ({lookahead; _}, node') ->
-        match Coercion.pre pre (Tree.pre_classes node') with
-        | None ->
-          (* The goto transition is unreachable because of conflict resolution.
-             Don't register any dependency. *)
-          ()
-        | Some coerce_pre ->
-          let post' = Tree.post_classes node' in
-          let coerce_post = Coercion.infix post' post ~lookahead in
-          dependents.@(node') <-
-            List.cons (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
-      end eqn.non_nullable
-
-    (* Record dependencies on a inner node. *)
-    let record_inner node =
-      let (l, r) = Tree.define node in
-      (*(*sanity*)assert (Tree.pre_classes l == Tree.pre_classes node);*)
-      (*(*sanity*)assert (Tree.post_classes r == Tree.post_classes node);*)
-      let c1 = Tree.post_classes l in
-      let c2 = Tree.pre_classes r in
-      let coercion = Coercion.infix c1 c2 in
-      let dep = Inner (node, coercion) in
-      assert (Array.length c2 = Array.length coercion.Coercion.backward);
-      dependents.@(l) <- List.cons dep;
-      dependents.@(r) <- List.cons dep
+      )
 
     let costs = Vector.make Cell.n max_int
 
@@ -914,13 +1038,12 @@ struct
          visit all transitions and consider every non-infinite cell a root.
       *)
       let foreach_root visit_root =
-        (* Visit all nodes:
-           - call [visit_root] on roots
-           - populate the [dependents] vector for inner nodes.
+        (* Populate roots:
+           - shift transitions have cost 1 by definition
+           - nullable goto transitions have cost 0
         *)
-        Index.iter Transition.shift (record_shift ~visit_root);
-        Index.iter Transition.goto (record_goto ~visit_root);
-        Index.iter Tree.Inner.n record_inner
+        Index.iter Transition.shift (initialize_shift ~visit_root);
+        Index.iter Transition.goto (initialize_goto ~visit_root)
 
       (* Visit all the successors of a cell.
          This amounts to:
@@ -933,57 +1056,18 @@ struct
            in relaxing the node.
            This guarantees that the additions below do not overflow. *)
         assert (cost < max_int);
-        let node, i_pre, i_post = Cell.decode index in
-        let update_dep = function
-          | Leaf (parent, pre, post) ->
-            (* This change might improve one of the cost(s,x) *)
-            let parent = Tree.leaf (Transition.of_goto parent) in
-            (* If the production begins with a terminal,
-               we have to map the class *)
-            let i_pre' = match pre with
-              | Coercion.Pre_singleton i -> i
-              | Coercion.Pre_identity -> i_pre
-            in
-            let encode = Cell.encode parent in
-            Array.iter
-              (fun i_post' -> f (encode ~pre:i_pre' ~post:i_post') cost)
-              post.(i_post)
-          | Inner (parent, inner) ->
-            (* This change updates the cost of an occurrence of equation 8,
-               of the form l . coercion . r
-               We have to find whether the change comes from the [l] or the [r]
-               node to update the right-hand cells of the parent *)
-            let l, r = Tree.define parent in
-            let encode_p = Cell.encode (Tree.inject parent) in
-            if l = node then (
-              (* The left term has been updated *)
-              let encode = Cell.encode r in
-              for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
-                let r_cost = Array.fold_left
-                    (fun r_cost i_pre' ->
-                       min_cost r_cost costs.:(encode ~pre:i_pre' ~post:i_post'))
-                    max_int inner.Coercion.forward.(i_post)
-                in
-                if r_cost < max_int then
-                  f (encode_p ~pre:i_pre ~post:i_post')
-                    (cost + r_cost)
-              done
-            ) else (
-              (* The right term has been updated *)
-              (*sanity*)assert (r = node);
-              match inner.Coercion.backward.(i_pre) with
-              | -1 -> ()
-              | l_post ->
-                let encode_l = Cell.encode l in
-                for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
-                  let l_cost = costs.:(encode_l ~pre:i_pre ~post:l_post) in
-                  if l_cost < max_int then
-                    f (encode_p ~pre:i_pre ~post:i_post)
-                      (l_cost + cost)
-                done
+        Reverse_dependencies.visit_occurrences index
+          ~visit_goto:(fun cell -> f (Cell.of_goto cell) cost)
+          ~acc:max_int
+          ~acc_right:(fun cost right -> min_cost cost costs.:(right))
+          ~from_left:(fun ~right ~parent ->
+              if right < max_int then
+                f parent (cost + right))
+          ~from_right:(fun ~left ~parent ->
+              let left = costs.:(left) in
+              if left < max_int then
+                f parent (left + cost)
             )
-        in
-        List.iter update_dep dependents.:(node)
     end
 
     module Property = struct
@@ -1019,39 +1103,17 @@ struct
     module FiniteGraph = struct
       type variable = Cell.n index
 
-      let count = Vector.init Transition.goto (fun gt ->
-          let tr = Transition.of_goto gt in
-          Array.make (
-            Array.length (Classes.pre_transition tr) *
-            Array.length (Classes.post_transition tr)
-          ) 0
-        )
+      let count = Vector.make Cell.goto 0
 
       let () =
-        Vector.iter (fun deps ->
-            List.iter (function
-                | Inner _ -> ()
-                | Leaf (parent, pre, post) ->
-                  let node = Tree.leaf (Transition.of_goto parent) in
-                  let encode = Cell.encode node in
-                  let count = count.:(parent) in
-                  let update_pre pre =
-                    Array.iter (Array.iter (fun post ->
-                        let index = encode ~pre ~post in
-                        if costs.:(index) < max_int then
-                          let offset = Cell.cell_index index in
-                          count.(offset) <- count.(offset) + 1
-                      )) post
-                  in
-                  match pre with
-                  | Coercion.Pre_singleton i -> update_pre i
-                  | Coercion.Pre_identity ->
-                    let pre_classes = Tree.pre_classes node in
-                    for i = 0 to Array.length pre_classes - 1 do
-                      update_pre i
-                    done
-              ) deps
-          ) dependents
+        Index.iter Cell.n (fun cell ->
+            Reverse_dependencies.visit_occurrences cell
+              ~visit_goto:(fun goto -> count.@(goto) <- succ)
+              ~acc:()
+              ~acc_right:(fun () _ -> ())
+              ~from_left:(fun ~right:() ~parent:_ -> ())
+              ~from_right:(fun ~left:_ ~parent:_ -> ())
+          )
 
       let foreach_root visit_root =
         Index.iter Transition.shift (fun sh ->
@@ -1059,16 +1121,11 @@ struct
             visit_root (Cell.first_cell node) true
           );
         Index.iter Transition.goto (fun gt ->
-            let node = Tree.leaf (Transition.of_goto gt) in
-            let count = count.:(gt) in
-            let pre_count = Array.length (Tree.pre_classes node) in
-            let post_count = Array.length (Tree.post_classes node) in
-            let first = (Cell.first_cell node :> int) in
-            for i = 0 to pre_count * post_count - 1 do
-              let index = Index.of_int Cell.n (first + i) in
-              if costs.:(index) < max_int && count.(i) = 0 then
-                visit_root index true
-            done
+            Cell.iter_goto gt (fun gt' ->
+                let index = Cell.of_goto gt' in
+                if costs.:(index) < max_int && count.:(gt') = 0 then
+                  visit_root index true
+              )
           )
 
       (* Visit all the successors of a cell.
@@ -1079,57 +1136,18 @@ struct
       *)
       let foreach_successor index finite f =
         if finite then
-          let node, i_pre, i_post = Cell.decode index in
-          let update_dep = function
-            | Leaf (parent, pre, post) ->
-              let count = count.:(parent) in
-              let encode = Cell.encode (Tree.leaf (Transition.of_goto parent)) in
-              let i_pre' = match pre with
-                | Coercion.Pre_singleton i -> i
-                | Coercion.Pre_identity -> i_pre
-              in
-              Array.iter begin fun i_post' ->
-                let index = encode ~pre:i_pre' ~post:i_post' in
-                let offset = Cell.cell_index index in
-                count.(offset) <- count.(offset) - 1;
-                assert (count.(offset) >= 0);
-                if count.(offset) = 0 then
+          Reverse_dependencies.visit_occurrences index
+            ~visit_goto:(fun gt ->
+                let count' = count.:(gt) - 1  in
+                count.:(gt) <- count';
+                assert (count' >= 0);
+                if count' = 0 then
                   f index true
-              end post.(i_post)
-            | Inner (parent, inner) ->
-              (* This change updates the cost of an occurrence of equation 8,
-                 of the form l . coercion . r
-                 We have to find whether the change comes from the [l] or the [r]
-                 node to update the right-hand cells of the parent *)
-              let l, r = Tree.define parent in
-              let encode_p = Cell.encode (Tree.inject parent) in
-              if l = node then (
-                let encode_r = Cell.encode r in
-                (* The left term has been updated *)
-                for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
-                  let r_finite =
-                    Array.for_all
-                      (fun i_pre' -> Finite.get (encode_r ~pre:i_pre' ~post:i_post'))
-                      inner.Coercion.forward.(i_post)
-                  in
-                  if r_finite then
-                    f (encode_p ~pre:i_pre ~post:i_post') true
-                done
-              ) else (
-                (*sanity*)assert (r = node);
-                (* The right term has been updated *)
-                match inner.Coercion.backward.(i_pre) with
-                | -1 -> ()
-                | l_post ->
-                  let encode_l = Cell.encode l in
-                  for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
-                    let l_finite = Finite.get (encode_l ~pre:i_pre ~post:l_post) in
-                    if l_finite then
-                      f (encode_p ~pre:i_pre ~post:i_post) true
-                  done
               )
-          in
-          List.iter update_dep dependents.:(node)
+            ~acc:true ~acc_right:(fun acc right -> acc && Finite.get right)
+            ~from_left:(fun ~right ~parent -> if right then f parent true)
+            ~from_right:(fun ~left ~parent ->
+                if Finite.get left then f parent true)
     end
     include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(BoolMap())
   end
