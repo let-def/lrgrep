@@ -104,6 +104,14 @@ module type S = sig
 
     (* Get the node, row, and column corresponding to a cell *)
     val decode : n index -> Tree.n index * row * column
+
+    type goto
+    val goto : goto cardinal
+    val is_goto : n index -> goto index option
+    val of_goto : goto index -> n index
+    val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
+    val goto_decode : goto index -> Transition.goto index * row * column
+    val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
   end
 
   module Analysis : sig
