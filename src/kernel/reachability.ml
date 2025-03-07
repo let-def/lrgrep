@@ -156,8 +156,6 @@ end
 
 module Make (Info : Info.S)() : S with module Info := Info =
 struct
-  let time = Stopwatch.enter Stopwatch.main "Reachability"
-
   open Info
 
   (* ---------------------------------------------------------------------- *)
@@ -1156,6 +1154,4 @@ struct
     let cost = Vector.get Solver.costs
     let finite = Solver.Finite.get
   end
-
-  let () = Stopwatch.leave time
 end

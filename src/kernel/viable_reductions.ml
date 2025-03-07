@@ -98,9 +98,6 @@ module Make(Info : Info.S)() : S with module Info := Info =
 struct
   open Info
 
-  (* Start a stopwatch to measure the time taken by the module's execution. *)
-  let time = Stopwatch.enter Stopwatch.main "Viable_reductions.Make"
-
   include IndexBuffer.Gen.Make()
 
   (* A configuration of a reduction simulation state,
@@ -316,6 +313,5 @@ struct
 
   (* Log the number of nodes in the viable reductions graph. *)
   let () =
-    Stopwatch.step time "Viable reductions graph has %d nodes" (cardinal n);
-    Stopwatch.leave time
+    stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal n)
 end
