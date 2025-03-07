@@ -1,12 +1,13 @@
 (executable
  (name main)
  (public_name lrgrep)
- (modules main
-          sentences
-          compile_command
-          enum_command enum
-          interpret_command)
- (libraries front kernel fix cmon utils menhirSdk valmari support))
+ (modules main)
+ ;(modules main
+ ;         sentences
+ ;         compile_command
+ ;         enum_command enum
+ ;         interpret_command)
+ (libraries front fix cmon utils menhirSdk valmari support))
 
 (executable
  (name minilrgrep)

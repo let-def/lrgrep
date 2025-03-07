@@ -35,132 +35,49 @@ open Utils
 open Misc
 open Fix.Indexing
 
-(* Signature for a refinement of the set of LR states *)
-module type RAW0 = sig
+(* Extended signature for class-based refinements *)
+module type S = sig
   include Info.INDEXED
   module Info : Info.S
   open Info
 
-  (** Wait states lifted to LRC *)
-  val all_wait : set
-
   val lr1_of_lrc : t -> Lr1.t
   val lrcs_of_lr1 : Lr1.t -> set
   val first_lrc_of_lr1 : Lr1.t -> t
-  val all_successors : t -> set
-end
-
-(* Extended signature for class-based refinements *)
-module type RAW = sig
-  include RAW0
   val lookahead : t -> Info.Terminal.set
   val class_index : t -> int
   val to_string : t -> string
   val set_to_string : set -> string
+
+  (** Wait states lifted to LRC *)
+  val all_wait : set
+  val all_successors : t -> set
+
+  val reachable_from : t -> set
 end
 
 (* Signature for a fully-featured LRC module with reachability information *)
-module type S = sig
-  include RAW
-  val reachable : set
-  val wait : set
-  val entrypoints : set
-  val predecessors : t -> set
-  val successors : t -> set
+module type ENTRYPOINTS = sig
+  module Lrc : S
+  val reachable : Lrc.set
+  val wait : Lrc.set
+  val entrypoints : Lrc.set
+  val predecessors : Lrc.t -> Lrc.set
+  val successors : Lrc.t -> Lrc.set
 
   (* [some_prefix st] is a list of states reaching an entrypoint, starting from
      [st], or the empty list if state is unreachable. *)
-  val some_prefix : t -> t list
-end
-
-(* Find states reachable from specific states by closing over raw reachability
-   information *)
-module From_entrypoints(Info : Info.S)
-    (Lrc : RAW with module Info := Info)
-    (For : sig val entrypoints : Lrc.set end)
-  : S with module Info := Info and type n = Lrc.n =
-struct
-  include Lrc
-  include For
-
-  type n = Lrc.n
-  let n = Lrc.n
-
-  (* Set of reachable states *)
-  let reachable = ref IndexSet.empty
-
-  (* Compute transitive successors for each state and populate reachable set *)
-  let successors =
-    let table = Vector.make Lrc.n IndexSet.empty in
-    let todo = ref entrypoints in
-    let populate i =
-      reachable := IndexSet.add i !reachable;
-      if IndexSet.is_empty (Vector.get table i) then (
-        let succ = Lrc.all_successors i in
-        todo := IndexSet.union succ !todo;
-        Vector.set table i succ;
-      )
-    in
-    while not (IndexSet.is_empty !todo) do
-      let todo' = !todo in
-      todo := IndexSet.empty;
-      IndexSet.rev_iter populate todo';
-    done;
-    table
-
-  (* Compute predecessors for each state using successors information *)
-  let predecessors = Misc.relation_reverse n successors
-
-  (* Accessors for successors and predecessors *)
-  let successors = Vector.get successors
-  let predecessors = Vector.get predecessors
-
-  (* Final reachable states *)
-  let reachable = !reachable
-
-  (* Wait states that are reachable *)
-  let wait = IndexSet.inter Lrc.all_wait reachable
-
-  (* Compute a prefix to reach each state *)
-  let some_prefix =
-    let table = lazy (
-      let table = Vector.make Lrc.n [] in
-      let todo = ref [] in
-      let expand prefix state =
-        match Vector.get table state with
-        | [] ->
-          Vector.set table state prefix;
-          let prefix = state :: prefix in
-          let succ = successors state in
-          if not (IndexSet.is_empty succ) then
-            push todo (succ, prefix)
-        | _ -> ()
-      in
-      Index.iter Info.Lr1.n (fun lr1 ->
-          if Option.is_none (Info.Lr1.incoming lr1) then
-            expand [] (Lrc.first_lrc_of_lr1 lr1)
-        );
-      let propagate (succ, prefix) =
-        IndexSet.iter (expand prefix) succ
-      in
-      fixpoint ~propagate todo;
-      table
-    )
-    in
-    (fun st -> Vector.get (Lazy.force table) st)
+  val some_prefix : Lrc.t -> Lrc.t list
 end
 
 (* Functor to create an LRC module from an Info module and Reachability module *)
 module Make
     (I : Info.S)
     (Reachability : Reachability.S with module Info := I)
-: RAW with module Info := I
+: S with module Info := I
 =
 struct
   open I
-
-  (* Start timing for LRC computation *)
-  let time = Stopwatch.enter Stopwatch.main "Lrc"
 
   (* Compute the total number of LRC states *)
   let n =
@@ -230,12 +147,10 @@ struct
     lookaheads.(index_delta lrc lrc0)
 
   (* Step timing after computing the LRC set *)
-  let () = Stopwatch.step time "Computed LRC set"
+  let () = stopwatch 2 "Computed LRC set"
 
   (* Compute successors for each LRC state *)
-  let all_successors =
-    (* TODO: This computes the predecessors and then reverses the relation.
-     * We could compute the successors directly. *)
+  let all_successors, reachable_from =
     let table = Vector.make n IndexSet.empty in
     let process lr1 =
       let tgt_first = first_lrc_of_lr1 lr1 in
@@ -280,7 +195,19 @@ struct
         List.iter process_transition (Transition.predecessors lr1)
     in
     Index.iter Lr1.n process;
-    Vector.get (Misc.relation_reverse n table)
+    let successors = Misc.relation_reverse n table in
+    stopwatch 2 "Computed LRC successors";
+    let reachable = Misc.relation_closure ~reverse:table successors in
+    let count = ref 0 in
+    let hash = ref 0 in
+    Vector.iteri (fun i s ->
+        let s = IndexSet.cardinal s in
+        count := !count + s;
+        hash := !hash + Index.to_int i * s)
+      reachable;
+    Printf.eprintf "closure: cardinal: %d, hash: %d\n" !count !hash;
+    stopwatch 2 "Closed LRC successors";
+    (Vector.get successors, Vector.get reachable)
 
   (* Convert an LRC state to a string representation *)
   let to_string lrc =
@@ -291,13 +218,85 @@ struct
   (* Convert a set of LRC states to a string representation *)
   let set_to_string lrcs =
     string_of_indexset ~index:to_string lrcs
+end
 
-  (* End timing after computing all necessary information *)
-  let () = Stopwatch.leave time
+(* Find states reachable from specific states by closing over raw reachability
+   information *)
+module From_entrypoints(Info : Info.S)
+    (Lrc : S with module Info := Info)
+    (For : sig val entrypoints : Lrc.set end)
+  : ENTRYPOINTS
+    with module Lrc.Info := Info
+    with module Lrc := Lrc =
+struct
+  include For
+
+  (* Set of reachable states *)
+  let reachable = ref IndexSet.empty
+
+  (* Compute transitive successors for each state and populate reachable set *)
+  let successors =
+    let table = Vector.make Lrc.n IndexSet.empty in
+    let todo = ref entrypoints in
+    let populate i =
+      reachable := IndexSet.add i !reachable;
+      if IndexSet.is_empty (Vector.get table i) then (
+        let succ = Lrc.all_successors i in
+        todo := IndexSet.union succ !todo;
+        Vector.set table i succ;
+      )
+    in
+    while not (IndexSet.is_empty !todo) do
+      let todo' = !todo in
+      todo := IndexSet.empty;
+      IndexSet.rev_iter populate todo';
+    done;
+    table
+
+  (* Compute predecessors for each state using successors information *)
+  let predecessors = Misc.relation_reverse Lrc.n successors
+
+  (* Accessors for successors and predecessors *)
+  let successors = Vector.get successors
+  let predecessors = Vector.get predecessors
+
+  (* Final reachable states *)
+  let reachable = !reachable
+
+  (* Wait states that are reachable *)
+  let wait = IndexSet.inter Lrc.all_wait reachable
+
+  (* Compute a prefix to reach each state *)
+  let some_prefix =
+    let table = lazy (
+      let table = Vector.make Lrc.n [] in
+      let todo = ref [] in
+      let expand prefix state =
+        match Vector.get table state with
+        | [] ->
+          Vector.set table state prefix;
+          let prefix = state :: prefix in
+          let succ = successors state in
+          if not (IndexSet.is_empty succ) then
+            push todo (succ, prefix)
+        | _ -> ()
+      in
+      Index.iter Info.Lr1.n (fun lr1 ->
+          if Option.is_none (Info.Lr1.incoming lr1) then
+            expand [] (Lrc.first_lrc_of_lr1 lr1)
+        );
+      let propagate (succ, prefix) =
+        IndexSet.iter (expand prefix) succ
+      in
+      fixpoint ~propagate todo;
+      table
+    )
+    in
+    (fun st -> Vector.get (Lazy.force table) st)
 end
 
 (* Minimize the number of states in a refinement *)
-module Minimize
+(*module Minimize
     (Info : Info.S)
     (Lrc : RAW0 with module Info := Info)
   : RAW0 with module Info := Info =
@@ -415,4 +414,4 @@ struct
       (cardinal Lrc.n) (cardinal MDFA.states);
     (* End timing *)
     Stopwatch.leave time
-end
+  end *)
