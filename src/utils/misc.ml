@@ -366,3 +366,17 @@ let stopwatch level fmt =
       (fun _ -> prerr_newline ()) stderr fmt
   ) else
     Printf.ifprintf stderr fmt
+
+module LazyFunctor(S : sig module type T val log : string option end)(F:() -> S.T) =
+  (functor (X : sig module Force() : S.T end) () -> X.Force())
+    (struct
+      let thunk = lazy begin
+        let result = (module F() : S.T) in
+        begin match S.log with
+          | None -> ()
+          | Some name -> stopwatch 1 "Computed %s" name
+        end;
+        result
+      end
+      module Force(): S.T = (val Lazy.force thunk)
+    end)
