@@ -157,23 +157,26 @@ let fix_relation  (relation : ('n, 'n indexset) vector) (values : ('n, 'a) vecto
     ~(propagate : 'n index -> 'a -> 'n index -> 'a -> 'a)
   =
   let n = Vector.length values in
-  let marks = IndexMarks.make n in
+  let marked = ref true in
+  let marks = Boolvector.make n true in
   let update i =
-    let value = values.:(i) in
-    IndexSet.rev_iter (fun j ->
-        let value' = values.:(j) in
-        let value'' = propagate i value j value' in
-        if value' != value'' then (
-          values.:(j) <- value'';
-          IndexMarks.mark marks j
-        )
-      ) relation.:(i)
+    if Boolvector.test marks i then (
+      Boolvector.clear marks i;
+      let value = values.:(i) in
+      IndexSet.rev_iter (fun j ->
+          let value' = values.:(j) in
+          let value'' = propagate i value j value' in
+          if value' != value'' then (
+            values.:(j) <- value'';
+            Boolvector.set marks j;
+            marked := true
+          )
+        ) relation.:(i)
+    )
   in
-  Index.iter n update;
-  while not (IndexMarks.is_empty marks) do
-    let todo = IndexMarks.marked marks in
-    IndexMarks.clear marks;
-    IndexSet.rev_iter update todo
+  while !marked do
+    marked := false;
+    Index.rev_iter n update
   done
 
 let close_relation ?reverse rel =
