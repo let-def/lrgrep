@@ -94,14 +94,16 @@ end
 module Make
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
-    (Lrc: Lrc.S with module Info := Info)
+    (LRC: Lrc.S with module Info := Info)
+    (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
+                                   and module Lrc := LRC)
     () : S with module Info := Info
             and module Viable := Viable
-            and module Lrc := Lrc
+            and module Lrc := LRC
 =
 struct
   open Info
-  let time = Stopwatch.enter Stopwatch.main "Reachable reductions"
+  module Lrc = LRC
 
   include IndexBuffer.Gen.Make()
 
@@ -175,7 +177,7 @@ struct
       let rest =
         match rest with
         | [] -> []
-        | rest -> visit_outer (indexset_bind lrcs Lrc.predecessors) rest
+        | rest -> visit_outer (indexset_bind lrcs Entrypoints.predecessors) rest
       in
       candidates :: rest
 
@@ -188,13 +190,13 @@ struct
         (IndexSet.singleton lrc)
         (Source.inj_r lr1)
     in
-    IndexMap.inflate process Lrc.wait
+    IndexMap.inflate process Entrypoints.wait
 
   (* Freeze the state generator to finalize the state machine *)
   let states = IndexBuffer.Gen.freeze states
 
   (* Print timing information and the number of nodes in the state machine *)
-  let () = Stopwatch.step time "Nodes: %d" (cardinal n)
+  let () = stopwatch 2 "reachable reductions with %d nodes" (cardinal n)
 
   (* Iterate over all transition targets *)
   let iter_targets tr f =
@@ -259,9 +261,6 @@ struct
         then IndexSet.add red acc
         else acc
       ) IndexSet.empty (Vector.get states src).transitions
-
-  (* Leave the stopwatch to mark the end of the process *)
-  let () = Stopwatch.leave time
 end
 
 (* Functor to create a covering tree for the Reachable_reductions module *)
@@ -462,18 +461,19 @@ end
 module FailureNFA
     (Info : Info.S)
     (Viable: Viable_reductions.S with module Info := Info)
-    (Lrc: Lrc.S with module Info := Info)
+    (LRC: Lrc.S with module Info := Info)
+    (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
+                                   and module Lrc := LRC)
     (Reach : S with module Info := Info
                 and module Viable := Viable
-                and module Lrc := Lrc)
+                and module Lrc := LRC)
     ()
   : FAILURE_NFA with type terminal := Info.Terminal.n
                  and type lr1 := Info.Lr1.n
-                 and type lrc := Lrc.n
+                 and type lrc := LRC.n
 =
 struct
-
-  let time = Stopwatch.enter Stopwatch.main "FailureNFA2"
+  module Lrc = LRC
 
   let () =
     if build_with_expensive_assertions then (
@@ -482,7 +482,7 @@ struct
           let lr1s' = Info.Lr1.predecessors lr1 in
           IndexSet.iter (fun lrc' ->
               assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s')
-            ) (Lrc.predecessors lrc)
+            ) (Entrypoints.predecessors lrc)
         );
       let validate {Reach. config; transitions} =
         let rec validate lrcs = function
@@ -497,7 +497,7 @@ struct
                   assert false
                 )
               ) x;
-            validate (indexset_bind lrcs Lrc.predecessors) xs
+            validate (indexset_bind lrcs Entrypoints.predecessors) xs
         in
         validate config.lrcs transitions
       in
@@ -559,16 +559,16 @@ struct
 
   let lrc_initials =
     IndexSet.filter
-      (fun lrc -> IndexSet.is_empty (Lrc.predecessors lrc))
-      Lrc.wait
+      (fun lrc -> IndexSet.is_empty (Entrypoints.predecessors lrc))
+      Entrypoints.wait
 
   let bottom =
     States.suffix
       (IndexBuffer.Gen.add suffix_transitions (IndexMap.empty, IndexSet.empty))
 
   let reach_transitions =
-    let preds lrcs = indexset_bind lrcs Lrc.predecessors in
-    let succs lrcs = indexset_bind lrcs Lrc.successors in
+    let preds lrcs = indexset_bind lrcs Entrypoints.predecessors in
+    let succs lrcs = indexset_bind lrcs Entrypoints.successors in
     let rec import lrcs = function
       | [] -> (IndexMap.empty, IndexSet.empty)
       | targets :: next ->
@@ -689,7 +689,7 @@ struct
     match States.prj i with
     | States.Prefix lrc ->
       IndexMap.inflate (fun _ -> IndexSet.empty)
-        (IndexSet.map States.prefix (Lrc.predecessors lrc))
+        (IndexSet.map States.prefix (Entrypoints.predecessors lrc))
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
@@ -719,8 +719,6 @@ struct
       );
     p "}";
     close_out oc
-
-  let () = Stopwatch.leave time
 end
 
 module Coverage_check
@@ -741,7 +739,6 @@ module Coverage_check
 =
 struct
   open Info
-  let time = Stopwatch.enter Stopwatch.main "Coverage check"
 
   module FDFA = struct
     let table = Hashtbl.create 7
@@ -786,9 +783,7 @@ struct
       fixpoint ~propagate todo
 
     let () =
-      Stopwatch.step time
-        "Determinized Failure NFA, %d states\n"
-        (Hashtbl.length table)
+      stopwatch 3 "Determinized Failure NFA with %d states" (Hashtbl.length table)
   end
 
   let pts ts = string_of_indexset ~index:Terminal.to_string ts
@@ -966,8 +961,6 @@ struct
         ) desc.successors
     in
     fixpoint ~propagate worklist
-
-  let () = Stopwatch.leave time
 
   (* Normalize successors & compute predecessors *)
   let () =

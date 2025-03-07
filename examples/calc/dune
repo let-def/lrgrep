@@ -9,8 +9,8 @@
   (targets parse_errors.ml)
   (deps    parser.cmly parse_errors.mlyl)
   (action
-     (run lrgrep parse_errors.mlyl -g parser.cmly
-          -o parse_errors.ml)))
+     (run lrgrep parser.cmly parse_errors.mlyl
+          compile -o parse_errors.ml)))
 
 (executable
  (name main)
