@@ -334,3 +334,35 @@ let rec fixpoint ?counter ~propagate todo = match !todo with
 
 let assert_equal_length v1 v2 =
   assert_equal_cardinal (Vector.length v1) (Vector.length v2)
+
+let verbosity_level = ref 0
+
+let stopwatch_delta =
+  let last = ref [] in
+  fun level ->
+  let rec visit = function
+    | (level', _) :: acc when level' > level ->
+      visit acc
+    | [] -> 0.0, []
+    | (level', time) :: acc when level' = level ->
+      (time, acc)
+    | (_, time) :: _ as acc ->
+      time, acc
+  in
+  let time = Sys.time () in
+  let time', last' = visit !last in
+  last := (level, time) :: last';
+  (time -. time')
+
+let stopwatch level fmt =
+  if true || level <= !verbosity_level then (
+    let delta = stopwatch_delta level in
+    if delta < 10. then
+      Printf.eprintf "[% 5.0fms]" (delta *. 1000.)
+    else
+      Printf.eprintf "[% 5.01fs]" delta;
+    Printf.fprintf stderr "%s-> " (String.make level ' ');
+    Printf.kfprintf
+      (fun _ -> prerr_newline ()) stderr fmt
+  ) else
+    Printf.ifprintf stderr fmt
