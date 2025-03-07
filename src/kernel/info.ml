@@ -302,8 +302,6 @@ let all n =
 
 module Make(Grammar : GRAMMAR) : S with module Grammar = Grammar =
 struct
-  let time = Stopwatch.enter Stopwatch.main "Info.Make"
-
   module Grammar = Grammar
 
   module Terminal = struct
@@ -582,7 +580,7 @@ struct
       end;
       !acc
 
-    let () = Stopwatch.step time "Transition"
+    let () = stopwatch 2 "Info.Transition"
   end
 
   module Lr1 = struct
@@ -697,7 +695,7 @@ struct
         (fun _ lr1 acc -> IndexSet.add lr1 acc)
         entrypoints IndexSet.empty
 
-    let () = Stopwatch.step time "Lr1"
+    let () = stopwatch 2 "Info.Lr1"
   end
 
   (** A more convenient presentation of reductions than the one from Cmly.
@@ -760,6 +758,4 @@ struct
     let lookaheads = Vector.get lookaheads
     let from_lr1 = Vector.get from_lr1
   end
-
-  let () = Stopwatch.leave time
 end

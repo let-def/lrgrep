@@ -152,7 +152,7 @@ struct
   open Regexp
   open Info
 
-  let time = Stopwatch.enter Stopwatch.main "Processing entry %s" E.entry.name
+  let () = stopwatch 3 "Starting to process entry %s" E.entry.name
 
   module Clause = struct
     module Actions = Const(struct let cardinal = List.length E.entry.clauses end)
@@ -331,7 +331,7 @@ struct
       let capture = Capture.gensym () in
       Vector.map (process_action ~capture) Clause.actions
 
-    let () = Stopwatch.step time "LazyNFA"
+    let () = stopwatch 3 "LazyNFA"
 
   end
 
@@ -376,8 +376,6 @@ struct
   end =
   struct
     open IndexBuffer
-
-    let time = Stopwatch.enter time "BigDFA"
 
     let group_make (type a) (prj : a -> LazyNFA.t) (ts : a list) : a array =
       let mark = ref () in
@@ -516,7 +514,7 @@ struct
       in
       (determinize group).index
 
-    let () = Stopwatch.step time "Processed initial states"
+    let () = stopwatch 3 "Processed initial states"
 
     let () =
       let accepting = Vector.make Clause.n [] in
@@ -580,7 +578,7 @@ struct
 
     let states = Gen.freeze states
 
-    let () = Stopwatch.step time "Determinized DFA (%d states)" (cardinal n)
+    let () = stopwatch 3 "Determinized DFA (%d states)" (cardinal n)
 
     let () =
       Vector.iter (fun (Packed t) ->
@@ -671,7 +669,7 @@ struct
       in
       loop ()
 
-    let () = Stopwatch.step time "Computed reachability"
+    let () = stopwatch 3 "Computed reachability"
 
     let () =
       let process (Packed tgt) =
@@ -729,7 +727,7 @@ struct
         )
         Clause.vector
 
-    let () = Stopwatch.step time "Dead-code analysis"
+    let () = stopwatch 3 "Dead-code analysis"
 
     let () =
       let count = ref 0 in
@@ -806,7 +804,7 @@ struct
           loop ()
       in
       loop ();
-      Stopwatch.step time "Compute priority splits (%d refinements)" !count
+      stopwatch 3 "computed priority splits (%d refinements)" !count
 
     let chain = Order_chain.make ()
 
@@ -968,8 +966,10 @@ struct
                   (List.sort (fun (l1, _) (l2, _) -> IndexSet.compare l1 l2) xs))
       in
       loop (visit [] ((), Packed initial));
-      Stopwatch.step time
-        "Constructed order chain with %d elements (%d direct transitions, %d shared, %d trivial pairings, %d non-trivial pairings, %d transitions with pairings)"
+      stopwatch 3
+        "constructed order chain with %d elements \
+         (%d direct transitions, %d shared, %d trivial pairings, \
+          %d non-trivial pairings, %d transitions with pairings)"
         (Order_chain.freeze chain)
         !direct_transitions
         !shared_transitions
@@ -1067,7 +1067,7 @@ struct
       in
       loop ()
 
-    let () = Stopwatch.step time "Computed liveness"
+    let () = stopwatch 3 "Computed liveness"
 
     let empty_registers = Vector.Packed Vector.empty
 
@@ -1103,12 +1103,10 @@ struct
             max_index := max !max_index (Index.to_int reg))) regs;
       in
       Vector.iter check_state states;
-      Stopwatch.step time
-        "register allocation, max live registers: %d, register count: %d"
+      stopwatch 3
+        "allocated registers (max live registers: %d, register count: %d)"
         !max_live (!max_index + 1);
       !max_index + 1
-
-    let () = Stopwatch.leave time
   end
 
   (* Labels of DFA transitions *)
@@ -1268,14 +1266,14 @@ struct
         | (l, k) :: rest -> group_actions l [k] rest
       in
       start actions
-
-    let () = Stopwatch.step time "RunDFA"
   end
+
+  let () = stopwatch 3 "RunDFA of %s" E.entry.name
 
   (*module MinDFA = Valmari.Minimize (Label) (RunDFA)*)
   module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)
 
-  let () = Stopwatch.step time "MinDFA"
+  let () = stopwatch 3 "MinDFA of %s" E.entry.name
 
   module type OUTDFA = sig
     type states
@@ -1369,7 +1367,7 @@ struct
       let registers = BigDFA.get_registers source in
       Vector.fold_right2 add_accepting source.group registers []
 
-    let () = Stopwatch.step time "OutDFA"
+    let () = stopwatch 3 "OutDFA of %s" E.entry.name
   end
 
   module OutDFA = (val (
@@ -1583,5 +1581,6 @@ struct
     Vector.iter2 output_action Clause.actions LazyNFA.actions;
     Code_printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
-  let () = Stopwatch.leave time
+
+  let () = stopwatch 2 "Processed entry %s" E.entry.name
 end
