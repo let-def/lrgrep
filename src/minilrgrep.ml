@@ -48,9 +48,6 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 module Info = Kernel.Info.Make(Grammar)
 open Info
 
-(** Start timing the execution MiniLRGrep *)
-let time = Stopwatch.enter Stopwatch.main "MiniLRGrep"
-
 (** {1 Helpers} *)
 
 (** An invalid input position *)
@@ -256,9 +253,6 @@ module Reduction_DFA = struct
       in
       ({stack; lookaheads; child} :: suffixes, targets)
 
-  (** Start timing the determinization process *)
-  let time = Stopwatch.enter time "Determinization"
-
   include IndexBuffer.Gen.Make()
 
   (** Description of a DFA state.
@@ -303,7 +297,7 @@ module Reduction_DFA = struct
     (initial, states)
 
   (** Record the time taken for DFA construction *)
-  let () = Stopwatch.step time "Constructed the Reduction DFA (%d states)" (cardinal n)
+  let () = stopwatch 2 "Constructed the Reduction DFA (%d states)" (cardinal n)
 
   (** Pre-compute the successors and predecessors *)
   let successors = Vector.map (fun desc ->
@@ -315,10 +309,10 @@ module Reduction_DFA = struct
     Misc.relation_reverse n successors
 
   (** Record the time taken for computing successors/predecessors *)
-  let () = Stopwatch.step time "Pre-computed DFA predecessors and successors"
+  let () = stopwatch 2 "Pre-computed DFA predecessors and successors"
 
   (** End timing the determinization process *)
-  let () = Stopwatch.leave time
+  let () = stopwatch 1 "Determinized the automaton"
 
   (* Pre-compute the shortest stack suffixes that permit reaching a DFA
      state.
@@ -326,7 +320,6 @@ module Reduction_DFA = struct
      first DFA-paths reaching each state. *)
   let stack_suffix =
     lazy_lookup begin fun () ->
-      let time = Stopwatch.enter Stopwatch.main "Computing stack suffixes" in
       let table = Vector.make n [] in
       let todo = ref [initial, []] in
       let propagate (x, path) =
@@ -339,7 +332,7 @@ module Reduction_DFA = struct
             states.:(x).transitions
       in
       Misc.fixpoint ~propagate todo;
-      let () = Stopwatch.leave time in
+      let () = stopwatch 2 "Computed stack suffixes" in
       table
     end
 
@@ -349,7 +342,6 @@ module Reduction_DFA = struct
      registering the first LR-paths reaching each state. *)
   let rev_stack_prefix =
     lazy_lookup begin fun () ->
-      let time = Stopwatch.enter Stopwatch.main "Computing stack prefixes" in
       let table = Vector.make Lr1.n [] in
       let todo = ref [] in
       let propagate (x, path) =
@@ -368,7 +360,7 @@ module Reduction_DFA = struct
         (fun lr1 -> propagate (lr1, []))
         entrypoints;
       Misc.fixpoint ~propagate todo;
-      let () = Stopwatch.leave time in
+      let () = stopwatch 2 "Computed stack prefixes" in
       table
     end
 
@@ -416,8 +408,6 @@ end
     paths are useful for generating sentences (see module [Sentence] below).
 *)
 module Unreductions = struct
-  let time = Stopwatch.enter time "Item closure"
-
   (** The productions appearing in items of the form [(prod, 0)] in the
       item-closure of an LR(1) state. *)
   let prods_by_lr1 = Vector.make Lr1.n IndexSet.empty
@@ -454,7 +444,7 @@ module Unreductions = struct
       steps 0 lr1 [] prods
     )
 
-  let () = Stopwatch.leave time
+  let () = stopwatch 1 "Computed item closure"
 end
 
 (** Pre-compute suffixes reachable from each DFA state.
@@ -469,8 +459,6 @@ end
 *)
 module Suffix = struct
   (** Start timing the suffix computation *)
-  let time = Stopwatch.enter time "Pre-computing suffixes"
-
   include IndexBuffer.Gen.Make()
   type set = n indexset
 
@@ -503,8 +491,7 @@ module Suffix = struct
   (** Freeze the suffix descriptions *)
   let desc = IndexBuffer.Gen.freeze desc
 
-  let () =
-    Stopwatch.step time "Generated set of all suffixes (%d unique suffixes)" (cardinal n)
+  let () = stopwatch 2 "Generated set of all suffixes (%d unique suffixes)" (cardinal n)
 
   (** Compute the transitive closure of reachable states *)
   let reachable =
@@ -516,9 +503,7 @@ module Suffix = struct
     table
 
   (** End timing the suffix computation *)
-  let () =
-    Stopwatch.step time "Computed set of reachable suffixes";
-    Stopwatch.leave time
+  let () = stopwatch 1 "Computed set of reachable suffixes"
 end
 
 (* We are done with preprocessing of the LR automaton.
@@ -1124,9 +1109,6 @@ let () = if clause_shadow then let module _ = Shadowing() in ()
     alternative. *)
 module Sentence = struct
 
-  (** Start timing the sentence generation process. *)
-  let time = Stopwatch.enter time "Setting up sentence generator"
-
   (** The code work by reversing the effect of a reduction, replacing a goto
       transition by the stack suffix that would permit reducing it. *)
   type unreduce = {
@@ -1226,7 +1208,7 @@ module Sentence = struct
     loop ()
 
   (** End timing the sentence generation process. *)
-  let () = Stopwatch.leave time
+  let () = stopwatch 1 "Precomputed sentence generation information"
 
   (** Print the number of loops performed and the cost of reaching each goto transition. *)
   let () =
