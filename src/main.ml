@@ -146,13 +146,12 @@ let rec parse_commands acc command args =
     | Some command ->
       parse_commands acc command rest
 
-let conf_verbosity = ref 0
 let conf_grammar_file = ref None
 let conf_spec_file = ref None
 
 let rec parse_global_options = function
   | Short 'v' :: rest ->
-    incr conf_verbosity;
+    incr Misc.verbosity_level;
     parse_global_options rest
 
   | (Short 'h' | Long "help") :: _ ->

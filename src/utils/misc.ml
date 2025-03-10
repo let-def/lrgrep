@@ -355,7 +355,7 @@ let stopwatch_delta =
   (time -. time')
 
 let stopwatch level fmt =
-  if true || level <= !verbosity_level then (
+  if level <= !verbosity_level then (
     let delta = stopwatch_delta level in
     if delta < 10. then
       Printf.eprintf "[% 5.0fms]" (delta *. 1000.)
