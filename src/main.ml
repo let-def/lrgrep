@@ -1,3 +1,4 @@
+open Fix.Indexing
 open Utils
 open Misc
 
@@ -253,6 +254,8 @@ let spec =
     stopwatch 1 "Loaded specification %s" file;
     Some result
 
+module U = struct end
+
 module type Viable = module type of Kernel.Viable_reductions.Make(Info)()
 
 module Viable =
@@ -261,9 +264,9 @@ module Viable =
       module type T = Viable
       let log = Some "viable reductions"
     end)
-    (Kernel.Viable_reductions.Make(Info))
+    (Kernel.Viable_reductions.Make(Info))()
 
-module type Regexp = module type of Kernel.Regexp.Make(Info)(Viable())
+module type Regexp = module type of Kernel.Regexp.Make(Info)(Viable(U))
 
 module Regexp =
   LazyFunctor
@@ -271,11 +274,9 @@ module Regexp =
       module type T = Regexp
       let log = None
     end)
-    (functor () -> Kernel.Regexp.Make(Info)(Viable()))
+    (functor () -> Kernel.Regexp.Make(Info)(Viable(U)))()
 
-module X = Viable()
-
-module type Transl = module type of Kernel.Transl.Make(Regexp())
+module type Transl = module type of Kernel.Transl.Make(Regexp(U))
 
 module Transl =
   LazyFunctor
@@ -283,7 +284,7 @@ module Transl =
       module type T = Transl
       let log = None
     end)
-    (functor () -> Kernel.Transl.Make(Regexp()))
+    (functor () -> Kernel.Transl.Make(Regexp(U)))()
 
 module type Reachability =
   module type of Kernel.Reachability.Make(Info)()
@@ -294,9 +295,9 @@ module Reachability =
       module type T = Reachability
       let log = Some "reachability information"
     end)
-    (Kernel.Reachability.Make(Info))
+    (Kernel.Reachability.Make(Info))()
 
-module type Lrc = module type of Kernel.Lrc.Make(Info)(Reachability())
+module type Lrc = module type of Kernel.Lrc.Make(Info)(Reachability(U))
 
 module Lrc =
   LazyFunctor
@@ -304,8 +305,7 @@ module Lrc =
       module type T = Lrc
       let log = Some "LRC" (*refinement of LR(1) states with reachable classes*)
     end)
-    (functor () -> Kernel.Lrc.Make(Info)(Reachability()))
-    ()
+    (functor () -> Kernel.Lrc.Make(Info)(Reachability(U)))()
 
 let process_command = function
   | Compile options ->
