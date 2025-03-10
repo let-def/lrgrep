@@ -307,6 +307,33 @@ module Lrc =
     end)
     (functor () -> Kernel.Lrc.Make(Info)(Reachability(U)))()
 
+type entrypoints = {
+  wait: Lrc(U).set;
+  reachable: Lrc(U).set;
+  entrypoints : Lrc(U).set;
+  successors : (Lrc(U).n, Lrc(U).set) vector;
+  predecessors : (Lrc(U).n, Lrc(U).set) vector;
+}
+
+let entrypoints =
+  let cache = Hashtbl.create 7 in
+  fun from_entrypoints ->
+    match Hashtbl.find_opt cache from_entrypoints with
+    | Some ep -> ep
+    | None ->
+      let module Lrc = Lrc(U) in
+      let entrypoints = indexset_bind from_entrypoints Lrc.lrcs_of_lr1 in
+      let reachable = indexset_bind entrypoints Lrc.reachable_from in
+      let wait = IndexSet.inter Lrc.all_wait reachable in
+      let successors =
+        Vector.init Lrc.n (fun s -> IndexSet.inter reachable (Lrc.all_successors s))
+      in
+      let predecessors = Misc.relation_reverse Lrc.n successors in
+      let ep = { wait; reachable; entrypoints; successors; predecessors } in
+      Hashtbl.add cache from_entrypoints ep;
+      stopwatch 2 "Computed LRC subset reachable from entrypoints";
+      ep
+
 let process_command = function
   | Compile options ->
     let output = match options.compile_output with
