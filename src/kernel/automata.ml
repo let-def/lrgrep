@@ -153,7 +153,7 @@ struct
   open Regexp
   open Info
 
-  let () = stopwatch 3 "Starting to process entry %s" rule.name
+  let () = stopwatch 3 "Starting to process rule %s" rule.name
 
   module Clause = struct
     module Actions = Const(struct let cardinal = List.length rule.clauses end)
@@ -1250,12 +1250,12 @@ struct
       start actions
   end
 
-  let () = stopwatch 3 "RunDFA of %s" E.entry.name
+  let () = stopwatch 3 "RunDFA of %s" rule.name
 
   (*module MinDFA = Valmari.Minimize (Label) (RunDFA)*)
   module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)
 
-  let () = stopwatch 3 "MinDFA of %s" E.entry.name
+  let () = stopwatch 3 "MinDFA of %s" rule.name
 
   module type OUTDFA = sig
     type states
@@ -1349,7 +1349,7 @@ struct
       let registers = BigDFA.get_registers source in
       Vector.fold_right2 add_accepting source.group registers []
 
-    let () = stopwatch 3 "OutDFA of %s" E.entry.name
+    let () = stopwatch 3 "OutDFA of %s" rule.name
   end
 
   module OutDFA = (val (
@@ -1564,5 +1564,5 @@ struct
     Code_printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
 
-  let () = stopwatch 2 "Processed entry %s" E.entry.name
+  let () = stopwatch 2 "Processed entry %s" rule.name
 end
