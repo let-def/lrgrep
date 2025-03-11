@@ -339,7 +339,13 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
 let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
-  let output_code (loc, txt) = Code_printer.print cp ~loc txt in
+  let parser_name =
+    String.capitalize_ascii (Filename.chop_extension (Filename.basename grammar_filename))
+  in
+  let output_code (loc, txt) =
+    if txt <> "" then
+      Code_printer.print cp ~loc txt
+  in
   output_code input.header;
   let module Lrc = Lrc(U) in
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
@@ -377,14 +383,14 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
       let prev = Vector.get subset.predecessors
       let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
     end in
+    let module Rule = struct
+      let parser_name = parser_name
+      let rule = rule
+    end in
     let module Automaton =
-      Kernel.Automata.Make(Transl(U))(Stacks)(struct
-        let parser_name = Filename.chop_extension (Filename.basename grammar_filename)
-        let rule = rule
-      end)()
+      Kernel.Automata.Make(Transl(U))(Stacks)(Rule)()
     in
-    ()
-
+    Automaton.output_code cp
   end input.rules;
   output_code input.trailer
 
