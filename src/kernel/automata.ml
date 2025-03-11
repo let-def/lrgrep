@@ -45,17 +45,17 @@ module type STACKS = sig
   type lr1
   type n
   val n : n cardinal
-  val initials : n indexset
-  val next : n index -> n indexset
+  val tops : n indexset
+  val prev : n index -> n indexset
   val label : n index -> lr1 indexset
 end
 
-module Entry
+module Make
     (Transl : Transl.S)
     (Stacks: STACKS with type lr1 := Transl.Regexp.Info.Lr1.n)
-    (E : sig
+    (R : sig
        val parser_name : string
-       val entry : Syntax.entry
+       val rule : Syntax.rule
      end)
     () :
 sig
@@ -148,14 +148,15 @@ sig
   val output_code : Code_printer.t -> unit
 end =
 struct
+  open R
   open Transl
   open Regexp
   open Info
 
-  let () = stopwatch 3 "Starting to process entry %s" E.entry.name
+  let () = stopwatch 3 "Starting to process rule %s" rule.name
 
   module Clause = struct
-    module Actions = Const(struct let cardinal = List.length E.entry.clauses end)
+    module Actions = Const(struct let cardinal = List.length rule.clauses end)
 
     type actions = Actions.n
 
@@ -169,7 +170,7 @@ struct
     include Vector.Of_array(struct
         type a = desc
         let array = Array.of_list (
-            E.entry.clauses
+            rule.clauses
             |> List.mapi (fun index clause ->
                 clause.Syntax.patterns
                 |> List.map (fun pattern ->
@@ -201,7 +202,7 @@ struct
             index := !index + count;
             let last = Index.of_int n (!index - 1) in
             clause, IndexSet.init_interval first last
-          ) E.entry.clauses
+          ) rule.clauses
       in
       Vector.cast_array Actions.n (Array.of_list list)
 
@@ -366,7 +367,6 @@ struct
 
     type packed = Packed : 'n t -> packed [@@unboxed]
 
-    (*val determinize : ('a, LazyNFA.t) vector -> 'a t*)
     val initial : n index
     val states : (n, packed) vector
     val get_registers : 'm t -> ('m, Register.t Capture.map) vector
@@ -393,16 +393,6 @@ struct
       let acc = ref acc in
       Vector.iteri (fun i x -> acc := f i x !acc) x;
       !acc
-
-    (*let group_index_of (type n) th (t : (n, LazyNFA.t) vector) =
-      let exception Found of n index in
-      match
-        Vector.iteri
-          (fun i x -> if LazyNFA.compare x th = 0 then raise (Found i))
-          t
-      with
-      | () -> raise Not_found
-      | exception (Found n) -> n*)
 
     module State = Gen.Make()
     type n = State.n
@@ -547,7 +537,7 @@ struct
           let expand_stack stack =
             if IndexSet.disjoint (Stacks.label stack) label
             then IndexSet.empty
-            else (really_empty := false; Stacks.next stack)
+            else (really_empty := false; Stacks.prev stack)
           in
           let stacks = indexset_bind todo expand_stack in
           if not !really_empty then
@@ -573,7 +563,7 @@ struct
       | 0 -> ()
       | n ->
         let bound = Index.of_int Clause.n (n - 1) in
-        schedule bound initial Stacks.initials;
+        schedule bound initial Stacks.tops;
         loop bound
 
     let states = Gen.freeze states
@@ -1268,12 +1258,12 @@ struct
       start actions
   end
 
-  let () = stopwatch 3 "RunDFA of %s" E.entry.name
+  let () = stopwatch 3 "RunDFA of %s" rule.name
 
   (*module MinDFA = Valmari.Minimize (Label) (RunDFA)*)
   module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)
 
-  let () = stopwatch 3 "MinDFA of %s" E.entry.name
+  let () = stopwatch 3 "MinDFA of %s" rule.name
 
   module type OUTDFA = sig
     type states
@@ -1367,7 +1357,7 @@ struct
       let registers = BigDFA.get_registers source in
       Vector.fold_right2 add_accepting source.group registers []
 
-    let () = stopwatch 3 "OutDFA of %s" E.entry.name
+    let () = stopwatch 3 "OutDFA of %s" rule.name
   end
 
   module OutDFA = (val (
@@ -1481,7 +1471,7 @@ struct
         \      | Value (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
         name name name offset
         (if is_optional then "(None, None, None)" else "assert false")
-        E.parser_name
+        parser_name
         (if Option.is_none typ then "_" else "st")
         (if Option.is_none typ then "_" else "x")
         (if Option.is_none typ then "as x" else "");
@@ -1490,7 +1480,7 @@ struct
         | Some (symbols, typ) ->
           Code_printer.fmt out
             "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n"
-            E.parser_name;
+            parser_name;
             List.iter (fun symbol ->
               Code_printer.fmt out "          | %s -> (x : %s)\n"
               (symbol_matcher symbol) typ) (IndexSet.elements symbols);
@@ -1511,7 +1501,7 @@ struct
         name offset
         none
         (some "__initialpos")
-        E.parser_name (some "p")
+        parser_name (some "p")
     | End_loc ->
       Code_printer.fmt out
         "    let _endloc_%s_ = match __registers.(%d) with\n\
@@ -1522,7 +1512,7 @@ struct
         name offset
         none
         (some "__initialpos")
-        E.parser_name (some "p")
+        parser_name (some "p")
 
   let lookahead_constraint index =
     match Clause.lookaheads index with
@@ -1544,8 +1534,8 @@ struct
       \  (__initialpos : Lexing.position)\n\
       \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
       \  : _ option = match __clause, token with\n"
-      E.entry.name (String.concat " " E.entry.args)
-      E.parser_name E.parser_name;
+      rule.name (String.concat " " rule.args)
+      parser_name parser_name;
     let output_action (source, clauses) (captures, _states) =
       Code_printer.fmt out " ";
       IndexSet.iter (fun index ->
@@ -1582,5 +1572,5 @@ struct
     Code_printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
 
 
-  let () = stopwatch 2 "Processed entry %s" E.entry.name
+  let () = stopwatch 2 "Processed entry %s" rule.name
 end

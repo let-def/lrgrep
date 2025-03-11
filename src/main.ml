@@ -307,7 +307,7 @@ module Lrc =
     end)
     (functor () -> Kernel.Lrc.Make(Info)(Reachability(U)))()
 
-type entrypoints = {
+type lrc_subset = {
   wait: Lrc(U).set;
   reachable: Lrc(U).set;
   entrypoints : Lrc(U).set;
@@ -315,7 +315,7 @@ type entrypoints = {
   predecessors : (Lrc(U).n, Lrc(U).set) vector;
 }
 
-let entrypoints =
+let lrc_from_entrypoints =
   let cache = Hashtbl.create 7 in
   fun from_entrypoints ->
     match Hashtbl.find_opt cache from_entrypoints with
@@ -334,13 +334,76 @@ let entrypoints =
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
 
+let report_error {Kernel.Syntax. line; col} fmt =
+  Printf.eprintf "Error line %d, column %d: " line col;
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
+
+let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
+  let output_code (loc, txt) = Code_printer.print cp ~loc txt in
+  output_code input.header;
+  let module Lrc = Lrc(U) in
+  List.iter begin fun (rule : Kernel.Syntax.rule) ->
+    let unknown = ref [] in
+    let initial_states =
+      List.filter_map (fun (sym, pos) ->
+          let result = Hashtbl.find_opt Info.Lr1.entrypoints sym in
+          if Option.is_none result then
+            push unknown (sym, pos);
+          result
+        ) rule.startsymbols
+      |> IndexSet.of_list
+    in
+    begin match List.rev !unknown with
+      | [] -> ()
+      | (first, pos) :: rest ->
+        let names = String.concat ", " (first :: List.map fst rest) in
+        let candidates =
+          String.concat ", " (List.of_seq (Hashtbl.to_seq_keys Info.Lr1.entrypoints))
+        in
+        report_error pos
+          "Unknown start symbols %s.\n\
+           Start symbols of this grammar are:\n\
+           %s\n"
+          names candidates
+    end;
+    let subset = lrc_from_entrypoints initial_states in
+    let module Stacks = struct
+      type n = Lrc.n
+      let n = Lrc.n
+      let tops =
+        if fst rule.error
+        then subset.wait
+        else subset.reachable
+      let prev = Vector.get subset.predecessors
+      let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
+    end in
+    let module Automaton =
+      Kernel.Automata.Make(Transl(U))(Stacks)(struct
+        let parser_name = Filename.chop_extension (Filename.basename grammar_filename)
+        let rule = rule
+      end)()
+    in
+    ()
+
+  end input.rules;
+  output_code input.trailer
+
 let process_command = function
   | Compile options ->
+    let input = match spec with
+      | Some i -> i
+      | None ->
+        usage_error "compile: no output file has been set"
+    in
     let output = match options.compile_output with
       | Some o -> o
       | None ->
         usage_error "compile: no output file has been set"
     in
     let oc = open_out_bin output in
+    let cp = Code_printer.create ~filename:output (output_string oc) in
+    do_compile input cp;
     close_out oc
   | _ -> failwith "TODO"
+
+let () = List.iter process_command commands

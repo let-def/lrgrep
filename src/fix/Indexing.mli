@@ -171,6 +171,9 @@ module Index : sig
      [\[0, n)], in decreasing order. *)
   val rev_iter : 'n cardinal -> ('n index -> unit) -> unit
 
+  (** [pred i] is the index immediately before [i], if [i] is non-zero *)
+  val pred : 'n index -> 'n index option
+
   (**This exception is raised by an iterator (created by {!enumerate}) that is
      queried after it has been exhausted. *)
   exception End_of_set

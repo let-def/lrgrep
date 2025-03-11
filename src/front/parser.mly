@@ -50,7 +50,7 @@ let mk_re desc pos = {desc; position = make_position pos}
 
 lexer_definition:
 | header rule+ header EOF
-  { {header=$1; entrypoints=$2; trailer=$3} }
+  { {header=$1; rules=$2; trailer=$3} }
 ;
 
 ident:

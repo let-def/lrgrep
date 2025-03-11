@@ -61,34 +61,6 @@ struct
         );
       Vector.get table
 
-    let symbol_of_string str =
-      let rec parse_symbol str i0 i j =
-        if i = j then
-          (Name (String.sub str i0 (i - i0)), i)
-        else
-          match str.[i] with
-          | ',' | ')' -> (Name (String.sub str i0 (i - i0)), i)
-          | '(' ->
-            let name = String.sub str i0 (i - i0) in
-            let args, i = parse_args str (i + 1) j in
-            Apply (name, args), i
-          | _ -> parse_symbol str i0 (i + 1) j
-
-      and parse_args str i j =
-        let arg, i = parse_symbol str i i j in
-        if i = j then
-          failwith ("Malformed symbol " ^ str)
-        else
-          match str.[i] with
-          | ',' ->
-            let args, i = parse_args str (i + 1) j in
-            (arg :: args, i)
-          | ')' -> ([arg], (i + 1))
-          | _ ->
-            failwith ("Malformed symbol " ^ str)
-      in
-      fst (parse_symbol str 0 0 (String.length str))
-
     let string_of_symbol =
       let buffer = Buffer.create 32 in
       function
@@ -115,7 +87,35 @@ struct
       Index.iter Symbol.n add_symbol;
       Hashtbl.find_opt table
 
-    let _find_instances =
+    (*let symbol_of_string str =
+      let rec parse_symbol str i0 i j =
+        if i = j then
+          (Name (String.sub str i0 (i - i0)), i)
+        else
+          match str.[i] with
+          | ',' | ')' -> (Name (String.sub str i0 (i - i0)), i)
+          | '(' ->
+            let name = String.sub str i0 (i - i0) in
+            let args, i = parse_args str (i + 1) j in
+            Apply (name, args), i
+          | _ -> parse_symbol str i0 (i + 1) j
+
+      and parse_args str i j =
+        let arg, i = parse_symbol str i i j in
+        if i = j then
+          failwith ("Malformed symbol " ^ str)
+        else
+          match str.[i] with
+          | ',' ->
+            let args, i = parse_args str (i + 1) j in
+            (arg :: args, i)
+          | ')' -> ([arg], (i + 1))
+          | _ ->
+            failwith ("Malformed symbol " ^ str)
+      in
+      fst (parse_symbol str 0 0 (String.length str))*)
+
+    (*let _find_instances =
       let table = Hashtbl.create 7 in
       let get name = Option.value (Hashtbl.find_opt table name) ~default:[] in
       let add_symbol sym =
@@ -125,7 +125,7 @@ struct
           Hashtbl.replace table name ((args, sym) :: get name)
       in
       Index.iter Symbol.n add_symbol;
-      get
+      get*)
 
     let find_symbol name =
       find_linearized_symbol (string_of_symbol name)
@@ -195,7 +195,8 @@ struct
               (fun prod -> register (prod, 0))
               (prod_by_lhs nt)
           in
-          let kernel_item (prod, pos) =
+          let kernel_item item =
+            let (prod, pos) = Item.desc item in
             register (prod, pos);
             let rhs = Production.rhs prod in
             if pos < Array.length rhs then
@@ -205,7 +206,7 @@ struct
                 IndexSet.iter closure_items
                   (left_rec_nt_reflexive_closure nt)
           in
-          List.iter kernel_item (Lr1.items lr1)
+          IndexSet.iter kernel_item (Lr1.items lr1)
       );
       Vector.get table
   end
