@@ -6,9 +6,11 @@ let name_string = "The Menhir parser lexer generator :-]"
 let version_string = "0.1"
 
 let usage = "\
-Usage: lrgrep [global options] <parser.cmly> [error-spec.mlyl] <commands>...
+Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.mlyl] <commands>...
 
 Global options:
+  -g, --grammar <parser.cmly> Grammar/automaton to work on
+  -s, --spec    <spec.mlyl>   Specification to process
   -v, --verbose      Increase verbosity
   -h, --help         Show this help messages
   -V, --version      Display version information and exit
@@ -127,6 +129,36 @@ let parse_enumerate () _ = failwith "enumerate: TODO"
 let parse_recover   () _ = failwith "recover: TODO"
 let parse_complete  () _ = failwith "complete: TODO"
 
+let conf_grammar_file = ref None
+
+let set_grammar_file text =
+  match !conf_grammar_file with
+  | None -> conf_grammar_file := Some text
+  | Some text' ->
+    usage_error "-g %S: grammar has already been set to %S" text text'
+
+let conf_spec_file = ref None
+
+let set_spec_file text =
+  match !conf_spec_file with
+  | None -> conf_spec_file := Some text
+  | Some text' ->
+    usage_error "-s %S: spec has already been set to %S" text text'
+
+let rec parse_common_options = function
+  | (Short 'g' | Long "grammar") :: Text file :: rest ->
+    set_grammar_file file;
+    parse_common_options rest
+
+  | (Short 's' | Long "spec") :: Text file :: rest ->
+    set_spec_file file;
+    parse_common_options rest
+
+  | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
+    usage_error "expecting filename after %s" (arg_to_text arg)
+
+  | rest -> rest
+
 let rec parse_commands acc command args =
   let command, args = match command with
     | Compile   opts -> parse_compile opts args
@@ -147,10 +179,9 @@ let rec parse_commands acc command args =
     | Some command ->
       parse_commands acc command rest
 
-let conf_grammar_file = ref None
-let conf_spec_file = ref None
-
-let rec parse_global_options = function
+let anon_arguments = ref []
+let rec parse_global_options args =
+  match parse_common_options args with
   | Short 'v' :: rest ->
     incr Misc.verbosity_level;
     parse_global_options rest
@@ -172,20 +203,8 @@ let rec parse_global_options = function
   | Text text :: rest ->
     begin match is_command text with
     | None ->
-      begin match !conf_grammar_file, !conf_spec_file with
-        | None, _ ->
-          conf_grammar_file := Some text
-        | Some _, None ->
-          conf_spec_file := Some text
-        | Some grammar, Some spec ->
-          usage_error
-            "unexpected argument %S\n\
-             Grammar: %S.\n\
-             Specification: %S.\n\
-             Expecting a command \
-             (compile, interpret, enumerate, recover, complete).\n"
-            text grammar spec
-      end;
+      push anon_arguments text;
+      (*begin ;*)
       parse_global_options rest
 
     | Some command ->
@@ -199,6 +218,22 @@ let rec parse_global_options = function
 
 let commands = parse_global_options
     (List.concat_map parse_arg (List.tl (Array.to_list Sys.argv)))
+
+let () = List.iter (fun text ->
+    match !conf_grammar_file, !conf_spec_file with
+    | None, _ ->
+      conf_grammar_file := Some text
+    | Some _, None ->
+      conf_spec_file := Some text
+    | Some grammar, Some spec ->
+      usage_error
+        "unexpected argument %S\n\
+         Grammar: %S.\n\
+         Specification: %S.\n\
+         Expecting a command \
+         (compile, interpret, enumerate, recover, complete).\n"
+        text grammar spec
+  ) (List.rev !anon_arguments)
 
 (* Load and pre-process grammar *)
 
