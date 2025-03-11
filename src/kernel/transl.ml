@@ -25,6 +25,7 @@ module type S = sig
     val find_symbol : symbol -> Symbol.t option
     val get_symbol : position -> symbol -> Symbol.t
   end
+
   type capture_kind = Start_loc | End_loc | Value
   type lr1_trie = {
     mutable sub : lr1_trie Lr1.map;
@@ -141,23 +142,19 @@ struct
           result
 
     let states_by_items =
-      let table = Vector.init Production.n
-          (fun prod -> Array.make (1 + Production.length prod) IndexSet.empty)
-      in
+      let table = Vector.make Item.n IndexSet.empty in
       Index.rev_iter Lr1.n (fun lr1 ->
-          let register (prod, pos) =
-            let prod = Vector.get table prod in
-            prod.(pos) <- IndexSet.add lr1 prod.(pos)
+          let register item =
+            table.@(item) <- IndexSet.add lr1
           in
           let closure_items nt =
-            (* TODO: Should we traverse nullable nt?! *)
             IndexSet.iter
-              (fun prod -> register (prod, 0))
+              (fun prod -> register (Item.make prod 0))
               (prod_by_lhs nt)
           in
           let kernel_item item =
+            register item;
             let (prod, pos) = Item.desc item in
-            register (prod, pos);
             let rhs = Production.rhs prod in
             if pos < Array.length rhs then
               match Symbol.prj rhs.(pos) with
@@ -360,8 +357,8 @@ struct
       result
     in
     let matching_states prod =
-      IntSet.fold
-        (fun pos acc -> IndexSet.union (Indices.states_by_items prod).(pos) acc)
+      IntSet.fold (fun pos acc ->
+          IndexSet.union (Indices.states_by_items (Item.make prod pos)) acc)
         (matching_dots prod) IndexSet.empty
     in
     indexset_bind prods matching_states
