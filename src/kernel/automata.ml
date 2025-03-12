@@ -41,6 +41,149 @@ open Lrgrep_support
 
 type priority = int
 
+module type BRANCHES = sig
+  module Regexp : Regexp.S
+  open Regexp.Info
+
+  include CARDINAL
+  type t = n index
+
+  type clause
+  val clause : clause cardinal
+  val clause_syntax : clause index -> Syntax.clause
+  val clause_branches : clause index -> n indexset
+  val clause_captures : clause index -> (Capture.n, Syntax.capture_kind * string) indexmap
+
+  val branch_clause : n index -> clause index
+  val branch_pattern : n index -> Syntax.pattern
+  val branch_lookaheads : n index -> Terminal.set option
+  val branch_captures : n index -> Capture.n indexset
+  val branch_expr : n index -> Regexp.RE.t
+  val branch_is_total : n index -> bool
+end
+
+module Branches
+    (Transl : Transl.S)
+    (R : sig val parser_name : string val rule : Syntax.rule end)
+  : BRANCHES with module Regexp := Transl.Regexp =
+struct
+  open R
+  open Transl.Regexp.Info
+
+  module Clause = Vector.Of_array(struct
+      type a = Syntax.clause
+      let array = Array.of_list rule.clauses
+    end)
+
+  type clause = Clause.n
+  let clause = Vector.length Clause.vector
+  let clause_syntax = Vector.get Clause.vector
+
+  type desc = {
+    clause: clause index;
+    pattern: Syntax.pattern;
+  }
+
+  include Vector.Of_array(struct
+      type a = desc
+      let array =
+        Vector.mapi (fun clause syntax ->
+            List.map
+              (fun pattern -> {clause; pattern})
+              syntax.Syntax.patterns
+          ) Clause.vector
+        |> Vector.to_list
+        |> List.flatten
+        |> Array.of_list
+    end)
+
+  let n = Vector.length vector
+  type t = n index
+
+  let branch_clause b = vector.:(b).clause
+
+  let branch_pattern b = vector.:(b).pattern
+
+  let clause_branches =
+    let index = ref 0 in
+    let import clause =
+      let count = List.length clause.Syntax.patterns in
+      let first = Index.of_int n !index in
+      index := !index + count;
+      let last = Index.of_int n (!index - 1) in
+      IndexSet.init_interval first last
+    in
+    Vector.get (Vector.map import Clause.vector)
+
+  let branch_lookaheads =
+    tabulate_finset n @@ fun branch ->
+    match vector.:(branch).pattern.lookaheads with
+    | [] -> None
+    | symbols ->
+      let lookahead_msg =
+        "Lookahead can either be a terminal or `first(nonterminal)'"
+      in
+      let sym_pattern (sym, pos) =
+        match sym with
+        | Syntax.Apply ("first", [sym]) ->
+          begin match Symbol.prj (Transl.Indices.get_symbol pos sym) with
+            | L t ->
+              let t = Terminal.to_string t in
+              failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                        t ^ " is a terminal")
+            | R n ->
+              Nonterminal.to_g n
+              |> Grammar.Nonterminal.first
+              |> List.map Terminal.of_g
+          end
+        | Syntax.Name _ ->
+          begin match Symbol.prj (Transl.Indices.get_symbol pos sym) with
+            | R n ->
+              failwith (lookahead_msg ^ "; " ^
+                        Nonterminal.to_string n ^ " is a nonterminal")
+            | L t -> [t]
+          end
+        | _ ->
+          failwith lookahead_msg
+      in
+      Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
+
+  let branch_is_total br =
+    Option.is_none (branch_lookaheads br) &&
+    match (clause_syntax (branch_clause br)).action with
+    | Syntax.Total _ -> true
+    | Syntax.Partial _ -> false
+    | Syntax.Unreachable -> true
+
+  let branch_transl = Vector.make n (IndexSet.empty, Transl.Regexp.RE.empty)
+
+  let clause_captures =
+    let gensym = Capture.gensym () in
+    tabulate_finset clause @@ fun clause ->
+    let capture_tbl = Hashtbl.create 7 in
+    let capture_def = ref IndexMap.empty in
+    let capture kind name =
+      let key = (kind, name) in
+      match Hashtbl.find_opt capture_tbl key with
+      | Some index -> index
+      | None ->
+        let index = gensym () in
+        Hashtbl.add capture_tbl key index;
+        capture_def := IndexMap.add index key !capture_def;
+        index
+    in
+    let translate_branch (br : n index) =
+      let pattern = branch_pattern br in
+      branch_transl.:(br) <- Transl.transl ~capture pattern.expr
+    in
+    IndexSet.iter translate_branch (clause_branches clause);
+    !capture_def
+
+  let branch_captures b = fst branch_transl.:(b)
+
+  let branch_expr b = snd branch_transl.:(b)
+end
+
 module type STACKS = sig
   type lr1
   type n
