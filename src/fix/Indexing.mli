@@ -180,6 +180,7 @@ module Index : sig
      all elements have been produced causes the exception {!End_of_set} to be
      raised. *)
   val enumerate : 'n cardinal -> (unit -> 'n index)
+  val rev_enumerate : 'n cardinal -> (unit -> 'n index)
 
   (** To implement clever datastructures (for instance using bit-packing),
       it is useful to manipulate indices as integers. See [IndexSet] or
