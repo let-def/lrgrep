@@ -198,14 +198,6 @@ struct
     let successors = Misc.relation_reverse n table in
     stopwatch 2 "Computed LRC successors";
     let reachable = Misc.relation_closure ~reverse:table successors in
-    let count = ref 0 in
-    let hash = ref 0 in
-    Vector.iteri (fun i s ->
-        let s = IndexSet.cardinal s in
-        count := !count + s;
-        hash := !hash + Index.to_int i * s)
-      reachable;
-    Printf.eprintf "closure: cardinal: %d, hash: %d\n" !count !hash;
     stopwatch 2 "Closed LRC successors";
     (Vector.get successors, Vector.get reachable)
 
