@@ -382,3 +382,6 @@ module LazyFunctor(S : sig module type T val log : string option end)(F:() -> S.
       let t2_t1 : (module T1) -> (module T2) = Obj.magic
       module T2 = (val t2_t1 (module Force : T1))
     end)
+
+let assert_equal_length v1 v2 =
+  assert_equal_cardinal (Vector.length v1) (Vector.length v2)
