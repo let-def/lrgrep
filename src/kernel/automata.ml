@@ -208,34 +208,33 @@ sig
   include CARDINAL
 
   type 'n state
+  type packed = Packed : 'n state -> packed
 
   type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
 
-  type 'src transition =
-      Transition : {
-        label: Lr1.set;
-        target: 'tgt state;
-        mapping: ('src, 'tgt) mapping;
-        mutable pairings: (Branch.t * (Order_chain.element * Order_chain.element) list) list;
-      } -> 'src transition
+  type 'src transition = Transition : {
+      label: Lr1.set;
+      target: 'tgt state;
+      mapping: ('src, 'tgt) mapping;
+      mutable pairings: (Branch.t * (Order_chain.element * Order_chain.element) list) list;
+    } -> 'src transition
 
   val initial : n index
 
-  type packed = Packed : 'n state -> packed
-  val states : n -> packed
+  val states : n index -> packed
 
-  val get_registers : 'm state -> ('m, Register.t Capture.map) vector
   val iter_transitions : 'n state -> ('n transition -> unit) -> unit
-  val register_count : int
-  val accepts : n index -> (Branch.t * int) list
+
+  val domain : n index -> Lr1.set
+  (*val get_registers : 'm state -> ('m, Register.t Capture.map) vector
+    val register_count : int
+    val accepts : n index -> (Branch.t * int) list*)
 end =
 struct
   open R
   open Transl
   open Regexp
   open Info
-
-  let () = stopwatch 3 "Starting to process rule %s" rule.name
 
   module NFA = struct
     type t = {
@@ -304,8 +303,6 @@ struct
         )
   end
 
-  open IndexBuffer
-
   let group_make (type a) (prj : a -> NFA.t) (ts : a list) : a array =
     let mark = ref () in
     let ts = List.filter (fun a ->
@@ -318,10 +315,7 @@ struct
     in
     Array.of_list ts
 
-  let group_fold f x acc =
-    let acc = ref acc in
-    Vector.iteri (fun i x -> acc := f i x !acc) x;
-    !acc
+  open IndexBuffer
 
   module State = Gen.Make()
   type n = State.n
@@ -331,16 +325,10 @@ struct
 
   type 'n state = {
     index: n index;
-    group: ('n, NFA.t) vector;
+    kernel: ('n, NFA.t) vector;
+    accept: Branch.t option;
     mutable raw_transitions: (Lr1.set * 'n fwd_mapping lazy_t) list;
     mutable transitions: 'n transition list;
-    accept: Branch.t option;
-    mutable visited_labels: Lr1.set;
-    mutable visited: Stacks.n indexset;
-    mutable scheduled: Stacks.n indexset;
-    mutable splits: 'n indexset;
-    mutable new_splits: 'n indexset;
-    mutable chain: ('n index * Order_chain.element) list;
   }
 
   and 'src fwd_mapping = Fwd_mapping : ('src, 'tgt) mapping * 'tgt state -> 'src fwd_mapping
@@ -357,20 +345,26 @@ struct
 
   let states = State.get_generator ()
 
-  module GroupMap = Map.Make(struct
+  module KernelMap = Map.Make(struct
       type t = NFA.t array
       let compare g1 g2 = array_compare NFA.compare g1 g2
     end)
 
-  let determinize group =
-    let map = ref GroupMap.empty in
-    let rec aux : type n . (n, NFA.t) vector -> n state =
-      fun group ->
-        match GroupMap.find_opt (Vector.as_array group) !map with
+  let kernel_fold f x acc =
+    let acc = ref acc in
+    Vector.iteri (fun i x -> acc := f i x !acc) x;
+    !acc
+
+  let dfa = ref KernelMap.empty
+
+  let initial =
+    let rec determinize : type n . (n, NFA.t) vector -> n state =
+      fun kernel ->
+        match KernelMap.find_opt (Vector.as_array kernel) !dfa with
         | Some (Packed t') ->
-          let Refl = assert_equal_cardinal
-              (Vector.length group) (Vector.length t'.group)
-          in
+          let l = Vector.length kernel in
+          let l' = Vector.length t'.kernel in
+          let Refl = assert_equal_cardinal l l' in
           t'
         | None ->
           let accept = ref None in
@@ -378,84 +372,81 @@ struct
             let make i ({K. filter; captures; usage}, t) =
               (filter, (i, (captures, usage), t))
             in
-            group_fold
+            kernel_fold
               (fun i (nfa : NFA.t) acc ->
                  if nfa.accept && Branch.branch_is_total nfa.branch then
                    accept := Some nfa.branch;
                  List.rev_map (make i) nfa.transitions @ acc)
-              group []
+              kernel []
+          in
+          let prepare_target_kernel (index, captures, lazy nfa) =
+            nfa, (index, captures)
           in
           let process_class label rev_targets =
             label, lazy (
-              let prepare_target (index, captures, lazy nfa) =
-                nfa, (index, captures)
-              in
               let Packed result =
                 rev_targets
-                |> List.rev_map prepare_target
+                |> List.rev_map prepare_target_kernel
                 |> group_make fst
                 |> Vector.of_array
               in
-              Fwd_mapping ((Vector.map snd result), aux (Vector.map fst result))
+              Fwd_mapping ((Vector.map snd result),
+                           determinize (Vector.map fst result))
             )
           in
           let raw_transitions = ref [] in
           IndexRefine.iter_merged_decomposition rev_transitions
             (fun label targets -> push raw_transitions (process_class label targets));
           let raw_transitions = !raw_transitions in
-          let reservation = Gen.reserve states in
+          let reservation = IndexBuffer.Gen.reserve states in
           let state = {
-            index = Gen.index reservation;
-            accept = !accept;
-            group; raw_transitions;
-            transitions    = [];
-            visited_labels = IndexSet.empty;
-            scheduled      = IndexSet.empty;
-            visited        = IndexSet.empty;
-            splits         = IndexSet.empty;
-            new_splits     = IndexSet.empty;
-            chain          = [];
+            index = IndexBuffer.Gen.index reservation;
+            kernel; accept = !accept;
+            raw_transitions;
+            transitions = [];
           } in
-          Gen.commit states reservation (Packed state);
-          map := GroupMap.add (Vector.as_array group) (Packed state) !map;
+          IndexBuffer.Gen.commit states reservation (Packed state);
+          dfa := KernelMap.add (Vector.as_array kernel) (Packed state) !dfa;
           state
     in
-    aux group
-
-  let initial =
-    let Vector.Packed group =
+    let Vector.Packed kernel =
       Vector.of_array (group_make Fun.id (Vector.to_list NFA.branches))
     in
-    (determinize group).index
+    (determinize kernel).index
 
   let () = stopwatch 3 "Processed initial states"
+
+  let visited: (n, Stacks.n indexset) Dyn.t = Dyn.make IndexSet.empty
+  let scheduled: (n, Stacks.n indexset) Dyn.t = Dyn.make IndexSet.empty
+
+  let (.*()) = Dyn.get
+  let (.*()<-) = Dyn.set
 
   let () =
     let accepting = Vector.make Branch.n [] in
     let todo = ref [] in
-    let min_clause t = (Vector.as_array t.group).(0).branch in
+    let min_clause t = (Vector.as_array t.kernel).(0).branch in
     let schedule bound i set =
-      let Packed t as packed = Gen.get states i in
-      if min_clause t <= bound then (
-        let set = IndexSet.diff set t.visited in
+      let Packed t as packed = IndexBuffer.Gen.get states i in
+      if min_clause t <= bound then
+        let set = IndexSet.diff set visited.*(i) in
         if not (IndexSet.is_empty set) then (
-          if IndexSet.is_empty t.scheduled then (
+          if IndexSet.is_empty scheduled.*(i) then (
             begin match t.accept with
               | Some c when c < bound ->
                 accepting.@(c) <- List.cons packed
               | Some _ | None -> push todo packed
             end;
-            t.scheduled <- set
+            scheduled.*(i) <- set
           ) else (
-            t.scheduled <- IndexSet.union t.scheduled set
+            scheduled.*(i) <- IndexSet.union scheduled.*(i) set
           )
         )
-      )
     in
     let update bound (Packed t) =
-      let todo = t.scheduled in
-      t.visited <- IndexSet.union t.visited todo;
-      t.scheduled <- IndexSet.empty;
+      let todo = scheduled.*(t.index) in
+      visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
+      scheduled.*(t.index) <- IndexSet.empty;
       List.iter begin fun (label, target) ->
         let really_empty = ref true in
         let expand_stack stack =
@@ -490,20 +481,18 @@ struct
       schedule bound initial Stacks.tops;
       loop bound
 
-  let states = Gen.freeze states
+  let states = IndexBuffer.Gen.freeze states
 
-  let () = stopwatch 3 "Determinized DFA (%d states)" (cardinal n)
-
-  let () =
-    Vector.iter (fun (Packed t) ->
-        let visited_labels = indexset_bind t.visited Stacks.label in
-        t.visited_labels <- visited_labels;
+  let domain =
+    Vector.mapi (fun i (Packed t) ->
+        let visited_labels = indexset_bind visited.*(i) Stacks.label in
         t.transitions <-
           List.filter_map (fun (label, target) ->
               if Lazy.is_val target then
                 let label = IndexSet.inter label visited_labels in
                 if not (IndexSet.is_empty label) then
-                  Some {label; mapping = Lazy.force target; pairings = []}
+                  let Fwd_mapping (mapping, target) = Lazy.force target in
+                  Some (Transition {label; mapping; target; pairings = []})
                 else
                   None
               else
@@ -511,9 +500,15 @@ struct
             ) t.raw_transitions;
         t.raw_transitions <- [];
       ) states
+    |> Vector.get
 
   let iter_transitions t f =
     List.iter f t.transitions
+
+  let () = stopwatch 3 "Determinized DFA (%d states)" (cardinal n)
+end
+
+(*module Later() = struct
 
   type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) mapping -> 'tgt rev_mapping
   type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
@@ -2350,3 +2345,4 @@ struct
 
   let () = stopwatch 2 "Processed entry %s" rule.name
 end
+*)
