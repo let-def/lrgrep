@@ -194,30 +194,846 @@ module type STACKS = sig
 end
 
 module Make
-    (Transl : Transl.S)
-    (Stacks: STACKS with type lr1 := Transl.Regexp.Info.Lr1.n)
+    (Regexp : Regexp.S)
+    (Branch : BRANCHES with module Regexp := Regexp)
+    (Stacks: STACKS with type lr1 := Regexp.Info.Lr1.n)
     (R : sig
        val parser_name : string
        val rule : Syntax.rule
      end)
     () :
 sig
-  open Transl.Regexp.Info
+  open Regexp.Info
 
-  (* Representation of a clause *)
-  module Clause : sig
-    include CARDINAL
-    type t = n index
+  include CARDINAL
 
-    (* Is the clause total? *)
-    val total : t -> bool
+  type 'n state
 
-    (* Lookahead constraints of this clause, if any *)
-    val lookaheads : t -> Terminal.set option
+  type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
+
+  type 'src transition =
+      Transition : {
+        label: Lr1.set;
+        target: 'tgt state;
+        mapping: ('src, 'tgt) mapping;
+        mutable pairings: (Branch.t * (Order_chain.element * Order_chain.element) list) list;
+      } -> 'src transition
+
+  val initial : n index
+
+  type packed = Packed : 'n state -> packed
+  val states : n -> packed
+
+  val get_registers : 'm state -> ('m, Register.t Capture.map) vector
+  val iter_transitions : 'n state -> ('n transition -> unit) -> unit
+  val register_count : int
+  val accepts : n index -> (Branch.t * int) list
+end =
+struct
+  open R
+  open Transl
+  open Regexp
+  open Info
+
+  let () = stopwatch 3 "Starting to process rule %s" rule.name
+
+  module NFA = struct
+    type t = {
+      (* State construction *)
+      uid: int;
+      k: K.t;
+      transitions: (K.label * t lazy_t) list;
+      accept: bool;
+      branch: Branch.t;
+      mutable mark: unit ref;
+    }
+
+    let compare t1 t2 =
+      Int.compare t1.uid t2.uid
+
+    let uid =
+      let k = ref 0 in
+      fun () -> incr k; !k
+
+    let default_mark = ref ()
+
+    module KMap = Map.Make(Regexp.K)
+
+    let make branch =
+      let nfa = ref KMap.empty in
+      let rec aux k =
+        match KMap.find_opt k !nfa with
+        | Some t -> t
+        | None ->
+          let accept = ref false in
+          let rec process_transitions = function
+            | [] -> []
+            | (label, target) :: rest ->
+              begin match target with
+                | None when K.is_immediate_label label ->
+                  accept := true;
+                  []
+                | None ->
+                  (label, accepting) :: process_transitions rest
+                | Some k' ->
+                  (label, lazy (aux k')) :: process_transitions rest
+              end
+          in
+          let inj ({K. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+          let prj filter (usage, captures, t) = ({K. filter; usage; captures}, t) in
+          let transitions =
+            K.derive Lr1.all k
+            |> process_transitions
+            |> List.map inj
+            |> IndexRefine.annotated_partition
+            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
+          in
+          let uid = uid () in
+          let accept = !accept in
+          let t = {uid; k; transitions; accept; branch; mark=default_mark} in
+          nfa := KMap.add k t !nfa;
+          t
+      and accepting = lazy (aux K.Done)
+      in
+      aux
+
+    let branches =
+      Vector.init Branch.n (fun br ->
+          let re = Branch.branch_expr br in
+          make br (Regexp.K.More (re, Regexp.K.Done))
+        )
   end
 
-  (* Variables captured by a clause *)
-  val captures : Clause.t -> Capture.set
+  open IndexBuffer
+
+  let group_make (type a) (prj : a -> NFA.t) (ts : a list) : a array =
+    let mark = ref () in
+    let ts = List.filter (fun a ->
+        let th = prj a in
+        if th.mark != mark then (
+          th.mark <- mark;
+          true
+        ) else false
+      ) ts
+    in
+    Array.of_list ts
+
+  let group_fold f x acc =
+    let acc = ref acc in
+    Vector.iteri (fun i x -> acc := f i x !acc) x;
+    !acc
+
+  module State = Gen.Make()
+  type n = State.n
+  let n = State.n
+
+  type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
+
+  type 'n state = {
+    index: n index;
+    group: ('n, NFA.t) vector;
+    mutable raw_transitions: (Lr1.set * 'n fwd_mapping lazy_t) list;
+    mutable transitions: 'n transition list;
+    accept: Branch.t option;
+    mutable visited_labels: Lr1.set;
+    mutable visited: Stacks.n indexset;
+    mutable scheduled: Stacks.n indexset;
+    mutable splits: 'n indexset;
+    mutable new_splits: 'n indexset;
+    mutable chain: ('n index * Order_chain.element) list;
+  }
+
+  and 'src fwd_mapping = Fwd_mapping : ('src, 'tgt) mapping * 'tgt state -> 'src fwd_mapping
+
+  and 'src transition =
+      Transition : {
+        label: Lr1.set;
+        target: 'tgt state;
+        mapping: ('src, 'tgt) mapping;
+        mutable pairings: (Branch.t * (Order_chain.element * Order_chain.element) list) list;
+      } -> 'src transition
+
+  type packed = Packed : 'n state -> packed
+
+  let states = State.get_generator ()
+
+  module GroupMap = Map.Make(struct
+      type t = NFA.t array
+      let compare g1 g2 = array_compare NFA.compare g1 g2
+    end)
+
+  let determinize group =
+    let map = ref GroupMap.empty in
+    let rec aux : type n . (n, NFA.t) vector -> n state =
+      fun group ->
+        match GroupMap.find_opt (Vector.as_array group) !map with
+        | Some (Packed t') ->
+          let Refl = assert_equal_cardinal
+              (Vector.length group) (Vector.length t'.group)
+          in
+          t'
+        | None ->
+          let accept = ref None in
+          let rev_transitions =
+            let make i ({K. filter; captures; usage}, t) =
+              (filter, (i, (captures, usage), t))
+            in
+            group_fold
+              (fun i (nfa : NFA.t) acc ->
+                 if nfa.accept && Branch.branch_is_total nfa.branch then
+                   accept := Some nfa.branch;
+                 List.rev_map (make i) nfa.transitions @ acc)
+              group []
+          in
+          let process_class label rev_targets =
+            label, lazy (
+              let prepare_target (index, captures, lazy nfa) =
+                nfa, (index, captures)
+              in
+              let Packed result =
+                rev_targets
+                |> List.rev_map prepare_target
+                |> group_make fst
+                |> Vector.of_array
+              in
+              Fwd_mapping ((Vector.map snd result), aux (Vector.map fst result))
+            )
+          in
+          let raw_transitions = ref [] in
+          IndexRefine.iter_merged_decomposition rev_transitions
+            (fun label targets -> push raw_transitions (process_class label targets));
+          let raw_transitions = !raw_transitions in
+          let reservation = Gen.reserve states in
+          let state = {
+            index = Gen.index reservation;
+            accept = !accept;
+            group; raw_transitions;
+            transitions    = [];
+            visited_labels = IndexSet.empty;
+            scheduled      = IndexSet.empty;
+            visited        = IndexSet.empty;
+            splits         = IndexSet.empty;
+            new_splits     = IndexSet.empty;
+            chain          = [];
+          } in
+          Gen.commit states reservation (Packed state);
+          map := GroupMap.add (Vector.as_array group) (Packed state) !map;
+          state
+    in
+    aux group
+
+  let initial =
+    let Vector.Packed group =
+      Vector.of_array (group_make Fun.id (Vector.to_list NFA.branches))
+    in
+    (determinize group).index
+
+  let () = stopwatch 3 "Processed initial states"
+
+  let () =
+    let accepting = Vector.make Branch.n [] in
+    let todo = ref [] in
+    let min_clause t = (Vector.as_array t.group).(0).branch in
+    let schedule bound i set =
+      let Packed t as packed = Gen.get states i in
+      if min_clause t <= bound then (
+        let set = IndexSet.diff set t.visited in
+        if not (IndexSet.is_empty set) then (
+          if IndexSet.is_empty t.scheduled then (
+            begin match t.accept with
+              | Some c when c < bound ->
+                accepting.@(c) <- List.cons packed
+              | Some _ | None -> push todo packed
+            end;
+            t.scheduled <- set
+          ) else (
+            t.scheduled <- IndexSet.union t.scheduled set
+          )
+        )
+      )
+    in
+    let update bound (Packed t) =
+      let todo = t.scheduled in
+      t.visited <- IndexSet.union t.visited todo;
+      t.scheduled <- IndexSet.empty;
+      List.iter begin fun (label, target) ->
+        let really_empty = ref true in
+        let expand_stack stack =
+          if IndexSet.disjoint (Stacks.label stack) label
+          then IndexSet.empty
+          else (really_empty := false; Stacks.prev stack)
+        in
+        let stacks = indexset_bind todo expand_stack in
+        if not !really_empty then
+          let lazy (Fwd_mapping (_, t')) = target in
+          if not (IndexSet.is_empty stacks) then
+            schedule bound t'.index stacks
+      end t.raw_transitions
+    in
+    let rec loop bound =
+      match !todo with
+      | [] when Index.to_int bound > 0 ->
+        let bound = Index.of_int Branch.n (Index.to_int bound - 1) in
+        todo := Vector.get accepting bound;
+        Vector.set accepting bound [];
+        loop bound
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter (update bound) todo';
+        loop bound
+    in
+    match cardinal Branch.n with
+    | 0 -> ()
+    | n ->
+      let bound = Index.of_int Branch.n (n - 1) in
+      schedule bound initial Stacks.tops;
+      loop bound
+
+  let states = Gen.freeze states
+
+  let () = stopwatch 3 "Determinized DFA (%d states)" (cardinal n)
+
+  let () =
+    Vector.iter (fun (Packed t) ->
+        let visited_labels = indexset_bind t.visited Stacks.label in
+        t.visited_labels <- visited_labels;
+        t.transitions <-
+          List.filter_map (fun (label, target) ->
+              if Lazy.is_val target then
+                let label = IndexSet.inter label visited_labels in
+                if not (IndexSet.is_empty label) then
+                  Some {label; mapping = Lazy.force target; pairings = []}
+                else
+                  None
+              else
+                None
+            ) t.raw_transitions;
+        t.raw_transitions <- [];
+      ) states
+
+  let iter_transitions t f =
+    List.iter f t.transitions
+
+  type 'tgt rev_mapping = Rev_mapping : 'src t * ('src, 'tgt) mapping -> 'tgt rev_mapping
+  type packed_rev_mapping = Rev_packed : 'n rev_mapping list -> packed_rev_mapping [@@ocaml.unboxed]
+
+  let reverse_transitions =
+    let table = Vector.make n (Rev_packed []) in
+    Vector.iter (fun (Packed src) ->
+        iter_transitions src (fun tr ->
+            let Fwd_mapping (mapping, tgt) = tr.mapping in
+            match Vector.get table tgt.index with
+            | Rev_packed [] ->
+              Vector.set table tgt.index (Rev_packed [Rev_mapping (src, mapping)])
+            | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
+              let Refl = assert_equal_cardinal
+                  (Vector.length mapping) (Vector.length mapping0)
+              in
+              Vector.set table tgt.index (Rev_packed (Rev_mapping (src, mapping) :: xs))
+          )
+      ) states;
+    table
+
+  let iter_reverse_transitions (type n) (t : n t) (f : n rev_mapping -> unit) =
+    match Vector.get reverse_transitions t.index with
+    | Rev_packed [] -> ()
+    | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
+      let Refl = assert_equal_cardinal
+          (Vector.length mapping0) (Vector.length t.group)
+      in
+      List.iter f xs
+
+  let reachable =
+    Vector.map (fun (Packed tgt) ->
+        (IndexSet.init_from_set
+           (Vector.length tgt.group)
+           (fun i -> (Vector.get tgt.group i).accept)
+         :> IntSet.t)
+      ) states
+
+  let () =
+    let todo = ref [] in
+    let process (Packed tgt) =
+      let reach = Vector.get reachable tgt.index in
+      iter_reverse_transitions tgt (fun (Rev_mapping (src, mapping)) ->
+          let mapping = Vector.as_array mapping in
+          let changed = ref false in
+          IntSet.iter (fun i ->
+              let j, _ = mapping.(i) in
+              let reach' = Vector.get reachable src.index in
+              let reach'' = IntSet.add (j :> int) reach' in
+              if not (IntSet.equal reach' reach'') then (
+                Vector.set reachable src.index reach'';
+                changed := true;
+              )
+            ) reach;
+          if !changed then
+            push todo (Packed src)
+        )
+    in
+    Vector.iter process states;
+    let rec loop () =
+      match !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter process todo';
+        loop ()
+    in
+    loop ()
+
+  let () = stopwatch 3 "Computed reachability"
+
+  let () =
+    let process (Packed tgt) =
+      let reach = Vector.get reachable tgt.index in
+      iter_reverse_transitions tgt (fun (Rev_mapping (_, mapping)) ->
+          let mapping = Vector.as_array mapping in
+          IntSet.iter (fun i ->
+              let _, (_, usage) = mapping.(i) in
+              Usage.mark_used usage
+            ) reach;
+        )
+    in
+    Vector.iter process states
+
+  let () =
+    let reachable_clauses =
+      let clauses = ref IndexSet.empty in
+      let Packed t = Vector.get states initial in
+      IntSet.iter (fun i ->
+          let i = Index.of_int (Vector.length t.group) i in
+          let thread = Vector.get t.group i in
+          clauses := IndexSet.add thread.clause !clauses;
+        ) (Vector.get reachable initial);
+      !clauses
+    in
+    let iter_re f (re : Syntax.regular_expr) =
+      match re.desc with
+      | Atom _ -> ()
+      | Filter _ -> ()
+      | Repetition {expr; policy = _} ->
+        f expr
+      | Reduce {capture = _; mark = _; expr; policy = _} ->
+        f expr
+      | Alternative res ->
+        List.iter f res
+      | Concat res ->
+        List.iter f res
+    in
+    let rec check (re : Syntax.regular_expr) =
+      match re.desc with
+      | Atom (_, _, mark) | Reduce {mark; _} ->
+        if Usage.is_unused mark then (
+          Printf.eprintf "Warning: expression line %d, column %d is unreachable\n"
+            re.position.line re.position.col
+        )
+      | _ -> iter_re check re
+    in
+    Vector.iteri (fun index (clause : Clause.desc) ->
+        let expr = clause.pattern.expr in
+        if IndexSet.mem index reachable_clauses then
+          check expr
+        else
+          Printf.eprintf "Warning: clause line %d, column %d is unreachable\n"
+            expr.position.line expr.position.col
+      )
+      Clause.vector
+
+  let () = stopwatch 3 "Dead-code analysis"
+
+  let () =
+    let count = ref 0 in
+    let todo = ref [] in
+    let init_split (Packed t) =
+      t.new_splits <-
+        IndexSet.init_from_set
+          (Vector.length t.group)
+          (fun i -> (Vector.get t.group i).accept);
+      if not (IndexSet.is_empty t.new_splits) then
+        push todo (Packed t)
+    in
+    Vector.iter init_split states;
+    let schedule (type n) (t : n t) (splits : n indexset) =
+      let splits = IndexSet.diff splits t.splits in
+      if IndexSet.is_empty splits then
+        ()
+      else if IndexSet.is_empty t.new_splits then (
+        incr count;
+        push todo (Packed t);
+        t.new_splits <- splits;
+      ) else
+        t.new_splits <- IndexSet.union t.new_splits splits
+    in
+    let rec schedule_one : type n. n t -> n indexset -> unit =
+      fun (type n) (t : n t) (splits : n indexset) ->
+        let splits = IndexSet.diff splits t.splits in
+        if IndexSet.is_empty splits then
+          ()
+        else if IndexSet.is_empty t.new_splits then (
+          t.new_splits <- splits;
+          process (Packed t)
+        ) else
+          t.new_splits <- IndexSet.union t.new_splits splits
+    and process (Packed src) =
+      let new_splits = src.new_splits in
+      src.new_splits <- IndexSet.empty;
+      src.splits <- IndexSet.union src.splits new_splits;
+      let new_splits = IndexSet.elements new_splits in
+      let rec map_one mapping tgt i x xs =
+        let n = Array.length mapping in
+        if i >= n then
+          IndexSet.empty
+        else
+          let x', _ = mapping.(i) in
+          if x' < x then
+            map_one mapping tgt (i + 1) x xs
+          else
+            let nfa = Vector.get src.group x in
+            let acc = map_splits mapping tgt (i + 1) xs in
+            if (Vector.get src.group x').clause = nfa.clause then
+              IndexSet.add (Index.of_int (Vector.length tgt.group) i) acc
+            else
+              acc
+      and map_splits mapping tgt i = function
+        | [] -> IndexSet.empty
+        | x :: xs -> map_one mapping tgt i x xs
+      in
+      match src.transitions with
+      | [] -> ()
+      | [{mapping = Fwd_mapping (mapping, tgt); _}] ->
+        schedule_one tgt (map_splits (Vector.as_array mapping) tgt 0 new_splits)
+      | xs ->
+        List.iter (fun {mapping = Fwd_mapping (mapping, tgt); _} ->
+            schedule tgt (map_splits (Vector.as_array mapping) tgt 0 new_splits)
+          ) xs
+    in
+    let rec loop () =
+      match !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter process todo';
+        loop ()
+    in
+    loop ();
+    stopwatch 3 "computed priority splits (%d refinements)" !count
+
+  let chain = Order_chain.make ()
+
+  let group_by_clause t = function
+    | [] -> []
+    | (i, _) as x :: xs ->
+      let rec loop clause acc accs = function
+        | [] -> List.rev ((clause, List.rev acc) :: accs)
+        | (i, _) as x :: xs ->
+          let clause' = (Vector.get t.group i).clause in
+          if clause = clause' then
+            loop clause (x :: acc) accs xs
+          else
+            loop clause' [x] ((clause, List.rev acc) :: accs) xs
+      in
+      let clause = (Vector.get t.group i).clause in
+      loop clause [x] [] xs
+
+  let () =
+    let chain_processed = Vector.make n false in
+    let root = Order_chain.root chain in
+    let Packed initial = Vector.get states initial in
+    initial.chain <- (
+      match cardinal Clause.n with
+      | 0 -> []
+      | _ ->
+        let rec fresh_chain t clause element = function
+          | [] -> []
+          | m :: ms ->
+            let clause' = (Vector.get t.group m).clause in
+            let element =
+              if clause = clause'
+              then Order_chain.next element
+              else root
+            in
+            (m, element) :: fresh_chain t clause' element ms
+        in
+        fresh_chain initial (Index.of_int Clause.n 0) root (IndexSet.elements initial.splits);
+    );
+    Vector.set chain_processed initial.index true;
+    let direct_transitions = ref 0 in
+    let shared_transitions = ref 0 in
+    let trivial_pairing = ref 0 in
+    let nontrivial_pairing = ref 0 in
+    let transitions_with_pairing = ref 0 in
+    let process_direct_transition src mapping tgt =
+      assert (not (Vector.get chain_processed tgt.index));
+      incr direct_transitions;
+      let rec extract_clause clause acc = function
+        | (n, _) as x :: xs when (Vector.get src.group n).clause = clause ->
+          extract_clause clause (x :: acc) xs
+        | rest -> List.rev acc, rest
+      in
+      let rec seek_clause clause = function
+        | [] -> [], []
+        | ((n, _) as x :: xs) as xxs ->
+          let clause' = (Vector.get src.group n).clause in
+          if clause' < clause then
+            seek_clause clause xs
+          else if clause = clause' then
+            extract_clause clause [x] xs
+          else
+            ([], xxs)
+      in
+      let rec chain_next_split i element = function
+        | (i', element') :: rest ->
+          if i' < i  then
+            chain_next_split i element' rest
+          else if i' = i then
+            (element', rest)
+          else
+            (Order_chain.extend element, rest)
+        | [] -> (Order_chain.next element, [])
+      in
+      let rec process_splits chain = function
+        | [] -> []
+        | m :: ms ->
+          let clause = (Vector.get tgt.group m).clause in
+          let chain, rest = seek_clause clause chain in
+          process_clause clause chain rest m ms
+      and process_clause clause chain rest m ms =
+        let i, _ = (Vector.get mapping m) in
+        let split, chain = chain_next_split i root chain in
+        (m, split) :: process_continue_clause clause chain rest ms
+      and process_continue_clause clause chain rest = function
+        | m :: ms when (Vector.get tgt.group m).clause = clause ->
+          process_clause clause chain rest m ms
+        | ms -> process_splits rest ms
+      in
+      tgt.chain <- process_splits src.chain (IndexSet.elements tgt.splits);
+      Vector.set chain_processed tgt.index true;
+    in
+    let process_shared_transition src mapping tgt =
+      incr shared_transitions;
+      assert (Vector.get chain_processed src.index);
+      assert (Vector.get chain_processed tgt.index);
+      let src_chain = group_by_clause src src.chain in
+      let tgt_chain = group_by_clause tgt tgt.chain in
+      let rec find_element i element = function
+        | [] -> element, []
+        | (i', element') :: xs as xxs ->
+          if (i' : _ index) > i
+          then element, xxs
+          else find_element i element' xs
+      in
+      let rec pair_elements src_elements = function
+        | [] -> []
+        | (i, tgt_element) :: rest ->
+          let src_element, src_elements =
+            find_element (fst (Vector.get mapping i)) root src_elements
+          in
+          let tl = pair_elements src_elements rest in
+          if src_element == tgt_element then (
+            incr trivial_pairing;
+            tl
+          ) else (
+            incr nontrivial_pairing;
+            (src_element, tgt_element) :: tl
+          )
+      in
+      let rec process_tgt clause elements next = function
+        | (clause', _) :: rest when compare_index clause' clause < 0 ->
+          process_tgt clause elements next rest
+        | (clause', elements') :: rest when equal_index clause clause' ->
+          let tl = process_next rest next in
+          begin match pair_elements elements' elements with
+            | [] -> tl
+            | hd -> (clause, hd) :: tl
+          end
+        | src_chain -> process_next src_chain next
+      and process_next src_chain = function
+        | [] -> []
+        | (clause, elements) :: next ->
+          process_tgt clause elements next src_chain
+      in
+      process_next src_chain tgt_chain
+    in
+    let visit acc (_, Packed src) =
+      assert (Vector.get chain_processed src.index);
+      List.fold_left (fun acc ({label; mapping = Fwd_mapping (mapping, tgt); _} as tr) ->
+          if not (Vector.get chain_processed tgt.index) then (
+            process_direct_transition src mapping tgt;
+            (label, Packed tgt) :: acc
+          ) else (
+            begin match process_shared_transition src mapping tgt with
+              | [] -> ()
+              | pairings ->
+                incr transitions_with_pairing;
+                tr.pairings <- pairings
+            end;
+            acc
+          )
+        ) acc src.transitions
+    in
+    let rec loop = function
+      | [] -> ()
+      | xs ->
+        loop (List.fold_left visit []
+                (List.sort (fun (l1, _) (l2, _) -> IndexSet.compare l1 l2) xs))
+    in
+    loop (visit [] ((), Packed initial));
+    stopwatch 3
+      "constructed order chain with %d elements \
+       (%d direct transitions, %d shared, %d trivial pairings, \
+       %d non-trivial pairings, %d transitions with pairings)"
+      (Order_chain.freeze chain)
+      !direct_transitions
+      !shared_transitions
+      !trivial_pairing
+      !nontrivial_pairing
+      !transitions_with_pairing;
+    if false then (
+      let count = ref 0 in
+      Vector.iter (fun (Packed t) ->
+          iter_transitions t (fun tr ->
+              match tr.pairings with
+              | [] -> ()
+              | pairings ->
+                Printf.eprintf "Transition with pairing #%d:\n" !count;
+                incr count;
+                List.iter (fun (clause, pairings) ->
+                    Printf.eprintf "- clause %d:" (Index.to_int clause);
+                    List.iter (fun (a, b) ->
+                        Printf.eprintf " %d->%d"
+                          (Order_chain.evaluate a)
+                          (Order_chain.evaluate b))
+                      pairings;
+                    Printf.eprintf "\n"
+                  ) pairings
+            )
+        ) states
+    )
+
+  let accepts =
+    Vector.map (fun (Packed t) ->
+        let remainder = ref t.chain in
+        let get_element i =
+          let clause = (Vector.get t.group i).clause in
+          let rec loop element = function
+            | (i', element') :: rest
+              when i' <= i && (Vector.get t.group i').clause = clause ->
+              loop element' rest
+            | rest ->
+              remainder := rest;
+              element
+          in
+          loop (Order_chain.root chain) !remainder
+        in
+        let acc = ref [] in
+        Vector.iteri begin fun i (nfa : NFA.t) ->
+          if nfa.accept then
+            push acc (nfa.clause, Order_chain.evaluate (get_element i))
+        end t.group;
+        List.rev !acc
+      ) states
+
+  let liveness =
+    let reserve (Packed t) =
+      Vector.Packed (Vector.make (Vector.length t.group) IndexSet.empty) in
+    Vector.map reserve states
+
+  let liveness (type m) (t : m t) : (m, Capture.set) vector =
+    let Vector.Packed v = Vector.get liveness t.index in
+    let Refl = assert_equal_cardinal
+        (Vector.length v) (Vector.length t.group)
+    in
+    v
+
+  let () =
+    let todo = ref [] in
+    let process (Packed src) =
+      let live_src = liveness src in
+      let process_transition {mapping = Fwd_mapping (mapping, tgt); _} =
+        let changed = ref false in
+        let live_tgt = liveness tgt in
+        (*let reachable = Vector.get reachable tgt.index in*)
+        let process_mapping tgt_j (src_i, (captures, _usage)) =
+          (*if IntSet.mem (tgt_j : _ index :> int) reachable then*)
+          let live = IndexSet.union (Vector.get live_src src_i) captures in
+          let live' = Vector.get live_tgt tgt_j in
+          if not (IndexSet.equal live live') then (
+            Vector.set live_tgt tgt_j live;
+            changed := true;
+          )
+        in
+        Vector.iteri process_mapping mapping;
+        if !changed then
+          push todo (Packed tgt)
+      in
+      iter_transitions src process_transition
+    in
+    Vector.iter process states;
+    let rec loop () =
+      match !todo with
+      | [] -> ()
+      | todo' ->
+        todo := [];
+        List.iter process todo';
+        loop ()
+    in
+    loop ()
+
+  let () = stopwatch 3 "Computed liveness"
+
+  let empty_registers = Vector.Packed Vector.empty
+
+  let registers : (n, Register.t Capture.map Vector.packed) vector =
+    Vector.make (Vector.length states) empty_registers
+
+  let get_registers (type m) (st : m t) : (m, _) vector =
+    let Vector.Packed regs = Vector.get registers st.index in
+    let Refl = assert_equal_cardinal (Vector.length regs) (Vector.length st.group) in
+    regs
+
+  (* Naive allocator *)
+  let () =
+    let init (Packed state) =
+      let in_use = ref IntSet.empty in
+      let alloc_reg _ = Register.of_int (IntSet.allocate in_use) in
+      let alloc caps = IndexMap.inflate alloc_reg caps in
+      Vector.set registers state.index
+        (Vector.Packed (Vector.map alloc (liveness state)))
+    in
+    Vector.iter init states
+
+  let register_count =
+    let max_live = ref 0 in
+    let max_index = ref (-1) in
+    let check_state (Packed state) =
+      let regs = get_registers state in
+      let max_live' =
+        Vector.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
+      in
+      max_live := max !max_live max_live';
+      Vector.iter (IndexMap.iter (fun _ reg ->
+          max_index := max !max_index (Index.to_int reg))) regs;
+    in
+    Vector.iter check_state states;
+    stopwatch 3
+      "allocated registers (max live registers: %d, register count: %d)"
+      !max_live (!max_index + 1);
+    !max_index + 1
+end
+
+module Make
+    (Regexp : Regexp.S)
+    (Branch : BRANCHES with module Regexp := Regexp)
+    (Stacks: STACKS with type lr1 := Regexp.Info.Lr1.n)
+    (R : sig
+       val parser_name : string
+       val rule : Syntax.rule
+     end)
+    () :
+sig
+  open Regexp.Info
 
   (* The first DFA produced. Exposed only to gather statistics.
      Big because it is before optimization/minimization. *)
@@ -239,7 +1055,7 @@ sig
       moves: Register.t Register.map;
       (** Registers to move when taking this transition.
           The source register is used as a key and the target as a value. *)
-      priority: (Clause.t * priority * priority) list;
+      priority: (Branch.t * priority * priority) list;
       (** Dynamic priority levels to remap.
           An element (c, p1, p2) means that a match of clause [c] at priority
           [p1] in the source state corresponds to a match at priority [p2] in
@@ -281,11 +1097,11 @@ sig
     (* [matching st] is the set of clauses accepted when reaching [st].  Each
        clause comes with a priority level and a mapping indicating in which
        register captured variables can be found. *)
-    val matching : states index -> (Clause.t * priority * Register.t Capture.map) list
+    val matching : states index -> (Branch.t * priority * Register.t Capture.map) list
 
     (* [threads st] list the clauses being recognized in state [st].
        The boolean indicates if the clause is accepted in this state. *)
-    val threads : states index -> (bool * Clause.t * Register.t Capture.map) list
+    val threads : states index -> (bool * Branch.t * Register.t Capture.map) list
   end
 
   val output_code : Code_printer.t -> unit
@@ -297,189 +1113,6 @@ struct
   open Info
 
   let () = stopwatch 3 "Starting to process rule %s" rule.name
-
-  module Clause = struct
-    module Actions = Const(struct let cardinal = List.length rule.clauses end)
-
-    type actions = Actions.n
-
-    type desc = {
-      action: actions index;
-      pattern: Syntax.pattern;
-      partial: bool;
-      has_lookaheads: bool;
-    }
-
-    include Vector.Of_array(struct
-        type a = desc
-        let array = Array.of_list (
-            rule.clauses
-            |> List.mapi (fun index clause ->
-                clause.Syntax.patterns
-                |> List.map (fun pattern ->
-                    {
-                      action = Index.of_int Actions.n index;
-                      pattern;
-                      partial = (match clause.Syntax.action with
-                          | Syntax.Unreachable -> false
-                          | Syntax.Total _ -> false
-                          | Syntax.Partial _ -> true);
-                      has_lookaheads = (pattern.lookaheads <> []);
-                    }
-                  )
-              )
-            |> List.flatten
-          )
-      end)
-
-    type t = n index
-
-    let n = Vector.length vector
-
-    let actions =
-      let index = ref 0 in
-      let list =
-        List.map (fun clause ->
-            let count = List.length clause.Syntax.patterns in
-            let first = Index.of_int n !index in
-            index := !index + count;
-            let last = Index.of_int n (!index - 1) in
-            clause, IndexSet.init_interval first last
-          ) rule.clauses
-      in
-      Vector.cast_array Actions.n (Array.of_list list)
-
-    let total c = not (Vector.get vector c).partial
-
-    let lookaheads = tabulate_finset n (fun st ->
-        match (Vector.get vector st).pattern.lookaheads with
-        | [] -> None
-        | symbols ->
-          let lookahead_msg =
-            "Lookahead can either be a terminal or `first(nonterminal)'"
-          in
-          let sym_pattern (sym, pos) =
-            match sym with
-            | Syntax.Apply ("first", [sym]) ->
-              begin match Info.Symbol.prj (Indices.get_symbol pos sym) with
-                | L t ->
-                  let t = Info.Terminal.to_string t in
-                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                            t ^ " is a terminal")
-                | R n ->
-                  Nonterminal.to_g n
-                  |> Grammar.Nonterminal.first
-                  |> List.map Info.Terminal.of_g
-              end
-            | Syntax.Name _ ->
-              begin match Symbol.prj (Indices.get_symbol pos sym) with
-                | R n ->
-                  failwith (lookahead_msg ^ "; " ^
-                            Info.Nonterminal.to_string n ^ " is a nonterminal")
-                | L t -> [t]
-              end
-            | _ ->
-              failwith lookahead_msg
-          in
-          Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
-      )
-  end
-
-  module LazyNFA = struct
-    type t = {
-      (* State construction *)
-      uid: int;
-      k: K.t;
-      transitions: (K.label * t lazy_t) list;
-      accept: bool;
-      clause: Clause.t;
-      mutable mark: unit ref;
-    }
-
-    let compare t1 t2 =
-      Int.compare t1.uid t2.uid
-
-    let uid =
-      let k = ref 0 in
-      fun () -> incr k; !k
-
-    let default_mark = ref ()
-
-    module KMap = Map.Make(Regexp.K)
-
-    let make clause =
-      let nfa = ref KMap.empty in
-      let rec aux k =
-        match KMap.find_opt k !nfa with
-        | Some t -> t
-        | None ->
-          let accept = ref false in
-          let rec process_transitions = function
-            | [] -> []
-            | (label, target) :: rest ->
-              begin match target with
-                | None when K.is_immediate_label label ->
-                  accept := true;
-                  []
-                | None ->
-                  (label, accepting) :: process_transitions rest
-                | Some k' ->
-                  (label, lazy (aux k')) :: process_transitions rest
-              end
-          in
-          let inj ({K. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
-          let prj filter (usage, captures, t) = ({K. filter; usage; captures}, t) in
-          let transitions =
-            K.derive Lr1.all k
-            |> process_transitions
-            |> List.map inj
-            |> IndexRefine.annotated_partition
-            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
-          in
-          let uid = uid () in
-          let accept = !accept in
-          let t = {uid; k; transitions; accept; clause; mark=default_mark} in
-          nfa := KMap.add k t !nfa;
-          t
-      and accepting = lazy (aux K.Done)
-      in
-      aux
-
-    let captures = Vector.make Clause.n IndexSet.empty
-
-    let process_clause ~capture (i : Clause.t) =
-      let captures', re =
-        Transl.transl ~capture ~for_reduction:false
-          (Vector.get Clause.vector i).pattern.expr
-      in
-      Vector.set captures i captures';
-      make i Regexp.K.(More (re, Done))
-
-    let process_action ~capture (_source, clauses) =
-      let capture_tbl = Hashtbl.create 7 in
-      let capture_def = ref IndexMap.empty in
-      let capture kind name =
-        let key = (kind, name) in
-        match Hashtbl.find_opt capture_tbl key with
-        | Some index -> index
-        | None ->
-          let index = capture () in
-          Hashtbl.add capture_tbl key index;
-          capture_def := IndexMap.add index key !capture_def;
-          index
-      in
-      let clauses = List.map (process_clause ~capture) (IndexSet.elements clauses) in
-      !capture_def, clauses
-
-    let actions =
-      let capture = Capture.gensym () in
-      Vector.map (process_action ~capture) Clause.actions
-
-    let () = stopwatch 3 "LazyNFA"
-
-  end
-
-  let captures clause = Vector.get LazyNFA.captures clause
 
   module BigDFA : sig
     include CARDINAL
