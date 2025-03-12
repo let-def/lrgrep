@@ -295,3 +295,7 @@ let cmon_definition {header; rules; trailer} : Cmon.t =
     "rules", Cmon.list (List.map cmon_rule rules);
     "trailer", cmon_ocamlcode trailer;
   ]
+
+(** The role of a captured value in a regular expression: captures only the
+    start or end location, captures the value (and its location) *)
+type capture_kind = Start_loc | End_loc | Value

@@ -105,6 +105,8 @@ module type RE = sig
     | Reduce of Capture.set * reduction
     (** The reduction operator *)
 
+  val empty : t
+
   (** Introduce a new term, allocating a unique ID *)
   val make : Syntax.position -> desc -> t
 
@@ -215,6 +217,8 @@ struct
       | Reduce of Capture.set * reduction
 
     let make position desc = {uid = uid (); desc; position}
+
+    let empty = make Syntax.invalid_position (Alt [])
 
     let compare t1 t2 =
       Int.compare t1.uid t2.uid

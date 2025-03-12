@@ -26,7 +26,6 @@ module type S = sig
     val get_symbol : position -> symbol -> Symbol.t
   end
 
-  type capture_kind = Start_loc | End_loc | Value
   type lr1_trie = {
     mutable sub : lr1_trie Lr1.map;
     mutable reached : Redgraph.n indexset;
@@ -37,7 +36,6 @@ module type S = sig
     Redgraph.n indexset * Lr1.n indexset
   val transl :
     capture:(capture_kind -> string -> Capture.n index) ->
-    for_reduction:bool ->
     regular_expr -> Capture.n indexset * RE.t
 end
 
@@ -363,11 +361,6 @@ struct
     in
     indexset_bind prods matching_states
 
-  type capture_kind =
-    | Start_loc
-    | End_loc
-    | Value
-
   type lr1_trie = {
     mutable sub: lr1_trie Lr1.map;
     mutable reached: Redgraph.n indexset;
@@ -424,7 +417,7 @@ struct
     step lr1_trie_root (K.More (re, K.Done));
     (!reached, !immediate)
 
-  let transl ~capture ~for_reduction re =
+  let transl ~capture re =
     let all_cap = ref IndexSet.empty in
     let mk_capture kind name =
       let index = capture kind name in
@@ -489,6 +482,6 @@ struct
           warn re.position "No items match this filter";
         RE.Filter states
     in
-    let result = transl ~for_reduction re in
+    let result = transl ~for_reduction:false re in
     (!all_cap, result)
 end
