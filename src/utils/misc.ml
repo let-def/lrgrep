@@ -333,3 +333,6 @@ let rec fixpoint ?counter ~propagate todo = match !todo with
     todo := [];
     List.iter propagate todo';
     fixpoint ?counter ~propagate todo
+
+let assert_equal_length v1 v2 =
+  assert_equal_cardinal (Vector.length v1) (Vector.length v2)

@@ -449,9 +449,7 @@ struct
         fun group ->
           match GroupMap.find_opt (Vector.as_array group) !map with
           | Some (Packed t') ->
-            let Refl = assert_equal_cardinal
-                (Vector.length group) (Vector.length t'.group)
-            in
+            let Refl = assert_equal_length group t'.group in
             t'
           | None ->
             let accept = ref None in
@@ -615,9 +613,7 @@ struct
               | Rev_packed [] ->
                 Vector.set table tgt.index (Rev_packed [Rev_mapping (src, mapping)])
               | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
-                let Refl = assert_equal_cardinal
-                    (Vector.length mapping) (Vector.length mapping0)
-                in
+                let Refl = assert_equal_length mapping mapping0 in
                 Vector.set table tgt.index (Rev_packed (Rev_mapping (src, mapping) :: xs))
             )
         ) states;
@@ -627,9 +623,7 @@ struct
       match Vector.get reverse_transitions t.index with
       | Rev_packed [] -> ()
       | Rev_packed (Rev_mapping (_, mapping0) :: _ as xs) ->
-        let Refl = assert_equal_cardinal
-            (Vector.length mapping0) (Vector.length t.group)
-        in
+        let Refl = assert_equal_length mapping0 t.group in
         List.iter f xs
 
     let reachable =
@@ -1028,9 +1022,7 @@ struct
 
     let liveness (type m) (t : m t) : (m, Capture.set) vector =
       let Vector.Packed v = Vector.get liveness t.index in
-      let Refl = assert_equal_cardinal
-          (Vector.length v) (Vector.length t.group)
-      in
+      let Refl = assert_equal_length v t.group in
       v
 
     let () =
@@ -1076,7 +1068,7 @@ struct
 
     let get_registers (type m) (st : m t) : (m, _) vector =
       let Vector.Packed regs = Vector.get registers st.index in
-      let Refl = assert_equal_cardinal (Vector.length regs) (Vector.length st.group) in
+      let Refl = assert_equal_length regs st.group in
       regs
 
     (* Naive allocator *)
