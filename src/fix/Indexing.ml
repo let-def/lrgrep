@@ -210,6 +210,15 @@ module Index = struct
       incr next;
       i
 
+  let rev_enumerate (n : 'n cardinal) : unit -> 'n index =
+    let n = cardinal n in
+    let next = ref (n - 1) in
+    fun () ->
+      let i = !next in
+      if i < 0 then raise End_of_set;
+      decr next;
+      i
+
   let pred = function
     | 0 -> None
     | i -> Some (pred i)
