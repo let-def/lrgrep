@@ -347,7 +347,7 @@ type lrc_subset = {
   wait: Lrc(U).set;
   reachable: Lrc(U).set;
   entrypoints : Lrc(U).set;
-  successors : (Lrc(U).n, Lrc(U).set) vector;
+  successors : Lrc(U).n index -> Lrc(U).set;
   predecessors : (Lrc(U).n, Lrc(U).set) vector;
 }
 
@@ -358,14 +358,26 @@ let lrc_from_entrypoints =
     | Some ep -> ep
     | None ->
       let module Lrc = Lrc(U) in
-      let entrypoints = indexset_bind from_entrypoints Lrc.lrcs_of_lr1 in
-      let reachable = indexset_bind entrypoints Lrc.reachable_from in
-      let wait = IndexSet.inter Lrc.all_wait reachable in
-      let successors =
-        Vector.init Lrc.n (fun s -> IndexSet.inter reachable (Lrc.all_successors s))
+      let ep =
+      if IndexSet.is_empty from_entrypoints then
+        let entrypoints = indexset_bind Info.Lr1.all_entrypoints Lrc.lrcs_of_lr1 in
+        let reachable =
+          IndexSet.init_interval
+            (Index.of_int Lrc.n 0)
+            (Index.of_int Lrc.n (cardinal Lrc.n - 1))
+        in
+        let wait = Lrc.all_wait in
+        let successors = Lrc.all_successors in
+        let predecessors = Misc.relation_reverse' Lrc.n successors in
+        { wait; reachable; entrypoints; successors; predecessors }
+      else
+        let entrypoints = indexset_bind from_entrypoints Lrc.lrcs_of_lr1 in
+        let reachable = indexset_bind entrypoints Lrc.reachable_from in
+        let wait = IndexSet.inter Lrc.all_wait reachable in
+        let successors s = IndexSet.inter reachable (Lrc.all_successors s) in
+        let predecessors = Misc.relation_reverse' Lrc.n successors in
+        { wait; reachable; entrypoints; successors; predecessors }
       in
-      let predecessors = Misc.relation_reverse Lrc.n successors in
-      let ep = { wait; reachable; entrypoints; successors; predecessors } in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
