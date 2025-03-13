@@ -374,16 +374,17 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.eprintf "Error line %d, column %d: " line col;
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
-let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
-  let parser_name =
-    String.capitalize_ascii (Filename.chop_extension (Filename.basename grammar_filename))
-  in
-  let output_code (loc, txt) =
-    if txt <> "" then
-      Code_printer.print cp ~loc txt
-  in
-  output_code input.header;
+let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t option) =
   let module Lrc = Lrc(U) in
+  let module Codegen = Kernel.Codegen.Make(Info)(struct
+      let parser_name =
+        String.capitalize_ascii
+          (Filename.chop_extension
+             (Filename.basename grammar_filename))
+      let lexer_definition = input
+    end)
+  in
+  Codegen.output_header cp;
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
     let unknown = ref [] in
     let initial_states =
@@ -419,23 +420,24 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
       let prev = Vector.get subset.predecessors
       let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
     end in
-    let module Rule = struct
-      let parser_name = parser_name
-      let rule = rule
-    end in
+    let module Rule = struct let rule = rule end in
     let module Automata = Kernel.Automata.Make(Transl(U))(Rule) in
     let module DFA      = Automata.Determinize(Stacks)() in
     let module Dataflow = Automata.Dataflow(DFA) in
     let module Machine  = Automata.Minimize(DFA)(Dataflow) in
-    let module Codegen  = Kernel.Codegen.Make(Info)(Rule)(Automata.Branch)(struct
+    let module Codegen  = Codegen.Rule(Rule)(Automata.Branch)(struct
         include Machine
         let captures tr = (label tr).captures
+        let clear tr = (label tr).clear
+        let moves tr = (label tr).moves
+        let priority tr = (label tr).priority
         let label tr = (label tr).filter
-    end)
+        let register_count = Dataflow.register_count
+      end)
     in
-    Codegen.output_code cp
+    Codegen.output cp
   end input.rules;
-  output_code input.trailer
+  Codegen.output_trailer cp
 
 let process_command = function
   | Compile options ->
@@ -451,7 +453,7 @@ let process_command = function
     in
     let oc = open_out_bin output in
     let cp = Code_printer.create ~filename:output (output_string oc) in
-    do_compile input cp;
+    do_compile input (Some cp);
     close_out oc
   | _ -> failwith "TODO"
 
