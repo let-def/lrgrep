@@ -28,8 +28,15 @@ Commands:
     By default the sentence is parsed using the first entry point of the grammar
     To specify another entrypoint, write its name followed by ':'.
 
-  enumerate  Produce invalid sentences for coverage.
+  cover      Analyses to cover all errors.
     -o <-|file>          Output file for the invalid sentences.
+
+Examples:
+  lrgrep -v grammar.cmly error.mlyl compile -o error.ml
+  lrgrep grammar.cmly error.mlyl interpret -i \"invalid sentence\"
+"
+
+(*
 
   recover    Generate an error-resilient parser.
     -o <file.ml>            Output file for the total parser source code.
@@ -37,19 +44,13 @@ Commands:
   complete   Generate code for completing an input prefix.
     -o <file.ml>            Output file for the completion source code.
 
-Examples:
-  lrgrep -v grammar.cmly error.mlyl compile -o error.ml
-  lrgrep grammar.cmly error.mlyl interpret -i \"invalid sentence\"
-"
+*)
 
 let version = "LRgrep 1.0\n"
 
 let usage_error fmt =
-  Printf.eprintf "lrgrep: ";
-  Printf.kfprintf (fun _ ->
-      prerr_string usage;
-      exit 2
-    ) stderr fmt
+  prerr_string "lrgrep: ";
+  Printf.kfprintf (fun _ -> prerr_newline (); exit 2) stderr fmt
 
 
 (* Quick'n'dirty argument parsing *)
@@ -62,14 +63,14 @@ type compile_options = {
 type command =
   | Compile of compile_options
   | Interpret of unit
-  | Enumerate of unit
+  | Cover of unit
   | Recover of unit
   | Complete of unit
 
 type arg =
   | Short of char
-  | Long   of string
-  | Text   of string
+  | Long  of string
+  | Text  of string
 
 let default_compile_options = {
   compile_output = None;
@@ -79,7 +80,7 @@ let default_compile_options = {
 let is_command = function
   | "compile"   -> Some (Compile default_compile_options)
   | "interpret" -> Some (Interpret ())
-  | "enumerate" -> Some (Enumerate ())
+  | "cover"     -> Some (Cover ())
   | "recover"   -> Some (Recover ())
   | "complete"  -> Some (Complete ())
   | _ -> None
@@ -125,7 +126,7 @@ let rec parse_compile acc = function
   | rest -> Compile acc, rest
 
 let parse_interpret () _ = failwith "interpret: TODO"
-let parse_enumerate () _ = failwith "enumerate: TODO"
+let parse_cover () _ = failwith "cover: TODO"
 let parse_recover   () _ = failwith "recover: TODO"
 let parse_complete  () _ = failwith "complete: TODO"
 
@@ -163,7 +164,7 @@ let rec parse_commands acc command args =
   let command, args = match command with
     | Compile   opts -> parse_compile opts args
     | Interpret opts -> parse_interpret opts args
-    | Enumerate opts -> parse_enumerate opts args
+    | Cover     opts -> parse_cover opts args
     | Recover   opts -> parse_recover opts args
     | Complete  opts -> parse_complete opts args
   in
@@ -422,10 +423,12 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
       let parser_name = parser_name
       let rule = rule
     end in
-    let module Automaton =
-      Kernel.Automata.Make(Transl(U))(Stacks)(Rule)()
-    in
-    Automaton.output_code cp
+    let module Automata = Kernel.Automata.Make(Transl(U))(Rule) in
+    let module DFA      = Automata.Determinize(Stacks)() in
+    let module Dataflow = Automata.Dataflow(DFA) in
+    let module Machine  = Automata.Minimize(DFA)(Dataflow) in
+    let module Codegen  = Automata.Codegen(Machine) in
+    Codegen.output_code cp
   end input.rules;
   output_code input.trailer
 
