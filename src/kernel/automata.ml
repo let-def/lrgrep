@@ -60,7 +60,6 @@ struct
 
     val clause : n index -> Clause.n index
     val pattern : n index -> Syntax.pattern
-    val captures : n index -> Capture.n indexset
     val expr : n index -> Regexp.RE.t
     val is_total : n index -> bool
   end =
