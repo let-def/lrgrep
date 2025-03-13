@@ -427,7 +427,12 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t) =
     let module DFA      = Automata.Determinize(Stacks)() in
     let module Dataflow = Automata.Dataflow(DFA) in
     let module Machine  = Automata.Minimize(DFA)(Dataflow) in
-    let module Codegen  = Automata.Codegen(Machine) in
+    let module Codegen  = Kernel.Codegen.Make(Info)(Rule)(Automata.Branch)(struct
+        include Machine
+        let captures tr = (label tr).captures
+        let label tr = (label tr).filter
+    end)
+    in
     Codegen.output_code cp
   end input.rules;
   output_code input.trailer

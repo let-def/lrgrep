@@ -43,7 +43,7 @@ type priority = int
 
 module Make
     (Transl : Transl.S)
-    (R : sig val parser_name : string val rule : Syntax.rule end) =
+    (R : Codegen.RULE) =
 struct
   open Transl
   open Regexp
@@ -51,39 +51,27 @@ struct
   open R
 
   module Branch : sig
-    include CARDINAL
-    type t = n index
+    include Codegen.BRANCH with module Info := Info
 
     type state = {
-      index: t;
+      index: n index;
       accept: bool;
     }
 
-    type clause
-    val clause : clause cardinal
-    val clause_syntax : clause index -> Syntax.clause
-    val clause_branches : clause index -> n indexset
-    val clause_captures : clause index -> (Capture.n, Syntax.capture_kind * string) indexmap
-
-    val branch_clause : n index -> clause index
-    val branch_pattern : n index -> Syntax.pattern
-    val branch_lookaheads : n index -> Terminal.set option
-    val branch_captures : n index -> Capture.n indexset
-    val branch_expr : n index -> Regexp.RE.t
-    val branch_is_total : n index -> bool
+    val clause : n index -> Clause.n index
+    val pattern : n index -> Syntax.pattern
+    val captures : n index -> Capture.n indexset
+    val expr : n index -> Regexp.RE.t
+    val is_total : n index -> bool
   end =
   struct
-    module Clause = Vector.Of_array(struct
+    module Preclause = Vector.Of_array(struct
         type a = Syntax.clause
         let array = Array.of_list rule.clauses
       end)
 
-    type clause = Clause.n
-    let clause = Vector.length Clause.vector
-    let clause_syntax = Vector.get Clause.vector
-
     type desc = {
-      clause: clause index;
+      clause: Preclause.n index;
       pattern: Syntax.pattern;
     }
 
@@ -94,25 +82,25 @@ struct
               List.map
                 (fun pattern -> {clause; pattern})
                 syntax.Syntax.patterns
-            ) Clause.vector
+            ) Preclause.vector
           |> Vector.to_list
           |> List.flatten
           |> Array.of_list
       end)
+    type branch = n
 
     let n = Vector.length vector
-    type t = n index
 
     type state = {
-      index: t;
+      index: n index;
       accept: bool;
     }
 
-    let branch_clause b = vector.:(b).clause
+    let clause b = vector.:(b).clause
 
-    let branch_pattern b = vector.:(b).pattern
+    let pattern b = vector.:(b).pattern
 
-    let clause_branches =
+    let of_clauses =
       let index = ref 0 in
       let import clause =
         let count = List.length clause.Syntax.patterns in
@@ -121,9 +109,9 @@ struct
         let last = Index.of_int n (!index - 1) in
         IndexSet.init_interval first last
       in
-      Vector.get (Vector.map import Clause.vector)
+      Vector.get (Vector.map import Preclause.vector)
 
-    let branch_lookaheads =
+    let lookaheads =
       tabulate_finset n @@ fun branch ->
       match vector.:(branch).pattern.lookaheads with
       | [] -> None
@@ -156,40 +144,44 @@ struct
         in
         Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
 
-    let branch_is_total br =
-      Option.is_none (branch_lookaheads br) &&
-      match (clause_syntax (branch_clause br)).action with
+    let is_total br =
+      Option.is_none (lookaheads br) &&
+      match Preclause.vector.:(clause br).action with
       | Syntax.Total _ -> true
       | Syntax.Partial _ -> false
       | Syntax.Unreachable -> true
 
     let branch_transl = Vector.make n (IndexSet.empty, Transl.Regexp.RE.empty)
+    let captures b = fst branch_transl.:(b)
+    let expr b = snd branch_transl.:(b)
 
-    let clause_captures =
-      let gensym = Capture.gensym () in
-      tabulate_finset clause @@ fun clause ->
-      let capture_tbl = Hashtbl.create 7 in
-      let capture_def = ref IndexMap.empty in
-      let capture kind name =
-        let key = (kind, name) in
-        match Hashtbl.find_opt capture_tbl key with
-        | Some index -> index
-        | None ->
-          let index = gensym () in
-          Hashtbl.add capture_tbl key index;
-          capture_def := IndexMap.add index key !capture_def;
-          index
-      in
-      let translate_branch (br : n index) =
-        let pattern = branch_pattern br in
-        branch_transl.:(br) <- Transl.transl ~capture pattern.expr
-      in
-      IndexSet.iter translate_branch (clause_branches clause);
-      !capture_def
+    module Clause = struct
+      include Preclause
 
-    let branch_captures b = fst branch_transl.:(b)
+      let n = Vector.length vector
+      let syntax = Vector.get vector
 
-    let branch_expr b = snd branch_transl.:(b)
+      let captures =
+        let gensym = Capture.gensym () in
+        tabulate_finset n @@ fun clause ->
+        let capture_tbl = Hashtbl.create 7 in
+        let capture_def = ref IndexMap.empty in
+        let capture kind name =
+          let key = (kind, name) in
+          match Hashtbl.find_opt capture_tbl key with
+          | Some index -> index
+          | None ->
+            let index = gensym () in
+            Hashtbl.add capture_tbl key index;
+            capture_def := IndexMap.add index key !capture_def;
+            index
+        in
+        let translate_branch (br : branch index) =
+          branch_transl.:(br) <- Transl.transl ~capture (pattern br).expr
+        in
+        IndexSet.iter translate_branch (of_clauses clause);
+        !capture_def
+    end
   end
 
   module type STACKS = sig
@@ -290,7 +282,7 @@ struct
 
       let branches =
         Vector.init Branch.n (fun br ->
-            let re = Branch.branch_expr br in
+            let re = Branch.expr br in
             make br (Regexp.K.More (re, Regexp.K.Done))
           )
     end
@@ -301,7 +293,7 @@ struct
       type 'n prestate = {
         index: n index;
         kernel: ('n, NFA.t) vector;
-        accept: Branch.t option;
+        accept: Branch.n index option;
         mutable raw_transitions: (Lr1.set * 'n fwd_mapping lazy_t) list;
       }
 
@@ -352,7 +344,7 @@ struct
                 kernel_fold
                   (fun i (nfa : NFA.t) acc ->
                      if nfa.branch.accept &&
-                        Branch.branch_is_total nfa.branch.index then
+                        Branch.is_total nfa.branch.index then
                        accept := Some nfa.branch.index;
                      List.rev_map (make i) nfa.transitions @ acc)
                   kernel []
@@ -525,8 +517,8 @@ struct
 
   module type DATAFLOW = sig
     module DFA : DFA
-    val pairings : (DFA.n, (Branch.t * (Order_chain.element * Order_chain.element) list) list list) vector
-    val accepts : (DFA.n, (Branch.t * priority) list) vector
+    val pairings : (DFA.n, (Branch.n index * (Order_chain.element * Order_chain.element) list) list list) vector
+    val accepts : (DFA.n, (Branch.n index * priority) list) vector
     val get_liveness : 'n DFA.t -> ('n, Capture.set) vector
     val get_registers : 'n DFA.t -> ('n, Register.t Capture.map) vector
     val register_count : int
@@ -649,7 +641,7 @@ struct
         | _ -> iter_re check re
       in
       Index.iter Branch.n @@ fun branch ->
-      let pattern = Branch.branch_pattern branch in
+      let pattern = Branch.pattern branch in
       if IndexSet.mem branch reachable_branches then
         check pattern.expr
       else
@@ -1034,7 +1026,7 @@ struct
       moves: Register.t Register.map;
       (** Registers to move when taking this transition.
           The source register is used as a key and the target as a value. *)
-      priority: (Branch.t * priority * priority) list;
+      priority: (Branch.n index * priority * priority) list;
       (** Dynamic priority levels to remap.
           An element (c, p1, p2) means that a match of clause [c] at priority
           [p1] in the source state corresponds to a match at priority [p2] in
@@ -1064,7 +1056,7 @@ struct
     (* [matching st] is the set of clauses accepted when reaching [st].  Each
        clause comes with a priority level and a mapping indicating in which
        register captured variables can be found. *)
-    val matching : states index -> (Branch.t * priority * Register.t Capture.map) list
+    val matching : states index -> (Branch.n index * priority * Register.t Capture.map) list
 
     (* [threads st] list the clauses being recognized in state [st].
        The boolean indicates if the clause is accepted in this state. *)
@@ -1081,7 +1073,7 @@ struct
       captures: (Capture.t * Register.t) list;
       clear: Register.set;
       moves: Register.t Register.map;
-      priority: (Branch.t * int * int) list;
+      priority: (Branch.n index * int * int) list;
     }
 
     let label_compare t1 t2 =
@@ -1163,7 +1155,7 @@ struct
       Vector.fold_left begin fun acc (DFA.Packed st) ->
         Vector.fold_left2 begin fun acc (br : Branch.state) regs ->
           if br.accept then
-            let cap = Branch.branch_captures br.index in
+            let cap = Branch.captures br.index in
             IndexSet.fold begin fun var acc ->
               if IndexMap.mem var regs
               then acc
@@ -1307,196 +1299,4 @@ struct
     let () = stopwatch 3 "OutDFA of %s" rule.name
   end
 
-  module Codegen (M : MACHINE) = struct
-    let captures_lr1 =
-      let map = ref IndexMap.empty in
-      Index.iter M.transitions (fun tr ->
-          let label = M.label tr in
-          map := List.fold_left (fun map (cap, _reg) ->
-              IndexMap.update cap (function
-                  | None -> Some label.filter
-                  | Some set' -> Some (IndexSet.union set' label.filter)
-                ) map
-            ) !map label.captures
-        );
-      !map
-
-    let recover_type index =
-      try
-        let lr1s = IndexMap.find index captures_lr1 in
-        let symbols = IndexSet.map (fun lr1 ->
-            match Lr1.incoming lr1 with
-            | None -> raise Not_found
-            | Some sym -> sym
-          ) lr1s
-        in
-        let typ = IndexSet.fold (fun sym acc ->
-            let typ = match Symbol.semantic_value sym with
-              | None -> raise Not_found
-              | Some typ -> String.trim typ
-            in
-            match acc with
-            | None -> Some typ
-            | Some typ' ->
-              if typ <> typ' then raise Not_found;
-              acc
-          ) symbols None
-        in
-        match typ with
-        | None -> None
-        | Some typ -> Some (symbols, typ)
-      with Not_found -> None
-
-    let symbol_matcher s = match Info.Symbol.prj s with
-      | L t -> "T T_" ^ Info.Terminal.to_string t
-      | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
-
-    let bytes_match b i str =
-      Bytes.length b >= i + String.length str &&
-      let exception Exit in
-      match
-        for j = 0 to String.length str - 1 do
-          if Bytes.get b (i + j) <> String.get str j then
-            raise Exit
-        done
-      with
-      | () -> true
-      | exception Exit -> false
-
-    let rewrite_loc_keywords str =
-      let b = Bytes.of_string str in
-      let l = Bytes.length b in
-      let i = ref 0 in
-      while !i < l do
-        if Bytes.get b !i = '$' &&
-           (bytes_match b (!i + 1) "startloc(" ||
-            bytes_match b (!i + 1) "endloc(")
-        then (
-          Bytes.set b !i '_';
-          while Bytes.get b !i <> '(' do incr i; done;
-          Bytes.set b !i '_';
-          while !i < l  && Bytes.get b !i <> ')' do incr i; done;
-          if !i < l then Bytes.set b !i '_'
-        )
-        else incr i
-      done;
-      Bytes.to_string b
-
-    let bind_capture out ~roffset index (def, name) =
-      let is_optional = IndexSet.mem index M.partial_captures in
-      let none = if is_optional then "None" else "assert false" in
-      let some x = if is_optional then "Some (" ^ x ^ ")" else x in
-      let offset = !roffset in
-      incr roffset;
-      match def with
-      | Syntax.Value ->
-        let typ = recover_type index in
-        Code_printer.fmt out
-          "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
-          \      | Empty -> %s\n\
-          \      | Initial -> assert false\n\
-          \      | Value (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
-          name name name offset
-          (if is_optional then "(None, None, None)" else "assert false")
-          parser_name
-          (if Option.is_none typ then "_" else "st")
-          (if Option.is_none typ then "_" else "x")
-          (if Option.is_none typ then "as x" else "");
-        begin match typ with
-          | None -> ()
-          | Some (symbols, typ) ->
-            Code_printer.fmt out
-              "        let x = match %s.MenhirInterpreter.incoming_symbol st with\n"
-              parser_name;
-            List.iter (fun symbol ->
-                Code_printer.fmt out "          | %s -> (x : %s)\n"
-                  (symbol_matcher symbol) typ) (IndexSet.elements symbols);
-            Code_printer.fmt out
-              "          | _ -> assert false\n\
-              \        in\n"
-        end;
-        Code_printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
-        Code_printer.fmt out "    in\n";
-        Code_printer.fmt out "    let _ = %s in\n" name
-      | Start_loc ->
-        Code_printer.fmt out
-          "    let _startloc_%s_ = match __registers.(%d) with\n\
-          \      | Empty -> %s\n\
-          \      | Initial -> %s\n\
-          \      | Value (%s.MenhirInterpreter.Element (_, _, p, _)) -> %s\n\
-          \    in\n"
-          name offset
-          none
-          (some "__initialpos")
-          parser_name (some "p")
-      | End_loc ->
-        Code_printer.fmt out
-          "    let _endloc_%s_ = match __registers.(%d) with\n\
-          \      | Empty -> %s\n\
-          \      | Initial -> %s\n\
-          \      | Value (%s.MenhirInterpreter.Element (_, _, _, p)) -> %s\n\
-          \    in\n"
-          name offset
-          none
-          (some "__initialpos")
-          parser_name (some "p")
-
-    let lookahead_constraint branch =
-      match Branch.branch_lookaheads branch with
-      | None -> None
-      | Some terms ->
-        let term_pattern t =
-          let name = Info.Terminal.to_string t in
-          match Info.Terminal.semantic_value t with
-          | None -> name
-          | Some _ -> name ^ " _"
-        in
-        Some (string_concat_map ~wrap:("(",")") "|"
-                term_pattern (IndexSet.elements terms))
-
-    let output_code out =
-      Code_printer.fmt out
-        "let lrgrep_execute_%s %s\n\
-        \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
-        \  (__initialpos : Lexing.position)\n\
-        \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
-        \  : _ option = match __clause, token with\n"
-        rule.name (String.concat " " rule.args)
-        parser_name parser_name;
-      let output_clause clause =
-        let branches = Branch.clause_branches clause in
-        let captures = Branch.clause_captures clause in
-        Code_printer.fmt out " ";
-        IndexSet.iter (fun branch ->
-            Code_printer.fmt out
-              " | %d, %s"
-              (Index.to_int branch)
-              (Option.value (lookahead_constraint branch) ~default:"_");
-          ) branches;
-        Code_printer.fmt out " ->\n";
-        IndexMap.iter (bind_capture out ~roffset:(ref 0)) captures;
-        begin match (Branch.clause_syntax clause).action with
-          | Unreachable ->
-            Code_printer.print out "    failwith \"Should be unreachable\"\n"
-          | Partial (loc, str) ->
-            Code_printer.print out "    (\n";
-            Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
-            Code_printer.print out "    )\n"
-          | Total (loc, str) ->
-            Code_printer.print out "    Some (\n";
-            Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
-            Code_printer.print out "    )\n"
-        end;
-        let constrained =
-          IndexSet.filter
-            (fun branch -> Option.is_some (Branch.branch_lookaheads branch))
-            branches
-        in
-        if not (IndexSet.is_empty constrained) then
-          Code_printer.fmt out "  | (%s), _ -> None\n"
-            (string_concat_map "|" string_of_index (IndexSet.elements constrained))
-      in
-      Index.iter Branch.clause output_clause;
-      Code_printer.print out "  | _ -> failwith \"Invalid action (internal error or API misuse)\"\n\n"
-  end
 end
