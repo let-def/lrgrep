@@ -288,67 +288,25 @@ let spec =
   | Some file ->
     let result = parse_spec file in
     stopwatch 1 "Loaded specification %s" file;
-    Some result
+    Some (file, result)
 
-module U = struct end
+let parser_name =
+  String.capitalize_ascii
+    (Filename.remove_extension
+       (Filename.basename grammar_filename))
 
-module type Viable = module type of Kernel.Viable_reductions.Make(Info)()
-
-module Viable =
-  LazyFunctor
-    (struct
-      module type T = Viable
-      let log = Some "viable reductions"
-    end)
-    (Kernel.Viable_reductions.Make(Info))()
-
-module type Regexp = module type of Kernel.Regexp.Make(Info)(Viable(U))
-
-module Regexp =
-  LazyFunctor
-    (struct
-      module type T = Regexp
-      let log = None
-    end)
-    (functor () -> Kernel.Regexp.Make(Info)(Viable(U)))()
-
-module type Transl = module type of Kernel.Transl.Make(Regexp(U))
-
-module Transl =
-  LazyFunctor
-    (struct
-      module type T = Transl
-      let log = None
-    end)
-    (functor () -> Kernel.Transl.Make(Regexp(U)))()
-
-module type Reachability =
-  module type of Kernel.Reachability.Make(Info)()
-
-module Reachability =
-  LazyFunctor
-    (struct
-      module type T = Reachability
-      let log = Some "reachability information"
-    end)
-    (Kernel.Reachability.Make(Info))()
-
-module type Lrc = module type of Kernel.Lrc.Make(Info)(Reachability(U))
-
-module Lrc =
-  LazyFunctor
-    (struct
-      module type T = Lrc
-      let log = Some "LRC" (*refinement of LR(1) states with reachable classes*)
-    end)
-    (functor () -> Kernel.Lrc.Make(Info)(Reachability(U)))()
+module Viable = Kernel.Viable_reductions.Make(Info)()
+module Regexp = Kernel.Regexp.Make(Info)(Viable)
+module Transl = Kernel.Transl.Make(Regexp)
+module Reachability = Kernel.Reachability.Make(Info)()
+module Lrc = Kernel.Lrc.Make(Info)(Reachability)
 
 type lrc_subset = {
-  wait: Lrc(U).set;
-  reachable: Lrc(U).set;
-  entrypoints : Lrc(U).set;
-  successors : Lrc(U).n index -> Lrc(U).set;
-  predecessors : (Lrc(U).n, Lrc(U).set) vector;
+  wait: Lrc.set;
+  reachable: Lrc.set;
+  entrypoints : Lrc.set;
+  successors : Lrc.n index -> Lrc.set;
+  predecessors : (Lrc.n, Lrc.set) vector;
 }
 
 let lrc_from_entrypoints =
@@ -357,7 +315,6 @@ let lrc_from_entrypoints =
     match Hashtbl.find_opt cache from_entrypoints with
     | Some ep -> ep
     | None ->
-      let module Lrc = Lrc(U) in
       let ep =
       if IndexSet.is_empty from_entrypoints then
         let entrypoints = indexset_bind Info.Lr1.all_entrypoints Lrc.lrcs_of_lr1 in
@@ -387,7 +344,6 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
 let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t option) =
-  let module Lrc = Lrc(U) in
   let module Codegen = Kernel.Codegen.Make(Info)(struct
       let parser_name =
         String.capitalize_ascii
@@ -433,11 +389,11 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
       let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
     end in
     let module Rule = struct let rule = rule end in
-    let module Automata = Kernel.Automata.Make(Transl(U))(Rule) in
+    let module Automata = Kernel.Automata.Make(Transl)(Rule) in
     let module DFA      = Automata.Determinize(Stacks)() in
     let module Dataflow = Automata.Dataflow(DFA) in
     let module Machine  = Automata.Minimize(DFA)(Dataflow) in
-    let module Codegen  = Codegen.Rule(Rule)(Automata.Branch)(struct
+    let module Program  = Codegen.Rule(Rule)(Automata.Branch)(struct
         include Machine
         let captures tr = (label tr).captures
         let clear tr = (label tr).clear
@@ -447,24 +403,23 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
         let register_count = Dataflow.register_count
       end)
     in
-    Codegen.output cp
+    Program.output cp
   end input.rules;
   Codegen.output_trailer cp
 
 let process_command = function
   | Compile options ->
-    let input = match spec with
+    let (input_file, input) = match spec with
       | Some i -> i
       | None ->
-        usage_error "compile: no output file has been set"
+        usage_error "compile: expecting a specification (-s <spec.mlyl>)"
     in
-    let output = match options.compile_output with
+    let output_file = match options.compile_output with
       | Some o -> o
-      | None ->
-        usage_error "compile: no output file has been set"
+      | None -> Filename.remove_extension input_file ^ ".ml"
     in
-    let oc = open_out_bin output in
-    let cp = Code_printer.create ~filename:output (output_string oc) in
+    let oc = open_out_bin output_file in
+    let cp = Code_printer.create ~filename:output_file (output_string oc) in
     do_compile input (Some cp);
     close_out oc
   | _ -> failwith "TODO"
