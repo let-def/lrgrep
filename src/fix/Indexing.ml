@@ -219,6 +219,10 @@ module Index = struct
       decr next;
       i
 
+  let pred = function
+    | 0 -> None
+    | i -> Some (pred i)
+
   let equal = Int.equal
   let compare = Int.compare
   let minimum = Int.min
