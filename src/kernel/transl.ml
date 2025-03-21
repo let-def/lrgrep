@@ -61,34 +61,6 @@ struct
         );
       Vector.get table
 
-    let symbol_of_string str =
-      let rec parse_symbol str i0 i j =
-        if i = j then
-          (Name (String.sub str i0 (i - i0)), i)
-        else
-          match str.[i] with
-          | ',' | ')' -> (Name (String.sub str i0 (i - i0)), i)
-          | '(' ->
-            let name = String.sub str i0 (i - i0) in
-            let args, i = parse_args str (i + 1) j in
-            Apply (name, args), i
-          | _ -> parse_symbol str i0 (i + 1) j
-
-      and parse_args str i j =
-        let arg, i = parse_symbol str i i j in
-        if i = j then
-          failwith ("Malformed symbol " ^ str)
-        else
-          match str.[i] with
-          | ',' ->
-            let args, i = parse_args str (i + 1) j in
-            (arg :: args, i)
-          | ')' -> ([arg], (i + 1))
-          | _ ->
-            failwith ("Malformed symbol " ^ str)
-      in
-      fst (parse_symbol str 0 0 (String.length str))
-
     let string_of_symbol =
       let buffer = Buffer.create 32 in
       function
@@ -114,18 +86,6 @@ struct
       let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
       Index.iter Symbol.n add_symbol;
       Hashtbl.find_opt table
-
-    let _find_instances =
-      let table = Hashtbl.create 7 in
-      let get name = Option.value (Hashtbl.find_opt table name) ~default:[] in
-      let add_symbol sym =
-        match symbol_of_string (Symbol.name ~mangled:false sym) with
-        | Name _ -> ()
-        | Apply (name, args) ->
-          Hashtbl.replace table name ((args, sym) :: get name)
-      in
-      Index.iter Symbol.n add_symbol;
-      get
 
     let find_symbol name =
       find_linearized_symbol (string_of_symbol name)
