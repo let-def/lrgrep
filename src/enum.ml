@@ -18,7 +18,7 @@ struct
   let get_reduce_filter st =
     let desc = Vector.get Reach.states st in
     let get_items lr1 =
-      List.filter (fun (p, n) -> Production.length p > n) (Lr1.items lr1)
+      IndexSet.filter (fun it -> not (Item.is_reducible it)) (Lr1.items lr1)
     in
     let reduce, filter =
       match Reach.Source.prj desc.config.source with
@@ -47,29 +47,17 @@ struct
       | _ -> ()
     end
 
-  let output_item oc (prod, dot) =
-    output_string oc "/";
-    output_string oc (Nonterminal.to_string (Production.lhs prod));
-    output_char oc ':';
-    let rhs = Production.rhs prod in
-    for i = 0 to dot - 1 do
-      output_char oc ' ';
-      output_string oc (Symbol.name rhs.(i));
-    done;
-    output_string oc " .";
-    for i = dot to Array.length rhs - 1 do
-      output_char oc ' ';
-      output_string oc (Symbol.name rhs.(i));
-    done
+  let print_items oc items =
+    let first = ref true in
+    IndexSet.iter (fun item ->
+        if !first then first := false else
+          output_char oc ' ';
+        output_char oc '/';
+        output_string oc (Item.to_string item)
+      ) items
 
   let () =
     Printf.eprintf "Maximal reduce-filter patterns:\n";
-    let print_items oc items =
-      List.iteri (fun i item ->
-          if i > 0 then output_char oc ' ';
-          output_item oc item
-        ) items
-    in
     Hashtbl.iter begin fun (reduce, filter) lookaheads ->
       begin match reduce with
       | [] -> print_items stderr filter
@@ -102,11 +90,8 @@ struct
           if i > 0 then output_string oc "; ";
           output_string oc (Lr1.symbol_to_string lr1);
         ) suffix;
-      List.iteri (fun i item ->
-          if i > 0 || suffix <> [] then
-            output_char oc ' ';
-          output_item oc item
-        ) (Lr1.items top);
+      if suffix <> [] then output_char oc ' ';
+      print_items oc (Lr1.items top);
       output_string oc "]"
     in
     fun oc (entrypoint, terminals, lookaheads, suffixes) ->
@@ -131,7 +116,8 @@ struct
         ) xs;
       output_char oc ']'
     in
-    let output_item oc (prod, dot) =
+    let output_item oc item =
+      let (prod, dot) = Item.desc item in
       Printf.fprintf oc
         "{\"lhs\":%a,\"rhs\":%a,\"dot\":%d}"
         output_symbol
@@ -147,7 +133,7 @@ struct
       Printf.fprintf oc
         "{\"reduce\": %a, \"filter\": %a}"
         (output_list output_state) (List.rev suffix)
-        (output_list output_item) (Lr1.items top)
+        (output_list output_item) (IndexSet.elements (Lr1.items top))
     in
     let output_terminal oc t =
       output_symbol oc (Symbol.inj_l t)

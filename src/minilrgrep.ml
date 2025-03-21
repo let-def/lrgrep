@@ -664,7 +664,8 @@ module Transl = struct
       | None -> error pos "unknown symbol %S" sym
 
   (** Match the right-hand side of a filter to an item *)
-  let match_rhs rfilter (prod, dot) =
+  let match_rhs rfilter item =
+    let (prod, dot) = Item.desc item in
     let found = ref false in
     let rec loop rhs index = function
       | [] ->
@@ -701,15 +702,16 @@ module Transl = struct
   (** Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
     let match_lr1 lr1 =
-      let match_lhs (prod, _) = function
+      let match_lhs item = function
         | None -> true
-        | Some lhs -> Index.equal lhs (Production.lhs prod)
+        | Some lhs ->
+          Index.equal lhs (Production.lhs (Item.production item))
       in
       let match_item item =
         match_lhs item lhs && match_rhs rhs item
       in
-      let match_closed prod = match_item (prod, 0) in
-      List.exists match_item (Lr1.items lr1) ||
+      let match_closed prod = match_item (Item.make prod 0) in
+      IndexSet.exists match_item (Lr1.items lr1) ||
       IndexSet.exists match_closed
         Unreductions.prods_by_lr1.:(lr1)
     in
@@ -1274,15 +1276,21 @@ module Enum = struct
 
   (** Produce reduce-filter patterns for each leaf *)
   let maximal_patterns =
-    let irreducible_item (p, i) =
+    let irreducible_item item =
+      let p, i = Item.desc item in
       let rhs = Production.rhs p in
       i < Array.length rhs &&
       non_nullable_symbol rhs.(i)
     in
     let pattern_from_stack stack =
-      let filter = List.filter irreducible_item (Lr1.items (List.hd stack)) in
-      let max_dot = List.fold_left (fun max (_, dot) -> Int.max max dot) 0 filter in
-      let filter = List.filter (fun (prod, dot) ->
+      let filter =
+        IndexSet.filter irreducible_item (Lr1.items (List.hd stack))
+      in
+      let max_dot =
+        IndexSet.fold (fun item max -> Int.max max (Item.position item)) filter 0
+      in
+      let filter = IndexSet.filter (fun item ->
+          let (prod, dot) = Item.desc item in
           dot = max_dot && (
             max_dot <> 1 ||
             not (Index.equal
@@ -1298,14 +1306,11 @@ module Enum = struct
       match Suffix.desc.:(i) with
       | _, {child = _ :: _; _} -> ()
       | _, {stack; _} ->
-        begin match pattern_from_stack stack with
-        | _, [] -> ()
-        | reduce, filter ->
-          begin match Hashtbl.find_opt table reduce with
-            | None -> Hashtbl.add table reduce (ref [i, filter])
-            | Some r -> r := (i, filter) :: !r
-          end
-        end
+        let reduce, filter = pattern_from_stack stack in
+        if not (IndexSet.is_empty filter) then
+          match Hashtbl.find_opt table reduce with
+          | None -> Hashtbl.add table reduce (ref [i, filter])
+          | Some r -> r := (i, filter) :: !r
     in
     Vector.iteri (fun st suffixes ->
         if Reduction_DFA.is_leaf st && Analyze.is_uncovered st then
@@ -1328,10 +1333,12 @@ module Enum = struct
           else keep_minima ((i, xs) :: acc) xxs
       in
       filters
+      |> List.map (fun (p,its) -> (p, IndexSet.elements its))
       |> List.sort (fun (_, l1) (_, l2) -> List.compare_lengths l1 l2)
       |> keep_minima []
     in
-    let add_lookahead acc (prod, pos) =
+    let add_lookahead acc item =
+      let (prod, pos) = Item.desc item in
       let rhs = Production.rhs prod in
       if pos < Array.length rhs then
         IndexSet.add rhs.(pos) acc
@@ -1387,16 +1394,16 @@ module Enum = struct
           List.iteri (fun i item ->
               Printf.eprintf "%c /%s\n"
                 (if i = 0 then '|' else ' ')
-                (item_to_string item)
+                (Item.to_string item)
             ) filter
         | _ ->
           let reduce = Misc.string_concat_map "; " Symbol.name reduce in
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "| [%s /%s" reduce (item_to_string item)
+                Printf.eprintf "| [%s /%s" reduce (Item.to_string item)
               else
-                Printf.eprintf "\n   %s /%s" padding (item_to_string item)
+                Printf.eprintf "\n   %s /%s" padding (Item.to_string item)
             ) filter;
           Printf.eprintf "]\n"
         end;

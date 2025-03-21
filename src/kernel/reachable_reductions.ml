@@ -1132,35 +1132,25 @@ struct
           !count (string_of_indexset ~index:Terminal.to_string failing);
         let print_step i step =
           let plr1 lr1 = Lr1.symbol_to_string lr1 in
-          let pitem (prod, dot) =
-            let components = ref [] in
-            let rhs = Production.rhs prod in
-            for i = Array.length rhs - 1 downto dot do
-              push components (Symbol.name rhs.(i));
-            done;
-            push components ".";
-            for i = dot - 1 downto 0 do
-              push components (Symbol.name rhs.(i));
-            done;
-            push components ("/" ^ Nonterminal.to_string (Production.lhs prod) ^ ":");
-            String.concat " " !components
-          in
           let lr1 = IndexSet.choose step.label in
           Printf.eprintf "- %s\n" (plr1 lr1);
           match step.goto with
           | [] ->
             if i = 0 then
               Printf.eprintf "  [ %s]\n"
-              (string_concat_map " " pitem (Lr1.items lr1))
+              (string_concat_map " " Item.to_string
+                 (IndexSet.elements (Lr1.items lr1)))
           | goto ->
             List.iter (fun goto ->
                 let lr1' = List.hd goto in
                 let suff = string_concat_map ";" plr1 (List.rev goto) in
                 let pad = String.make (String.length suff) ' ' in
                 Printf.eprintf "  [%s " suff;
-                List.iteri (fun i item ->
-                    if i > 0 then Printf.eprintf "\n    %s" pad;
-                    Printf.eprintf "%s" (pitem item);
+                let need_sep = ref false in
+                IndexSet.iter (fun item ->
+                    if !need_sep then Printf.eprintf "\n    %s" pad;
+                    need_sep := true;
+                    Printf.eprintf "%s" (Item.to_string item);
                   ) (Lr1.items lr1');
                 Printf.eprintf "]\n";
               ) goto

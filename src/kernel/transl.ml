@@ -155,7 +155,8 @@ struct
               (fun prod -> register (prod, 0))
               (prod_by_lhs nt)
           in
-          let kernel_item (prod, pos) =
+          let kernel_item item =
+            let (prod, pos) = Item.desc item in
             register (prod, pos);
             let rhs = Production.rhs prod in
             if pos < Array.length rhs then
@@ -165,7 +166,7 @@ struct
                 IndexSet.iter closure_items
                   (left_rec_nt_reflexive_closure nt)
           in
-          List.iter kernel_item (Lr1.items lr1)
+          IndexSet.iter kernel_item (Lr1.items lr1)
       );
       Vector.get table
   end

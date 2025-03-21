@@ -129,6 +129,18 @@ module type S = sig
     val all : set
   end
 
+  (* Explicit representation of LR(0) items *)
+  module Item : sig
+    include INDEXED
+    val make : Production.t -> int -> t
+    val prev : t -> t option
+    val desc : t -> Production.t * int
+    val position : t -> int
+    val production : t -> Production.t
+    val is_reducible : t -> bool
+    val to_string : t -> string
+  end
+
   module Lr0 : sig
     include GRAMMAR_INDEXED with type raw = Grammar.lr0
 
@@ -136,7 +148,7 @@ module type S = sig
     val incoming : t -> Symbol.t option
 
     (* See [Lr1.items]. *)
-    val items : t -> (Production.t * int) list
+    val items : t -> Item.set
 
     (* If the state is an initial state, returns the pseudo (start)
        production that it recognizes this entrypoint. *)
@@ -163,7 +175,7 @@ module type S = sig
     val incoming : t -> Symbol.t option
 
     (* Get the items in the kernel of a state (before closure). *)
-    val items : t -> (Production.t * int) list
+    val items : t -> Item.set
 
     (* Printing functions, for debug purposes.
        Not nice for the end-user (FIXME). *)
@@ -398,6 +410,74 @@ struct
     let all = all n
   end
 
+  (* Explicit representation of LR(0) items *)
+  module Item = struct
+    let count = ref 0
+
+    let offsets =
+      Vector.init Production.n (fun prod ->
+          let position = !count in
+          count := !count + Production.length prod + 1;
+          position
+        )
+
+    include Const(struct let cardinal = !count end)
+    type t = n index
+    type set = n indexset
+    type 'a map = (n, 'a) indexmap
+
+
+    let productions =
+      Vector.make' n (fun () -> Index.of_int Production.n 0)
+
+    let () =
+      let enum = Index.enumerate n in
+      Index.iter Production.n @@ fun prod ->
+      for _ = 0 to Production.length prod do
+        productions.:(enum ()) <- prod
+      done
+
+    let make prod pos =
+      if pos < 0 || pos > Production.length prod then
+        invalid_arg "Info.Item.make: pos out of bounds";
+      Index.of_int n (offsets.:(prod) + pos)
+
+    let production i = productions.:(i)
+
+    let position i =
+      ((i : _ index :> int) - offsets.:(production i))
+
+    let desc i =
+      let prod = production i in
+      (prod, (i :> int) - offsets.:(prod))
+
+    let is_reducible i =
+      let prod = production i in
+      ((i :> int) - offsets.:(prod)) = Production.length prod
+
+    let prev (i : t) =
+      match Index.pred i with
+      | Some j when not (Index.equal (production i) (production j)) -> None
+      | result -> result
+
+    let to_string i =
+      let prod, pos = desc i in
+      let b = Buffer.create 63 in
+      Buffer.add_string b (Nonterminal.to_string (Production.lhs prod));
+      Buffer.add_char b ':';
+      let rhs = Production.rhs prod in
+      let add_sym sym =
+        Buffer.add_char b ' ';
+        Buffer.add_string b (Symbol.name sym);
+      in
+      for i = 0 to pos - 1
+      do add_sym rhs.(i) done;
+      Buffer.add_string b " .";
+      for i = pos to Array.length rhs - 1
+      do add_sym rhs.(i) done;
+      Buffer.contents b
+  end
+
   module Lr0 = struct
     include Indexed(Grammar.Lr0)
 
@@ -405,21 +485,26 @@ struct
       Option.map Symbol.of_g (Grammar.Lr0.incoming (to_g lr0))
 
     let items lr0 =
-      List.map
-        (fun (p,pos) -> (Production.of_g p, pos))
-        (Grammar.Lr0.items (to_g lr0))
+      to_g lr0
+      |> Grammar.Lr0.items
+      |> List.map (fun (p,pos) -> Item.make (Production.of_g p) pos)
+      |> IndexSet.of_list
 
     let is_entrypoint lr0 =
-      match items lr0 with
-      | [p, 0] ->
-        assert (Production.kind p = `START);
-        assert (Nonterminal.kind (Production.lhs p) = `START);
-        assert (match Production.rhs p with
-            | [|n|] -> Symbol.is_nonterminal n
-            | _ -> false
-          );
-        Some p
-      | _ -> None
+      let items = items lr0 in
+      if not (IndexSet.is_singleton items) then
+        None
+      else
+        match Item.desc (IndexSet.choose items) with
+        | (prod, 0) ->
+          assert (Production.kind prod = `START);
+          assert (Nonterminal.kind (Production.lhs prod) = `START);
+          assert (match Production.rhs prod with
+              | [|n|] -> Symbol.is_nonterminal n
+              | _ -> false
+            );
+          Some prod
+        | _ -> None
   end
 
   (** [Transitions] module, defined below, depends on the set of Lr1 states
@@ -595,31 +680,19 @@ struct
 
     let items lr1 = Lr0.items (to_lr0 lr1)
 
-    (** A somewhat informative string description of the Lr1 state, for debug
-        purposes. *)
-    let to_string lr1 =
-      string_of_index lr1 ^ ":" ^
-      let lr0 = to_lr0 lr1 in
-      match Lr0.incoming lr0 with
-      | Some sym -> Symbol.name sym
-      | None ->
-        let entrypoint = Option.get (Lr0.is_entrypoint lr0) in
-        (Symbol.name (Production.rhs entrypoint).(0) ^ ":")
+    let is_entrypoint lr1 = Lr0.is_entrypoint (to_lr0 lr1)
 
     let symbol_to_string lr1 =
       match incoming lr1 with
       | Some sym -> Symbol.name sym
-      | None -> (
-          match items lr1 with
-          | [p, 0] ->
-            let p = Production.to_g p in
-            assert (Grammar.Production.kind p = `START);
-            let name = Grammar.Nonterminal.name (Grammar.Production.lhs p) in
-            let name = Bytes.of_string name in
-            Bytes.set name (Bytes.length name - 1) ':';
-            Bytes.unsafe_to_string name
-          | _ -> assert false
-        )
+      | None ->
+        let entrypoint = Option.get (is_entrypoint lr1) in
+        (Symbol.name (Production.rhs entrypoint).(0) ^ ":")
+
+    (** A somewhat informative string description of the Lr1 state, for debug
+        purposes. *)
+    let to_string lr1 =
+      string_of_index lr1 ^ ":" ^ symbol_to_string lr1
 
     let list_to_string lr1s =
       string_concat_map ~wrap:("[","]") "; " to_string lr1s
@@ -679,8 +752,6 @@ struct
       if a == all then b
       else if b == all then a
       else IndexSet.inter a b
-
-    let is_entrypoint lr1 = Lr0.is_entrypoint (to_lr0 lr1)
 
     let entrypoints =
       let table = Hashtbl.create 7 in

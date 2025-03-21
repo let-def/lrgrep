@@ -42,26 +42,14 @@ struct
     else
       sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
-  let print_item (prod, pos) =
-    let open Info in
-    let rhs = Production.rhs prod in
-    let path = ref [] in
-    let add_dot i = if pos = i then path := "." :: !path in
-    add_dot (Array.length rhs);
-    for i = Array.length rhs - 1 downto 0 do
-      path := Info.Symbol.name rhs.(i) :: !path;
-      add_dot i;
-    done;
-    path := (Nonterminal.to_string (Production.lhs prod) ^ ":") :: !path;
-    String.concat " " !path
-
   let print_items indent suffix items =
     Printf.printf "\t\t%s\x1b[0;32m  [%s" (String.make indent ' ') suffix;
     let pad = String.make (indent + 3 + String.length suffix) ' ' in
-    List.iteri (fun i item ->
-        if i > 0 then
+    let first = ref true in
+    IndexSet.iter (fun item ->
+        if !first then first := false else
           Printf.printf "\n\t\t%s" pad;
-        Printf.printf " / %s" (print_item item);
+        Printf.printf " / %s" (Info.Item.to_string item);
       ) items;
     Printf.printf "]\n";
 
@@ -224,8 +212,8 @@ struct
           print_items 0 "" items;
         ) else if !opt_stack_items then (
           print_string "\x1b[0;36m";
-          List.iter
-            (fun item -> print_endline ("\t\t  [" ^ print_item item ^ "]"))
+          IndexSet.iter
+            (fun item -> print_endline ("\t\t  [" ^ Item.to_string item ^ "]"))
             items;
         );
         print_string "\x1b[0m- ";
