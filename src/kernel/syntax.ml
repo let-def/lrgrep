@@ -121,11 +121,10 @@ type clause = {
   action: clause_action; (** the semantic action *)
 }
 
-(** An .mlyl file can contain multiple entrypoints, each represented as an
-    instance of [entry]. *)
-type entry = {
+(** A rule in .mlyl file is represented by the [rule] type. *)
+type rule = {
   name    : string;
-  (** Name of this entry *)
+  (** Name of the rule *)
   error   : bool * position;
   (** [error] is true if this entry only matches failing stacks.
       Syntactically, an error entry has the form:
@@ -144,9 +143,9 @@ type entry = {
 (** An .mlyl file is an header containing some OCaml code, one or more entries,
     and a trailer with some other OCaml code. *)
 type lexer_definition = {
-  header      : ocaml_code;
-  entrypoints : entry list;
-  trailer     : ocaml_code;
+  header  : ocaml_code;
+  rules   : rule list;
+  trailer : ocaml_code;
 }
 
 (** {1 Helper and cmoning functions} *)
@@ -279,8 +278,8 @@ let cmon_clause {patterns; action} =
     "action", cmon_clause_action action;
   ]
 
-(** Convert an entry to a Cmon value. *)
-let cmon_entrypoints {error; startsymbols; name; args; clauses} =
+(** Convert a rule to a Cmon value. *)
+let cmon_rule {error; startsymbols; name; args; clauses} =
   Cmon.record [
     "startsymbols", Cmon.list_map (cmon_positioned Cmon.string) startsymbols;
     "error", cmon_positioned Cmon.bool error;
@@ -290,9 +289,9 @@ let cmon_entrypoints {error; startsymbols; name; args; clauses} =
   ]
 
 (** Convert a lexer definition to a Cmon value. *)
-let cmon_definition {header; entrypoints; trailer} : Cmon.t =
+let cmon_definition {header; rules; trailer} : Cmon.t =
   Cmon.record [
     "header", cmon_ocamlcode header;
-    "entrypoints", Cmon.list (List.map cmon_entrypoints entrypoints);
+    "rules", Cmon.list (List.map cmon_rule rules);
     "trailer", cmon_ocamlcode trailer;
   ]

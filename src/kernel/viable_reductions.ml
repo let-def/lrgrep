@@ -89,8 +89,9 @@ module type S = sig
   (* Retrieve the states reachable from a state. *)
   val reachable : n index -> n indexset
 
-  (* Convert a state to a string representation. *)
-  val to_string : n index -> string
+  (* [string_of_stack st] is a string representing the suffix of the stacks
+     recognized by when reaching state [st]. *)
+  val string_of_stack : n index -> string
 end
 
 module Make(Info : Info.S)() : S with module Info := Info =
@@ -306,8 +307,9 @@ struct
     let config = get_config st in
     config.top :: config.rest
 
-  (* Convert a state to a string representation. *)
-  let to_string state =
+  (* [string_of_stack st] is a string representing the suffix of the stacks
+     recognized by when reaching state [st]. *)
+  let string_of_stack state =
     let {top; rest; _} = get_config state in
     let states = List.rev (top :: rest) in
     string_concat_map " " Lr1.to_string states

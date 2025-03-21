@@ -78,8 +78,8 @@ end)() = struct
   struct
     type n = Info.Lr1.n
     let n = Info.Lr1.n
-    let initials = Info.Lr1.wait
-    let next = Info.Lr1.predecessors
+    let tops = Info.Lr1.wait
+    let prev = Info.Lr1.predecessors
     let label = IndexSet.singleton
   end
 
@@ -106,10 +106,10 @@ end)() = struct
   let parser_name =
     String.capitalize_ascii (Filename.basename Grammar.Grammar.basename)
 
-  let process_entry oc (entry : Kernel.Syntax.entry) = (
+  let process_entry oc (rule : Kernel.Syntax.rule) = (
     let open Fix.Indexing in
     let entrypoints =
-      match entry.startsymbols with
+      match rule.startsymbols with
       | [] -> Info.Lr1.all_entrypoints
       | syms ->
         translate_entrypoints fst snd
@@ -119,25 +119,25 @@ end)() = struct
     let module Lrc = Kernel.Lrc.From_entrypoints(Info)(Lrc)
         (struct let entrypoints = indexset_bind entrypoints Lrc.lrcs_of_lr1 end)
     in
-    let open Kernel.Automata.Entry
+    let open Kernel.Automata.Make
         (Transl)
         (struct
           include Lrc
-          let initials =
-            if fst entry.error then
+          let tops =
+            if fst rule.error then
               Lrc.wait
             else
               IndexSet.init_from_set Lrc.n (fun _ -> true)
-          let next = Lrc.predecessors
+          let prev = Lrc.predecessors
           let label lrc = IndexSet.singleton (Lrc.lr1_of_lrc lrc)
         end)
         (struct
           let parser_name = parser_name
-          let entry = entry
+          let rule = rule
         end)
         ()
     in
-    let time = Stopwatch.enter Stopwatch.main "Generating code for entry %s" entry.name in
+    let time = Stopwatch.enter Stopwatch.main "Generating code for rule %s" rule.name in
     Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
     Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
     Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
@@ -368,7 +368,7 @@ end)() = struct
         output_table out entry program;
         output_wrapper out entry
       end out
-    end lexer_definition.entrypoints;
+    end lexer_definition.rules;
     Option.iter begin fun out ->
       Code_printer.print out "\n";
       print_ocaml_code out lexer_definition.trailer;

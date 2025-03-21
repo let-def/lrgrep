@@ -782,9 +782,9 @@ module Transl = struct
       [{filter; reduce = Reduce_no; position = expr.position}]
 
   (** Extract branches from an entry in the specification *)
-  let extract_clauses (entry : entry) =
-    if not (fst entry.error) then
-      error (snd entry.error) "only entries matching errors are supported";
+  let extract_clauses (rule : rule) =
+    if not (fst rule.error) then
+      error (snd rule.error) "only entries matching errors are supported";
     let extract_pattern (pattern : pattern) =
       match pattern.lookaheads with
       | [] -> flatten_alternatives pattern.expr
@@ -794,7 +794,7 @@ module Transl = struct
       (List.hd clause.patterns).expr.position,
       List.concat_map extract_pattern clause.patterns
     in
-    List.map extract_clause entry.clauses
+    List.map extract_clause rule.clauses
 
   (** Compile a branch into a set of suffixes that match the branch *)
   let compile_branch branch =
@@ -843,7 +843,7 @@ module Transl = struct
             error invalid_position
               "-entry %S has been provided, but no specification was given\n" entry
           | "", Some ast ->
-            begin match ast.entrypoints with
+            begin match ast.rules with
               | [] -> [||]
               | [x] -> compile_entry x
               | x :: xs ->
@@ -853,11 +853,11 @@ module Transl = struct
                 compile_entry x
             end
           | name, Some ast ->
-            begin match List.find_opt (fun x -> x.name = name) ast.entrypoints with
+            begin match List.find_opt (fun x -> x.name = name) ast.rules with
               | None ->
                 error invalid_position
                   "unknown entry %S; pass `-entry <name>` to process another entry (%s)"
-                  name (string_concat_map ", " (fun x -> x.name) ast.entrypoints)
+                  name (string_concat_map ", " (fun x -> x.name) ast.rules)
               | Some x -> compile_entry x
             end
       end)
