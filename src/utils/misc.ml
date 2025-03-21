@@ -34,15 +34,13 @@ let array_split a =
 
 let array_compare cmp a1 a2 =
   let len = Array.length a1 in
-  let c = Int.compare len (Array.length a2) in
-  if c <> 0 then c else
-    let rec loop i len =
-      if i = len then 0 else
-        let c = cmp a1.(i) a2.(i) in
-        if c <> 0 then c else
-          loop (i + 1) len
-    in
-    loop 0 len
+  let c = ref (Int.compare len (Array.length a2)) in
+  let i = ref 0 in
+  while !c = 0 && !i < len do
+    c := cmp a1.(!i) a2.(!i);
+    incr i
+  done;
+  !c
 
 (** [group ~compare ~group list]
     Group togethers the elements of [list] that are equivalent according to
