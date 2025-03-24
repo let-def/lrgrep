@@ -443,7 +443,6 @@ struct
 end
 
 module type FAILURE_NFA = sig
-  type reach
   type lr1
   type lrc
   type terminal
@@ -471,13 +470,10 @@ module FailureNFA
   : FAILURE_NFA with type terminal := Info.Terminal.n
                  and type lr1 := Info.Lr1.n
                  and type lrc := Lrc.n
-                 and type reach = Reach.n
 =
 struct
 
   let time = Stopwatch.enter Stopwatch.main "FailureNFA2"
-
-  type reach = Reach.n
 
   let () =
     if build_with_expensive_assertions then (
