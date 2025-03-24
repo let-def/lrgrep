@@ -1,3 +1,5 @@
+let verbosity = ref 0
+
 let output = ref prerr_string
 
 let oprintf fmt =
@@ -29,8 +31,10 @@ let step t fmt =
   let time' = Sys.time () in
   Printf.ksprintf (fun msg ->
       let delta = ((time' -. t.time.value) *. 1000.0) in
-      indent stderr t.indent;
-      oprintf "| +%.02fms: %s\n" delta msg;
+      if !verbosity > t.indent then (
+        indent stderr t.indent;
+        oprintf "| +%.02fms: %s\n" delta msg;
+      );
       t.time.value <- time';
     ) fmt
 
@@ -38,18 +42,22 @@ let enter t fmt =
   let time' = Sys.time () in
   Printf.ksprintf (fun msg ->
       let delta = ((time' -. t.time.value) *. 1000.0)  in
-      indent stderr t.indent;
-      if delta >= 0.01
-      then oprintf "\\ %s (after %.02fms)\n" msg delta
-      else oprintf "\\ %s\n" msg;
-      t.time.value <- time';
+      if !verbosity > t.indent then (
+        indent stderr t.indent;
+        if delta >= 0.01
+        then oprintf "\\ %s (after %.02fms)\n" msg delta
+        else oprintf "\\ %s\n" msg;
+        t.time.value <- time';
+      );
       {time = t.time; start = time'; indent = t.indent + 1}
     ) fmt
 
 let leave t =
   let time' = Sys.time () in
-  indent stderr t.indent;
-  oprintf "(total: %.02fms)\n" ((time' -. t.start) *. 1000.0);
+  if !verbosity > t.indent then (
+    indent stderr t.indent;
+    oprintf "(total: %.02fms)\n" ((time' -. t.start) *. 1000.0);
+  );
   t.time.value <- time'
 
 let main = create ()

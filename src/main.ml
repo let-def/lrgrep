@@ -44,6 +44,8 @@ let base_specs = [
   " Print version and exit";
   "-vnum", Arg.Unit print_version_num,
   " Print version number and exit";
+  "-v", Arg.Unit (fun () -> incr Stopwatch.verbosity),
+  " Increase log/profile verbosity level";
 ]
 
 (* Command dispatch *)
