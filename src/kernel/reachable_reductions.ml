@@ -707,18 +707,19 @@ struct
       | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () =
-    let oc = open_out_bin "nfa.dot" in
-    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
-    p "digraph G {";
-    p "  %s" style;
-    Index.iter n (fun i ->
-        p "  st%d[label=%S];\n" (i :> int) (to_string i);
-        IndexMap.iter (fun j _ ->
-            p "  st%d -> st%d;\n" (i :> int) (Index.to_int j);
-          ) (transitions i)
-      );
-    p "}";
-    close_out oc
+    if false then
+      let oc = open_out_bin "nfa.dot" in
+      let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+      p "digraph G {";
+      p "  %s" style;
+      Index.iter n (fun i ->
+          p "  st%d[label=%S];\n" (i :> int) (to_string i);
+          IndexMap.iter (fun j _ ->
+              p "  st%d -> st%d;\n" (i :> int) (Index.to_int j);
+            ) (transitions i)
+        );
+      p "}";
+      close_out oc
 
   let () = Stopwatch.leave time
 end
@@ -794,23 +795,24 @@ struct
   let pts ts = string_of_indexset ~index:Terminal.to_string ts
 
   let () =
-    let oc = open_out_bin "dfa.dot" in
-    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
-    p "digraph G {";
-    p "  %s" style;
-    Index.iter DFA.n (fun src ->
-        let accept = pts (DFA.accept src) in
-        p "  st%d [label=%S]" (Index.to_int src)
-          (if src = DFA.initial then "initial " ^ accept else accept)
-        ;
-        List.iter (fun (lbl, tgt) ->
-            p "  st%d -> st%d [label=%S]"
-              (Index.to_int src) (Index.to_int tgt)
-              (Lr1.set_to_string lbl)
-        ) (DFA.successors src);
-      );
-    p "}";
-    close_out_noerr oc
+    if false then
+      let oc = open_out_bin "dfa.dot" in
+      let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+      p "digraph G {";
+      p "  %s" style;
+      Index.iter DFA.n (fun src ->
+          let accept = pts (DFA.accept src) in
+          p "  st%d [label=%S]" (Index.to_int src)
+            (if src = DFA.initial then "initial " ^ accept else accept)
+          ;
+          List.iter (fun (lbl, tgt) ->
+              p "  st%d -> st%d [label=%S]"
+                (Index.to_int src) (Index.to_int tgt)
+                (Lr1.set_to_string lbl)
+            ) (DFA.successors src);
+        );
+      p "}";
+      close_out_noerr oc
 
   module Image = struct
     type t = {
