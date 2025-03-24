@@ -1518,8 +1518,8 @@ struct
         | None -> name
         | Some _ -> name ^ " _"
       in
-      Some (string_concat_map ~wrap:("(",")")
-              "|" term_pattern (IndexSet.elements terms))
+      Some (string_concat_map ~l:"(" ~r:")" "|"
+              term_pattern (IndexSet.elements terms))
 
   let output_code out =
     Code_printer.fmt out

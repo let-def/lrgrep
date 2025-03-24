@@ -695,10 +695,10 @@ struct
       string_of_index lr1 ^ ":" ^ symbol_to_string lr1
 
     let list_to_string lr1s =
-      string_concat_map ~wrap:("[","]") "; " to_string lr1s
+      string_concat_map ~l:"[" ~r:"]" "; " to_string lr1s
 
     let set_to_string lr1s =
-      string_concat_map ~wrap:("{","}") ", " to_string (IndexSet.elements lr1s)
+      string_concat_map ~l:"{" ~r:"}" ", " to_string (IndexSet.elements lr1s)
 
     let accepting = ref IndexSet.empty
 

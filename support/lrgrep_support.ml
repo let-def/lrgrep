@@ -144,10 +144,12 @@ end = struct
         set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
-    Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
-    Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
-    Printf.eprintf "table size: %d\nrepr size: %d\n"
-      (Array.length table) (Bytes.length repr);
+    if !Stopwatch.verbosity > 0 then (
+      Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
+      Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
+      Printf.eprintf "table size: %d\nrepr size: %d\n"
+        (Array.length table) (Bytes.length repr);
+    );
     Bytes.unsafe_to_string repr
 end
 
@@ -231,7 +233,8 @@ end = struct
         Bytes.set_uint16_be buf pos (!reloc land 0xFFFF);
         Bytes.set_uint8 buf (pos + 2) (!reloc lsr 16);
       ) t.reloc;
-    Printf.eprintf "bytecode size: %d\n" (Bytes.length buf);
+    if !Stopwatch.verbosity > 0 then
+      Printf.eprintf "bytecode size: %d\n" (Bytes.length buf);
     Bytes.unsafe_to_string buf
 end
 
@@ -381,8 +384,9 @@ let compact (type dfa clause lr1)
   Array.sort (fun (c1, _, _, _, _) (c2, _, _, _, _) -> Int.compare c2 c1)
     preparation;
   Array.iter process_state preparation;
-  Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
-    !transition_count !transition_dom !cell_count;
+  if !Stopwatch.verbosity > 0 then
+    Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
+      !transition_count !transition_dom !cell_count;
   let code = Code_emitter.link code in
   let index = Sparse_packer.pack packer (!) in
   let pcs = Vector.as_array (Vector.map (!) pcs) in

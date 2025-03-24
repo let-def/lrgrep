@@ -204,17 +204,18 @@ let compare_index =
     by [sep].
     [wrap] is optional, but if provided, pre is prepended to the
     result and [post] is appended. *)
-let string_concat_map ?wrap sep f xs =
-  let result = String.concat sep (List.map f xs) in
-  match wrap with
-  | None -> result
-  | Some (pre, post) -> pre ^ result ^ post
+let string_concat_map ?(l="") ?(r="") sep f xs =
+  let (^) l r = match l, r with
+    | "", x | x, "" -> x
+    | l, r -> l ^ r
+  in
+  l ^ String.concat sep (List.map f xs) ^ r
 
 let string_of_index =
   (string_of_int : int -> string :> _ index -> string)
 
 let string_of_indexset ?(index=string_of_index) xs =
-  string_concat_map ~wrap:("[", "]") ";" index (IndexSet.elements xs)
+  string_concat_map ~l:"[" ~r:"]" ";" index (IndexSet.elements xs)
 
 (** Prepend an element to a list reference *)
 let push xs x = xs := x :: !xs

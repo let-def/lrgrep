@@ -138,15 +138,17 @@ end)() = struct
         ()
     in
     let time = Stopwatch.enter Stopwatch.main "Generating code for rule %s" rule.name in
-    Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
-    Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
-    Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
-    Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
+    if !Stopwatch.verbosity > 0 then (
+      Printf.eprintf "Raw DFA states: %d\n" (cardinal BigDFA.n);
+      Printf.eprintf "Min DFA states: %d\n" (cardinal MinDFA.states);
+      Printf.eprintf "Output DFA states: %d\n" (cardinal OutDFA.states);
+      Printf.eprintf "Time spent: %.02fms\n" (Sys.time () *. 1000.);
+    );
     if !opt_coverage || !opt_coverage_silent || !opt_coverage_fatal then (
-      (*let open Info in*)
-      let module Reach = Kernel.Reachable_reductions.Make(Info)(Viable)(Lrc)() in
-      let module Failure = Kernel.Reachable_reductions.FailureNFA(Info)(Viable)(Lrc)(Reach)() in
-      let module Check = Kernel.Reachable_reductions.Coverage_check(Info)(Lrc)(Failure)(struct
+      let open Kernel.Reachable_reductions in
+      let module Reach = Make(Info)(Viable)(Lrc)() in
+      let module Failure = FailureNFA(Info)(Viable)(Lrc)(Reach)() in
+      let module Check = Coverage_check(Info)(Lrc)(Failure)(struct
           type n = OutDFA.states
           let n = OutDFA.states
           let initial = OutDFA.initial
@@ -167,34 +169,6 @@ end)() = struct
                 ) IndexSet.empty m
             )
         end)() in
-      (*if !Check.Forward.found_uncovered then (
-        Printf.eprintf "rule %s: coverage is not exhaustive\n"
-          entry.Front.Syntax.name;
-        if not !opt_coverage_silent then (
-          let module Backward = Check.Backward() in
-          Backward.enum_sentence (fun suffix lrc unhandled ->
-              let suffix = List.filter_map (fun sym ->
-                  match Backward.Sym_or_lr1.prj sym with
-                  | L sym -> Some sym
-                  | R _ -> None
-                ) suffix
-              in
-              let entry, prefix =
-                match List.rev_map Lrc.lr1_of_lrc (lrc :: Lrc.some_prefix lrc) with
-                | [] -> assert false
-                | entry :: prefix ->
-                  entry, prefix
-              in
-              let prefix = List.filter_map Lr1.incoming prefix in
-              Printf.printf "%s %s %s\n"
-                (Lr1.to_string entry)
-                (string_concat_map " " Symbol.name (prefix @ suffix))
-                (string_of_indexset ~index:Terminal.to_string unhandled)
-            )
-        );
-        if !opt_coverage_fatal then
-          exit 2
-      );*)
       ()
     );
     let get_state_for_compaction index =

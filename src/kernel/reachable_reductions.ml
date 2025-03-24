@@ -473,7 +473,7 @@ module FailureNFA
 =
 struct
 
-  let time = Stopwatch.enter Stopwatch.main "FailureNFA2"
+  let time = Stopwatch.enter Stopwatch.main "FailureNFA"
 
   let () =
     if build_with_expensive_assertions then (
