@@ -59,12 +59,13 @@ module Make2(Info : Info.S)() = struct
     type state =
       | Initial
       | Suffix of Lr1.t list * Terminal.set
-      | Reduce of Lr1.t list * (int * Nonterminal.t * Terminal.set) list
+      | Reduce of int * Lr1.set * Nonterminal.t * Terminal.set * (int * Nonterminal.t * Terminal.set) list
 
     (** A transition of the ϵ-NFA is represented as a pair of a label and a target state.
         The label is either [Some <lr1_state>] for a labelled transition or [None]
         for an ϵ-transition. *)
-    type transition = Lr1.t option * state
+    type label = Epsilon | Lr1 of Lr1.t | Wildcard
+    type transition = label * state
 
     let elements_map set f =
       IndexSet.fold_right (fun acc x -> f x :: acc) [] set
@@ -101,39 +102,58 @@ module Make2(Info : Info.S)() = struct
         )
         [] (Reduction.from_lr1 lr1)
 
+    let rec expand states = function
+      | 0 -> states
+      | n -> expand (indexset_bind states Lr1.predecessors) (n - 1)
+
+    let rec wildcard n states lhs lookaheads rest acc =
+      if n = 0 then
+        let acc =
+          IndexSet.fold (fun state acc ->
+              let target = Transition.find_goto_target state lhs in
+              (Lr1 state, Suffix ([target; state], lookaheads)) :: acc
+            ) states acc
+        in
+        match rest with
+        | [] -> acc
+        | (n, lhs, lookaheads) :: rest ->
+          wildcard n (expand states n) lhs lookaheads rest acc
+      else
+        (Wildcard, Reduce (n, states, lhs, lookaheads, rest)) :: acc
+
+    let rec reduce acc stack = function
+      | [] -> acc
+      | (0, lhs, lookaheads) :: rest ->
+        let current = List.hd stack in
+        let target = Transition.find_goto_target current lhs in
+        reduce ((Epsilon, Suffix (target :: stack, lookaheads)) :: acc) stack rest
+      | (n, lhs, lookaheads) :: rest ->
+        match stack with
+        | [] -> assert false
+        | [top] ->
+          wildcard (n - 1) (expand (IndexSet.singleton top) n) lhs lookaheads rest acc
+        | _ :: stack ->
+          reduce acc stack ((n - 1, lhs, lookaheads) :: rest)
+
     (** The transition function of the ϵ-NFA *)
-    let rec transitions : state -> transition list = function
+    let transitions : state -> transition list = function
       | Initial ->
         (* Visit all initial states *)
         elements_map Lr1.all
-          (fun lr1 -> (Some lr1, Suffix ([lr1], Terminal.all)))
+          (fun lr1 -> (Lr1 lr1, Suffix ([lr1], Terminal.all)))
       | Suffix (stack, lookaheads) ->
         (* The current state of the LR automaton is at the top of the stack *)
         let current = List.hd stack in
         (* Visit all reductions applicable to the top state *)
         (match reduction_list current lookaheads with
          | [] -> []
-         | actions -> transitions (Reduce (stack, actions)))
-      (* End of a reduction sequence *)
-      | Reduce (_, []) -> []
+         | actions -> reduce [] stack actions)
       (* End of a reduction *)
-      | Reduce (stack, (0, lhs, lookaheads) :: rest) ->
-        (* The current state of the LR automaton is at the top of the stack *)
-        let current = List.hd stack in
-        (* Find the target of the goto transition labelled [lhs] *)
-        let target = Transition.find_goto_target current lhs in
-        (None, Suffix (target :: stack, lookaheads)) ::
-        (* Continue with remaining actions *)
-        transitions (Reduce (stack, rest))
-      (* Reducing an empty suffix: consume one more symbol of the stack *)
-      | Reduce ([current], (n, lhs, lookaheads) :: rest) ->
-        let actions' = (n - 1, lhs, lookaheads) :: rest in
-        (* Look at possible predecessors *)
-        elements_map (Lr1.predecessors current)
-          (fun lr1 -> (Some lr1, Reduce ([lr1], actions')))
-      (* Reducing from the current suffix *)
-      | Reduce (stack, (n, lhs, lookaheads) :: rest) ->
-        transitions (Reduce (List.tl stack, (n - 1, lhs, lookaheads) :: rest))
+      | Reduce (0, _states, _lhs, _lookaheads, _rest) ->
+        assert false
+      | Reduce (n, states, lhs, lookaheads, rest) ->
+        wildcard (n - 1) states lhs lookaheads rest []
+
   end
 
   (* The "wildcard" NFA, with special transitions that should be taken for all
@@ -155,35 +175,32 @@ module Make2(Info : Info.S)() = struct
     type 'a desc = {
       suffixes: suffix list;
       transitions: 'a Lr1.map;
-      wildcards: 'a list;
+      wildcards: 'a option;
     }
 
-    let desc_empty = {suffixes = []; transitions = IndexMap.empty; wildcards = []}
+    let desc_empty = {suffixes = []; transitions = IndexMap.empty; wildcards = None}
 
     let desc_map f {suffixes; transitions; wildcards} = {
       suffixes;
       transitions = IndexMap.map f transitions;
-      wildcards = List.map f wildcards
+      wildcards = Option.map f wildcards
     }
 
     (** Determinize states and close over ϵ-transitions, accumulating visited
         suffixes on the way while preserving the tree structure (such that we can
         tell which suffix allowed reaching another one via ϵ-transitions). *)
     let rec fold_transition (desc : _ desc) (label, state) =
+      let update = function
+        | None -> Some [state]
+        | Some states -> Some (state :: states)
+      in
       match label with
-      | None ->
+      | ENFA.Epsilon ->
         fold_transitions desc state
-      | Some lr1 ->
-        let update = function
-          | None -> Some [state]
-          | Some states -> Some (state :: states)
-        in
-        begin match state with
-          | ENFA.Reduce (_, (n, _, _) :: _) when n > 0 ->
-            {desc with wildcards = [state] :: desc.wildcards}
-          | _ ->
-            {desc with transitions = IndexMap.update lr1 update desc.transitions}
-        end
+      | ENFA.Lr1 lr1 ->
+        {desc with transitions = IndexMap.update lr1 update desc.transitions}
+      | ENFA.Wildcard ->
+        {desc with wildcards = update desc.wildcards}
 
     and fold_transitions (desc : _ desc) (state : ENFA.state) : _ desc =
       let transitions = ENFA.transitions state in
