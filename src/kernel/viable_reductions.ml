@@ -32,6 +32,202 @@ open Fix.Indexing
 open Utils
 open Misc
 
+module Make2(Info : Info.S)() = struct
+  open Info
+
+  module ENFA = struct
+    (** Define states of the reduction ϵ-NFA.
+        - [Initial]: initial state.
+        - [Suffix]: represents a stack suffix with a set of lookaheads.
+        - [Reduce]: represents a state during reduction with a stack suffix, set of
+                    lookaheads, the nonterminal to `goto` at the end of the
+                    reduction, and the number of symbols that remain to consume.
+
+        Compared to the description in the thesis, the main differences are:
+        - The stack suffix is represented by a single list with the current state
+          as the first element. Thus, what is described in the document as
+          [s . s'] is represented by a list [List.rev (s :: s')].
+        - During reduction, we do not care about the actual symbols to remove
+          (written α) but only by the number of symbols, thus we only store |α| as
+          an [int].
+          Furthermore, to improve performance, we want to explore multiple
+          reductions in a single pass. So [Reduce] takes a list of the form
+          [(pop, nt) :: rest] representing the sequence of actions to take: after
+          popping [pop] elements, follow goto transition labelled [nt], and
+          continue with list [rest].
+    *)
+    type state =
+      | Initial
+      | Suffix of Lr1.t list * Terminal.set
+      | Reduce of Lr1.t list * (int * Nonterminal.t * Terminal.set) list
+
+    (** A transition of the ϵ-NFA is represented as a pair of a label and a target state.
+        The label is either [Some <lr1_state>] for a labelled transition or [None]
+        for an ϵ-transition. *)
+    type transition = Lr1.t option * state
+
+    let elements_map set f =
+      IndexSet.fold_right (fun acc x -> f x :: acc) [] set
+
+    let delta_cons length lhs lookaheads = function
+      | [] -> [(length, lhs, lookaheads)]
+      | (length', lhs', lookaheads') :: rest ->
+        let delta = length' - length in
+        assert (delta >= 0);
+        if delta = 0 && Index.equal lhs lhs' then
+          (length, lhs, IndexSet.union lookaheads lookaheads') :: rest
+        else
+          (length, lhs, lookaheads) :: (delta, lhs', lookaheads') :: rest
+
+    let reduction_list lr1 lookaheads =
+      (* Reductions are ordered such that the shortest ones comes first, so by
+         folding from the right we can construct a correct list of reductions
+         delta. *)
+      IndexSet.fold_right
+        (fun acc red ->
+           let lookaheads =
+             IndexSet.inter (Reduction.lookaheads red) lookaheads
+           in
+           (* Skip this reduction if no lookahead permits to take it *)
+           if IndexSet.is_empty lookaheads then
+             acc
+           else
+             let prod = Reduction.production red in
+             delta_cons
+               (Production.length prod)
+               (Production.lhs prod)
+               lookaheads
+               acc
+        )
+        [] (Reduction.from_lr1 lr1)
+
+    (** The transition function of the ϵ-NFA *)
+    let rec transitions : state -> transition list = function
+      | Initial ->
+        (* Visit all initial states *)
+        elements_map Lr1.all
+          (fun lr1 -> (Some lr1, Suffix ([lr1], Terminal.all)))
+      | Suffix (stack, lookaheads) ->
+        (* The current state of the LR automaton is at the top of the stack *)
+        let current = List.hd stack in
+        (* Visit all reductions applicable to the top state *)
+        (match reduction_list current lookaheads with
+         | [] -> []
+         | actions -> transitions (Reduce (stack, actions)))
+      (* End of a reduction sequence *)
+      | Reduce (_, []) -> []
+      (* End of a reduction *)
+      | Reduce (stack, (0, lhs, lookaheads) :: rest) ->
+        (* The current state of the LR automaton is at the top of the stack *)
+        let current = List.hd stack in
+        (* Find the target of the goto transition labelled [lhs] *)
+        let target = Transition.find_goto_target current lhs in
+        (None, Suffix (target :: stack, lookaheads)) ::
+        (* Continue with remaining actions *)
+        transitions (Reduce (stack, rest))
+      (* Reducing an empty suffix: consume one more symbol of the stack *)
+      | Reduce ([current], (n, lhs, lookaheads) :: rest) ->
+        let actions' = (n - 1, lhs, lookaheads) :: rest in
+        (* Look at possible predecessors *)
+        elements_map (Lr1.predecessors current)
+          (fun lr1 -> (Some lr1, Reduce ([lr1], actions')))
+      (* Reducing from the current suffix *)
+      | Reduce (stack, (n, lhs, lookaheads) :: rest) ->
+        transitions (Reduce (List.tl stack, (n - 1, lhs, lookaheads) :: rest))
+  end
+
+  (* The "wildcard" NFA, with special transitions that should be taken for all
+     input symbols.
+     It keeps track of the suffixes produced by following goto transitions to
+     enable recognition of reduce patterns. *)
+  module WNFA = struct
+    (** Explicit representation focusing on suffixes.
+
+        A suffix [{stack; lookaheads}] abstracts the set of LR configurations
+        whose stacks are suffixed by [stack] and looking ahead at a symbol
+        in [lookaheads]. *)
+    type suffix = {
+      stack: Lr1.t list;
+      lookaheads: Terminal.set;
+      child: suffix list;
+    }
+
+    type 'a desc = {
+      suffixes: suffix list;
+      transitions: 'a Lr1.map;
+      wildcards: 'a list;
+    }
+
+    let desc_empty = {suffixes = []; transitions = IndexMap.empty; wildcards = []}
+
+    let desc_map f {suffixes; transitions; wildcards} = {
+      suffixes;
+      transitions = IndexMap.map f transitions;
+      wildcards = List.map f wildcards
+    }
+
+    (** Determinize states and close over ϵ-transitions, accumulating visited
+        suffixes on the way while preserving the tree structure (such that we can
+        tell which suffix allowed reaching another one via ϵ-transitions). *)
+    let rec fold_transition (desc : _ desc) (label, state) =
+      match label with
+      | None ->
+        fold_transitions desc state
+      | Some lr1 ->
+        let update = function
+          | None -> Some [state]
+          | Some states -> Some (state :: states)
+        in
+        begin match state with
+          | ENFA.Reduce (_, (n, _, _) :: _) when n > 0 ->
+            {desc with wildcards = [state] :: desc.wildcards}
+          | _ ->
+            {desc with transitions = IndexMap.update lr1 update desc.transitions}
+        end
+
+    and fold_transitions (desc : _ desc) (state : ENFA.state) : _ desc =
+      let transitions = ENFA.transitions state in
+      match state with
+      | Suffix (stack, lookaheads) ->
+        let suffixes = desc.suffixes in
+        let desc =
+          List.fold_left fold_transition {desc with suffixes = []} transitions
+        in
+        let suffix = {stack; lookaheads; child = desc.suffixes} in
+        {desc with suffixes = suffix :: suffixes}
+      | _ -> List.fold_left fold_transition desc transitions
+
+    include IndexBuffer.Gen.Make()
+
+    (** Construct the DFA *)
+    let initial, states =
+      (* Generator for DFA states *)
+      let states = get_generator () in
+      (* Hashtable to memoize visited states. *)
+      let table = Hashtbl.create 7 in
+      (* Recursive function to visit and process states *)
+      let rec visit nstates =
+        let nstates = List.sort_uniq compare nstates in
+        match Hashtbl.find_opt table nstates with
+        | Some index -> index
+        | None ->
+          let slot = IndexBuffer.Gen.reserve states in
+          Hashtbl.add table nstates (IndexBuffer.Gen.index slot);
+          let desc = List.fold_left fold_transitions desc_empty nstates in
+          let desc = desc_map visit desc in
+          IndexBuffer.Gen.commit states slot desc;
+          IndexBuffer.Gen.index slot
+      in
+      (* Start exploration from the initial state *)
+      let initial = visit [ENFA.Initial] in
+      (* Freeze the DFA states *)
+      let states = IndexBuffer.Gen.freeze states in
+      (initial, states)
+  end
+
+end
+
+
 module type S = sig
   module Info : Info.S
   open Info
