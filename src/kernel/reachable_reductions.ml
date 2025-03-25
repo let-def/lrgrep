@@ -998,7 +998,7 @@ struct
     not (IndexSet.is_empty desc.uncovered) || is_bottom desc
 
   (* Propagate failing lookaheads backward *)
-  let () =
+  let failing_lookaheads =
     let counter = ref 0 in
     let worklist = ref [] in
     let schedule index desc =
@@ -1036,17 +1036,17 @@ struct
         )
       ) coverage;
     fixpoint ~counter ~propagate worklist;
-    let initial_failing =
-      IndexMap.fold (fun nfa _ acc ->
-          match IndexTable.find_opt coverage (State.inj DFA.initial nfa) with
-          | None -> acc
-          | Some desc -> IndexSet.union desc.failing acc
-        ) NFA.initial IndexSet.empty
-    in
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
+    IndexMap.fold (fun nfa _ acc ->
+        match IndexTable.find_opt coverage (State.inj DFA.initial nfa) with
+        | None -> acc
+        | Some desc -> IndexSet.union desc.failing acc
+      ) NFA.initial IndexSet.empty
+
+  let () =
     Printf.eprintf "Unhandled lookaheads: %s.\n"
       (string_concat_map ", " Terminal.to_string
-         (IndexSet.elements initial_failing))
+         (IndexSet.elements failing_lookaheads))
 
   (* Generate sentences and determinize on the fly *)
 
@@ -1122,38 +1122,62 @@ struct
     in
     visit [] initials
 
+  let direct_or_dual ts =
+    let card = IndexSet.cardinal ts in
+    if card > cardinal Terminal.n / 2 + 10
+    then `Dual (IndexSet.diff Terminal.regular ts)
+    else `Direct ts
+
+  let output_uncorevered_case suffix failing =
+    prerr_string "Stacks of the form:\n  ";
+    List.iteri (fun i step ->
+        let lr1 = IndexSet.choose step.label in
+        if i = 0 then (
+          if Option.is_some (Lr1.incoming lr1) then
+            prerr_string "... "
+        ) else
+          prerr_char ' ';
+        prerr_string (Lr1.symbol_to_string lr1)
+      ) suffix;
+    begin match direct_or_dual failing with
+      | `Direct ts ->
+        Printf.eprintf "\nFail when looking ahead at %s.\n"
+          (string_concat_map ", " Terminal.to_string (IndexSet.elements ts));
+      | `Dual ts ->
+        Printf.eprintf "\nSucceed only when looking ahead at %s.\n"
+          (string_concat_map ", " Terminal.to_string (IndexSet.elements ts));
+    end;
+    List.iteri begin fun i step ->
+      let lr1 = IndexSet.choose step.label in
+      match step.goto with
+      | [] ->
+        if i = 0 then
+          Printf.eprintf "  [ %s]\n"
+            (string_concat_map " " Item.to_string
+               (IndexSet.elements (Lr1.items lr1)))
+      | goto ->
+        List.iter (fun goto ->
+            let lr1' = List.hd goto in
+            let suff = string_concat_map ";" Lr1.symbol_to_string (List.rev goto) in
+            let pad = String.make (String.length suff) ' ' in
+            Printf.eprintf "  [%s " suff;
+            let need_sep = ref false in
+            IndexSet.iter (fun item ->
+                if !need_sep then Printf.eprintf "\n    %s" pad;
+                need_sep := true;
+                Printf.eprintf "%s" (Item.to_string item);
+              ) (Lr1.items lr1');
+            Printf.eprintf "]\n";
+          ) goto
+    end suffix;
+    prerr_newline ()
+
   let _ =
     let count = ref 0 in
     enum_uncovered ~f:(fun path failing ->
         incr count;
-        Printf.eprintf "Sentence %d, failing when looking ahead at %s:\n"
-          !count (string_of_indexset ~index:Terminal.to_string failing);
-        let print_step i step =
-          let plr1 lr1 = Lr1.symbol_to_string lr1 in
-          let lr1 = IndexSet.choose step.label in
-          Printf.eprintf "- %s\n" (plr1 lr1);
-          match step.goto with
-          | [] ->
-            if i = 0 then
-              Printf.eprintf "  [ %s]\n"
-              (string_concat_map " " Item.to_string
-                 (IndexSet.elements (Lr1.items lr1)))
-          | goto ->
-            List.iter (fun goto ->
-                let lr1' = List.hd goto in
-                let suff = string_concat_map ";" plr1 (List.rev goto) in
-                let pad = String.make (String.length suff) ' ' in
-                Printf.eprintf "  [%s " suff;
-                let need_sep = ref false in
-                IndexSet.iter (fun item ->
-                    if !need_sep then Printf.eprintf "\n    %s" pad;
-                    need_sep := true;
-                    Printf.eprintf "%s" (Item.to_string item);
-                  ) (Lr1.items lr1');
-                Printf.eprintf "]\n";
-              ) goto
-        in
-        List.iteri print_step (List.rev path)
+        Printf.eprintf "# Case %d\n\n" !count;
+        output_uncorevered_case (List.rev path) failing
       )
 
 end
