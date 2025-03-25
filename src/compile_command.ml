@@ -67,12 +67,6 @@ end)() = struct
 
   module Info = Kernel.Info.Make(Grammar)
   module Viable = Kernel.Viable_reductions.Make(Info)()
-  module Viable2 = Kernel.Viable_reductions.Make2(Info)()
-
-  let () = Printf.eprintf "Viable: new WNFA: %d states, old: %d\n"
-      (Fix.Indexing.cardinal Viable2.WNFA.n)
-      (Fix.Indexing.cardinal Viable.n)
-
   module Regexp = Kernel.Regexp.Make(Info)(Viable)
   module Transl = Kernel.Transl.Make(Regexp)
   module Reachability = Kernel.Reachability.Make(Info)()
