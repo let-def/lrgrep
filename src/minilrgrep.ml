@@ -404,6 +404,8 @@ module Reduction_DFA = struct
                   reduces the size of the DFA but make later analyses more
                   complex.
   *)
+
+  let () = Printf.eprintf "Reduction DFA has %d states\n" (cardinal n)
 end
 
 (** Reverse the action of reductions.
@@ -1392,7 +1394,7 @@ module Enum = struct
         begin match reduce with
         | [] ->
           List.iteri (fun i item ->
-              Printf.eprintf "%c /%s\n"
+              Printf.printf "%c /%s\n"
                 (if i = 0 then '|' else ' ')
                 (Item.to_string item)
             ) filter
@@ -1401,11 +1403,11 @@ module Enum = struct
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "| [%s /%s" reduce (Item.to_string item)
+                Printf.printf "| [%s /%s" reduce (Item.to_string item)
               else
-                Printf.eprintf "\n   %s /%s" padding (Item.to_string item)
+                Printf.printf "\n   %s /%s" padding (Item.to_string item)
             ) filter;
-          Printf.eprintf "]\n"
+          Printf.printf "]\n"
         end;
         let dfa, _ = Suffix.desc.:(suffix) in
         let stack = Reduction_DFA.stack_visiting dfa in
@@ -1414,6 +1416,6 @@ module Enum = struct
           let symbols = List.filter non_nullable_symbol symbols in
           Misc.string_concat_map " " Symbol.name symbols
         in
-        Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq stack)
+        Printf.printf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq stack)
       ) generalized_patterns
 end
