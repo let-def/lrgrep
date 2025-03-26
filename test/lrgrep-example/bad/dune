@@ -1,0 +1,41 @@
+(rule (target test00.out) (deps test00.in)
+  (action
+    (with-outputs-to test00.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test00.exp test00.out)))
+
+(rule (target test01.out) (deps test01.in)
+  (action
+    (with-outputs-to test01.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test01.exp test01.out)))
+
+(rule (target test02.out) (deps test02.in)
+  (action
+    (with-outputs-to test02.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test02.exp test02.out)))
+
+(rule (target test03.out) (deps test03.in)
+  (action
+    (with-outputs-to test03.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test03.exp test03.out)))
+
+(rule (target test04.out) (deps test04.in)
+  (action
+    (with-outputs-to test04.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test04.exp test04.out)))
+
+(rule (target test05.out) (deps test05.in)
+  (action
+    (with-outputs-to test05.out
+      (with-accepted-exit-codes 1 (run ../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff test05.exp test05.out)))

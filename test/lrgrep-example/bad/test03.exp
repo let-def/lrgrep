@@ -1,0 +1,8 @@
+File "test03.in", line 2, characters 0-1:
+Syntax error.
+An opening parenthesis has been read (line 1, characters 0-1):
+  (
+An expression has been read (line 1, characters 2-3):
+  +
+If this expression is complete,
+a closing parenthesis or a comma is now expected.

@@ -1,0 +1,5 @@
+File "test02.in", line 1, characters 3-4:
+Syntax error.
+An opening parenthesis has been read (line 1, characters 2-3):
+  (
+An expression is now expected.
