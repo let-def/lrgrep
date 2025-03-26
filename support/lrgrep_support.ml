@@ -17,6 +17,8 @@ let add_uint24_be b i =
   Buffer.add_uint16_be b (i land 0xFFFF);
   Buffer.add_uint8 b (i lsr 16)
 
+let debug = false
+
 module Sparse_packer : sig
   type 'a t
   val make : unit -> 'a t
@@ -373,6 +375,9 @@ let compact (type dfa clause lr1)
         cell_count := !cell_count + List.length cells;
         let cells = (cells : (lr1 index * _) list :> (RT.lr1 * _) list) in
         let i = Sparse_packer.add_vector packer cells in
+        if debug then
+          Printf.eprintf "Match index:%d handle symbols %s\n" i
+            (String.concat ", " (List.map (fun (index, _) -> string_of_int index) cells));
         Code_emitter.emit code (Match i);
     end;
     begin match default with

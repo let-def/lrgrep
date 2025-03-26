@@ -41,6 +41,8 @@ open Lrgrep_support
 
 type priority = int
 
+let debug = false
+
 module type STACKS = sig
   type lr1
   type n
@@ -1254,6 +1256,22 @@ struct
     let () = Stopwatch.step time "RunDFA"
   end
 
+  let () =
+    if debug then
+      let oc = open_out_bin "automata.dot" in
+      let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+      p "digraph G {";
+      Index.iter RunDFA.transitions (fun tr ->
+          let src = RunDFA.source tr in
+          let tgt = RunDFA.target tr in
+          let lbl = RunDFA.label tr in
+          p "st%d -> st%d[label=%S];"
+            (src :> int) (tgt :> int)
+            (Lr1.set_to_string lbl.filter)
+        );
+      p "}";
+      close_out oc
+
   (*module MinDFA = Valmari.Minimize (Label) (RunDFA)*)
   module MinDFA = Valmari.Minimize_with_custom_decomposition(RunDFA)
 
@@ -1374,6 +1392,22 @@ struct
       else
         (module MakeOutDFA() : OUTDFA)
     ))
+
+  let () =
+    if debug then
+      let oc = open_out_bin "outdfa.dot" in
+      let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+      p "digraph G {";
+      Index.iter OutDFA.transitions (fun tr ->
+          let src = OutDFA.source tr in
+          let tgt = OutDFA.target tr in
+          let lbl = OutDFA.label tr in
+          p "st%d -> st%d[label=%S];"
+            (src :> int) (tgt :> int)
+            (Lr1.set_to_string lbl.filter)
+        );
+      p "}";
+      close_out oc
 
   let captures_lr1 =
     let map = ref IndexMap.empty in

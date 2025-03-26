@@ -107,7 +107,7 @@ module type Parser = sig
   val pop : 'a env -> 'a env option
 end
 
-let debug = false
+let debug = true
 
 let eprintf = Printf.eprintf
 
@@ -164,7 +164,7 @@ let remap_candidate candidates ~(clause : clause) p1 p2 =
 let rec interpret_last program bank candidates pc =
   match program_step program.code pc with
   | Accept (clause, priority, registers) ->
-    if debug then eprintf "Accept (%d,%s) (bottom)\n" clause (print_regs bank registers);
+    if debug then eprintf "Last Accept (%d,%s) (bottom)\n" clause (print_regs bank registers);
     add_candidate candidates ~clause ~priority registers bank;
     interpret_last program bank candidates pc
   | _ -> ()
@@ -195,7 +195,7 @@ struct
         if debug then prerr_endline "Yield";
         Some pc'
       | Accept (clause, priority, registers) ->
-        if debug then eprintf "Accept (%d,%d,%s)\n"
+        if debug then eprintf "Accept (clause:%d,priority:%d,%s)\n"
             clause priority (print_regs bank registers);
         add_candidate candidates ~clause ~priority registers bank;
         loop ()
@@ -203,10 +203,10 @@ struct
         let state = P.current_state_number env in
         let () = match sparse_lookup program.table index state with
           | Some pc' ->
-            if debug then eprintf "Match %d %d: success\n" index state;
+            if debug then eprintf "Match index:%d symbol:%d: success\n" index state;
             pc := pc'
           | None ->
-            if debug then eprintf "Match %d %d: failure\n" index state
+            if debug then eprintf "Match index:%d symbol:%d: failure\n" index state
         in
         loop ()
       | Halt ->
