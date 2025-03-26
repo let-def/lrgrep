@@ -107,7 +107,7 @@ module type Parser = sig
   val pop : 'a env -> 'a env option
 end
 
-let debug = true
+let debug = false
 
 let eprintf = Printf.eprintf
 
