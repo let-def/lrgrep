@@ -3,6 +3,10 @@ all:
 
 test:
 	dune runtest
+	dune build @test
+
+promote:
+	dune promote
 
 clean:
 	dune clean
