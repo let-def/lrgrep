@@ -24,7 +24,7 @@ type program_instruction =
 
 type 'a register_value =
   | Empty
-  | Initial
+  | Location of Lexing.position * Lexing.position
   | Value of 'a
 
 type 'a register_values = 'a register_value array
@@ -105,6 +105,7 @@ module type Parser = sig
   val current_state_number : 'a env -> int
   val top : 'a env -> element option
   val pop : 'a env -> 'a env option
+  val positions: 'a env -> Lexing.position * Lexing.position
 end
 
 let debug = false
@@ -118,7 +119,7 @@ let print_regs bank regs =
         | None -> "None"
         | Some i -> "%" ^ string_of_int i ^ " = " ^ match bank.(i) with
           | Empty -> "Empty"
-          | Initial -> "Initial"
+          | Location _ -> "Location _"
           | Value _ -> "Value _"
       ) (Array.to_list regs)))
 
@@ -169,7 +170,7 @@ let rec interpret_last program bank candidates pc =
     interpret_last program bank candidates pc
   | _ -> ()
 
-type 'element candidate = clause * 'element register_values
+type 'a candidate = clause * 'a register_values
 
 module Interpreter (P : Parser) =
 struct
@@ -181,7 +182,7 @@ struct
         if debug then eprintf "Store %d\n" reg;
         bank.(reg) <- (match P.top env with
             | Some x -> Value x
-            | None -> Initial);
+            | None -> let s, e = P.positions env in Location (s, e));
         loop ()
       | Move (r1, r2) ->
         if debug then eprintf "Move %d -> %d\n" r1 r2;

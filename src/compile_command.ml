@@ -272,7 +272,7 @@ end)() = struct
 
   let output_wrapper out entry =
     let {Kernel.Syntax.name; args; _} = entry in
-    let args = "lrgrep_initial" :: "lrgrep_lookahead" :: args in
+    let args = "lrgrep_lookahead" :: args in
     let args = String.concat " " args in
     Code_printer.fmt out
       "let %s _lrgrep_env %s = (\n\
