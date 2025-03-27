@@ -436,25 +436,6 @@ struct
         | r' ->
           r := (label, Some next) :: r'
       in
-      (* FIXME:
-         "can_succeed_next" is a workaround for a limitation of dataflow analysis.
-         It is used to place capture the end location of a reduction if is
-         likely to succeed at the next transition.
-         It is correct to always capture the location, however the dataflow
-         analysis does a bad job (!) of eliminating useless captures, which
-         lead to a bigger than necessary automaton. can_succeed_next is used as
-         a heuristic to not place unnecessary captures.
-
-         The proper solution is to improve the dataflow analysis, which will
-         lead to smaller automata in general and allows us to get rid of this
-         heuristic.
-       *)
-      let can_succeed_next (red : RE.reduction) = function
-        | (step : Lr1.set Redgraph.reduction_step) :: _ ->
-          List.exists (fun cand -> IndexSet.mem cand.Redgraph.target red.pattern)
-            step.goto_transitions
-        | [] -> false
-      in
       let reduce_outer matching ks next label reduction transitions =
         let rec visit_transitions label reduction = function
           | step :: transitions when live_redstep reduction step ->
@@ -475,9 +456,7 @@ struct
           | _ -> ()
         in
         visit_transitions
-          (if can_succeed_next reduction transitions
-           then label_capture label reduction.capture Usage.empty
-           else label)
+          (label_capture label reduction.capture Usage.empty)
           reduction transitions
       in
       let ks = ref [] in
