@@ -30,7 +30,7 @@ let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t)
   print "}\n"
 
 let output_wrapper out {Syntax.name; args; _} =
-  let args = "lrgrep_initial" :: "lrgrep_lookahead" :: args in
+  let args = "lrgrep_lookahead" :: args in
   let args = String.concat " " args in
   Code_printer.fmt out
     "let %s _lrgrep_env %s = (\n\
@@ -198,7 +198,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
         Code_printer.fmt out
           "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
           \      | Empty -> %s\n\
-          \      | Initial -> assert false\n\
+          \      | Location _ -> assert false\n\
           \      | Value (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
           name name name offset
           (if is_optional then "(None, None, None)" else "assert false")
@@ -226,23 +226,19 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
         Code_printer.fmt out
           "    let _startloc_%s_ = match __registers.(%d) with\n\
           \      | Empty -> %s\n\
-          \      | Initial -> %s\n\
-          \      | Value (%s.MenhirInterpreter.Element (_, _, p, _)) -> %s\n\
+          \      | Location (p, _) | Value (%s.MenhirInterpreter.Element (_, _, p, _)) -> %s\n\
           \    in\n"
           name offset
           none
-          (some "__initialpos")
           parser_name (some "p")
       | End_loc ->
         Code_printer.fmt out
           "    let _endloc_%s_ = match __registers.(%d) with\n\
           \      | Empty -> %s\n\
-          \      | Initial -> %s\n\
-          \      | Value (%s.MenhirInterpreter.Element (_, _, _, p)) -> %s\n\
+          \      | Location (_, p) | Value (%s.MenhirInterpreter.Element (_, _, _, p)) -> %s\n\
           \    in\n"
           name offset
           none
-          (some "__initialpos")
           parser_name (some "p")
     in
     let lookahead_constraint branch =
@@ -262,7 +258,6 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
       Code_printer.fmt out
         "let lrgrep_execute_%s %s\n\
         \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
-        \  (__initialpos : Lexing.position)\n\
         \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
         \  : _ option = match __clause, token with\n"
         rule.name (String.concat " " rule.args)

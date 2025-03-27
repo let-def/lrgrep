@@ -92,7 +92,7 @@ type program_instruction =
 
 type 'a register_value =
   | Empty
-  | Initial
+  | Location of Lexing.position * Lexing.position
   | Value of 'a
 
 type 'a register_values = 'a register_value array
@@ -132,6 +132,10 @@ module type Parser = sig
   (** Returns the stack with the top frame removed,
       or [None] for an empty stack *)
   val pop : 'a env -> 'a env option
+
+  (** Returns the starting and ending positions of the element at the top of the
+      stack *)
+  val positions: 'a env -> Lexing.position * Lexing.position
 end
 
 (** A matching candidate.

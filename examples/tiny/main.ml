@@ -37,7 +37,7 @@ let parse
     | I.Accepted x -> Ok x
     | I.Rejected -> assert false
     | I.HandlingError _ ->
-      match Parse_errors.error_message env Lexing.dummy_pos tok with
+      match Parse_errors.error_message env tok with
       | None -> report "Syntax error (no handler)"
       | Some err -> report err
   in

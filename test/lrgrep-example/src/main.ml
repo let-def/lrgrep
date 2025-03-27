@@ -22,7 +22,7 @@ type 'a checkpoint = 'a I.checkpoint
 
 let print_syntax_error (content : string) (triple : triple) (env : _ env) =
   Errors.content := Some content; (* TODO *)
-  match Errors.error_message env dummy_pos triple with
+  match Errors.error_message env triple with
   | Some msg ->
       (* This syntax error has an explanation. Print it. *)
       eprintf "Syntax error.\n%s\n%!" msg

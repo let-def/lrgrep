@@ -17,7 +17,7 @@ let rec parse
     handle_error last_token last_env
 
 and handle_error last_token last_env =
-  match Parse_errors.error_message last_env Lexing.dummy_pos last_token with
+  match Parse_errors.error_message last_env last_token with
   | None -> Result.Error "Syntax error (no handler)"
   | Some err -> Result.Error err
 
