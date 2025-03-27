@@ -1,0 +1,3 @@
+rule error_message arg1 arg2 = parse error
+| OPAREN ; [chars]
+{ ignore (arg1, arg2); "Unclosed '('" }

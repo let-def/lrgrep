@@ -1,1 +1,1 @@
-(dirs ("tiny" "calc"))
+(dirs ("tiny" "calc" "tiny-parameterized"))

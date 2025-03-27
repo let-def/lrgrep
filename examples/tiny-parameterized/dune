@@ -1,0 +1,14 @@
+(menhir
+  (modules parser)
+  (flags :standard --inspection --table --cmly))
+
+(rule
+  (targets parse_errors.ml)
+  (deps    parser.cmly parse_errors.mlyl)
+  (action
+     (run lrgrep parse_errors.mlyl -g parser.cmly
+          -o parse_errors.ml)))
+
+(executable
+ (name main)
+ (libraries menhirLib lrgrep.runtime))
