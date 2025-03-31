@@ -16,7 +16,6 @@
 (* The lexical analyzer for lexer definitions. Bootstrapped! *)
 
 {
-open Kernel.Syntax
 open Parser
 
 (* Auxiliaries for the lexical analyzer *)
@@ -28,13 +27,12 @@ let ic = ref None
 
 let in_pattern () = !brace_depth = 0 && !comment_depth = 0
 
-exception Lexical_error of {msg: string; file: string; line: int; col: int}
+exception Lexical_error of {msg: string; pos: Lexing.position}
 
 let string_buff = Buffer.create 256
 
-let read_location ic loc =
+let read_location ic start stop =
   let pos = pos_in ic in
-  let start = loc.start_pos and stop = loc.end_pos in
   seek_in ic start;
   let txt = really_input_string ic (stop - start) in
   seek_in ic pos;
@@ -54,22 +52,13 @@ let char_for_backslash = function
   | c   -> c
 
 let raise_lexical_error lexbuf msg =
-  let p = Lexing.lexeme_start_p lexbuf in
-  raise (Lexical_error {msg;
-                        file=p.Lexing.pos_fname;
-                        line=p.Lexing.pos_lnum;
-                        col=p.Lexing.pos_cnum - p.Lexing.pos_bol + 1})
+  let pos = Lexing.lexeme_start_p lexbuf in
+  raise (Lexical_error {msg; pos})
 
 let handle_lexical_error fn lexbuf =
-  let p = Lexing.lexeme_start_p lexbuf in
-  let line = p.Lexing.pos_lnum
-  and col = p.Lexing.pos_cnum - p.Lexing.pos_bol + 1
-  and file = p.Lexing.pos_fname
-  in
-  try
-    fn lexbuf
-  with Lexical_error {msg; file=""; line=0; col=0} ->
-    raise(Lexical_error{msg; file; line; col})
+  try fn lexbuf
+  with Lexical_error {msg; pos = {pos_cnum = -1; _}} ->
+    raise(Lexical_error{msg; pos = Lexing.lexeme_start_p lexbuf})
 
 let warning lexbuf msg =
   let p = Lexing.lexeme_start_p lexbuf in
@@ -172,19 +161,14 @@ rule main = parse
   { UNREACHABLE }
 | '{'
   { let p = Lexing.lexeme_end_p lexbuf in
-    let loc_file = p.Lexing.pos_fname in
-    let start_pos = p.Lexing.pos_cnum in
-    let start_line = p.Lexing.pos_lnum in
-    let start_col = start_pos - p.Lexing.pos_bol in
     brace_depth := 1;
     let end_pos = handle_lexical_error action lexbuf in
-    let location = { loc_file; start_pos; end_pos; start_line; start_col } in
     let code =
       match !ic with
       | None -> assert false
-      | Some ic -> read_location ic location
+      | Some ic -> read_location ic p.pos_cnum end_pos
     in
-    ACTION (location, code)
+    ACTION (p, code)
   }
 | '=' { EQUAL }
 | '|' { BAR }
@@ -227,7 +211,7 @@ and comment = parse
     { skip_char lexbuf ;
       comment lexbuf }
   | eof
-    { raise(Lexical_error{msg="unterminated comment"; file=""; line=0; col=0}) }
+    { raise(Lexical_error{msg="unterminated comment"; pos = lexbuf.lex_curr_p}) }
   | '\010'
     { incr_loc lexbuf 0;
       comment lexbuf }
@@ -261,7 +245,7 @@ and action = parse
       comment lexbuf;
       action lexbuf }
   | eof
-    { raise (Lexical_error{msg="unterminated action"; file=""; line=0; col=0}) }
+    { raise (Lexical_error{msg="unterminated action"; pos = lexbuf.lex_curr_p}) }
   | '\010'
     { incr_loc lexbuf 0;
       action lexbuf }
@@ -314,7 +298,7 @@ and string = parse
       store_string_char c ;
       string lexbuf }
   | eof
-    { raise(Lexical_error{msg="unterminated string"; file=""; line=0; col=0}) }
+    { raise(Lexical_error{msg="unterminated string"; pos = lexbuf.lex_curr_p}) }
   | '\013'* '\010' as s
     { if !comment_depth = 0 then
         warning lexbuf (Printf.sprintf "unescaped newline in string") ;
@@ -330,7 +314,7 @@ and quoted_string delim = parse
     { incr_loc lexbuf 0;
       quoted_string delim lexbuf }
   | eof
-    { raise (Lexical_error{msg="unterminated string"; file=""; line=0; col=0}) }
+    { raise (Lexical_error{msg="unterminated string"; pos = lexbuf.lex_curr_p}) }
   | '|' (lowercase* as delim') '}'
     { if delim <> delim' then
       quoted_string delim lexbuf }

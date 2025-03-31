@@ -699,10 +699,8 @@ struct
       let rec check (re : Syntax.regular_expr) =
         match re.desc with
         | Atom (_, _, mark) | Reduce {mark; _} ->
-          if Usage.is_unused mark then (
-            Printf.eprintf "Warning: expression line %d, column %d is unreachable\n"
-              re.position.line re.position.col
-          )
+          if Usage.is_unused mark then
+            Syntax.warn re.position "expression is unreachable"
         | _ -> iter_re check re
       in
       Vector.iteri (fun index (clause : Clause.desc) ->
@@ -710,8 +708,7 @@ struct
            if IndexSet.mem index reachable_clauses then
              check expr
            else
-            Printf.eprintf "Warning: clause line %d, column %d is unreachable\n"
-              expr.position.line expr.position.col
+             Syntax.warn expr.position "clause is unreachable"
         )
         Clause.vector
 

@@ -29,27 +29,16 @@ open Utils
 
 (** {1 The shallow abstract syntax} *)
 
-type location = Code_printer.location = {
-  loc_file : string;
-  start_pos : int;
-  end_pos : int;
-  start_line : int;
-  start_col : int;
-}
-
 (** Kind of quantifier used in regular expressions. *)
 type quantifier_kind =
   | Longest  (* aka "greedy" *)
   | Shortest (* aka "lazy" *)
 
+type position = Lexing.position
+
 (** This represents a piece of OCaml code, as appearing in semantic
     actions, as well as in the header and trailer. *)
-type ocaml_code = location * string
-
-(** A position in the input file. *)
-type position = {line: int; col: int}
-
-let invalid_position = {line = -1; col = -1}
+type ocaml_code = position * string
 
 (** A grammar symbol (a terminal or a non-terminal) *)
 type symbol =
@@ -150,44 +139,21 @@ type lexer_definition = {
 
 (** {1 Helper and cmoning functions} *)
 
-(** Create a position from a Lexing position. *)
-let make_position {Lexing. pos_lnum; pos_cnum; pos_bol; _} =
-  {line = pos_lnum; col = pos_cnum - pos_bol + 1}
-
-(** Create a location from start and end positions. *)
-let make_location startpos endpos = {
-  loc_file = startpos.Lexing.pos_fname;
-  start_line = startpos.Lexing.pos_lnum;
-  start_pos = startpos.Lexing.pos_cnum;
-  start_col =  startpos.Lexing.pos_cnum - startpos.Lexing.pos_bol + 1;
-  end_pos = endpos.Lexing.pos_cnum;
-}
-
 (** Convert a location to a Cmon record. *)
-let cmon_location {
-    loc_file;
-    start_pos;
-    end_pos;
-    start_line;
-    start_col;
-  } = Cmon.(record [
-    "loc_file"  , string loc_file;
-    "start_pos" , int start_pos;
-    "end_pos"   , int end_pos;
-    "start_line", int start_line;
-    "start_col" , int start_col;
+let cmon_position {Lexing. pos_fname; pos_bol; pos_cnum; pos_lnum} =
+  Cmon.(record [
+    "filename" , string pos_fname;
+    "line"     , int pos_lnum;
+    "column"   , int (pos_cnum - pos_bol);
+    "offset"   , int pos_cnum;
   ])
 
 (** Convert an OCaml code to a Cmon tuple. *)
 let cmon_ocamlcode (location, code) =
   Cmon.tuple [
-    cmon_location location;
+    cmon_position location;
     Cmon.string code;
   ]
-
-(** Convert a position to a Cmon record. *)
-let cmon_position {line; col} =
-  Cmon.(record ["line", int line; "col", int col])
 
 (** Convert a function and a position to a Cmon pair. *)
 let cmon_positioned f =
@@ -295,3 +261,24 @@ let cmon_definition {header; rules; trailer} : Cmon.t =
     "rules", Cmon.list (List.map cmon_rule rules);
     "trailer", cmon_ocamlcode trailer;
   ]
+
+(** Print position for error or warning messages *)
+let gnu_position (pos : Lexing.position) =
+  if pos = Lexing.dummy_pos then
+    "lrgrep"
+  else if pos.pos_cnum > -1 then
+    Printf.sprintf "%s:%d.%d" pos.pos_fname pos.pos_lnum (pos.pos_cnum - pos.pos_bol)
+  else if pos.pos_lnum > 0 then
+    Printf.sprintf "%s:%d" pos.pos_fname pos.pos_lnum
+  else
+    pos.pos_fname
+
+(** Report a warning *)
+let warn (pos : Lexing.position) fmt =
+  Printf.eprintf "%s: warning: " (gnu_position pos);
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt
+
+(** Report an error *)
+let error (pos : Lexing.position) fmt =
+  Printf.eprintf "%s: error: " (gnu_position pos);
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt

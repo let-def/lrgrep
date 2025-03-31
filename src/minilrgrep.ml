@@ -5,6 +5,7 @@
 open Utils
 open Fix.Indexing
 open Misc
+module Syntax = Kernel.Syntax
 
 (** Print usage information for the program *)
 let usage () =
@@ -54,7 +55,7 @@ let time = Stopwatch.enter Stopwatch.main "MiniLRGrep"
 (** {1 Helpers} *)
 
 (** An invalid input position *)
-let invalid_position = Kernel.Syntax.invalid_position
+let invalid_position = Lexing.dummy_pos
 
 (** Accessing 'vectors' (strongly-typed arrays indexed by elements of a finite
     set) *)
@@ -82,30 +83,6 @@ let list_from_set ss f =
       | None -> acc
       | Some x -> x :: acc
     ) ss []
-
-(** Print position for error or warning messages *)
-let print_file_position (pos : Kernel.Syntax.position) = match spec_file with
-  | None -> ()
-  | Some name ->
-    Printf.eprintf "%s:" name;
-    if pos.line > -1 then (
-      Printf.eprintf "%d:" pos.line;
-      if pos.col > -1 then
-        Printf.eprintf "%d:" pos.col
-    );
-    Printf.eprintf " "
-
-(** Print an error message and exit *)
-let error pos fmt =
-  print_file_position pos;
-  Printf.eprintf "error: ";
-  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n"; exit 1) stderr fmt
-
-(** Print a warning message *)
-let warn (pos : Kernel.Syntax.position) fmt =
-  print_file_position pos;
-  Printf.eprintf "warning: ";
-  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n") stderr fmt
 
 (** Check if a symbol is not nullable *)
 let non_nullable_symbol sym =
@@ -535,10 +512,11 @@ let ast = match spec_file with
       try open_in_bin spec_file
       with
       | Sys_error msg ->
-        error invalid_position "cannot open specification file (%S).\n" msg;
+        Kernel.Syntax.error invalid_position
+          "cannot open specification file (%S).\n" msg
       | exn ->
-        error invalid_position "cannot open specification file (%S).\n"
-          (Printexc.to_string exn)
+        Kernel.Syntax.error invalid_position
+          "cannot open specification file (%S).\n" (Printexc.to_string exn)
     in
     (* Create a lexer buffer from the file *)
     let lexbuf =
@@ -550,13 +528,10 @@ let ast = match spec_file with
       Lexing.set_filename lexbuf spec_file;
       try Front.Parser.lexer_definition Front.Lexer.main lexbuf
       with
-      | Front.Lexer.Lexical_error {msg; file=_; line; col} ->
-        error {Kernel.Syntax. line; col} "%s" msg
+      | Front.Lexer.Lexical_error {msg; pos} ->
+        Syntax.error pos "%s" msg
       | Front.Parser.Error ->
-        let pos = lexbuf.lex_start_p in
-        let line = pos.pos_lnum in
-        let col = pos.pos_cnum - pos.pos_bol in
-        error {Kernel.Syntax.line; col} "syntax error"
+        Syntax.error lexbuf.lex_start_p "syntax error"
     in
     (* Close the input channel *)
     let () =
@@ -617,12 +592,12 @@ module Transl = struct
     | Filter (states', position) ->
       let states = Lr1.intersect states states' in
       if IndexSet.is_empty states then
-        warn position "these filters reject all states";
+        Syntax.warn position "these filters reject all states";
       Filter (states, position)
     | Consume (filter', states', position) ->
       let states = Lr1.intersect states states' in
       if IndexSet.is_empty states then
-        warn position "these filters reject all states";
+        Syntax.warn position "these filters reject all states";
       Consume (filter', states, position)
 
   (** An entry is translated to a list of branches.
@@ -828,7 +803,7 @@ module Transl = struct
     let compile_branch branch =
       let suffixes = compile_branch branch in
       if IndexSet.is_empty suffixes then
-        warn branch.position "pattern is unreachable";
+        Syntax.warn branch.position "pattern is unreachable";
       (branch, suffixes)
     in
     let compile_clause (position, branches) =
@@ -1101,14 +1076,12 @@ module Shadowing() = struct
   let () = Vector.iteri begin fun c cs ->
       (* Check if the clause has any shadowers. *)
       if not (IndexSet.is_empty cs) then (
-        (* Function to print the clause position. *)
-        let print_clause c =
-          Printf.sprintf "line %d" (Transl.Clause.position c).line
-        in
         (* Print the unreachable clause and its shadowers. *)
-        Printf.eprintf "Clause %s is unreachable. It is shadowed at least by clauses %s.\n"
-          (print_clause c)
-          (string_concat_map ", " print_clause (IndexSet.elements cs))
+        Syntax.warn (Transl.Clause.position c)
+          "Clause is unreachable. It is shadowed at least by clauses %s.\n"
+          (string_concat_map ", "
+             (fun c -> Syntax.gnu_position (Transl.Clause.position c))
+             (IndexSet.elements cs))
       )
     end occluders
 end

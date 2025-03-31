@@ -1,10 +1,6 @@
 open Utils
 open Misc
 
-let error {Kernel.Syntax. line; col} fmt =
-  Printf.eprintf "Error line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
-
 (* Command-line parsing. *)
 
 let opt_output_name = ref None
@@ -44,20 +40,13 @@ module Run(P : sig
 end)() = struct
   let print_parse_error_and_exit lexbuf exn =
     let bt = Printexc.get_raw_backtrace () in
-    begin match exn with
-      | Front.Parser.Error ->
-        let p = Lexing.lexeme_start_p lexbuf in
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: syntax error.\n"
-          p.Lexing.pos_fname p.Lexing.pos_lnum
-          (p.Lexing.pos_cnum - p.Lexing.pos_bol)
-      | Front.Lexer.Lexical_error {msg; file; line; col} ->
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: %s.\n"
-          file line col msg
-      | _ -> Printexc.raise_with_backtrace exn bt
-    end;
-    exit 3
+    match exn with
+    | Front.Parser.Error ->
+      let pos = Lexing.lexeme_start_p lexbuf in
+      Kernel.Syntax.error pos "syntax error."
+    | Front.Lexer.Lexical_error {msg; pos} ->
+      Kernel.Syntax.error pos "%s." msg
+    | _ -> Printexc.raise_with_backtrace exn bt
 
   let () = Stopwatch.step Stopwatch.main "Beginning"
 
@@ -113,7 +102,7 @@ end)() = struct
       | [] -> Info.Lr1.all_entrypoints
       | syms ->
         translate_entrypoints fst snd
-          (fun loc msg -> error loc "%s" msg)
+          (fun loc msg -> Kernel.Syntax.error loc "%s" msg)
           syms
     in
     let module Lrc = Kernel.Lrc.From_entrypoints(Info)(Lrc)
@@ -308,7 +297,8 @@ end)() = struct
         (Some oc, Some out)
     in
     let print_ocaml_code out (loc, code) =
-      Code_printer.print out ~loc code
+      if code <> "" then
+        Code_printer.print out ~loc code
     in
     Option.iter begin fun out ->
       begin match Grammar.Grammar.parameters with

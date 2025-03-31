@@ -30,17 +30,6 @@
 (** Opaque type representing the state of the code printer. *)
 type t
 
-(** A location represents a range of characters from the input file.
-    TODO: This is inherited from ocamllex and not all fields are useful.
-*)
-type location = {
-  loc_file : string;   (** File name where the location points. *)
-  start_pos : int;     (** Starting position in the file, as a byte offset. *)
-  end_pos : int;       (** Ending position in the file, as a byte offset. *)
-  start_line : int;    (** Starting line in the file. *)
-  start_col : int;     (** Starting column in the file. *)
-}
-
 (** [create ~filename ?line output_function] creates a new code printer.
     [filename] is the name of the output file.
     [line] is the line number at which output starts to be appended (defaults to 1).
@@ -57,7 +46,7 @@ val create : filename:string -> ?line:int -> (string -> unit) -> t
     is emitted if necessary to indicate that [text] is code specific to the
     printed file.
 *)
-val print : ?loc:location -> t -> string -> unit
+val print : ?loc:Lexing.position -> t -> string -> unit
 
 (** [fmt] is a variant of [print] that supports [Printf]-like format strings. *)
-val fmt : ?loc:location -> t -> ('a, unit, string, unit) format4 -> 'a
+val fmt : ?loc:Lexing.position -> t -> ('a, unit, string, unit) format4 -> 'a

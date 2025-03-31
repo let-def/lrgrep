@@ -4,14 +4,6 @@ open Syntax
 open Fix.Indexing
 open Regexp
 
-let error {line; col} fmt =
-  Printf.eprintf "Error line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
-
-let warn {line; col} fmt =
-  Printf.eprintf "Warning line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt
-
 module type S = sig
   module Regexp : Regexp.S
   open Regexp
@@ -445,7 +437,7 @@ struct
           | Some sym ->
             let sym = Indices.get_symbol re.position sym in
             if for_reduction && Symbol.is_terminal sym then
-              warn re.position "A reduction can only match non-terminals";
+              Syntax.warn re.position "A reduction can only match non-terminals";
             Indices.states_of_symbol sym
         in
         let cap = match capture with
@@ -489,7 +481,7 @@ struct
           transl_filter re.position ~lhs ~rhs
         in
         if IndexSet.is_empty states then
-          warn re.position "No items match this filter";
+          Syntax.warn re.position "No items match this filter";
         RE.Filter states
     in
     let result = transl ~for_reduction re in
