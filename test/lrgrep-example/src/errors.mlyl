@@ -60,44 +60,44 @@ rule error_message = parse error (main)
 | e=expr; o=DIV / _* . expr _*
 | e=expr; o=TIMES / _* . expr _*
     {
-      expr ($startloc(e), $endloc(e)) ^
-      binop ($startloc(o), $endloc(o)) ^
+      expr $positions(e) ^
+      binop $positions(o) ^
       "An expression is now expected."
     }
 
 | l=LPAREN / _* . expr _*
     {
-      lparen ($startloc(l), $endloc(l)) ^
+      lparen $positions(l) ^
       "An expression is now expected."
     }
 
 | l=LPAREN; e=[expr / _* . RPAREN]
     {
-      lparen ($startloc(l), $endloc(l)) ^
-      expr ($startloc(e), $endloc(e)) ^
+      lparen $positions(l) ^
+      expr $positions(e) ^
       "If this expression is complete,\na closing parenthesis or a comma is now expected."
     }
 
 | l=LPAREN; e=expr; c=COMMA / _* . expr _*
     {
-      lparen ($startloc(l), $endloc(l)) ^
-      expr ($startloc(e), $endloc(e)) ^
-      comma ($startloc(c), $endloc(c)) ^
+      lparen $positions(l) ^
+      expr $positions(e) ^
+      comma $positions(c) ^
       "An expression is now expected."
     }
 
 | l=LPAREN; e1=expr; c=COMMA; e2=[expr / _* . RPAREN]
     {
-      lparen ($startloc(l), $endloc(l)) ^
-      expr ($startloc(e1), $endloc(e1)) ^
-      comma ($startloc(c), $endloc(c)) ^
-      expr ($startloc(e2), $endloc(e2)) ^
+      lparen $positions(l) ^
+      expr $positions(e1) ^
+      comma $positions(c) ^
+      expr $positions(e2) ^
       "A closing parenthesis is now expected."
     }
 
 | e=[expr / _* . EOF]
     {
-      expr ($startloc(e), $endloc(e)) ^
+      expr $positions(e) ^
       "If this expression is complete, the end of the file is now expected."
     }
 
