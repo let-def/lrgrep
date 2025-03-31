@@ -1449,53 +1449,21 @@ struct
     | L t -> "T T_" ^ Info.Terminal.to_string t
     | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Info.Nonterminal.to_g n)
 
-  let bytes_match b i str =
-    Bytes.length b >= i + String.length str &&
-    let exception Exit in
-    match
-      for j = 0 to String.length str - 1 do
-        if Bytes.get b (i + j) <> String.get str j then
-          raise Exit
-      done
-    with
-    | () -> true
-    | exception Exit -> false
-
-  let rewrite_loc_keywords str =
-    let b = Bytes.of_string str in
-    let l = Bytes.length b in
-    let i = ref 0 in
-    while !i < l do
-      if Bytes.get b !i = '$' &&
-         (bytes_match b (!i + 1) "startloc(" ||
-          bytes_match b (!i + 1) "endloc(")
-      then (
-        Bytes.set b !i '_';
-        while Bytes.get b !i <> '(' do incr i; done;
-        Bytes.set b !i '_';
-        while !i < l  && Bytes.get b !i <> ')' do incr i; done;
-        if !i < l then Bytes.set b !i '_'
-      )
-      else incr i
-    done;
-    Bytes.to_string b
-
-  let bind_capture out ~roffset index (def, name) =
+  let bind_capture out ~offset index (def, name, (_startpos, _endpos, positions)) =
+    (* FIXME: variables should be introduced only if the relevant keyword appear in the action *)
     let is_optional = IndexSet.mem index RunDFA.partial_captures in
     let none = if is_optional then "None" else "assert false" in
     let some x = if is_optional then "Some (" ^ x ^ ")" else x in
-    let offset = !roffset in
-    incr roffset;
     match def with
     | Value ->
       let typ = recover_type index in
       Code_printer.fmt out
-        "    let %s, _startloc_%s_, _endloc_%s_ = match __registers.(%d) with \n\
+        "    let %s, _startpos_%s_, _endpos_%s_, _positions_%s_ = match __registers.(%d) with \n\
         \      | Empty -> %s\n\
         \      | Location _ -> assert false\n\
         \      | Value (%s.MenhirInterpreter.Element (%s, %s, startp, endp)%s) ->\n"
-        name name name offset
-        (if is_optional then "(None, None, None)" else "assert false")
+        name name name name offset
+        (if is_optional then "(None, None, None, None)" else "assert false")
         parser_name
         (if Option.is_none typ then "_" else "st")
         (if Option.is_none typ then "_" else "x")
@@ -1513,12 +1481,14 @@ struct
             "          | _ -> assert false\n\
             \        in\n"
       end;
-      Code_printer.fmt out "        (%s, %s, %s)\n" (some "x") (some "startp") (some "endp");
+      positions := false;
+      Code_printer.fmt out "        (%s, %s, %s, %s)\n"
+        (some "x") (some "startp") (some "endp") (some "(startp, endp)");
       Code_printer.fmt out "    in\n";
       Code_printer.fmt out "    let _ = %s in\n" name
     | Start_loc ->
       Code_printer.fmt out
-        "    let _startloc_%s_ = match __registers.(%d) with\n\
+        "    let _startpos_%s_ = match __registers.(%d) with\n\
         \      | Empty -> %s\n\
         \      | Location (p, _) | Value (%s.MenhirInterpreter.Element (_, _, p, _)) -> %s\n\
         \    in\n"
@@ -1527,7 +1497,7 @@ struct
         parser_name (some "p")
     | End_loc ->
       Code_printer.fmt out
-        "    let _endloc_%s_ = match __registers.(%d) with\n\
+        "    let _endpos_%s_ = match __registers.(%d) with\n\
         \      | Empty -> %s\n\
         \      | Location (_, p) | Value (%s.MenhirInterpreter.Element (_, _, _, p)) -> %s\n\
         \    in\n"
@@ -1537,6 +1507,7 @@ struct
 
   let lookahead_constraint index =
     match Clause.lookaheads index with
+
     | None -> None
     | Some terms ->
       let term_pattern t =
@@ -1558,6 +1529,7 @@ struct
       parser_name parser_name;
     let output_action (source, clauses) (captures, _states) =
       Code_printer.fmt out " ";
+      (* Identify branches that lead to this action *)
       IndexSet.iter (fun index ->
           Code_printer.fmt out
             " | %d, %s"
@@ -1566,17 +1538,75 @@ struct
                ~default:"_");
         ) clauses;
       Code_printer.fmt out " ->\n";
-      IndexMap.iter (bind_capture out ~roffset:(ref 0)) captures;
-      begin match source.Syntax.action with
+      let vars = Hashtbl.create 7 in
+      let captures =
+        IndexMap.map begin fun (kind, var) ->
+          let refs = match Hashtbl.find_opt vars var with
+            | Some refs -> refs
+            | None ->
+              let refs = (ref false, ref false, ref false) in
+              Hashtbl.add vars var refs;
+              refs
+          in
+          (kind, var, refs)
+        end captures
+      in
+      let body =
+        match source.Syntax.action with
+        | Unreachable -> ""
+        | Partial (loc, str) | Total (loc, str) ->
+          Misc.rewrite_keywords begin fun pos kw var ->
+            match kw with
+            (* FIXME Report an error message rather than a failure *)
+            | "$startloc" -> Syntax.error pos "$startloc is now called $startpos"
+            | "$endloc" ->  Syntax.error pos "$endloc is now called $endpos"
+            | "$startpos" | "$endpos" | "$positions" ->
+              (* FIXME Check if variable exists *)
+              begin match Hashtbl.find_opt vars var with
+                | None -> Syntax.error pos "undefined variable %s" var
+                | Some (rstart, rend, rpos) ->
+                  match kw with
+                  | "$startpos" -> rstart := true
+                  | "$endpos" -> rend := true
+                  | "$positions" -> rpos := true
+                  | _ -> ()
+              end;
+              true
+            | kw ->
+              Syntax.error pos "unknown keyword %S; did you mean $startpos, $endpos or $positions?" kw
+          end loc str
+      in
+      let offset = ref 0 in
+      IndexMap.iter
+        (fun k v -> bind_capture out ~offset:!offset k v; incr offset)
+        captures;
+      IndexMap.iter (fun index (_, var, (_, _, positions)) ->
+          if !positions then (
+            let is_optional = IndexSet.mem index RunDFA.partial_captures in
+            if is_optional then
+              Code_printer.fmt out
+                "    let _positions_%s_ = match _startpos_%s_, _endpos_%s_ with\n\
+                \      | Some s, Some e -> Some (s, e)\n\
+                \      | _ -> None in\n"
+                var var var
+            else
+              Code_printer.fmt out
+                "    let _positions_%s_ = (_startpos_%s_, _endpos_%s_) in\n"
+                var var var
+          )
+        ) captures;
+      begin
+        let open Code_printer in
+        match source.Syntax.action with
         | Unreachable ->
-          Code_printer.print out "    failwith \"Should be unreachable\"\n"
-        | Partial (loc, str) ->
-          Code_printer.print out "    (\n";
-          Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
-          Code_printer.print out "    )\n"
-        | Total (loc, str) ->
-          Code_printer.print out "    Some (\n";
-          Code_printer.fmt out ~loc "%s\n" (rewrite_loc_keywords str);
+          print out "    failwith \"Should be unreachable\"\n"
+        | Partial (loc, _) ->
+          print out "    (\n";
+          fmt out ~loc "%s\n" body;
+          print out "    )\n"
+        | Total (loc, _) ->
+          print out "    Some (\n";
+          fmt out ~loc "%s\n" body;
           Code_printer.print out "    )\n"
       end;
       let constrained =

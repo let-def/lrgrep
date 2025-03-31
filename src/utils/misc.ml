@@ -335,3 +335,83 @@ let rec fixpoint ?counter ~propagate todo = match !todo with
 
 let assert_equal_length v1 v2 =
   assert_equal_cardinal (Vector.length v1) (Vector.length v2)
+
+let rewrite_keywords f (pos : Lexing.position) str =
+  let b = Bytes.of_string str in
+  let l = Bytes.length b in
+  let i = ref 0 in
+  let pos_lnum = ref pos.pos_lnum in
+  let pos_bol = ref pos.pos_bol in
+  let nl () =
+    pos_bol := pos.pos_cnum + !i;
+    incr pos_lnum
+  in
+  let escape () =
+    if !i < l && Bytes.get b !i = '\n' then
+      (incr i; nl ())
+    else
+      incr i
+  in
+  while !i < l do
+    match Bytes.get b !i with
+    | '\n' -> incr i; nl ()
+    | '\\' -> incr i; escape ()
+    (* Look for $ident(ident) *)
+    | '$' ->
+      let dollar = !i in
+      incr i;
+      let in_range a b c = a <= b && b <= c in
+      let is_ident c =
+        in_range 'a' c 'z' || in_range 'A' c 'Z' ||
+        in_range '0' c '9' || (c = '_') || (c = '\'')
+      in
+      while !i < l && is_ident (Bytes.get b !i)
+      do incr i done;
+      if !i < l && Bytes.get b !i = '(' then (
+        let lpar = !i in
+        incr i;
+        while !i < l && is_ident (Bytes.get b !i) do
+          incr i
+        done;
+        if !i < l && Bytes.get b !i = ')' then (
+          let rpar = !i in
+          let kw = Bytes.sub_string b dollar (lpar - dollar) in
+          let arg = Bytes.sub_string b (lpar + 1) (rpar - lpar - 1) in
+          let pos = {pos with pos_lnum = !pos_lnum; pos_bol = !pos_bol;
+                              pos_cnum = pos.pos_cnum + dollar} in
+          if f pos kw arg then (
+            Bytes.set b dollar '_';
+            Bytes.set b lpar '_';
+            Bytes.set b rpar '_';
+          )
+        )
+      )
+    (* Skip strings *)
+    | '"' ->
+      incr i;
+      while !i < l &&
+            let c = Bytes.get b !i in
+            incr i;
+            match c with
+            | '"' -> false
+            | '\n' -> nl (); true
+            | '\\' -> escape (); true
+            | _ -> true
+      do () done
+    | _ -> incr i
+  done;
+  Bytes.to_string b
+
+(*    if Bytes.get b !i = '$' &&
+       (bytes_match b (!i + 1) "startloc(" ||
+        bytes_match b (!i + 1) "endloc(")
+    then (
+      Bytes.set b !i '_';
+      while Bytes.get b !i <> '(' do incr i; done;
+      Bytes.set b !i '_';
+      while !i < l  && Bytes.get b !i <> ')' do incr i; done;
+      if !i < l then Bytes.set b !i '_'
+    )
+    else incr i
+  done;
+*)
