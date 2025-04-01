@@ -158,7 +158,9 @@ end)() = struct
                 ) IndexSet.empty m
             )
         end)() in
-      ()
+      if !opt_coverage_fatal then
+        if !Check.uncovered_count > 0 then
+          exit 1
     );
     let get_state_for_compaction index =
       let add_match (clause, priority, regs) =
