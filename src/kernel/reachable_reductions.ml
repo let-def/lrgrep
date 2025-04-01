@@ -1165,18 +1165,19 @@ struct
             IndexSet.iter (fun item ->
                 if !need_sep then Printf.eprintf "\n    %s" pad;
                 need_sep := true;
-                Printf.eprintf "%s" (Item.to_string item);
+                Printf.eprintf "/%s" (Item.to_string item);
               ) (Lr1.items lr1');
             Printf.eprintf "]\n";
           ) goto
     end suffix;
     prerr_newline ()
 
+  let uncovered_count = ref 0
+
   let _ =
-    let count = ref 0 in
     enum_uncovered ~f:(fun path failing ->
-        incr count;
-        Printf.eprintf "# Case %d\n\n" !count;
+        incr uncovered_count;
+        Printf.eprintf "# Case %d\n\n" !uncovered_count;
         output_uncorevered_case (List.rev path) failing
       )
 
