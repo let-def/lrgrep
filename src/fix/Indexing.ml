@@ -87,93 +87,130 @@ type ('l, 'r) either =
   | L of 'l
   | R of 'r
 
-module type SUM = sig
-  type l and r
-  include CARDINAL
-  val inj_l : l index -> n index
-  val inj_r : r index -> n index
-  val prj : n index -> (l index, r index) either
-end
+module Sum = struct
+  type (_, _) n = unit
 
-module Sum (L : CARDINAL)(R : CARDINAL) = struct
+  module type S = sig
+    type l and r
+    type nonrec n = (l, r) n
+    include CARDINAL with type n := n
+    val inj_l : l index -> n index
+    val inj_r : r index -> n index
+    val prj : n index -> (l index, r index) either
+  end
 
-  type n = unit
+  module Make (L : CARDINAL)(R : CARDINAL) = struct
+    type l = L.n
+    type r = R.n
+    type nonrec n = (l, r) n
 
-  type l = L.n
-  type r = R.n
+    (* The cardinal [l] of the left-hand set becomes fixed now (if it
+       wasn't already). We need it to be fixed for our injections and
+       projections to make sense. *)
+    let l : int = cardinal L.n
 
-  (* The cardinal [l] of the left-hand set becomes fixed now (if it
-     wasn't already). We need it to be fixed for our injections and
-     projections to make sense. *)
-  let l : int = cardinal L.n
-  (* The right-hand set can remain open-ended. *)
-  let r : r cardinal = R.n
+    (* The right-hand set can remain open-ended. *)
+    let r : r cardinal = R.n
 
-  let n : n cardinal =
-    (* We optimize the case where [r] is fixed already, but the code
-       in the [else] branch would work always. *)
-    if is_val r then
-      let n = l + cardinal r in
-      Cardinal (lazy n)
-    else
-      Cardinal (lazy (l + cardinal r))
+    let n : n cardinal =
+      (* We optimize the case where [r] is fixed already, but the code
+         in the [else] branch would work always. *)
+      if is_val r then
+        let n = l + cardinal r in
+        Cardinal (lazy n)
+      else
+        Cardinal (lazy (l + cardinal r))
 
-  (* Injections. The two sets are numbered side by side. *)
+    (* Injections. The two sets are numbered side by side. *)
+    let inj_l x = x
+    let inj_r y = l + y
+
+    (* Projection. *)
+    let prj x = if x < l then L x else R (x - l)
+  end
+
+  let cardinal (type l r)
+        (Cardinal (lazy l) : l cardinal)
+        (Cardinal (lazy r) : r cardinal)
+      : (l, r) n cardinal =
+    let c = l + r in
+    Cardinal (lazy c)
+
   let inj_l x = x
-  let inj_r y = l + y
 
-  (* Projection. *)
-  let prj x = if x < l then L x else R (x - l)
+  let inj_r (type l r) (Cardinal (lazy l) : l cardinal) (x : r index) =
+    l + x
 
+  let prj (type l r) (Cardinal (lazy l) : l cardinal) (x : (l, r) n index) : (l index, r index) either =
+    if x < l then L x else R (x - l)
+
+  let make (type l r) (l : l cardinal) (r : r cardinal) =
+    let module L = struct type n = l let n = l end in
+    let module R = struct type n = r let n = r end in
+    (module Make(L)(R) : S with type l = l and type r = r)
 end
 
-let sum (type l r) (l : l cardinal) (r : r cardinal) =
-  let module L = struct type n = l let n = l end in
-  let module R = struct type n = r let n = r end in
-  (module Sum(L)(R) : SUM with type l = l and type r = r)
+module Prod = struct
+  type (_, _) n = unit
 
-module type PROD = sig
-  type l and r
-  include CARDINAL
-  val inj : l index -> r index -> n index
-  val prj : n index -> l index * r index
-end
+  module type S = sig
+    type l and r
+    type nonrec n = (l, r) n
+    include CARDINAL with type n := n
+    val inj : l index -> r index -> n index
+    val prj : n index -> l index * r index
+  end
 
-module Prod (L : CARDINAL)(R : CARDINAL) = struct
+  module Make (L : CARDINAL)(R : CARDINAL) = struct
+    type n = unit
 
-  type n = unit
+    type l = L.n
+    type r = R.n
 
-  type l = L.n
-  type r = R.n
+    (* The cardinal [l] of the left-hand set becomes fixed now (if it
+       wasn't already). We need it to be fixed for our injections and
+       projections to make sense. *)
+    let l : int = cardinal L.n
+    (* The right-hand set can remain open-ended. *)
+    let r : r cardinal = R.n
 
-  (* The cardinal [l] of the left-hand set becomes fixed now (if it
-     wasn't already). We need it to be fixed for our injections and
-     projections to make sense. *)
-  let l : int = cardinal L.n
-  (* The right-hand set can remain open-ended. *)
-  let r : r cardinal = R.n
+    let n : n cardinal =
+      (* We optimize the case where [r] is fixed already, but the code
+         in the [else] branch would work always. *)
+      if is_val r then
+        let n = l * cardinal r in
+        Cardinal (lazy n)
+      else
+        Cardinal (lazy (l * cardinal r))
 
-  let n : n cardinal =
-    (* We optimize the case where [r] is fixed already, but the code
-       in the [else] branch would work always. *)
-    if is_val r then
-      let n = l * cardinal r in
-      Cardinal (lazy n)
+    (* Injections. The two sets are numbered side by side. *)
+    let inj x y = y * l + x
+
+    (* Projection. *)
+    let prj x = (x mod l, x / l)
+  end
+
+  let cardinal (type l r)
+        (Cardinal (lazy l) : l cardinal)
+        (Cardinal r : r cardinal)
+      : (l, r) n cardinal =
+    if Lazy.is_val r then
+      let c = l * Lazy.force r in
+      Cardinal (lazy c)
     else
-      Cardinal (lazy (l * cardinal r))
+      Cardinal (lazy (l * Lazy.force r))
 
-  (* Injections. The two sets are numbered side by side. *)
-  let inj x y = y * l + x
+  let inj (type l) (Cardinal (lazy l) : l cardinal) lx rx =
+    l * lx + rx
 
-  (* Projection. *)
-  let prj x = (x mod l, x / l)
+  let prj (type l) (Cardinal (lazy l) : l cardinal) x =
+    (x mod l, x / l)
 
+  let make (type l r) (l : l cardinal) (r : r cardinal) =
+    let module L = struct type n = l let n = l end in
+    let module R = struct type n = r let n = r end in
+    (module Make(L)(R) : S with type l = l and type r = r)
 end
-
-let prod (type l r) (l : l cardinal) (r : r cardinal) =
-  let module L = struct type n = l let n = l end in
-  let module R = struct type n = r let n = r end in
-  (module Prod(L)(R) : PROD with type l = l and type r = r)
 
 module Index = struct
 

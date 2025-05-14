@@ -57,7 +57,7 @@ module type S = sig
   open Info
 
   include CARDINAL
-  module Source : SUM with type l := Viable.n and type r := Lr1.n
+  module Source : Sum.S with type l := Viable.n and type r := Lr1.n
 
   type config = {
     source: Source.n index;
@@ -107,7 +107,7 @@ struct
 
   include IndexBuffer.Gen.Make()
 
-  module Source = Sum(Viable)(Lr1)
+  module Source = Sum.Make(Viable)(Lr1)
 
   type config = {
     source: Source.n index;
@@ -506,8 +506,8 @@ struct
 
   module States = struct
     module Suffix = IndexBuffer.Gen.Make()
-    module Reach_or_suffix = Sum(Reach)(Suffix)
-    include Sum(Lrc)(Reach_or_suffix)
+    module Reach_or_suffix = Sum.Make(Reach)(Suffix)
+    include Sum.Make(Lrc)(Reach_or_suffix)
 
     let prefix i = inj_l i
     let suffix i = inj_r (Reach_or_suffix.inj_r i)
@@ -858,7 +858,7 @@ struct
        rejected = IndexSet.union i1.rejected i2.rejected}
   end
 
-  module State = Prod(DFA)(NFA)
+  module State = Prod.Make(DFA)(NFA)
 
   type desc = {
     state: State.n index;

@@ -105,19 +105,6 @@ type ('l, 'r) either =
   | L of 'l
   | R of 'r
 
-(**The signature {!SUM} extends {!CARDINAL} with an explicit isomorphism between
-   the set [n] and the disjoint sum [l + r]. The functions [inj_l] and [inj_r]
-   convert an index into [l] or an index into [r] into an index into [n].
-   Conversely, the function [prj] converts an index into [r] into either an
-   index into [l] or an index into [r]. *)
-module type SUM = sig
-  type l and r
-  include CARDINAL
-  val inj_l : l index -> n index
-  val inj_r : r index -> n index
-  val prj : n index -> (l index, r index) either
-end
-
 (**[Sum(L)(R)] creates a new type-level set, which is the disjoint sums of the
    sets [L] and [R]. The functor application [Sum(L)(R)] involves a call to
    [cardinal L.n], thereby fixing the cardinal of the set [L], if it was an
@@ -125,27 +112,57 @@ end
    open-ended set, then the new set is open-ended as well, and it is still
    permitted to add new elements to [R] by calling [R.fresh()]. Fixing the
    cardinal of the new set fixes the cardinal of [R]. *)
-module Sum (L : CARDINAL)(R : CARDINAL) :
-  SUM with type l := L.n
-       and type r := R.n
+module Sum : sig
+  type (_, _) n
 
-(**The function {!sum} is a value-level analogue of the functor {!Sum}. *)
-val sum : 'l cardinal -> 'r cardinal ->
-  (module SUM with type l = 'l and type r = 'r)
+  val cardinal : 'l cardinal -> 'r cardinal -> ('l, 'r) n cardinal
+  val inj_l : 'l index -> ('l, 'r) n index
+  val inj_r : 'l cardinal -> 'r index -> ('l, 'r) n index
+  val prj : 'l cardinal -> ('l, 'r) n index -> ('l index, 'r index) either
 
-module type PROD = sig
-  type l and r
-  include CARDINAL
-  val inj : l index -> r index -> n index
-  val prj : n index -> l index * r index
+  (**The signature {!SUM} extends {!CARDINAL} with an explicit isomorphism between
+     the set [n] and the disjoint sum [l + r]. The functions [inj_l] and [inj_r]
+     convert an index into [l] or an index into [r] into an index into [n].
+     Conversely, the function [prj] converts an index into [r] into either an
+     index into [l] or an index into [r]. *)
+  module type S = sig
+    type l and r
+    type nonrec n = (l, r) n
+    include CARDINAL with type n := n
+    val inj_l : l index -> n index
+    val inj_r : r index -> n index
+    val prj : n index -> (l index, r index) either
+  end
+
+  module Make (L : CARDINAL)(R : CARDINAL) : S with type l := L.n
+                                                and type r := R.n
+
+  (**The function {!sum} is a value-level analogue of the functor {!Sum}. *)
+  val make : 'l cardinal -> 'r cardinal ->
+             (module S with type l = 'l and type r = 'r)
 end
 
-module Prod (L : CARDINAL)(R : CARDINAL) :
-  PROD with type l := L.n
-       and type r := R.n
+module Prod : sig
+  type (_, _) n
 
-val prod : 'l cardinal -> 'r cardinal ->
-  (module PROD with type l = 'l and type r = 'r)
+  val cardinal : 'l cardinal -> 'r cardinal -> ('l, 'r) n cardinal
+  val inj : 'l cardinal -> 'l index -> 'r index -> ('l, 'r) n index
+  val prj : 'l cardinal -> ('l, 'r) n index -> 'l index * 'r index
+
+  module type S = sig
+    type l and r
+    type nonrec n = (l, r) n
+    include CARDINAL with type n := n
+    val inj : l index -> r index -> n index
+    val prj : n index -> l index * r index
+  end
+
+  module Make (L : CARDINAL)(R : CARDINAL) : S with type l := L.n
+                                                and type r := R.n
+
+  val make : 'l cardinal -> 'r cardinal ->
+             (module S with type l = 'l and type r = 'r)
+end
 
 (**The submodule {!Index} allows safely manipulating indices
    into a finite set. *)

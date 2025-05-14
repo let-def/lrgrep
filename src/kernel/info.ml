@@ -96,8 +96,8 @@ module type S = sig
   end
 
   module Symbol : sig
-    include SUM with type l := Terminal.n
-                 and type r := Nonterminal.n
+    include Sum.S with type l := Terminal.n
+                   and type r := Nonterminal.n
 
     type t = n index
     type set = n indexset
@@ -348,7 +348,7 @@ struct
   end
 
   module Symbol = struct
-    include Sum(Terminal)(Nonterminal)
+    include Sum.Make(Terminal)(Nonterminal)
     type t = n index
     type set = n indexset
 
@@ -544,7 +544,7 @@ struct
     let shift = Shift.n
 
     (* Any is the disjoint sum of goto and shift transitions *)
-    module Any = Sum(Goto)(Shift)
+    module Any = Sum.Make(Goto)(Shift)
     type any = Any.n
     let any = Any.n
 
@@ -830,3 +830,5 @@ struct
     let from_lr1 = Vector.get from_lr1
   end
 end
+
+type ('t, 'nt, 'p) t

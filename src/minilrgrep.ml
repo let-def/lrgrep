@@ -950,7 +950,7 @@ module Analyze = struct
     table
 
   module Clause_or_uncovered = struct
-    include Sum(Transl.Clause)(Unit)
+    include Sum.Make(Transl.Clause)(Unit)
     let of_clause = inj_l
     let uncovered = inj_r Unit.element
 

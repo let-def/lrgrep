@@ -366,8 +366,8 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
     in
     begin match List.rev !unknown with
       | [] -> ()
-      | (first, pos) :: rest ->
-        let names = String.concat ", " (first :: List.map fst rest) in
+      | (_, pos) :: _ as unknowns ->
+        let names = String.concat ", " (List.map fst unknowns) in
         let candidates =
           String.concat ", " (List.of_seq (Hashtbl.to_seq_keys Info.Lr1.entrypoints))
         in

@@ -366,22 +366,3 @@ let stopwatch level fmt =
       (fun _ -> prerr_newline ()) stderr fmt
   ) else
     Printf.ifprintf stderr fmt
-
-module LazyFunctor(S : sig module type T val log : string option end)(F:() -> S.T)() =
-  (functor (X: sig module T2 : functor (_ : sig end) -> S.T end) -> X.T2)
-    (struct
-      let thunk = match S.log with
-        | None -> lazy (module F() : S.T)
-        | Some name -> lazy (
-          let result = (module F() : S.T) in
-          stopwatch 1 "Computed %s" name;
-          result
-        )
-
-      module type T1 = functor () -> S.T
-      module type T2 = functor (_ : sig end) -> S.T
-      module Force(): S.T = (val Lazy.force thunk)
-
-      let t2_t1 : (module T1) -> (module T2) = Obj.magic
-      module T2 = (val t2_t1 (module Force : T1))
-    end)

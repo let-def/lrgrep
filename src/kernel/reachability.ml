@@ -269,7 +269,7 @@ struct
   module Classes = struct
 
     (* A node of the graph is either an lr1 state or a goto transition *)
-    module Node = (val sum Lr1.n Transition.goto)
+    module Node = (val Sum.make Lr1.n Transition.goto)
 
     (* Represents the dependency graph of Equation 7-9, to compute the SCCs *)
     module Gr = struct
@@ -464,7 +464,7 @@ struct
     module Inner = Gensym()
     (* The nodes of the trees is the disjoint sum of all transitions
        (the leaves) and the inner nodes. *)
-    include (val sum Transition.any Inner.n)
+    include (val Sum.make Transition.any Inner.n)
 
     let leaf = inj_l
     let inject = inj_r

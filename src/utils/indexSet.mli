@@ -7,7 +7,7 @@ val unsafe_to_indexset : 'a t -> 'b t
 val unsafe_of_intset : IntSet.t -> 'a t
 
 module CoerceSum(X : CARDINAL)(Y : CARDINAL) : sig
-  val coerce : X.n t -> Sum(X)(Y).n t
+  val coerce : X.n t -> (X.n, Y.n) Sum.n t
 end
 
 val init_from_set : 'a cardinal -> ('a index -> bool) -> 'a t
