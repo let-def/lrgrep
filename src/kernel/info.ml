@@ -72,8 +72,22 @@ end
 module type S = sig
   module Grammar : GRAMMAR
 
+  type terminal
+  type nonterminal
+  type symbol = (terminal, nonterminal) Sum.n
+  type production
+  type item
+  type lr0
+  type lr1
+
+  type transition_goto
+  type transition_shift
+  type transition = (transition_goto, transition_shift) Sum.n
+
+  type reduction
+
   module Terminal : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.terminal
+    include GRAMMAR_INDEXED with type raw = Grammar.terminal and type n = terminal
     val to_string : t -> string
     val all : set
     val regular : set
@@ -87,7 +101,7 @@ module type S = sig
   end
 
   module Nonterminal : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.nonterminal
+    include GRAMMAR_INDEXED with type raw = Grammar.nonterminal and type n = nonterminal
     val to_string : t -> string
     val all : set
     val kind : t -> [`REGULAR | `START]
@@ -96,8 +110,9 @@ module type S = sig
   end
 
   module Symbol : sig
-    include Sum.S with type l := Terminal.n
-                   and type r := Nonterminal.n
+    include Sum.S with type l := terminal
+                   and type r := nonterminal
+                   and type n = (terminal, nonterminal) Sum.n
 
     type t = n index
     type set = n indexset
@@ -121,7 +136,7 @@ module type S = sig
   end
 
   module Production : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.production
+    include GRAMMAR_INDEXED with type raw = Grammar.production and type n = production
     val lhs : t -> Nonterminal.t
     val rhs : t -> Symbol.t array
     val length : t -> int
@@ -131,7 +146,7 @@ module type S = sig
 
   (* Explicit representation of LR(0) items *)
   module Item : sig
-    include INDEXED
+    include INDEXED with type n = item
     val make : Production.t -> int -> t
     val prev : t -> t option
     val desc : t -> Production.t * int
@@ -142,7 +157,7 @@ module type S = sig
   end
 
   module Lr0 : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.lr0
+    include GRAMMAR_INDEXED with type raw = Grammar.lr0 and type n = lr0
 
     (* See [Lr1.incoming]. *)
     val incoming : t -> Symbol.t option
@@ -156,7 +171,7 @@ module type S = sig
   end
 
   module Lr1 : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.lr1
+    include GRAMMAR_INDEXED with type raw = Grammar.lr1 and type n = lr1
     val all : set
     val accepting : set
 
@@ -217,7 +232,7 @@ module type S = sig
        - any value of type [goto index] is a member of this set
          (representing a goto transition)
     *)
-    type goto and shift and any
+    type any = transition and goto = transition_goto and shift = transition_shift
 
     (* The set of goto transitions *)
     val goto : goto cardinal
@@ -271,7 +286,7 @@ module type S = sig
   end
 
   module Reduction : sig
-    include INDEXED
+    include INDEXED with type n = reduction
 
     (* A reduction is a triple [(lr1, prod, lookaheads)], meaning that:
        in state [lr1], when looking ahead at a terminal in [lookaheads], the
@@ -829,4 +844,18 @@ struct
     let lookaheads = Vector.get lookaheads
     let from_lr1 = Vector.get from_lr1
   end
+
+  type terminal = Terminal.n
+  type nonterminal = Nonterminal.n
+  type symbol = (terminal, nonterminal) Sum.n
+  type production = Production.n
+  type item = Item.n
+  type lr0 = Lr0.n
+  type lr1 = Lr1.n
+
+  type transition_goto = Transition.goto
+  type transition_shift = Transition.shift
+  type transition = (transition_goto, transition_shift) Sum.n
+
+  type reduction = Reduction.n
 end

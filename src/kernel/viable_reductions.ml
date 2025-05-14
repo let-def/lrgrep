@@ -82,16 +82,16 @@ type ('n, 'term, 'lr1, 'red) t = {
 module type S = sig
   type viable
   type lr1
-  type term
-  type red
-  val viable : (viable, term, lr1, red) t
+  type terminal
+  type reduction
+  val viable : (viable, terminal, lr1, reduction) t
 end
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-let group_reductions (type lr1 red)
-    ((module Info) : (module Info.S with type Lr1.n = lr1 and type Reduction.n = red)) =
+let group_reductions (type lr1 reduction)
+    ((module Info) : (module Info.S with type lr1 = lr1 and type reduction = reduction)) =
   let open Info in
-  let rec group depth : red index list -> red indexset list =
+  let rec group depth : reduction index list -> reduction indexset list =
     function
     | [] -> []
     | red :: rest when depth = Production.length (Reduction.production red) ->
@@ -106,11 +106,13 @@ let group_reductions (type lr1 red)
   Vector.init Lr1.n
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-let make (type term lr1 red)
-    ((module Info) : (module Info.S with type Lr1.n = lr1
-                                     and type Terminal.n = term
-                                     and type Reduction.n = red))
-     : (module S with type lr1 = lr1 and type term = term and type red = red) =
+let make (type terminal lr1 reduction)
+    ((module Info) : (module Info.S with type lr1 = lr1
+                                     and type terminal = terminal
+                                     and type reduction = reduction))
+     : (module S with type lr1 = lr1
+                  and type terminal = terminal
+                  and type reduction = reduction) =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   (* Get the generator for state indices. *)
@@ -240,9 +242,9 @@ let make (type term lr1 red)
   stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal States.n);
   (module struct
     type viable = States.n
-    type lr1 = Lr1.n
-    type term = Terminal.n
-    type red = Reduction.n
+    type nonrec lr1 = lr1
+    type nonrec terminal = terminal
+    type nonrec reduction = reduction
     let viable = {initial; reachable_from; config; transitions}
   end)
 
@@ -254,5 +256,5 @@ let get_stack vr state =
 (* [string_of_stack st] is a string representing the suffix of the stacks
    recognized by when reaching state [st]. *)
 let string_of_stack
-    (type lr1) ((module Info) : (module Info.S with type Lr1.n = lr1)) vr state =
+    (type lr1) ((module Info) : (module Info.S with type lr1 = lr1)) vr state =
   string_concat_map " " Info.Lr1.to_string (get_stack vr state)

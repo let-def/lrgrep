@@ -19,11 +19,11 @@ module type S = sig
 
   module Indices :
   sig
-    val states_of_symbol : Symbol.n index -> Lr1.n indexset
-    val string_of_symbol : symbol -> string
+    val states_of_symbol : Symbol.t -> Lr1.n indexset
+    val string_of_symbol : Syntax.symbol -> string
     val find_linearized_symbol : string -> Symbol.t option
-    val find_symbol : symbol -> Symbol.t option
-    val get_symbol : position -> symbol -> Symbol.t
+    val find_symbol : Syntax.symbol -> Symbol.t option
+    val get_symbol : position -> Syntax.symbol -> Symbol.t
   end
 
   type lr1_trie = {
