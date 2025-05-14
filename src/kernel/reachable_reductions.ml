@@ -52,12 +52,15 @@ let style = "\
 (* Signature of reachable reductions modules *)
 module type S = sig
   module Info : Info.S
-  module Viable: Viable_reductions.S with module Info := Info
-  module Lrc : Lrc.S with module Info := Info
   open Info
 
+  type viable
+  val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+
+  module Lrc : Lrc.S with module Info := Info
+
   include CARDINAL
-  module Source : Sum.S with type l := Viable.n and type r := Lr1.n
+  module Source : Sum.S with type l := viable and type r := Lr1.n
 
   type config = {
     source: Source.n index;
@@ -93,21 +96,29 @@ end
 (* Functor to create an instance of reachable reductions *)
 module Make
     (Info : Info.S)
-    (Viable: Viable_reductions.S with module Info := Info)
+    (Viable: sig
+         open Info
+         type viable
+         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+       end)
     (LRC: Lrc.S with module Info := Info)
     (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
                                    and module Lrc := LRC)
     () : S with module Info := Info
-            and module Viable := Viable
+            and type viable = Viable.viable
             and module Lrc := LRC
 =
 struct
   open Info
+  include Viable
   module Lrc = LRC
 
   include IndexBuffer.Gen.Make()
 
-  module Source = Sum.Make(Viable)(Lr1)
+  module Source = Sum.Make(struct
+                      type n = viable
+                      let n = Vector.length viable.reachable_from
+                    end)(Lr1)
 
   type config = {
     source: Source.n index;
@@ -139,19 +150,19 @@ struct
       Hashtbl.add nodes config index;
       let source_transitions =
         match Source.prj source with
-        | L viable -> Viable.get_transitions viable
-        | R lr1 -> {Viable.inner=[]; outer=Vector.get Viable.initial lr1}
+        | L v -> viable.transitions.:(v)
+        | R lr1 -> {Viable_reductions.inner=[]; outer=viable.initial.:(lr1)}
       in
       let transitions = visit_transitions lrcs source_transitions in
       IndexBuffer.Gen.commit states reservation {config; transitions};
       index
 
   (* Visit transitions from a given configuration *)
-  and visit_transitions lrcs {Viable.inner; outer} =
+  and visit_transitions lrcs {Viable_reductions. inner; outer} =
     let inner =
-      List.fold_left (fun acc {Viable.goto_transitions; _} ->
+      List.fold_left (fun acc {Viable_reductions. goto_transitions; _} ->
           List.fold_left
-            (fun acc {Viable.target; lookahead=_; source=(); reduction} ->
+            (fun acc {Viable_reductions. target; lookahead=_; source=(); reduction} ->
                let state = visit_config lrcs (Source.inj_l target) in
                (state, reduction) :: acc)
             acc goto_transitions
@@ -164,9 +175,9 @@ struct
   (* Visit outer transitions with lookahead restrictions *)
   and visit_outer lrcs = function
     | [] -> []
-    | {Viable.goto_transitions; _} :: rest ->
+    | {Viable_reductions. goto_transitions; _} :: rest ->
       let visit_goto_transition
-          {Viable.target; lookahead=_; source=lr1s; reduction} =
+          {Viable_reductions. target; lookahead=_; source=lr1s; reduction} =
         let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
         let lrcs = indexset_bind lr1s compatible_lrc in
         if IndexSet.is_empty lrcs
@@ -230,8 +241,8 @@ struct
   let reject st =
     let {config; _} = Vector.get states st in
     match Source.prj config.source with
-    | L viable ->
-      let config = Viable.get_config viable in
+    | L v ->
+      let config = viable.config.:(v) in
       IndexSet.inter (Lr1.reject config.top) config.lookahead
     | R lr1 -> IndexSet.inter (Lr1.reject lr1) Terminal.regular
 
@@ -266,16 +277,21 @@ end
 (* Functor to create a covering tree for the Reachable_reductions module *)
 module Covering_tree
     (Info : Info.S)
-    (Viable: Viable_reductions.S with module Info := Info)
+    (Viable: sig
+         open Info
+         type viable
+         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+       end)
     (Lrc: Lrc.S with module Info := Info)
     (Reach : S with module Info := Info
-                and module Viable := Viable
+                and type viable = Viable.viable
                 and module Lrc := Lrc)
     ()
 =
 struct
   open Info
   open Reach
+  open Viable
 
   (* Enumerate the stack suffixes produced by following one or more goto
      transitions as part of a sequence of reductions.*)
@@ -285,7 +301,7 @@ struct
     (* Function to get the LR0 stack from a source *)
     let lr0_stack_of_source source =
       match Source.prj source with
-      | L v -> List.rev_map Lr1.to_lr0 (Viable.get_stack v)
+      | L v -> List.rev_map Lr1.to_lr0 (Viable_reductions.get_stack viable v)
       | R lr1 -> [Lr1.to_lr0 lr1]
 
     let def = get_generator ()
@@ -460,12 +476,16 @@ end
 
 module FailureNFA
     (Info : Info.S)
-    (Viable: Viable_reductions.S with module Info := Info)
+    (Viable: sig
+         open Info
+         type viable
+         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+       end)
     (LRC: Lrc.S with module Info := Info)
     (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
                                    and module Lrc := LRC)
     (Reach : S with module Info := Info
-                and module Viable := Viable
+                and type viable = Viable.viable
                 and module Lrc := LRC)
     ()
   : FAILURE_NFA with type terminal := Info.Terminal.n
@@ -474,6 +494,7 @@ module FailureNFA
 =
 struct
   module Lrc = LRC
+  open Viable
 
   let () =
     if build_with_expensive_assertions then (
@@ -651,7 +672,7 @@ struct
       let desc = Vector.get Reach.states r in
       let source = desc.config.source in
       match Reach.Source.prj source with
-      | L v -> Some (Viable.get_config v).top
+      | L v -> Some viable.config.:(v).top
       | R lr1 -> Some lr1
 
   let goto i =
@@ -662,7 +683,7 @@ struct
       let desc = Vector.get Reach.states r in
       let source = desc.config.source in
       match Reach.Source.prj source with
-      | L v -> Viable.get_stack v
+      | L v -> Viable_reductions.get_stack viable v
       | R _ -> []
 
   let incoming_lrc i =

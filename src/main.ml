@@ -295,7 +295,7 @@ let parser_name =
     (Filename.remove_extension
        (Filename.basename grammar_filename))
 
-module Viable = Kernel.Viable_reductions.Make(Info)()
+module Viable = (val Kernel.Viable_reductions.make (module Info))
 module Regexp = Kernel.Regexp.Make(Info)(Viable)
 module Transl = Kernel.Transl.Make(Regexp)
 module Reachability = Kernel.Reachability.Make(Info)()

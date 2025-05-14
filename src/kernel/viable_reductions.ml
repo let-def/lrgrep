@@ -32,134 +32,92 @@ open Fix.Indexing
 open Utils
 open Misc
 
+(* A goto transition, which includes the target state,
+   the set of lookahead symbols that permitted to follow it,
+   the source state (different for inner/epsilon-reductions, and outer ones),
+   and the reduction to be performed. *)
+type ('a, 'n, 'term, 'red) goto_transition = {
+  target: 'n index;
+  lookahead: 'term indexset;
+  source: 'a;
+  reduction: 'red index;
+}
+
+(* A step in the reduction process, which includes the set of reachable states and a list
+   of goto candidates. *)
+type ('a, 'n, 'term, 'red) reduction_step = {
+  reachable: 'n indexset;
+  goto_transitions: ('a, 'n, 'term, 'red) goto_transition list;
+}
+
+(* Transitions within the same state (inner) and transitions to other states (outer). *)
+type ('n, 'term, 'red) inner_transitions =
+  (unit, 'n, 'term, 'red) reduction_step list
+
+type ('n, 'term, 'lr1, 'red) outer_transitions =
+  ('lr1 indexset, 'n, 'term, 'red) reduction_step list
+
+type ('n, 'term, 'lr1, 'red) transitions = {
+  inner: ('n, 'term, 'red) inner_transitions;
+  outer: ('n, 'term, 'lr1, 'red) outer_transitions;
+}
+
+(* A configuration of a reduction simulation state,
+   including the top of the stack, the rest of the stack,
+   and the lookahead symbols that permitted to reach it. *)
+type ('lr1, 'term) config = {
+  top: 'lr1 index;
+  rest: 'lr1 index list;
+  lookahead: 'term indexset;
+}
+
+type ('n, 'term, 'lr1, 'red) t = {
+  initial: ('lr1, ('n, 'term, 'lr1, 'red) outer_transitions) vector;
+  reachable_from: ('n, 'n indexset) vector;
+  config: ('n, ('lr1, 'term) config) vector;
+
+  transitions: ('n, ('n, 'term, 'lr1, 'red) transitions) vector;
+}
+
 module type S = sig
-  module Info : Info.S
-  open Info
-
-  include CARDINAL
-
-  (* A goto transition, which includes the target state,
-     the set of lookahead symbols that permitted to follow it,
-     the source state (different for inner/epsilon-reductions, and outer ones),
-     and the reduction to be performed. *)
-  type 'a goto_transition = {
-    target: n index;
-    lookahead: Terminal.set;
-    source: 'a;
-    reduction: Reduction.t;
-  }
-
-  (* A step in the reduction process, which includes the set of reachable states and a list
-     of goto candidates. *)
-  type 'a reduction_step = {
-    reachable: n indexset;
-    goto_transitions: 'a goto_transition list;
-  }
-
-  (* Transitions within the same state (inner) and transitions to other states (outer). *)
-  type inner_transitions = unit reduction_step list
-  type outer_transitions = Lr1.set reduction_step list
-  type transitions = {
-    inner: inner_transitions;
-    outer: outer_transitions;
-  }
-
-  (* A configuration of a reduction simulation state,
-     including the top of the stack, the rest of the stack,
-     and the lookahead symbols that permitted to reach it. *)
-  type config = {
-    top: Lr1.t;
-    rest: Lr1.t list;
-    lookahead: Terminal.set;
-  }
-
-  (* The initial set of transitions simulating reductions
-     for each LR(1) state. *)
-  val initial : (Lr1.n, outer_transitions) vector
-
-  (* Retrieve the configuration of a state. *)
-  val get_config : n index -> config
-
-  (* Retrieve the stack of a state. *)
-  val get_stack : n index -> Lr1.t list
-
-  (* Retrieve the transitions of a state. *)
-  val get_transitions : n index -> transitions
-
-  (* Retrieve the states reachable from a state. *)
-  val reachable : n index -> n indexset
-
-  (* [string_of_stack st] is a string representing the suffix of the stacks
-     recognized by when reaching state [st]. *)
-  val string_of_stack : n index -> string
+  type viable
+  type lr1
+  type term
+  type red
+  val viable : (viable, term, lr1, red) t
 end
 
-module Make(Info : Info.S)() : S with module Info := Info =
-struct
-  open Info
+(* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
+let group_reductions (type lr1 red)
+    ((module Info) : (module Info.S with type Lr1.n = lr1 and type Reduction.n = red)) =
+  let open Info in
+  let rec group depth : red index list -> red indexset list =
+    function
+    | [] -> []
+    | red :: rest when depth = Production.length (Reduction.production red) ->
+      begin match group depth rest with
+        | [] -> [IndexSet.singleton red]
+        | reds :: tail ->
+          IndexSet.add red reds :: tail
+      end
+    | otherwise ->
+      IndexSet.empty :: group (depth + 1) otherwise
+  in
+  Vector.init Lr1.n
+    (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-  include IndexBuffer.Gen.Make()
-
-  (* A configuration of a reduction simulation state,
-     including the top of the stack, the rest of the stack,
-     and the lookahead symbols that permitted to reach it. *)
-  type config = {
-    top: Lr1.t;
-    rest: Lr1.t list;
-    lookahead: Terminal.set;
-  }
-
-  (* Representation of a goto transition, which includes the target state,
-     the set of lookahead symbols that permitted to follow it,
-     the source state (different for inner/epsilon-reductions, and outer ones),
-     and the reduction to be performed. *)
-  type 'a goto_transition = {
-    target: n index;
-    lookahead: Terminal.set;
-    source: 'a;
-    reduction: Reduction.t;
-  }
-
-  (* A step in the reduction process, which includes the set of reachable states and a list
-     of goto candidates. *)
-  type 'a reduction_step = {
-    reachable: n indexset;
-    goto_transitions: 'a goto_transition list;
-  }
-
-  (* Transitions that do not consume stack symbols (inner)
-     and transitions that depend on symbols deeper in the stack (outer). *)
-  type inner_transitions = unit reduction_step list
-  type outer_transitions = Lr1.set reduction_step list
-  type transitions = {
-    inner: inner_transitions;
-    outer: outer_transitions;
-  }
-
-  (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-  let reductions =
-    let rec group depth
-      : Reduction.t list -> Reduction.set list =
-      function
-      | [] -> []
-      | red :: rest when depth = Production.length (Reduction.production red) ->
-        begin match group depth rest with
-          | [] -> [IndexSet.singleton red]
-          | reds :: tail ->
-            IndexSet.add red reds :: tail
-          end
-      | otherwise ->
-        IndexSet.empty :: group (depth + 1) otherwise
-    in
-    Vector.init Lr1.n
-      (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
-
+let make (type term lr1 red)
+    ((module Info) : (module Info.S with type Lr1.n = lr1
+                                     and type Terminal.n = term
+                                     and type Reduction.n = red))
+     : (module S with type lr1 = lr1 and type term = term and type red = red) =
+  let open Info in
+  let module States = IndexBuffer.Gen.Make() in
   (* Get the generator for state indices. *)
-  let states = get_generator ()
-
+  let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
-  let nodes = Hashtbl.create 7
-
+  let nodes = Hashtbl.create 7 in
+  let reductions = group_reductions (module Info) in
   (* Create states by visiting configurations and their outgoing transitions. *)
   let rec visit_config config =
     match Hashtbl.find_opt nodes config with
@@ -170,11 +128,9 @@ struct
       Hashtbl.add nodes config index;
       IndexBuffer.Gen.commit states reservation (config, visit_transitions config);
       index
-
   (* Visit all outgoing transitions of a given configuration. *)
   and visit_transitions config =
     visit_inner config (Vector.get reductions config.top)
-
   (* Follow inner transitions for a given configuration and list of reductions. *)
   and visit_inner config = function
     | [] -> ([], [])
@@ -197,7 +153,6 @@ struct
           Some {target; lookahead; source=(); reduction=red}
       in
       (List.filter_map process_goto (IndexSet.elements gotos) :: inner, outer)
-
   (* Follow outer transitions for a given lookahead set,
      set of LR(1) states, and list of reductions. *)
   and visit_outers lookahead lr1_states = function
@@ -205,7 +160,6 @@ struct
     | gotos :: next ->
       let lr1_states = indexset_bind lr1_states Lr1.predecessors in
       visit_outer lookahead lr1_states gotos next
-
   (* Helper function for visiting a single outer transition. *)
   and visit_outer lookahead lr1_states gotos next =
     let next = visit_outers lookahead lr1_states next in
@@ -238,7 +192,7 @@ struct
     in
     let gotos = IndexSet.fold process_goto gotos [] in
     gotos :: next
-
+  in
   (* Compute the initial set of transitions for each LR(1) state. *)
   let initial = Vector.init Lr1.n (fun lr1 ->
       match Vector.get reductions lr1 with
@@ -246,25 +200,21 @@ struct
       | gotos :: next ->
         visit_outer Terminal.regular (IndexSet.singleton lr1) gotos next
     )
-
-  let states = IndexBuffer.Gen.freeze states
-
+  in
+  let states = IndexBuffer.Gen.freeze states in
   (* Compute the set reachable states (closure of successors). *)
-  let reachable =
-    let reachable =
-      let add_target acc step = IndexSet.add step.target acc in
-      let add_targets acc l =
-        List.fold_left (List.fold_left add_target) acc l
-      in
-      Vector.mapi
-        (fun self (_stack, (inner, outer)) ->
-          add_targets (add_targets (IndexSet.singleton self) inner) outer)
-        states
+  let reachable_from =
+    let add_target acc step = IndexSet.add step.target acc in
+    let add_targets acc l =
+      List.fold_left (List.fold_left add_target) acc l
     in
-    close_relation reachable;
-    reachable
-
-  (* Follow all steps of a reduction *)
+    Vector.mapi
+      (fun self (_, (inner, outer)) ->
+         add_targets (add_targets (IndexSet.singleton self) inner) outer)
+      states
+  in
+  close_relation reachable_from;
+  (* Compute reachability for all steps of a reduction *)
   let rec process_steps = function
     | [] -> []
     | step :: steps ->
@@ -276,42 +226,33 @@ struct
       let reachable =
         List.fold_left (fun acc candidate ->
             IndexSet.union acc
-              (Vector.get reachable candidate.target))
+              (Vector.get reachable_from candidate.target))
           acc step
       in
       {reachable; goto_transitions=step} :: steps
-
-  (* Create a reduction step by exploring inner and outer transitions. *)
-  let make_reduction_step (inner, outer) =
+  in
+  let make_reduction_step (_, (inner, outer)) =
     {inner = process_steps inner; outer = process_steps outer}
+  in
+  let initial = Vector.map process_steps initial in
+  let config = Vector.map fst states in
+  let transitions = Vector.map make_reduction_step states in
+  stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal States.n);
+  (module struct
+    type viable = States.n
+    type lr1 = Lr1.n
+    type term = Terminal.n
+    type red = Reduction.n
+    let viable = {initial; reachable_from; config; transitions}
+  end)
 
-  (* Compute the initial set of transitions by processing all reductions applicable to states. *)
-  let initial = Vector.map process_steps initial
 
-  (* Compute the final definitions of states, with stack suffixes and processed transitions. *)
-  let states = Vector.map (fun (stack, steps) -> (stack, make_reduction_step steps)) states
+let get_stack vr state =
+  let {top; rest; _} = vr.config.:(state) in
+  List.rev (top :: rest)
 
-  (* The set of states reachable from a state. *)
-  let reachable = Vector.get reachable
-
-  (* The configuration and transitions of a state. *)
-  let get_def = Vector.get states
-  let get_config st = fst (get_def st)
-  let get_transitions st = snd (get_def st)
-
-  (* The stack suffix of a given state. *)
-  let get_stack st =
-    let config = get_config st in
-    config.top :: config.rest
-
-  (* [string_of_stack st] is a string representing the suffix of the stacks
-     recognized by when reaching state [st]. *)
-  let string_of_stack state =
-    let {top; rest; _} = get_config state in
-    let states = List.rev (top :: rest) in
-    string_concat_map " " Lr1.to_string states
-
-  (* Log the number of nodes in the viable reductions graph. *)
-  let () =
-    stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal n)
-end
+(* [string_of_stack st] is a string representing the suffix of the stacks
+   recognized by when reaching state [st]. *)
+let string_of_stack
+    (type lr1) ((module Info) : (module Info.S with type Lr1.n = lr1)) vr state =
+  string_concat_map " " Info.Lr1.to_string (get_stack vr state)

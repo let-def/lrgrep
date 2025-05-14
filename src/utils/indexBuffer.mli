@@ -22,6 +22,7 @@ module Gen : sig
   val get : ('n, 'a) t -> 'n index -> 'a
   val set : ('n, 'a) t -> 'n index -> 'a -> unit
   val freeze : ('n, 'a) t -> ('n, 'a) vector
+  val freeze_map : ('n, 'a) t -> ('n index -> 'a -> 'b) -> ('n, 'b) vector
 
   module Make () : sig
     type n

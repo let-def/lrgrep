@@ -102,6 +102,9 @@ module Gen = struct
     Array.blit t.values 0 (Vector.as_array vector) 0 (cardinal t.cardinal);
     vector
 
+  let freeze_map t f =
+    Vector.init t.cardinal (fun i -> f i t.values.((i : _ index :> int)))
+
   module Make () = struct
     include Gensym()
 

@@ -830,5 +830,3 @@ struct
     let from_lr1 = Vector.get from_lr1
   end
 end
-
-type ('t, 'nt, 'p) t

@@ -127,11 +127,12 @@ module type S = sig
   module Info : Info.S
   open Info
 
-  module Redgraph : Viable_reductions.S with module Info := Info
+  type viable
+  val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
 
   module RE : RE
     with module Info := Info
-     and type redstate := Redgraph.n
+     and type redstate := viable
 
   module K : sig
     type label = {
@@ -149,7 +150,7 @@ module type S = sig
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
-          transitions: Redgraph.outer_transitions;
+          transitions: (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.outer_transitions;
           next: t;
         }
     val compare : t -> t -> int
@@ -172,17 +173,22 @@ end
 
 module Make
     (Info : Info.S)
-    (Redgraph : Viable_reductions.S with module Info := Info)
+    (Redgraph : sig
+       open Info
+       type viable
+       val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+     end)
   : S with module Info = Info =
 struct
   module Info = Info
-  module Redgraph = Redgraph
+  include Redgraph
+
   open Info
 
 
   (* [RE]: Syntax for regular expression extended with reduction operator *)
   module RE : RE with module Info := Info
-                  and type redstate := Redgraph.n =
+                  and type redstate := viable =
   struct
     type uid = int
 
@@ -191,7 +197,7 @@ struct
       fun () -> incr k; !k
 
     type reduction = {
-      pattern: Redgraph.n indexset;
+      pattern: viable indexset;
       capture: Capture.set;
       usage: Usage.set;
       policy: Syntax.quantifier_kind;
@@ -275,7 +281,7 @@ struct
       | More of RE.t * t
       | Reducing of {
           reduction: RE.reduction;
-          transitions: Redgraph.outer_transitions;
+          transitions: (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.outer_transitions;
           next: t;
         }
 
@@ -289,15 +295,17 @@ struct
           if c <> 0 then c else
             list_compare f xs ys
 
+    open Viable_reductions
+
     let compare_outer_candidate c1 c2 =
-      let c = compare_index c1.Redgraph.target c2.Redgraph.target in
+      let c = compare_index c1.target c2.target in
       if c <> 0 then c else
         let c = IndexSet.compare c1.source c2.source in
         if c <> 0 then c else
           IndexSet.compare c1.lookahead c2.lookahead
 
     let compare_reduction_step r1 r2 =
-      let c = IndexSet.compare r1.Redgraph.reachable r2.Redgraph.reachable in
+      let c = IndexSet.compare r1.reachable r2.reachable in
       if c <> 0 then c else
         list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
 
@@ -321,7 +329,7 @@ struct
         | Reducing _, More _ -> +1
 
     let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
-      {Redgraph. target; lookahead; source; reduction=_}
+      {target; lookahead; source; reduction=_}
       =
       Cmon.record [
         "target"    , cmon_index target;
@@ -347,7 +355,7 @@ struct
           )
 
     let cmon_transitions ~goto_transition trs =
-      Cmon.list_map begin fun {Redgraph. reachable; goto_transitions} ->
+      Cmon.list_map begin fun {reachable; goto_transitions} ->
         Cmon.record [
           "reachable", cmon_set_cardinal reachable;
           "goto_transitions", Cmon.list_map goto_transition goto_transitions;
@@ -398,21 +406,21 @@ struct
       else
         label
 
-    let live_redstep (red : RE.reduction) (step : _ Redgraph.reduction_step) =
+    let live_redstep (red : RE.reduction) (step : _ Viable_reductions.reduction_step) =
       intersecting red.pattern step.reachable
 
-    let live_redstate (red : RE.reduction) (state : Redgraph.n index) =
-      intersecting red.pattern (Redgraph.reachable state)
+    let live_redstate (red : RE.reduction) (state : viable index) =
+      intersecting red.pattern viable.reachable_from.:(state)
 
     let rec reduce_target ~on_outer r target =
       (live_redstate r target &&
        reduce_inner_transitions ~on_outer r
-         (Redgraph.get_transitions target))
+         viable.transitions.:(target))
       || IndexSet.mem target r.pattern
 
-    and reduce_inner_transitions ~on_outer r {Redgraph. inner; outer} =
+    and reduce_inner_transitions ~on_outer r {Viable_reductions. inner; outer} =
       let matched = ref false in
-      let visit_candidate (c : unit Redgraph.goto_transition) =
+      let visit_candidate (c : (unit, _, _, _) Viable_reductions.goto_transition) =
         if reduce_target ~on_outer r c.target then
           matched := true
       in
@@ -454,8 +462,8 @@ struct
          heuristic.
        *)
       let can_succeed_next (red : RE.reduction) = function
-        | (step : Lr1.set Redgraph.reduction_step) :: _ ->
-          List.exists (fun cand -> IndexSet.mem cand.Redgraph.target red.pattern)
+        | (step : (Lr1.set, _, _, _) Viable_reductions.reduction_step) :: _ ->
+          List.exists (fun cand -> IndexSet.mem cand.target red.pattern)
             step.goto_transitions
         | [] -> false
       in
@@ -470,7 +478,7 @@ struct
               | _ -> ()
             end
           | _ -> ()
-        and visit_candidate label (candidate : Lr1.set Redgraph.goto_transition) =
+        and visit_candidate label (candidate : (Lr1.set, _, _ ,_) Viable_reductions.goto_transition) =
           match label_filter label candidate.source with
           | Some label
             when reduce_target reduction candidate.target
@@ -547,7 +555,7 @@ struct
                 next
                 {label with filter = IndexSet.singleton lr1}
                 reduction
-                (Vector.get Redgraph.initial lr1)
+                viable.initial.:(lr1)
             ) label.filter;
           let label =
             label_filter
