@@ -12,19 +12,117 @@ let warn {line; col} fmt =
   Printf.eprintf "Warning line %d, column %d: " line col;
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt
 
-module type S = sig
-  module Regexp : Regexp.S
-  open Regexp
-  open Info
+(* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
+module Indices = struct
+  let string_of_symbol =
+    let buffer = Buffer.create 32 in
+    function
+    | Name s -> s
+    | sym ->
+      Buffer.reset buffer;
+      let rec aux = function
+        | Name s -> Buffer.add_string buffer s
+        | Apply (s, args) ->
+          Buffer.add_string buffer s;
+          Buffer.add_char buffer '(';
+          List.iteri (fun i sym ->
+              if i > 0 then Buffer.add_char buffer ',';
+              aux sym
+            ) args;
+          Buffer.add_char buffer ')'
+      in
+      aux sym;
+      Buffer.contents buffer
 
-  module Indices :
-  sig
-    val states_of_symbol : Symbol.t -> Lr1.n indexset
-    val string_of_symbol : Syntax.symbol -> string
-    val find_linearized_symbol : string -> Symbol.t option
-    val find_symbol : Syntax.symbol -> Symbol.t option
-    val get_symbol : position -> Syntax.symbol -> Symbol.t
-  end
+  type ('symbol, 'item, 'lr1) t = {
+    by_incoming_symbol: ('symbol, 'lr1 indexset) vector;
+    linearized_symbols: (string, 'symbol index) Hashtbl.t;
+    by_items: ('item, 'lr1 indexset) vector;
+  }
+
+  let make (type terminal nonterminal item lr1)
+      ((module Info) : (module Info.S with type terminal = terminal
+                                       and type nonterminal = nonterminal
+                                       and type item = item
+                                       and type lr1 = lr1)) =
+    let open Info in
+    (* linearized_symbols *)
+    let linearized_symbols = Hashtbl.create 7 in
+    let name s = Symbol.name ~mangled:false s in
+    let add_symbol s = Hashtbl.add linearized_symbols (name s) s in
+    Index.iter Symbol.n add_symbol;
+    (* by_incoming_symbol *)
+    let by_incoming_symbol = Vector.make Symbol.n IndexSet.empty in
+    Index.iter Lr1.n (fun lr1 ->
+        match Lr1.incoming lr1 with
+        | None -> ()
+        | Some sym -> by_incoming_symbol.@(sym) <- IndexSet.add lr1
+      );
+    (* prod_by_lhs *)
+    let prod_by_lhs = Vector.make Nonterminal.n IndexSet.empty in
+    Index.rev_iter Production.n
+      (fun prod -> prod_by_lhs.@(Production.lhs prod) <- IndexSet.add prod);
+    (* Closure of nonterminals with epsilon-rules *)
+    let left_rec_nt_reflexive_closure =
+      let table = Vector.make Nonterminal.n IndexSet.empty in
+      let rec close acc nt =
+        if IndexSet.mem nt acc then acc else
+          let acc' = Vector.get table nt in
+          if not (IndexSet.is_empty acc') then
+            IndexSet.union acc acc'
+          else
+            let acc = IndexSet.add nt acc in
+            IndexSet.fold
+              (fun prod acc -> close_rhs (Production.rhs prod) 0 acc)
+              prod_by_lhs.:(nt) acc
+      and close_rhs rhs pos acc =
+        if pos >= Array.length rhs then acc
+        else match Symbol.prj rhs.(pos) with
+          | L _ -> acc
+          | R nt ->
+            let acc = close acc nt in
+            if Nonterminal.nullable nt then
+              close_rhs rhs (pos + 1) acc
+            else
+              acc
+      in
+      fun nt ->
+        let result = Vector.get table nt in
+        if IndexSet.is_empty result then
+          let result = close IndexSet.empty nt in
+          Vector.set table nt result;
+          result
+        else
+          result
+    in
+    (* by_items *)
+    let by_items = Vector.make Item.n IndexSet.empty in
+    Index.rev_iter Lr1.n (fun lr1 ->
+        let register item = by_items.@(item) <- IndexSet.add lr1 in
+        let closure_items nt =
+          IndexSet.iter
+            (fun prod -> register (Item.make prod 0))
+            prod_by_lhs.:(nt)
+        in
+        let kernel_item item =
+          register item;
+          let (prod, pos) = Item.desc item in
+          let rhs = Production.rhs prod in
+          if pos < Array.length rhs then
+            match Symbol.prj rhs.(pos) with
+            | L _ -> ()
+            | R nt ->
+              IndexSet.iter closure_items
+                (left_rec_nt_reflexive_closure nt)
+        in
+        IndexSet.iter kernel_item (Lr1.items lr1)
+      );
+    {by_incoming_symbol; linearized_symbols; by_items}
+end
+
+module type S = sig
+  module Info : Info.S
+  open Info
 
   type lr1_trie = {
     mutable sub : lr1_trie Lr1.map;
@@ -45,7 +143,6 @@ struct
   open Regexp
   open Info
 
-  (* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
 
   module Indices =
   struct
@@ -59,26 +156,6 @@ struct
           | Some sym -> table.@(sym) <- IndexSet.add lr1
         );
       Vector.get table
-
-    let string_of_symbol =
-      let buffer = Buffer.create 32 in
-      function
-      | Name s -> s
-      | sym ->
-        Buffer.reset buffer;
-        let rec aux = function
-          | Name s -> Buffer.add_string buffer s
-          | Apply (s, args) ->
-            Buffer.add_string buffer s;
-            Buffer.add_char buffer '(';
-            List.iteri (fun i sym ->
-                if i > 0 then Buffer.add_char buffer ',';
-                aux sym
-              ) args;
-            Buffer.add_char buffer ')'
-        in
-        aux sym;
-        Buffer.contents buffer
 
     let find_linearized_symbol =
       let table = Hashtbl.create 7 in

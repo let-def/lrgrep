@@ -8,6 +8,8 @@ let is_used t = t.used
 
 let is_unused t = not (is_used t)
 
+let cmon_mark _ = Cmon.constant "<Usage.mark>"
+
 type set =
   | Empty
   | Leaf of mark
@@ -36,3 +38,5 @@ let rec mark_used = function
     j.used <- true;
     mark_used j.s1;
     mark_used j.s2
+
+let cmon_set _ = Cmon.constant "<Usage.set>"

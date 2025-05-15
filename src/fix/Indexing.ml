@@ -65,6 +65,19 @@ let const c : (module CARDINAL) =
   assert (c >= 0);
   (module struct type n = unit let n = Cardinal (lazy c) end)
 
+module F_Const
+    (T : sig module type T end)
+    (H : (T: T.T) -> sig type t end)
+    (F : (T: T.T) -> sig val cardinal : int end) =
+struct
+  type 'a t = unit
+  module App(TT: T.T) = struct
+    type n = H(TT).t t
+    module X = F(TT)
+    let n : n cardinal = Cardinal (lazy (X.cardinal))
+  end
+end
+
 (* [Gensym] produces a set whose cardinal is a priori unknown. A new reference
    stores the current cardinal, which grows when [fresh()] is invoked. [fresh]
    fails if the suspension [n] has been forced. *)

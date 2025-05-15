@@ -58,521 +58,403 @@ end
 
     It also includes functions for creating, comparing, and converting regular
     expressions to a Cmon document. *)
-module type RE = sig
-  module Info : Info.S
-  open Info
-  type redstate
-
-  (** Integers that serves has unique id to identify sub-terms.
-      Thanks to properties of Antimirov's derivatives, no new term is
-      introduced during derivation. All terms are produced during initial
-      parsing. *)
-  type uid = private int
-
-  type reduction = {
-    pattern: redstate indexset;
+module Reductions = struct
+  type 'graph t = {
+    pattern: 'graph indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
   }
 
-  val compare_reduction : reduction -> reduction -> int
+  let compare r1 r2 =
+    if r1 == r2 then 0 else
+      let c = IndexSet.compare r1.pattern r2.pattern in
+      if c <> 0 then c else
+        IndexSet.compare r1.capture r2.capture
 
-  val cmon_reduction : reduction -> Cmon.t
+  let cmon {capture; pattern; usage; policy} =
+    Cmon.record [
+      "capture", cmon_indexset capture;
+      "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
+      "usage", Usage.cmon_set usage;
+      "policy", Syntax.cmon_quantifier_kind policy;
+    ]
+end
 
-  (** A regular expression term with its unique ID, its description and its
-      position. *)
-  type t = {
+module Expr = struct
+  (** Integers that serves has unique id to identify sub-terms.
+      Thanks to properties of Antimirov's derivatives, no new term is
+      introduced during derivation. All terms are produced during initial
+      parsing. *)
+  type uid = int
+
+  let uid =
+    let k = ref 0 in
+    fun () -> incr k; !k
+
+  type ('lr1, 'graph) t = {
     uid : uid;
-    desc : desc;
+    desc : ('lr1, 'graph) desc;
     position : Syntax.position;
   }
 
   (** The different constructors of regular expressions*)
-  and desc =
-    | Set of Lr1.set * Capture.set * Usage.set
+  and ('lr1, 'graph) desc =
+    | Set of 'lr1 indexset * Capture.set * Usage.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
-    | Alt of t list
+    | Alt of ('lr1, 'graph) t list
     (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
         [Alt []] represents the empty language. *)
-    | Seq of t list
+    | Seq of ('lr1, 'graph) t list
     (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
         [Seq []] represents the {ε}. *)
-    | Star of t * Syntax.quantifier_kind
+    | Star of ('lr1, 'graph) t * Syntax.quantifier_kind
     (** [Star t] is represents the Kleene star of [t] *)
-    | Filter of Lr1.set
-    | Reduce of Capture.set * reduction
+    | Filter of 'lr1 indexset
+    | Reduce of Capture.set * 'graph Reductions.t
     (** The reduction operator *)
 
-  val empty : t
+  (** A regular expression term with its unique ID, its description and its
+      position. *)
+  let empty = {uid = 0; desc = Alt[]; position = Syntax.invalid_position}
 
   (** Introduce a new term, allocating a unique ID *)
-  val make : Syntax.position -> desc -> t
+  let make position desc =
+    {uid = uid (); desc; position}
 
   (** Compare two terms *)
-  val compare : t -> t -> int
+  let compare t1 t2 =
+    Int.compare t1.uid t2.uid
 
-  (** Print a term to a [Cmon] document. [var] arguments allow to customize
-      printing of variables. *)
-  val cmon : t -> Cmon.t
+  let cmon t =
+    let rec aux t =
+      match t.desc with
+      | Set (lr1s, var, usage) ->
+        Cmon.construct "Set" [
+          cmon_set_cardinal lr1s;
+          cmon_indexset var;
+          Usage.cmon_set usage;
+        ]
+      | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
+      | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
+      | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
+      | Filter lr1s ->
+        Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
+      | Reduce (var, r) ->
+        Cmon.construct "Reduce" [cmon_indexset var; Reductions.cmon r]
+    in
+    aux t
 end
 
-(** The S module type defines the signature of the internal regex language,
-    which includes [Redgraph] for representing reductions, and [RE] for the
-    surface language, and [K] module for representing intermediate continuations
-    during derivation.
-*)
-module type S = sig
-  module Info : Info.S
-  open Info
+module Label = struct
+  type 'lr1 t = {
+    filter: 'lr1 indexset;
+    captures: Capture.set;
+    usage: Usage.set;
+  }
 
-  type viable
-  val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
+  (*let is_immediate {filter; captures; usage=_} =
+    IndexSet.equal filter Lr1.all &&
+    IndexSet.is_empty captures *)
 
-  module RE : RE
-    with module Info := Info
-     and type redstate := viable
+  let compare l1 l2 =
+    if l1 == l2 then 0 else
+      let c = IndexSet.compare l1.filter l2.filter in
+      if c <> 0 then c else
+        IndexSet.compare l1.captures l2.captures
 
-  module K : sig
-    type label = {
-      filter: Lr1.set;
-      captures: Capture.set;
-      usage: Usage.set;
-    }
+  let filter label filter =
+    let filter = IndexSet.inter label.filter filter in
+    if IndexSet.is_empty filter then
+      None
+    else
+      Some {label with filter}
 
-    val is_immediate_label : label -> bool
+  let union l1 l2 = {
+    filter = IndexSet.union l1.filter l2.filter;
+    captures = IndexSet.union l1.captures l2.captures;
+    usage = Usage.join l1.usage l2.usage;
+  }
 
-    val compare_label : label -> label -> int
-
-    type t =
-      | Done
-      | More of RE.t * t
-      | Reducing of {
-          reduction: RE.reduction;
-          transitions: (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.outer_transitions;
-          next: t;
-        }
-    val compare : t -> t -> int
-    val cmon : t -> Cmon.t
-
-    (* TODO
-       There is no way to detect immediate match (empty (sub-)regex leading
-       immediately to Done).
-       The case is handled by looking for [(empty_label, Done)] in the result
-       list, where [empty_label] is a label capturing and filtering nothing
-       (vars and ordering are empty, filter = Lr1.all).
-
-       However, this does not allow to distinguish between the regular
-       expressions ϵ and _ which will both lead to "Done" while matching no
-       transitions.
-    *)
-    val derive : Lr1.set -> t -> (label * t option) list
-  end
+  let capture label vars usage =
+    if IndexSet.is_empty vars && Usage.is_empty usage then
+      label
+    else
+      {label with captures = IndexSet.union label.captures vars;
+                  usage = Usage.join label.usage usage}
 end
 
-module Make
-    (Info : Info.S)
-    (Redgraph : sig
-       open Info
-       type viable
-       val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
-     end)
-  : S with module Info = Info =
-struct
-  module Info = Info
-  include Redgraph
+open Viable_reductions
 
-  open Info
+module K = struct
 
+  type ('terminal, 'lr1, 'reduction, 'viable) t =
+    | Done
+    | More of ('lr1, 'viable) Expr.t * ('terminal, 'lr1, 'reduction, 'viable) t
+    | Reducing of {
+        reduction: 'viable Reductions.t;
+        transitions: ('viable, 'terminal, 'lr1, 'reduction) Viable_reductions.outer_transitions;
+        next: ('terminal, 'lr1, 'reduction, 'viable) t;
+      }
 
-  (* [RE]: Syntax for regular expression extended with reduction operator *)
-  module RE : RE with module Info := Info
-                  and type redstate := viable =
-  struct
-    type uid = int
-
-    let uid =
-      let k = ref 0 in
-      fun () -> incr k; !k
-
-    type reduction = {
-      pattern: viable indexset;
-      capture: Capture.set;
-      usage: Usage.set;
-      policy: Syntax.quantifier_kind;
-    }
-
-    let compare_reduction r1 r2 =
-      if r1 == r2 then 0 else
-        let c = IndexSet.compare r1.pattern r2.pattern in
+  let rec list_compare f xxs yys =
+    if xxs == yys then 0 else
+      match xxs, yys with
+      | [], _  -> -1
+      | _ , [] -> +1
+      | (x :: xs), (y :: ys) ->
+        let c = f x y in
         if c <> 0 then c else
-          IndexSet.compare r1.capture r2.capture
+          list_compare f xs ys
 
-    type t = {
-      uid : uid;
-      desc : desc;
-      position : Syntax.position;
-    }
-    and desc =
-      | Set of Lr1.set * Capture.set * Usage.set
-      | Alt of t list
-      | Seq of t list
-      | Star of t * Syntax.quantifier_kind
-      | Filter of Lr1.set
-      | Reduce of Capture.set * reduction
-
-    let make position desc = {uid = uid (); desc; position}
-
-    let empty = make Syntax.invalid_position (Alt [])
-
-    let compare t1 t2 =
-      Int.compare t1.uid t2.uid
-
-    let cmon_usage_set _ = Cmon.constant "<Usage.set>"
-
-    let cmon_reduction {capture; pattern; usage; policy} =
-      Cmon.record [
-        "capture", cmon_indexset capture;
-        "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
-        "usage", cmon_usage_set usage;
-        "policy", Syntax.cmon_quantifier_kind policy;
-      ]
-
-    let cmon t =
-      let rec aux t =
-        match t.desc with
-        | Set (lr1s, var, usage) ->
-          Cmon.construct "Set" [
-            cmon_set_cardinal lr1s;
-            cmon_indexset var;
-            cmon_usage_set usage;
-          ]
-        | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
-        | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
-        | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
-        | Filter lr1s ->
-          Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-        | Reduce (var, r) ->
-          Cmon.construct "Reduce" [cmon_indexset var; cmon_reduction r]
-      in
-      aux t
-  end
-
-  module K = struct
-    type label = {
-      filter: Lr1.set;
-      captures: Capture.set;
-      usage: Usage.set;
-    }
-
-    let is_immediate_label {filter; captures; usage=_} =
-      IndexSet.equal filter Lr1.all &&
-      IndexSet.is_empty captures
-
-    let compare_label l1 l2 =
-      if l1 == l2 then 0 else
-        let c = IndexSet.compare l1.filter l2.filter in
-        if c <> 0 then c else
-          IndexSet.compare l1.captures l2.captures
-
-    type t =
-      | Done
-      | More of RE.t * t
-      | Reducing of {
-          reduction: RE.reduction;
-          transitions: (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.outer_transitions;
-          next: t;
-        }
-
-    let rec list_compare f xxs yys =
-      if xxs == yys then 0 else
-        match xxs, yys with
-        | [], _  -> -1
-        | _ , [] -> +1
-        | (x :: xs), (y :: ys) ->
-          let c = f x y in
-          if c <> 0 then c else
-            list_compare f xs ys
-
-    open Viable_reductions
-
-    let compare_outer_candidate c1 c2 =
-      let c = compare_index c1.target c2.target in
+  let compare_outer_candidate c1 c2 =
+    let c = compare_index c1.target c2.target in
+    if c <> 0 then c else
+      let c = IndexSet.compare c1.source c2.source in
       if c <> 0 then c else
-        let c = IndexSet.compare c1.source c2.source in
+        IndexSet.compare c1.lookahead c2.lookahead
+
+  let compare_reduction_step r1 r2 =
+    let c = IndexSet.compare r1.reachable r2.reachable in
+    if c <> 0 then c else
+      list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
+
+  let rec compare t1 t2 =
+    if t1 == t2 then 0 else
+      match t1, t2 with
+      | Done, Done -> 0
+      | More (e1, t1'), More (e2, t2') ->
+        let c = Expr.compare e1 e2 in
         if c <> 0 then c else
-          IndexSet.compare c1.lookahead c2.lookahead
-
-    let compare_reduction_step r1 r2 =
-      let c = IndexSet.compare r1.reachable r2.reachable in
-      if c <> 0 then c else
-        list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
-
-    let rec compare t1 t2 =
-      if t1 == t2 then 0 else
-        match t1, t2 with
-        | Done, Done -> 0
-        | More (e1, t1'), More (e2, t2') ->
-          let c = RE.compare e1 e2 in
+          compare t1' t2'
+      | Reducing r1, Reducing r2 ->
+        let c = Reductions.compare r1.reduction r2.reduction in
+        if c <> 0 then c else
+          let c = list_compare compare_reduction_step r1.transitions r2.transitions in
           if c <> 0 then c else
-            compare t1' t2'
-        | Reducing r1, Reducing r2 ->
-          let c = RE.compare_reduction r1.reduction r2.reduction in
-          if c <> 0 then c else
-            let c = list_compare compare_reduction_step r1.transitions r2.transitions in
-            if c <> 0 then c else
-              compare r1.next r2.next
-        | Done, (More _ | Reducing _) -> -1
-        | (More _ | Reducing _), Done -> +1
-        | More _, Reducing _ -> -1
-        | Reducing _, More _ -> +1
+            compare r1.next r2.next
+      | Done, (More _ | Reducing _) -> -1
+      | (More _ | Reducing _), Done -> +1
+      | More _, Reducing _ -> -1
+      | Reducing _, More _ -> +1
 
-    let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
+  let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
       {target; lookahead; source; reduction=_}
-      =
+    =
+    Cmon.record [
+      "target"    , cmon_index target;
+      "lookahead" , (
+        match lookahead' with
+        | None -> cmon_set_cardinal lookahead
+        | Some lookahead' ->
+          Cmon.constant (
+            Printf.sprintf "{%d elements} (%d matching current reduction)"
+              (IndexSet.cardinal lookahead)
+              (IndexSet.cardinal (IndexSet.inter lookahead lookahead'))
+          )
+      );
+      "source"    , cmon_source source;
+    ]
+
+  let cmon_outer_goto_transition ?(lr1=string_of_index) ?lookahead c =
+    cmon_goto_transition ?lookahead c
+      ~source:(fun source ->
+          if IndexSet.cardinal source >= 10 then cmon_set_cardinal source else
+            cmon_indexset source
+              ~index:(fun ilr1 -> Cmon.constant (lr1 ilr1));
+        )
+
+  let cmon_transitions ~goto_transition trs =
+    Cmon.list_map begin fun {reachable; goto_transitions} ->
       Cmon.record [
-        "target"    , cmon_index target;
-        "lookahead" , (
-          match lookahead' with
-          | None -> cmon_set_cardinal lookahead
-          | Some lookahead' ->
-            Cmon.constant (
-              Printf.sprintf "{%d elements} (%d matching current reduction)"
-                (IndexSet.cardinal lookahead)
-                (IndexSet.cardinal (IndexSet.inter lookahead lookahead'))
-            )
-        );
-        "source"    , cmon_source source;
+        "reachable", cmon_set_cardinal reachable;
+        "goto_transitions", Cmon.list_map goto_transition goto_transitions;
+      ]
+    end trs
+
+  let rec cmon ?lr1 = function
+    | Done ->
+      Cmon.constant "Done"
+    | More (re, next) ->
+      Cmon.construct "More" [Expr.cmon re; cmon next]
+    | Reducing {reduction; transitions; next} ->
+      let goto_transition = cmon_outer_goto_transition ?lr1 in
+      Cmon.crecord "Reducing" [
+        "reduction"   , Reductions.cmon reduction;
+        "transitions" , cmon_transitions ~goto_transition transitions;
+        "next"        , cmon next;
       ]
 
-    let cmon_outer_goto_transition ?lookahead c =
-      cmon_goto_transition ?lookahead c
-        ~source:(fun source ->
-            if IndexSet.cardinal source >= 10 then cmon_set_cardinal source else
-              cmon_indexset source
-                ~index:(fun lr1 -> Cmon.constant (Lr1.to_string lr1));
-          )
+  let intersecting s1 s2 =
+    not (IndexSet.disjoint s1 s2)
 
-    let cmon_transitions ~goto_transition trs =
-      Cmon.list_map begin fun {reachable; goto_transitions} ->
-        Cmon.record [
-          "reachable", cmon_set_cardinal reachable;
-          "goto_transitions", Cmon.list_map goto_transition goto_transitions;
-        ]
-      end trs
+  let live_redstep (red : _ Reductions.t) (step : _ Viable_reductions.reduction_step) =
+    intersecting red.pattern step.reachable
 
-    (*let cmon_all_transitions {Redgraph. inner; outer} =
-      Cmon.record [
-        "inner", cmon_transitions ~candidate:(cmon_candidate ~filter:(fun () -> Cmon.unit)) inner;
-        "outer", cmon_transitions ~candidate:cmon_outer_candidate outer;
-      ]*)
+  let live_redstate viable (red : _ Reductions.t) (state : _ index) =
+    intersecting red.pattern viable.reachable_from.:(state)
 
-    let rec cmon = function
-      | Done ->
-        Cmon.constant "Done"
-      | More (re, next) ->
-        Cmon.construct "More" [RE.cmon re; cmon next]
-      | Reducing {reduction; transitions; next} ->
-        Cmon.crecord "Reducing" [
-          "reduction"   , RE.cmon_reduction reduction;
-          "transitions" , cmon_transitions ~goto_transition:cmon_outer_goto_transition transitions;
-          "next"        , cmon next;
-        ]
+  let rec reduce_target viable ~on_outer r target =
+    (live_redstate viable r target &&
+     reduce_inner_transitions viable ~on_outer r
+       viable.transitions.:(target))
+    || IndexSet.mem target r.pattern
 
-    let not_empty s1 =
-      not (IndexSet.is_empty s1)
+  and reduce_inner_transitions viable ~on_outer r {Viable_reductions. inner; outer} =
+    let matched = ref false in
+    let visit_candidate (c : (unit, _, _, _) Viable_reductions.goto_transition) =
+      if reduce_target viable ~on_outer r c.target then
+        matched := true
+    in
+    let rec loop = function
+      | step :: xs when live_redstep r step ->
+        List.iter visit_candidate step.goto_transitions;
+        loop xs
+      | _ -> ()
+    in
+    loop inner;
+    if outer <> [] then
+      on_outer outer;
+    !matched
 
-    let intersecting s1 s2 =
-      not (IndexSet.disjoint s1 s2)
+  let derive viable filter k =
+    let accept r label = match !r with
+      | (label', None) :: r' ->
+        r := (Label.union label' label, None) :: r'
+      | r' ->
+        r := (label, None) :: r'
+    in
+    let continue r label next = match !r with
+      | (label', (Some next' as k)) :: r' when next' == next ->
+        r := (Label.union label' label, k) :: r'
+      | r' ->
+        r := (label, Some next) :: r'
+    in
+    (* FIXME:
+       "can_succeed_next" is a workaround for a limitation of dataflow analysis.
+       It is used to place capture the end location of a reduction if is
+       likely to succeed at the next transition.
+       It is correct to always capture the location, however the dataflow
+       analysis does a bad job (!) of eliminating useless captures, which
+       lead to a bigger than necessary automaton. can_succeed_next is used as
+       a heuristic to not place unnecessary captures.
 
-    let label_filter label filter =
-      let filter = Lr1.intersect label.filter filter in
-      if not_empty filter then
-        Some {label with filter}
-      else
-        None
-
-    let label_union l1 l2 = {
-      filter = IndexSet.union l1.filter l2.filter;
-      captures = IndexSet.union l1.captures l2.captures;
-      usage = Usage.join l1.usage l2.usage;
-    }
-
-    let label_capture label vars usage =
-      if not_empty vars || not (Usage.is_empty usage) then
-        {label with captures = IndexSet.union label.captures vars;
-                    usage = Usage.join label.usage usage}
-      else
-        label
-
-    let live_redstep (red : RE.reduction) (step : _ Viable_reductions.reduction_step) =
-      intersecting red.pattern step.reachable
-
-    let live_redstate (red : RE.reduction) (state : viable index) =
-      intersecting red.pattern viable.reachable_from.:(state)
-
-    let rec reduce_target ~on_outer r target =
-      (live_redstate r target &&
-       reduce_inner_transitions ~on_outer r
-         viable.transitions.:(target))
-      || IndexSet.mem target r.pattern
-
-    and reduce_inner_transitions ~on_outer r {Viable_reductions. inner; outer} =
-      let matched = ref false in
-      let visit_candidate (c : (unit, _, _, _) Viable_reductions.goto_transition) =
-        if reduce_target ~on_outer r c.target then
-          matched := true
-      in
-      let rec loop = function
-        | step :: xs when live_redstep r step ->
-          List.iter visit_candidate step.goto_transitions;
-          loop xs
+       The proper solution is to improve the dataflow analysis, which will
+       lead to smaller automata in general and allows us to get rid of this
+       heuristic.
+    *)
+    let can_succeed_next (red : _ Reductions.t) = function
+      | (step : (_, _, _, _) Viable_reductions.reduction_step) :: _ ->
+        List.exists (fun cand -> IndexSet.mem cand.target red.pattern)
+          step.goto_transitions
+      | [] -> false
+    in
+    let reduce_outer matching ks next label reduction transitions =
+      let rec visit_transitions label reduction = function
+        | step :: transitions when live_redstep reduction step ->
+          List.iter (visit_candidate label) step.goto_transitions;
+          begin match transitions with
+            | step' :: _ when live_redstep reduction step' ->
+              let reducing = Reducing {reduction; transitions; next} in
+              push ks (label, Some reducing)
+            | _ -> ()
+          end
+        | _ -> ()
+      and visit_candidate label (candidate : (_, _, _ ,_) Viable_reductions.goto_transition) =
+        match Label.filter label candidate.source with
+        | Some label
+          when reduce_target viable reduction candidate.target
+              ~on_outer:(visit_transitions label reduction) ->
+          matching := IndexSet.union label.filter !matching
         | _ -> ()
       in
-      loop inner;
-      if outer <> [] then
-        on_outer outer;
-      !matched
+      visit_transitions
+        (if can_succeed_next reduction transitions
+         then Label.capture label reduction.capture Usage.empty
+         else label)
+        reduction transitions
+    in
+    let ks = ref [] in
+    let rec process_k label = function
+      | Done ->
+        accept ks label
 
-    let derive filter k =
-      let accept r label = match !r with
-        | (label', None) :: r' ->
-          r := (label_union label' label, None) :: r'
-        | r' ->
-          r := (label, None) :: r'
-      in
-      let continue r label next = match !r with
-        | (label', (Some next' as k)) :: r'  when next' == next ->
-          r := (label_union label' label, k) :: r'
-        | r' ->
-          r := (label, Some next) :: r'
-      in
-      (* FIXME:
-         "can_succeed_next" is a workaround for a limitation of dataflow analysis.
-         It is used to place capture the end location of a reduction if is
-         likely to succeed at the next transition.
-         It is correct to always capture the location, however the dataflow
-         analysis does a bad job (!) of eliminating useless captures, which
-         lead to a bigger than necessary automaton. can_succeed_next is used as
-         a heuristic to not place unnecessary captures.
+      | More (re, next) as self ->
+        process_re label self next re.desc
 
-         The proper solution is to improve the dataflow analysis, which will
-         lead to smaller automata in general and allows us to get rid of this
-         heuristic.
-       *)
-      let can_succeed_next (red : RE.reduction) = function
-        | (step : (Lr1.set, _, _, _) Viable_reductions.reduction_step) :: _ ->
-          List.exists (fun cand -> IndexSet.mem cand.target red.pattern)
-            step.goto_transitions
-        | [] -> false
-      in
-      let reduce_outer matching ks next label reduction transitions =
-        let rec visit_transitions label reduction = function
-          | step :: transitions when live_redstep reduction step ->
-            List.iter (visit_candidate label) step.goto_transitions;
-            begin match transitions with
-              | step' :: _ when live_redstep reduction step' ->
-                let reducing = Reducing {reduction; transitions; next} in
-                push ks (label, Some reducing)
-              | _ -> ()
-            end
-          | _ -> ()
-        and visit_candidate label (candidate : (Lr1.set, _, _ ,_) Viable_reductions.goto_transition) =
-          match label_filter label candidate.source with
-          | Some label
-            when reduce_target reduction candidate.target
-                ~on_outer:(visit_transitions label reduction) ->
-            matching := IndexSet.union label.filter !matching
-          | _ -> ()
+      | Reducing {reduction; transitions; next} ->
+        let l' = ref IndexSet.empty in
+        let ks' = ref [] in
+        reduce_outer l' ks' next label reduction transitions;
+        match Label.filter label !l', reduction.policy with
+        | None, _ ->
+          ks := !ks' @ !ks
+        | Some label, Longest ->
+          ks := !ks' @ !ks;
+          process_k (Label.capture label IndexSet.empty reduction.usage) next
+        | Some label, Shortest ->
+          process_k (Label.capture label IndexSet.empty reduction.usage) next;
+          ks := !ks' @ !ks
+
+    and process_re label self next = function
+      | Set (s, var, usage) ->
+        begin match Label.filter label s with
+          | None -> ()
+          | Some label ->
+            continue ks (Label.capture label var usage) next
+        end
+
+      | Alt es ->
+        List.iter (fun e -> process_k label (More (e, next))) es
+
+      | Star (r, Shortest) ->
+        process_k label next;
+        process_k label (More (r, self))
+
+      | Star (r, Longest) ->
+        process_k label (More (r, self));
+        process_k label next
+
+      | Seq es ->
+        process_k label (List.fold_right (fun e k -> More (e, k)) es next)
+
+      | Filter filter ->
+        begin match Label.filter label filter with
+          | None -> ()
+          | Some label' -> process_k label' next
+        end
+
+      | Reduce (cap, reduction) ->
+        let label =
+          Label.capture label
+            (IndexSet.union cap reduction.capture)
+            Usage.empty
         in
-        visit_transitions
-          (if can_succeed_next reduction transitions
-           then label_capture label reduction.capture Usage.empty
-           else label)
-          reduction transitions
-      in
-      let ks = ref [] in
-      let rec process_k label = function
-        | Done ->
-          accept ks label
-
-        | More (re, next) as self ->
-          process_re label self next re.desc
-
-        | Reducing {reduction; transitions; next} ->
-          let l' = ref IndexSet.empty in
-          let ks' = ref [] in
-          reduce_outer l' ks' next label reduction transitions;
-          match label_filter label !l', reduction.policy with
-          | None, _ ->
-            ks := !ks' @ !ks
-          | Some label, Longest ->
+        let ks' = ref [] in
+        let matching = ref IndexSet.empty in
+        IndexSet.iter (fun lr1 ->
+            reduce_outer matching ks'
+              next
+              {label with filter = IndexSet.singleton lr1}
+              reduction
+              viable.initial.:(lr1)
+          ) label.filter;
+        let label =
+          Label.filter
+            (Label.capture label IndexSet.empty reduction.usage)
+            !matching
+        in
+        begin match reduction.policy with
+          | Shortest ->
+            Option.iter (fun label -> process_k label next) label;
             ks := !ks' @ !ks;
-            process_k (label_capture label IndexSet.empty reduction.usage) next
-          | Some label, Shortest ->
-            process_k (label_capture label IndexSet.empty reduction.usage) next;
-            ks := !ks' @ !ks
-
-      and process_re label self next = function
-        | Set (s, var, usage) ->
-          begin match label_filter label s with
-            | None -> ()
-            | Some label ->
-              continue ks (label_capture label var usage) next
-          end
-
-        | Alt es ->
-          List.iter (fun e -> process_k label (More (e, next))) es
-
-        | Star (r, Shortest) ->
-          process_k label next;
-          process_k label (More (r, self))
-
-        | Star (r, Longest) ->
-          process_k label (More (r, self));
-          process_k label next
-
-        | Seq es ->
-          process_k label (List.fold_right (fun e k -> More (e, k)) es next)
-
-        | Filter filter ->
-          begin match label_filter label filter with
-            | None -> ()
-            | Some label' -> process_k label' next
-          end
-
-        | Reduce (cap, reduction) ->
-          let label =
-            label_capture label
-              (IndexSet.union cap reduction.capture)
-              Usage.empty
-          in
-          let ks' = ref [] in
-          let matching = ref IndexSet.empty in
-          IndexSet.iter (fun lr1 ->
-              reduce_outer matching ks'
-                next
-                {label with filter = IndexSet.singleton lr1}
-                reduction
-                viable.initial.:(lr1)
-            ) label.filter;
-          let label =
-            label_filter
-              (label_capture label IndexSet.empty reduction.usage)
-              !matching
-          in
-          begin match reduction.policy with
-            | Shortest ->
-              Option.iter (fun label -> process_k label next) label;
-              ks := !ks' @ !ks;
-            | Longest ->
-              ks := !ks' @ !ks;
-              Option.iter (fun label -> process_k label next) label;
-          end
-      in
-      let label = {filter; captures = IndexSet.empty; usage = Usage.empty} in
-      process_k label k;
-      List.rev !ks
-  end
+          | Longest ->
+            ks := !ks' @ !ks;
+            Option.iter (fun label -> process_k label next) label;
+        end
+    in
+    let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
+    process_k label k;
+    List.rev !ks
 end

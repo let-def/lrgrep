@@ -34,6 +34,15 @@ open Fix.Indexing
 
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
+module COUNT = struct
+  module type T = sig
+    val count : int
+    type g
+  end
+end
+
+module Prj(G : COUNT.T) = struct type t = G.g end
+
 (** [INDEXED] represents a finite set, essentially extending
     [Fix.Indexing.CARDINAL] with convenient definitions.
 
@@ -69,25 +78,59 @@ module type GRAMMAR_INDEXED = sig
   val to_g : t -> raw
 end
 
+module Terminal = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Nonterminal = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Production = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Lr0 = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Lr1 = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Item = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Transition_goto = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Transition_shift = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Reduction = F_Const(COUNT)(Prj)
+    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+
+type 'g terminal = 'g Terminal.t
+type 'g nonterminal = 'g Nonterminal.t
+type 'g symbol = ('g terminal, 'g nonterminal) Sum.n
+type 'g production = 'g Production.t
+type 'g item = 'g Item.t
+type 'g lr0 = 'g Lr0.t
+type 'g lr1 = 'g Lr1.t
+type 'g transition_goto = 'g Transition_goto.t
+type 'g transition_shift = 'g Transition_shift.t
+type 'g transition = ('g transition_goto, 'g transition_shift) Sum.n
+type 'g reduction = 'g Reduction.t
+
+module Indexed(C : CARDINAL)(Raw : sig
+    type t
+    val to_int : t -> int
+    val of_int : int -> t
+  end)
+  : GRAMMAR_INDEXED with type n = C.n and type raw = Raw.t =
+struct
+  include C
+  type raw = Raw.t
+  type t = n index
+  type set = n indexset
+  type 'a map = (n, 'a) indexmap
+  let of_g x = Index.of_int n (Raw.to_int x)
+  let to_g x = Raw.of_int (Index.to_int x)
+end
+
 module type S = sig
   module Grammar : GRAMMAR
-
-  type terminal
-  type nonterminal
-  type symbol = (terminal, nonterminal) Sum.n
-  type production
-  type item
-  type lr0
-  type lr1
-
-  type transition_goto
-  type transition_shift
-  type transition = (transition_goto, transition_shift) Sum.n
-
-  type reduction
+  type g
 
   module Terminal : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.terminal and type n = terminal
+    include GRAMMAR_INDEXED with type raw = Grammar.terminal and type n = g terminal
     val to_string : t -> string
     val all : set
     val regular : set
@@ -101,7 +144,7 @@ module type S = sig
   end
 
   module Nonterminal : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.nonterminal and type n = nonterminal
+    include GRAMMAR_INDEXED with type raw = Grammar.nonterminal and type n = g nonterminal
     val to_string : t -> string
     val all : set
     val kind : t -> [`REGULAR | `START]
@@ -110,9 +153,9 @@ module type S = sig
   end
 
   module Symbol : sig
-    include Sum.S with type l := terminal
-                   and type r := nonterminal
-                   and type n = (terminal, nonterminal) Sum.n
+    include Sum.S with type l := g terminal
+                   and type r := g nonterminal
+                   and type n = (g terminal, g nonterminal) Sum.n
 
     type t = n index
     type set = n indexset
@@ -136,7 +179,7 @@ module type S = sig
   end
 
   module Production : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.production and type n = production
+    include GRAMMAR_INDEXED with type raw = Grammar.production and type n = g production
     val lhs : t -> Nonterminal.t
     val rhs : t -> Symbol.t array
     val length : t -> int
@@ -146,7 +189,7 @@ module type S = sig
 
   (* Explicit representation of LR(0) items *)
   module Item : sig
-    include INDEXED with type n = item
+    include INDEXED with type n = g item
     val make : Production.t -> int -> t
     val prev : t -> t option
     val desc : t -> Production.t * int
@@ -157,7 +200,7 @@ module type S = sig
   end
 
   module Lr0 : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.lr0 and type n = lr0
+    include GRAMMAR_INDEXED with type raw = Grammar.lr0 and type n = g lr0
 
     (* See [Lr1.incoming]. *)
     val incoming : t -> Symbol.t option
@@ -171,7 +214,7 @@ module type S = sig
   end
 
   module Lr1 : sig
-    include GRAMMAR_INDEXED with type raw = Grammar.lr1 and type n = lr1
+    include GRAMMAR_INDEXED with type raw = Grammar.lr1 and type n = g lr1
     val all : set
     val accepting : set
 
@@ -232,7 +275,7 @@ module type S = sig
        - any value of type [goto index] is a member of this set
          (representing a goto transition)
     *)
-    type any = transition and goto = transition_goto and shift = transition_shift
+    type any = g transition and goto = g transition_goto and shift = g transition_shift
 
     (* The set of goto transitions *)
     val goto : goto cardinal
@@ -286,7 +329,7 @@ module type S = sig
   end
 
   module Reduction : sig
-    include INDEXED with type n = reduction
+    include INDEXED with type n = g reduction
 
     (* A reduction is a triple [(lr1, prod, lookaheads)], meaning that:
        in state [lr1], when looking ahead at a terminal in [lookaheads], the
@@ -301,40 +344,18 @@ module type S = sig
   end
 end
 
-module Indexed(Raw : sig
-    type t
-    val count : int
-    val to_int : t -> int
-    val of_int : int -> t
-  end)
-  : GRAMMAR_INDEXED with type raw = Raw.t =
-struct
-  include Const(struct let cardinal = Raw.count end)
-  type raw = Raw.t
-  type t = n index
-  type set = n indexset
-  type 'a map = (n, 'a) indexmap
-  let of_g x = Index.of_int n (Raw.to_int x)
-  let to_g x = Raw.of_int (Index.to_int x)
-end
-
-let all n =
-  let i = cardinal n in
-  if i = 0 then
-    IndexSet.empty
-  else
-    let a = Index.of_int n 0 in
-    let b = Index.of_int n (i - 1) in
-    IndexSet.init_interval a b
-
 module Make(Grammar : GRAMMAR) : S with module Grammar = Grammar =
 struct
   module Grammar = Grammar
+  type handle
+  type g = handle
 
   module Terminal = struct
-    include Indexed(Grammar.Terminal)
+    include Indexed
+        (Terminal.App(struct type g = handle let count = Grammar.Terminal.count end))
+        (Grammar.Terminal)
     let to_string i = Grammar.Terminal.name (to_g i)
-    let all = all n
+    let all = IndexSet.all n
 
     let regular = IndexSet.init_from_set n (fun t ->
       match Grammar.Terminal.kind (to_g t) with
@@ -352,9 +373,11 @@ struct
   end
 
   module Nonterminal = struct
-    include Indexed(Grammar.Nonterminal)
+    include Indexed
+        (Nonterminal.App(struct type g = handle let count = Grammar.Nonterminal.count end))
+        (Grammar.Nonterminal)
     let to_string i = Grammar.Nonterminal.name (to_g i)
-    let all = all n
+    let all = IndexSet.all n
     let kind i = Grammar.Nonterminal.kind (to_g i)
     let semantic_value i =
       Grammar.Nonterminal.typ (to_g i)
@@ -400,11 +423,13 @@ struct
       | L t -> Some (Option.value (Terminal.semantic_value t) ~default:"unit")
       | R n -> Nonterminal.semantic_value n
 
-    let all = all n
+    let all = IndexSet.all n
   end
 
   module Production = struct
-    include Indexed(Grammar.Production)
+    include Indexed
+        (Production.App(struct type g = handle let count = Grammar.Production.count end))
+        (Grammar.Production)
 
     let lhs p = Nonterminal.of_g (Grammar.Production.lhs (to_g p))
 
@@ -420,7 +445,7 @@ struct
 
     let kind p = Grammar.Production.kind (to_g p)
 
-    let all = all n
+    let all = IndexSet.all n
   end
 
   (* Explicit representation of LR(0) items *)
@@ -434,7 +459,7 @@ struct
           position
         )
 
-    include Const(struct let cardinal = !count end)
+    include Item.App(struct type g = handle let count = !count end)
     type t = n index
     type set = n indexset
     type 'a map = (n, 'a) indexmap
@@ -492,7 +517,9 @@ struct
   end
 
   module Lr0 = struct
-    include Indexed(Grammar.Lr0)
+    include Indexed
+        (Lr0.App(struct type g = handle let count = Grammar.Lr0.count end))
+        (Grammar.Lr0)
 
     let incoming lr0 =
       Option.map Symbol.of_g (Grammar.Lr0.incoming (to_g lr0))
@@ -523,7 +550,9 @@ struct
   (** [Transitions] module, defined below, depends on the set of Lr1 states
       but [Lr1] module depends on [Transitions].
       So [Prelr1] is defined first and is the raw set of Lr1 states. *)
-  module Prelr1 = Indexed(Grammar.Lr1)
+  module Prelr1 = Indexed
+      (Lr1.App(struct type g = handle let count = Grammar.Lr1.count end))
+      (Grammar.Lr1)
 
   (* Transitions are represented as finite sets with auxiliary functions
      to get the predecessors, successors and labels. *)
@@ -549,8 +578,8 @@ struct
       end;
       (!shift_count, !goto_count)
 
-    module Goto = Const(struct let cardinal = goto_count end)
-    module Shift = Const(struct let cardinal = shift_count end)
+    module Goto = Transition_goto.App(struct type g = handle let count = goto_count end)
+    module Shift = Transition_shift.App(struct type g = handle let count = shift_count end)
 
     type goto = Goto.n
     let goto = Goto.n
@@ -685,7 +714,7 @@ struct
 
   module Lr1 = struct
     include Prelr1
-    let all = all n
+    let all = IndexSet.all n
 
     let to_lr0 lr1 = Lr0.of_g (Grammar.Lr1.lr0 (to_g lr1))
 
@@ -818,7 +847,7 @@ struct
       in
       Vector.init Lr1.n import_lr1
 
-    include Const(struct let cardinal = !n end)
+    include Reduction.App(struct type g = handle let count = !n end)
 
     type t = n index
     type set = n indexset

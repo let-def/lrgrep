@@ -70,6 +70,15 @@ end
    set whose cardinal is [c]. [c] must be nonnegative. *)
 module Const (X : sig val cardinal : int end) : CARDINAL
 
+module F_Const
+    (T : sig module type T end)
+    (H : (T: T.T) -> sig type t end)
+    (F : (T: T.T) -> sig val cardinal : int end) :
+sig
+  type 'a t
+  module App(TT: T.T) : CARDINAL with type n = H(TT).t t
+end
+
 (**The function {!const} is a value-level analogue of the functor {!Const}. *)
 val const : int -> (module CARDINAL)
 

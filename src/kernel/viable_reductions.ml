@@ -31,67 +31,61 @@
 open Fix.Indexing
 open Utils
 open Misc
+open Info
 
 (* A goto transition, which includes the target state,
    the set of lookahead symbols that permitted to follow it,
    the source state (different for inner/epsilon-reductions, and outer ones),
    and the reduction to be performed. *)
-type ('a, 'n, 'term, 'red) goto_transition = {
+type ('g, 'n, 'a) goto_transition = {
   target: 'n index;
-  lookahead: 'term indexset;
+  lookahead: 'g terminal indexset;
   source: 'a;
-  reduction: 'red index;
+  reduction: 'g reduction index;
 }
 
 (* A step in the reduction process, which includes the set of reachable states and a list
    of goto candidates. *)
-type ('a, 'n, 'term, 'red) reduction_step = {
+type ('g, 'n, 'a) reduction_step = {
   reachable: 'n indexset;
-  goto_transitions: ('a, 'n, 'term, 'red) goto_transition list;
+  goto_transitions: ('g, 'n, 'a) goto_transition list;
 }
 
 (* Transitions within the same state (inner) and transitions to other states (outer). *)
-type ('n, 'term, 'red) inner_transitions =
-  (unit, 'n, 'term, 'red) reduction_step list
+type ('g, 'n) inner_transitions = ('g, 'n, unit) reduction_step list
+type ('g, 'n) outer_transitions = ('g, 'n, 'g lr1 indexset) reduction_step list
 
-type ('n, 'term, 'lr1, 'red) outer_transitions =
-  ('lr1 indexset, 'n, 'term, 'red) reduction_step list
-
-type ('n, 'term, 'lr1, 'red) transitions = {
-  inner: ('n, 'term, 'red) inner_transitions;
-  outer: ('n, 'term, 'lr1, 'red) outer_transitions;
+type ('g, 'n) transitions = {
+  inner: ('g, 'n) inner_transitions;
+  outer: ('g, 'n) outer_transitions;
 }
 
 (* A configuration of a reduction simulation state,
    including the top of the stack, the rest of the stack,
    and the lookahead symbols that permitted to reach it. *)
-type ('lr1, 'term) config = {
-  top: 'lr1 index;
-  rest: 'lr1 index list;
-  lookahead: 'term indexset;
+type 'g config = {
+  top: 'g lr1 index;
+  rest: 'g lr1 index list;
+  lookahead: 'g terminal indexset;
 }
 
-type ('n, 'term, 'lr1, 'red) t = {
-  initial: ('lr1, ('n, 'term, 'lr1, 'red) outer_transitions) vector;
+type ('g, 'n) t = {
+  initial: ('g lr1, ('g, 'n) outer_transitions) vector;
+  config: ('n, 'g config) vector;
   reachable_from: ('n, 'n indexset) vector;
-  config: ('n, ('lr1, 'term) config) vector;
-
-  transitions: ('n, ('n, 'term, 'lr1, 'red) transitions) vector;
+  transitions: ('n, ('g, 'n) transitions) vector;
 }
 
 module type S = sig
+  type g
   type viable
-  type lr1
-  type terminal
-  type reduction
-  val viable : (viable, terminal, lr1, reduction) t
+  val viable : (g, viable) t
 end
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-let group_reductions (type lr1 reduction)
-    ((module Info) : (module Info.S with type lr1 = lr1 and type reduction = reduction)) =
+let group_reductions (type g) ((module Info) : g Info.t) =
   let open Info in
-  let rec group depth : reduction index list -> reduction indexset list =
+  let rec group depth : g reduction index list -> g reduction indexset list =
     function
     | [] -> []
     | red :: rest when depth = Production.length (Reduction.production red) ->
@@ -106,13 +100,7 @@ let group_reductions (type lr1 reduction)
   Vector.init Lr1.n
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-let make (type terminal lr1 reduction)
-    ((module Info) : (module Info.S with type lr1 = lr1
-                                     and type terminal = terminal
-                                     and type reduction = reduction))
-     : (module S with type lr1 = lr1
-                  and type terminal = terminal
-                  and type reduction = reduction) =
+let make (type g) ((module Info) : g Info.t) : (module S with type g = g) =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   (* Get the generator for state indices. *)
@@ -241,13 +229,10 @@ let make (type terminal lr1 reduction)
   let transitions = Vector.map make_reduction_step states in
   stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal States.n);
   (module struct
+    type nonrec g = g
     type viable = States.n
-    type nonrec lr1 = lr1
-    type nonrec terminal = terminal
-    type nonrec reduction = reduction
     let viable = {initial; reachable_from; config; transitions}
   end)
-
 
 let get_stack vr state =
   let {top; rest; _} = vr.config.:(state) in
@@ -255,6 +240,5 @@ let get_stack vr state =
 
 (* [string_of_stack st] is a string representing the suffix of the stacks
    recognized by when reaching state [st]. *)
-let string_of_stack
-    (type lr1) ((module Info) : (module Info.S with type lr1 = lr1)) vr state =
+let string_of_stack (type g) ((module Info) : g Info.t) vr state =
   string_concat_map " " Info.Lr1.to_string (get_stack vr state)
