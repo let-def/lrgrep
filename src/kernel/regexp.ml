@@ -30,6 +30,7 @@
 open Fix.Indexing
 open Utils
 open Misc
+open Info
 
 (** The Capture module defines types and functions for representing variables
     captured in regular expressions.
@@ -59,8 +60,8 @@ end
     It also includes functions for creating, comparing, and converting regular
     expressions to a Cmon document. *)
 module Reductions = struct
-  type 'graph t = {
-    pattern: 'graph indexset;
+  type 'g t = {
+    pattern: 'g Viable_reductions.viable indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -92,27 +93,27 @@ module Expr = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  type ('lr1, 'graph) t = {
+  type 'g t = {
     uid : uid;
-    desc : ('lr1, 'graph) desc;
+    desc : 'g desc;
     position : Syntax.position;
   }
 
   (** The different constructors of regular expressions*)
-  and ('lr1, 'graph) desc =
-    | Set of 'lr1 indexset * Capture.set * Usage.set
+  and 'g desc =
+    | Set of 'g lr1 indexset * Capture.set * Usage.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
-    | Alt of ('lr1, 'graph) t list
+    | Alt of 'g t list
     (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
         [Alt []] represents the empty language. *)
-    | Seq of ('lr1, 'graph) t list
+    | Seq of 'g t list
     (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
         [Seq []] represents the {ε}. *)
-    | Star of ('lr1, 'graph) t * Syntax.quantifier_kind
+    | Star of 'g t * Syntax.quantifier_kind
     (** [Star t] is represents the Kleene star of [t] *)
-    | Filter of 'lr1 indexset
-    | Reduce of Capture.set * 'graph Reductions.t
+    | Filter of 'g lr1 indexset
+    | Reduce of Capture.set * 'g Reductions.t
     (** The reduction operator *)
 
   (** A regular expression term with its unique ID, its description and its
@@ -148,8 +149,8 @@ module Expr = struct
 end
 
 module Label = struct
-  type 'lr1 t = {
-    filter: 'lr1 indexset;
+  type 'g t = {
+    filter: 'g lr1 indexset;
     captures: Capture.set;
     usage: Usage.set;
   }
@@ -189,13 +190,13 @@ open Viable_reductions
 
 module K = struct
 
-  type ('terminal, 'lr1, 'reduction, 'viable) t =
+  type 'g t =
     | Done
-    | More of ('lr1, 'viable) Expr.t * ('terminal, 'lr1, 'reduction, 'viable) t
+    | More of 'g Expr.t * 'g t
     | Reducing of {
-        reduction: 'viable Reductions.t;
-        transitions: ('viable, 'terminal, 'lr1, 'reduction) Viable_reductions.outer_transitions;
-        next: ('terminal, 'lr1, 'reduction, 'viable) t;
+        reduction: 'g Reductions.t;
+        transitions: 'g Viable_reductions.outer_transitions;
+        next: 'g t;
       }
 
   let rec list_compare f xxs yys =
@@ -303,7 +304,7 @@ module K = struct
 
   and reduce_inner_transitions viable ~on_outer r {Viable_reductions. inner; outer} =
     let matched = ref false in
-    let visit_candidate (c : (unit, _, _, _) Viable_reductions.goto_transition) =
+    let visit_candidate (c : ('g, unit) Viable_reductions.goto_transition) =
       if reduce_target viable ~on_outer r c.target then
         matched := true
     in
@@ -345,7 +346,7 @@ module K = struct
        heuristic.
     *)
     let can_succeed_next (red : _ Reductions.t) = function
-      | (step : (_, _, _, _) Viable_reductions.reduction_step) :: _ ->
+      | (step : _ Viable_reductions.reduction_step) :: _ ->
         List.exists (fun cand -> IndexSet.mem cand.target red.pattern)
           step.goto_transitions
       | [] -> false
@@ -361,7 +362,7 @@ module K = struct
             | _ -> ()
           end
         | _ -> ()
-      and visit_candidate label (candidate : (_, _, _ ,_) Viable_reductions.goto_transition) =
+      and visit_candidate label (candidate : _ Viable_reductions.goto_transition) =
         match Label.filter label candidate.source with
         | Some label
           when reduce_target viable reduction candidate.target

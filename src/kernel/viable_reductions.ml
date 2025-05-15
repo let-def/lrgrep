@@ -33,12 +33,15 @@ open Utils
 open Misc
 open Info
 
+module Viable = Unsafe_cardinal()
+type 'g viable = 'g Viable.t
+
 (* A goto transition, which includes the target state,
    the set of lookahead symbols that permitted to follow it,
    the source state (different for inner/epsilon-reductions, and outer ones),
    and the reduction to be performed. *)
-type ('g, 'n, 'a) goto_transition = {
-  target: 'n index;
+type ('g, 'a) goto_transition = {
+  target: 'g viable index;
   lookahead: 'g terminal indexset;
   source: 'a;
   reduction: 'g reduction index;
@@ -46,18 +49,18 @@ type ('g, 'n, 'a) goto_transition = {
 
 (* A step in the reduction process, which includes the set of reachable states and a list
    of goto candidates. *)
-type ('g, 'n, 'a) reduction_step = {
-  reachable: 'n indexset;
-  goto_transitions: ('g, 'n, 'a) goto_transition list;
+type ('g, 'a) reduction_step = {
+  reachable: 'g viable indexset;
+  goto_transitions: ('g, 'a) goto_transition list;
 }
 
 (* Transitions within the same state (inner) and transitions to other states (outer). *)
-type ('g, 'n) inner_transitions = ('g, 'n, unit) reduction_step list
-type ('g, 'n) outer_transitions = ('g, 'n, 'g lr1 indexset) reduction_step list
+type 'g inner_transitions = ('g, unit) reduction_step list
+type 'g outer_transitions = ('g, 'g lr1 indexset) reduction_step list
 
-type ('g, 'n) transitions = {
-  inner: ('g, 'n) inner_transitions;
-  outer: ('g, 'n) outer_transitions;
+type 'g transitions = {
+  inner: 'g inner_transitions;
+  outer: 'g outer_transitions;
 }
 
 (* A configuration of a reduction simulation state,
@@ -69,18 +72,12 @@ type 'g config = {
   lookahead: 'g terminal indexset;
 }
 
-type ('g, 'n) t = {
-  initial: ('g lr1, ('g, 'n) outer_transitions) vector;
-  config: ('n, 'g config) vector;
-  reachable_from: ('n, 'n indexset) vector;
-  transitions: ('n, ('g, 'n) transitions) vector;
+type 'g t = {
+  initial: ('g lr1, 'g outer_transitions) vector;
+  config: ('g viable, 'g config) vector;
+  reachable_from: ('g viable, 'g viable indexset) vector;
+  transitions: ('g viable, 'g transitions) vector;
 }
-
-module type S = sig
-  type g
-  type viable
-  val viable : (g, viable) t
-end
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
 let group_reductions (type g) ((module Info) : g Info.t) =
@@ -100,9 +97,11 @@ let group_reductions (type g) ((module Info) : g Info.t) =
   Vector.init Lr1.n
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-let make (type g) ((module Info) : g Info.t) : (module S with type g = g) =
+let make (type g) ((module Info) : g Info.t) : g t =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
+  let module VEq = Viable.Eq(struct type t = g include States end) in
+  let Refl : (States.n, g viable) eq = Obj.magic () in
   (* Get the generator for state indices. *)
   let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
@@ -228,11 +227,7 @@ let make (type g) ((module Info) : g Info.t) : (module S with type g = g) =
   let config = Vector.map fst states in
   let transitions = Vector.map make_reduction_step states in
   stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal States.n);
-  (module struct
-    type nonrec g = g
-    type viable = States.n
-    let viable = {initial; reachable_from; config; transitions}
-  end)
+  {initial; reachable_from; config; transitions}
 
 let get_stack vr state =
   let {top; rest; _} = vr.config.:(state) in

@@ -65,16 +65,16 @@ let const c : (module CARDINAL) =
   assert (c >= 0);
   (module struct type n = unit let n = Cardinal (lazy c) end)
 
-module F_Const
-    (T : sig module type T end)
-    (H : (T: T.T) -> sig type t end)
-    (F : (T: T.T) -> sig val cardinal : int end) =
-struct
+module Unsafe_cardinal() = struct
   type 'a t = unit
-  module App(TT: T.T) = struct
-    type n = H(TT).t t
-    module X = F(TT)
-    let n : n cardinal = Cardinal (lazy (X.cardinal))
+  module Const(M : sig type t val cardinal : int end) = struct
+    type n = M.t t
+    let n : n cardinal = Cardinal (lazy (M.cardinal))
+  end
+  module Eq(M : sig type t include CARDINAL end) = struct
+    let eq : (M.t t, M.n) eq =
+      let Cardinal _ = M.n in
+      Refl
   end
 end
 

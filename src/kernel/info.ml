@@ -34,15 +34,6 @@ open Fix.Indexing
 
 module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
-module COUNT = struct
-  module type T = sig
-    val count : int
-    type g
-  end
-end
-
-module Prj(G : COUNT.T) = struct type t = G.g end
-
 (** [INDEXED] represents a finite set, essentially extending
     [Fix.Indexing.CARDINAL] with convenient definitions.
 
@@ -78,24 +69,15 @@ module type GRAMMAR_INDEXED = sig
   val to_g : t -> raw
 end
 
-module Terminal = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Nonterminal = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Production = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Lr0 = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Lr1 = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Item = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Transition_goto = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Transition_shift = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
-module Reduction = F_Const(COUNT)(Prj)
-    (functor (G: COUNT.T) -> struct let cardinal = G.count end)
+module Terminal = Unsafe_cardinal()
+module Nonterminal = Unsafe_cardinal()
+module Production = Unsafe_cardinal()
+module Lr0  = Unsafe_cardinal()
+module Lr1  = Unsafe_cardinal()
+module Item = Unsafe_cardinal()
+module Transition_goto = Unsafe_cardinal()
+module Transition_shift = Unsafe_cardinal()
+module Reduction = Unsafe_cardinal()
 
 type 'g terminal = 'g Terminal.t
 type 'g nonterminal = 'g Nonterminal.t
@@ -347,12 +329,11 @@ end
 module Make(Grammar : GRAMMAR) : S with module Grammar = Grammar =
 struct
   module Grammar = Grammar
-  type handle
-  type g = handle
+  type g
 
   module Terminal = struct
     include Indexed
-        (Terminal.App(struct type g = handle let count = Grammar.Terminal.count end))
+        (Terminal.Const(struct type t = g let cardinal = Grammar.Terminal.count end))
         (Grammar.Terminal)
     let to_string i = Grammar.Terminal.name (to_g i)
     let all = IndexSet.all n
@@ -374,7 +355,7 @@ struct
 
   module Nonterminal = struct
     include Indexed
-        (Nonterminal.App(struct type g = handle let count = Grammar.Nonterminal.count end))
+        (Nonterminal.Const(struct type t = g let cardinal = Grammar.Nonterminal.count end))
         (Grammar.Nonterminal)
     let to_string i = Grammar.Nonterminal.name (to_g i)
     let all = IndexSet.all n
@@ -428,7 +409,7 @@ struct
 
   module Production = struct
     include Indexed
-        (Production.App(struct type g = handle let count = Grammar.Production.count end))
+        (Production.Const(struct type t = g let cardinal = Grammar.Production.count end))
         (Grammar.Production)
 
     let lhs p = Nonterminal.of_g (Grammar.Production.lhs (to_g p))
@@ -459,7 +440,7 @@ struct
           position
         )
 
-    include Item.App(struct type g = handle let count = !count end)
+    include Item.Const(struct type t = g let cardinal = !count end)
     type t = n index
     type set = n indexset
     type 'a map = (n, 'a) indexmap
@@ -518,7 +499,7 @@ struct
 
   module Lr0 = struct
     include Indexed
-        (Lr0.App(struct type g = handle let count = Grammar.Lr0.count end))
+        (Lr0.Const(struct type t = g let cardinal = Grammar.Lr0.count end))
         (Grammar.Lr0)
 
     let incoming lr0 =
@@ -551,7 +532,7 @@ struct
       but [Lr1] module depends on [Transitions].
       So [Prelr1] is defined first and is the raw set of Lr1 states. *)
   module Prelr1 = Indexed
-      (Lr1.App(struct type g = handle let count = Grammar.Lr1.count end))
+      (Lr1.Const(struct type t = g let cardinal = Grammar.Lr1.count end))
       (Grammar.Lr1)
 
   (* Transitions are represented as finite sets with auxiliary functions
@@ -578,8 +559,8 @@ struct
       end;
       (!shift_count, !goto_count)
 
-    module Goto = Transition_goto.App(struct type g = handle let count = goto_count end)
-    module Shift = Transition_shift.App(struct type g = handle let count = shift_count end)
+    module Goto = Transition_goto.Const(struct type t = g let cardinal = goto_count end)
+    module Shift = Transition_shift.Const(struct type t = g let cardinal = shift_count end)
 
     type goto = Goto.n
     let goto = Goto.n
@@ -847,7 +828,7 @@ struct
       in
       Vector.init Lr1.n import_lr1
 
-    include Reduction.App(struct type g = handle let count = !n end)
+    include Reduction.Const(struct type t = g let cardinal = !n end)
 
     type t = n index
     type set = n indexset
@@ -873,18 +854,6 @@ struct
     let lookaheads = Vector.get lookaheads
     let from_lr1 = Vector.get from_lr1
   end
-
-  type terminal = Terminal.n
-  type nonterminal = Nonterminal.n
-  type symbol = (terminal, nonterminal) Sum.n
-  type production = Production.n
-  type item = Item.n
-  type lr0 = Lr0.n
-  type lr1 = Lr1.n
-
-  type transition_goto = Transition.goto
-  type transition_shift = Transition.shift
-  type transition = (transition_goto, transition_shift) Sum.n
-
-  type reduction = Reduction.n
 end
+
+type 'g t = (module S with type g = 'g)

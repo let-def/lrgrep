@@ -36,22 +36,23 @@
 open Utils
 open Misc
 open Fix.Indexing
-open Regexp
 open Lrgrep_support
 
 type priority = int
 
-module Make
-    (Transl : Transl.S)
+module Make (Info : Info.S) (T : sig
+    val viable : Info.g Viable_reductions.t
+    val indices : Info.g Transl.Indices.t
+    val trie : Info.g Transl.Reductum_trie.t
+    end)
     (R : Codegen.RULE) =
 struct
-  open Transl
   open Regexp
   open Info
   open R
 
   module Branch : sig
-    include Codegen.BRANCH with module Info := Info
+    include Codegen.BRANCH with type g := Info.g
 
     type state = {
       index: n index;
@@ -60,7 +61,7 @@ struct
 
     val clause : n index -> Clause.n index
     val pattern : n index -> Syntax.pattern
-    val expr : n index -> Regexp.RE.t
+    val expr : n index -> g Expr.t
     val is_total : n index -> bool
   end =
   struct
@@ -121,7 +122,7 @@ struct
         let sym_pattern (sym, pos) =
           match sym with
           | Syntax.Apply ("first", [sym]) ->
-            begin match Symbol.prj (Transl.Indices.get_symbol pos sym) with
+            begin match Symbol.prj (Transl.Indices.get_symbol T.indices pos sym) with
               | L t ->
                 let t = Terminal.to_string t in
                 failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
@@ -132,7 +133,7 @@ struct
                 |> List.map Terminal.of_g
             end
           | Syntax.Name _ ->
-            begin match Symbol.prj (Transl.Indices.get_symbol pos sym) with
+            begin match Symbol.prj (Transl.Indices.get_symbol T.indices pos sym) with
               | R n ->
                 failwith (lookahead_msg ^ "; " ^
                           Nonterminal.to_string n ^ " is a nonterminal")
@@ -150,7 +151,7 @@ struct
       | Syntax.Partial _ -> false
       | Syntax.Unreachable -> true
 
-    let branch_transl = Vector.make n (IndexSet.empty, Transl.Regexp.RE.empty)
+    let branch_transl = Vector.make n (IndexSet.empty, Expr.empty)
     let captures b = fst branch_transl.:(b)
     let expr b = snd branch_transl.:(b)
 
@@ -176,7 +177,8 @@ struct
             index
         in
         let translate_branch (br : branch index) =
-          branch_transl.:(br) <- Transl.transl ~capture (pattern br).expr
+          branch_transl.:(br) <-
+            Transl.transl (module Info) T.viable T.indices T.trie ~capture (pattern br).expr
         in
         IndexSet.iter translate_branch (of_clauses clause);
         !capture_def
@@ -223,8 +225,8 @@ struct
     module NFA = struct
       type t = {
         uid: int;
-        k: K.t;
-        transitions: (K.label * t lazy_t) list;
+        k: g K.t;
+        transitions: (g Label.t * t lazy_t) list;
         branch: Branch.state;
         mutable mark: unit ref;
       }
@@ -238,7 +240,7 @@ struct
 
       let default_mark = ref ()
 
-      module KMap = Map.Make(Regexp.K)
+      module KMap = Map.Make(struct type t = g Regexp.K.t let compare = Regexp.K.compare end)
 
       let make index =
         let nfa = ref KMap.empty in
@@ -252,19 +254,19 @@ struct
               | [] -> []
               | (label, target) :: rest ->
                 begin match target with
-                  | None when K.is_immediate_label label ->
+                  (*| None when K.is_immediate_label label ->
                     accept := true;
-                    []
+                    []*)
                   | None ->
                     (label, accepting) :: process_transitions rest
                   | Some k' ->
                     (label, lazy (aux k')) :: process_transitions rest
                 end
             in
-            let inj ({K. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
-            let prj filter (usage, captures, t) = ({K. filter; usage; captures}, t) in
+            let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+            let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
             let transitions =
-              K.derive Lr1.all k
+              K.derive T.viable Lr1.all k
               |> process_transitions
               |> List.map inj
               |> IndexRefine.annotated_partition
@@ -337,7 +339,7 @@ struct
             | None ->
               let accept = ref None in
               let rev_transitions =
-                let make i ({K. filter; captures; usage}, t) =
+                let make i ({Label. filter; captures; usage}, t) =
                   (filter, (i, (captures, usage), t))
                 in
                 kernel_fold

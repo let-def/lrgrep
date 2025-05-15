@@ -295,9 +295,12 @@ let parser_name =
     (Filename.remove_extension
        (Filename.basename grammar_filename))
 
-module Viable = (val Kernel.Viable_reductions.make (module Info))
-module Regexp = Kernel.Regexp.Make(Info)(Viable)
-module Transl = Kernel.Transl.Make(Regexp)
+module T = struct
+  let viable = Kernel.Viable_reductions.make (module Info)
+  let indices = Kernel.Transl.Indices.make (module Info)
+  let trie = Kernel.Transl.Reductum_trie.make viable
+end
+
 module Reachability = Kernel.Reachability.Make(Info)()
 module Lrc = Kernel.Lrc.Make(Info)(Reachability)
 
@@ -389,7 +392,7 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
       let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
     end in
     let module Rule = struct let rule = rule end in
-    let module Automata = Kernel.Automata.Make(Transl)(Rule) in
+    let module Automata = Kernel.Automata.Make(Info)(T)(Rule) in
     let module DFA      = Automata.Determinize(Stacks)() in
     let module Dataflow = Automata.Dataflow(DFA) in
     let module Machine  = Automata.Minimize(DFA)(Dataflow) in

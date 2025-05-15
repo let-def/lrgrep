@@ -1,6 +1,7 @@
 open Fix.Indexing
 open Utils
 open Misc
+open Info
 open Regexp
 open Lrgrep_support
 
@@ -47,14 +48,13 @@ module type CLAUSE = sig
 end
 
 module type BRANCH = sig
-  module Info : Info.S
-  open Info
+  type g
 
   include CARDINAL
   module Clause : CLAUSE
 
   val of_clauses : Clause.n index -> n indexset
-  val lookaheads : n index -> Terminal.set option
+  val lookaheads : n index -> g terminal indexset option
   val captures : n index -> Capture.n indexset
 end
 
@@ -100,7 +100,7 @@ sig
 
   module Rule
       (R : RULE)
-      (B : BRANCH with module Info := Info)
+      (B : BRANCH with type g := Info.g)
       (M : MACHINE with module Info := Info and type branch := B.n) :
   sig
     val output : printer
@@ -150,7 +150,7 @@ struct
 
   module Rule
       (R : RULE)
-      (B : BRANCH with module Info := Info)
+      (B : BRANCH with type g := Info.g)
       (M : MACHINE with module Info := Info and type branch := B.n) =
   struct
     open R

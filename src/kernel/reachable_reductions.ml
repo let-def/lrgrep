@@ -54,13 +54,10 @@ module type S = sig
   module Info : Info.S
   open Info
 
-  type viable
-  val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
-
   module Lrc : Lrc.S with module Info := Info
 
   include CARDINAL
-  module Source : Sum.S with type l := viable and type r := Lr1.n
+  module Source : Sum.S with type l := g Viable_reductions.viable and type r := Lr1.n
 
   type config = {
     source: Source.n index;
@@ -96,27 +93,22 @@ end
 (* Functor to create an instance of reachable reductions *)
 module Make
     (Info : Info.S)
-    (Viable: sig
-         open Info
-         type viable
-         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
-       end)
+    (Viable: sig val viable : Info.g Viable_reductions.t end)
     (LRC: Lrc.S with module Info := Info)
     (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
                                    and module Lrc := LRC)
     () : S with module Info := Info
-            and type viable = Viable.viable
             and module Lrc := LRC
 =
 struct
   open Info
-  include Viable
+  open Viable
   module Lrc = LRC
 
   include IndexBuffer.Gen.Make()
 
   module Source = Sum.Make(struct
-                      type n = viable
+                      type n = g Viable_reductions.viable
                       let n = Vector.length viable.reachable_from
                     end)(Lr1)
 
@@ -277,14 +269,9 @@ end
 (* Functor to create a covering tree for the Reachable_reductions module *)
 module Covering_tree
     (Info : Info.S)
-    (Viable: sig
-         open Info
-         type viable
-         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
-       end)
+    (Viable: sig val viable : Info.g Viable_reductions.t end)
     (Lrc: Lrc.S with module Info := Info)
     (Reach : S with module Info := Info
-                and type viable = Viable.viable
                 and module Lrc := Lrc)
     ()
 =
@@ -476,17 +463,11 @@ end
 
 module FailureNFA
     (Info : Info.S)
-    (Viable: sig
-         open Info
-         type viable
-         val viable : (viable, Terminal.n, Lr1.n, Reduction.n) Viable_reductions.t
-       end)
+    (Viable: sig val viable : Info.g Viable_reductions.t end)
     (LRC: Lrc.S with module Info := Info)
     (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
                                    and module Lrc := LRC)
-    (Reach : S with module Info := Info
-                and type viable = Viable.viable
-                and module Lrc := LRC)
+    (Reach : S with module Info := Info and module Lrc := LRC)
     ()
   : FAILURE_NFA with type terminal := Info.Terminal.n
                  and type lr1 := Info.Lr1.n
