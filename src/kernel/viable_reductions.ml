@@ -80,7 +80,7 @@ type 'g t = {
 }
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-let group_reductions (type g) ((module Info) : g Info.t) =
+let group_reductions (type g) ((module Info) : g info) =
   let open Info in
   let rec group depth : g reduction index list -> g reduction indexset list =
     function
@@ -97,7 +97,7 @@ let group_reductions (type g) ((module Info) : g Info.t) =
   Vector.init Lr1.n
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
 
-let make (type g) ((module Info) : g Info.t) : g t =
+let make (type g) ((module Info) : g info) : g t =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   let module VEq = Viable.Eq(struct type t = g include States end) in
@@ -235,5 +235,5 @@ let get_stack vr state =
 
 (* [string_of_stack st] is a string representing the suffix of the stacks
    recognized by when reaching state [st]. *)
-let string_of_stack (type g) ((module Info) : g Info.t) vr state =
+let string_of_stack (type g) ((module Info) : g info) vr state =
   string_concat_map " " Info.Lr1.to_string (get_stack vr state)

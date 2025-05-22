@@ -86,9 +86,9 @@ type 'g production = 'g Production.t
 type 'g item = 'g Item.t
 type 'g lr0 = 'g Lr0.t
 type 'g lr1 = 'g Lr1.t
-type 'g transition_goto = 'g Transition_goto.t
-type 'g transition_shift = 'g Transition_shift.t
-type 'g transition = ('g transition_goto, 'g transition_shift) Sum.n
+type 'g goto_transition = 'g Transition_goto.t
+type 'g shift_transition = 'g Transition_shift.t
+type 'g transition = ('g goto_transition, 'g shift_transition) Sum.n
 type 'g reduction = 'g Reduction.t
 
 module Indexed(C : CARDINAL)(Raw : sig
@@ -257,7 +257,9 @@ module type S = sig
        - any value of type [goto index] is a member of this set
          (representing a goto transition)
     *)
-    type any = g transition and goto = g transition_goto and shift = g transition_shift
+    type any = g transition
+    type goto = g goto_transition
+    type shift = g shift_transition
 
     (* The set of goto transitions *)
     val goto : goto cardinal
@@ -856,4 +858,4 @@ struct
   end
 end
 
-type 'g t = (module S with type g = 'g)
+type 'g info = (module S with type g = 'g)

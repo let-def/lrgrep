@@ -3,6 +3,7 @@ open Misc
 open Syntax
 open Fix.Indexing
 open Regexp
+open Info
 
 let error {line; col} fmt =
   Printf.eprintf "Error line %d, column %d: " line col;
@@ -44,7 +45,7 @@ module Indices = struct
     by_items: ('g item, 'g lr1 indexset) vector;
   }
 
-  let make (type g) ((module Info) : g Info.t) =
+  let make (type g) ((module Info) : g info) =
     let open Info in
     (* linearized_symbols *)
     let linearized_symbols = Hashtbl.create 7 in
@@ -322,7 +323,7 @@ module Globbing = struct
         | Some dots -> IntSet.union dots exact.dots
 end
 
-let transl_filter (type g) (info : g Info.t) indices position ~lhs ~rhs =
+let transl_filter (type g) (info : g info) indices position ~lhs ~rhs =
   let open (val info) in
   let transl_sym = Option.map (Indices.get_symbol indices position) in
   let lhs = transl_sym lhs in
@@ -342,7 +343,7 @@ let transl_filter (type g) (info : g Info.t) indices position ~lhs ~rhs =
   in
   indexset_bind prods matching_states
 
-let compile_reduce_expr (type g) ((module Info) : g Info.t) viable trie re =
+let compile_reduce_expr (type g) ((module Info) : g info) viable trie re =
   let open Info in
   let reached = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
@@ -373,7 +374,7 @@ let compile_reduce_expr (type g) ((module Info) : g Info.t) viable trie re =
   step trie (K.More (re, K.Done));
   (!reached, !immediate)
 
-let transl (type g) (info : g Info.t) viable indices trie ~capture re =
+let transl (type g) (info : g info) viable indices trie ~capture re =
   let open (val info) in
   let all_cap = ref IndexSet.empty in
   let mk_capture kind name =

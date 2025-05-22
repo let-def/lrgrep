@@ -34,245 +34,220 @@
 open Fix.Indexing
 open Utils
 open Misc
+open Info
 
-module type S = sig
-  module Info : Info.S
-  open Info
+type 'g reduction_path = {
+  (* The production that is being reduced *)
+  production: 'g production index;
 
-  type reduction = {
-    (* The production that is being reduced *)
-    production: Production.t;
+  (* The set of lookahead terminals that allow this reduction to happen *)
+  lookahead: 'g terminal indexset;
 
-    (* The set of lookahead terminals that allow this reduction to happen *)
-    lookahead: Terminal.set;
+  (* The shape of the stack, all the transitions that are replaced by the
+     goto transition when the reduction is performed *)
+  steps: 'g transition index list;
 
-    (* The shape of the stack, all the transitions that are replaced by the
-       goto transition when the reduction is performed *)
-    steps: Transition.any index list;
+  (* The lr1 state at the top of the stack before reducing.
+     That is [state] can reduce [production] when the lookahead terminal
+     is in [lookahead]. *)
+  state: 'g lr1 index;
+}
 
-    (* The lr1 state at the top of the stack before reducing.
-       That is [state] can reduce [production] when the lookahead terminal
-       is in [lookahead]. *)
-    state: Lr1.t;
-  }
+module Coercion = struct
+  (* Pre coercions are used to handle the minimum in equation (7):
+     ccost(s, A → ϵ•α) · creduce(s, A → α)
 
-  (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
-  val unreduce : Transition.goto index -> reduction list
+     If α begins with a terminal, it will have only one class.
+     This is handled by the [Pre_singleton x] constructor that indicates that
+     this only class should be coerced to class [x].
 
-  module Classes : sig
-    (* Returns the classes of terminals for a given goto transition *)
-    val for_edge : Transition.goto index -> Terminal.set array
+     If α begins with a non-terminal, [Pre_identity] is used: ccost(s, A) and
+     ccost(s, A → ϵ•α) are guaranteed to have the same "first" classes.
+  *)
+  type pre =
+    | Pre_identity
+    | Pre_singleton of int
 
-    (* Returns the classes of terminals for a given LR(1) state *)
-    val for_lr1 : Lr1.t -> Terminal.set array
+  (* Compute the pre coercion from a partition of the form
+       P = first(cost(s, A))
+     to a partition of the form
+       Q = first(ccost(s, A → ϵ•α)))
 
-    (* Returns the classes of terminals before taking a transition *)
-    val pre_transition : Transition.any index -> Terminal.set array
+     If α starts with a terminal, we look only for the
+  *)
+  let pre outer inner =
+    if outer == inner then
+      Some Pre_identity
+    else (
+      assert (Array.length inner = 1);
+      assert (IndexSet.is_singleton inner.(0));
+      let t = IndexSet.choose inner.(0) in
+      match Utils.Misc.array_findi (fun _ ts -> IndexSet.mem t ts) 0 outer with
+      | i -> Some (Pre_singleton i)
+      | exception Not_found ->
+        (* If the production that starts with the 'inner' partition cannot be
+           reduced (because of conflict resolution), the transition becomes
+           unreachable and the terminal `t` might belong to no classes.
+        *)
+        None
+    )
 
-    (* Returns the classes of terminals after taking a transition *)
-    val post_transition : Transition.any index -> Terminal.set array
-  end
+  (* The type infix is the general representation for the coercion matrices
+     coerce(P, Q) appearing in M1 · coerce(P, Q) · M2
 
-  module Coercion : sig
-    type pre = Pre_identity | Pre_singleton of int
+     Since Q is finer than P, a class of P maps to multiple classes of Q.
+     This is represented by the forward array: a class p in P maps to all
+     classes q in array [forward.(p)].
 
-    (* Compute the pre coercion from a partition of the form
-         P = first(cost(s, A))
-       to a partition of the form
-         Q = first(ccost(s, A → ϵ•α)))
-    *)
-    val pre : 'a indexset array -> 'a indexset array -> pre option
+     The other direction is an injection: a class q in Q maps to class
+     [backward.(q)] in P.
 
-    type forward = int array array
-    type backward = int array
-    type infix = { forward : forward; backward : backward; }
+     The special class [-1] represents a class that is not mapped in the
+     partition (this occurs for instance when using creduce to filter a
+     partition).
+  *)
+  type forward = int array array
+  type backward = int array
+  type infix = { forward: forward; backward: backward }
 
-    (* Compute the infix coercion from two partitions P Q such that Q <= P *)
-    val infix : ?lookahead:'a indexset -> 'a indexset array -> 'a indexset array -> infix
-  end
+  (* Compute the infix coercion from two partitions P Q such that Q <= P.
 
-  module Tree : sig
-    include CARDINAL
-
-    (* Returns the leaf node corresponding to a given transition *)
-    val leaf : Transition.any index -> n index
-
-    (* Splits a node into its left and right children if it is an inner node *)
-    val split : n index -> (Transition.any index, n index * n index) either
-
-    (* Returns the nullable terminals and non-nullable equations for a given goto transition *)
-    type equations = {
-      nullable_lookaheads: Terminal.set;
-      nullable: reduction list;
-      non_nullable: (reduction * n index) list;
-    }
-    val goto_equations : Transition.goto index -> equations
-
-    (* Returns the pre-classes for a given node *)
-    val pre_classes : n index -> Terminal.set array
-
-    (* Returns the post-classes for a given node *)
-    val post_classes : n index -> Terminal.set array
-  end
-
-  (* Identify each cell of compact cost matrices.
-     A [Cell.n index] can be thought of as a triple made of a tree node and two indices
-     (row, col) of the compact cost matrix associated to the node. *)
-  module Cell : sig
-    include CARDINAL
-
-    (* A value of type row represents the index of a row of a matrix.
-       A row of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) - 1
-    *)
-    type row = int
-
-    (* A value of type column represents the index of a column of a matrix.
-       A column of node [n] belongs to the interval
-         0 .. Array.length (Tree.post_classes n) - 1
-    *)
-    type column = int
-
-    (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : Tree.n index -> pre:row -> post:column -> n index
-
-    (* Get the node, row, and column corresponding to a cell *)
-    val decode : n index -> Tree.n index * row * column
-
-    type goto
-    val goto : goto cardinal
-    val is_goto : n index -> goto index option
-    val of_goto : goto index -> n index
-    val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
-    val goto_decode : goto index -> Transition.goto index * row * column
-    val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
-  end
-
-  module Analysis : sig
-    val cost : Cell.n index -> int
-    val finite : Cell.n index -> bool
-  end
+     The optional [lookahead] argument is used to filter classes outside of a
+     certain set of terminals, exactly like the ↓ operator on partitions.
+     This is used to implement creduce operator.
+  *)
+  let infix ?lookahead pre_classes post_classes =
+    let forward_size = Array.make (Array.length pre_classes) 0 in
+    let backward =
+      Array.map begin fun ca ->
+        let keep = match lookahead with
+          | None -> true
+          | Some la -> IndexSet.quick_subset ca la
+        in
+        if keep then (
+          match
+            Utils.Misc.array_findi
+              (fun _ cb -> IndexSet.quick_subset ca cb) 0 pre_classes
+          with
+          | exception Not_found -> -1
+          | i -> forward_size.(i) <- 1 + forward_size.(i); i
+        ) else (-1)
+      end post_classes
+    in
+    let forward = Array.map (fun sz -> Array.make sz 0) forward_size in
+    Array.iteri (fun i_pre i_f ->
+        if i_f <> -1 then (
+          let pos = forward_size.(i_f) - 1 in
+          forward_size.(i_f) <- pos;
+          forward.(i_f).(pos) <- i_pre
+        )
+      ) backward;
+    { forward; backward }
 end
 
-module Make (Info : Info.S)() : S with module Info := Info =
-struct
-  open Info
+(* ---------------------------------------------------------------------- *)
 
-  (* ---------------------------------------------------------------------- *)
+(* Compute the inverse of the reduction relation.
+   It lists the different reductions that lead to following a goto
+   transition, reversing the effect of a single reduction.
 
-  (* Useful definitions *)
+   It serves the same purpose as the [reduce(s, A → α)] function from the
+   paper but is more convenient for the rest of the implementation.
+*)
 
-  (* Testing class inclusion *)
-  let quick_subset = IndexSet.quick_subset
+(* [(unreduce info).:(tr)] lists all the reductions that ends up following [tr]. *)
+let unreduce (type g) ((module Info) : g info)
+  : (g goto_transition, g reduction_path list) vector
+  =
+  let open Info in
+  let table = Vector.make Transition.goto [] in
+  (* [add_reduction lr1 (production, lookahead)] populates [table] by
+     simulating the reduction [production], starting from [lr1] when
+     lookahead is in [lookahead] *)
+  let add_reduction lr1 (production, lookahead) =
+    let production = Production.of_g production in
+    if Production.kind production = `REGULAR then begin
+      let lhs = Production.lhs production in
+      let rhs = Production.rhs production in
+      let states =
+        Array.fold_right (fun _ states ->
+            let expand acc (state, steps) =
+              List.fold_left (fun acc tr ->
+                  (Transition.source tr, tr :: steps) :: acc
+                ) acc (Transition.predecessors state)
+            in
+            List.fold_left expand [] states
+          ) rhs [lr1, []]
+      in
+      List.iter (fun (source, steps) ->
+          table.@(Transition.find_goto source lhs) <-
+            List.cons { production; lookahead; steps; state=lr1 }
+        ) states
+    end
+  in
+  (* [get_reductions lr1] returns the list of productions and the lookahead
+     sets that allow reducing them from state [lr1] *)
+  let get_reductions lr1 =
+    let lr1 = Lr1.to_g lr1 in
+    match Grammar.Lr1.default_reduction lr1 with
+    | Some prod ->
+      (* State has a default reduction, the lookahead can be any terminal *)
+      [prod, Terminal.all]
+    | None ->
+      let raw =
+        let add acc (t, p) =
+          match Grammar.Terminal.kind t with
+          | `ERROR -> acc
+          | _ -> ((t, p) :: acc)
+        in
+        List.fold_left add [] (Grammar.Lr1.get_reductions lr1)
+      in
+      (* Regroup lookahead tokens by production *)
+      Utils.Misc.group_by raw
+        ~compare:(fun (_, p1) (_, p2) ->
+            compare_index (Production.of_g p1) (Production.of_g p2)
+          )
+        ~group:(fun (t, p) tps ->
+            let set = List.fold_left
+                (fun set (t, _) -> IndexSet.add (Terminal.of_g t) set)
+                (IndexSet.singleton (Terminal.of_g t)) tps
+            in
+            (p, set)
+          )
+  in
+  (* Populate [table] with the reductions of all state *)
+  Index.iter Lr1.n
+    (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1));
+  table
 
-  (* ---------------------------------------------------------------------- *)
+(* ---------------------------------------------------------------------- *)
 
-  (* Compute the inverse of the reduction relation.
-     It lists the different reductions that lead to following a goto
-     transition, reversing the effect of a single reduction.
+(* Compute classes refinement.
 
-     It serves the same purpose as the [reduce(s, A → α)] function from the
-     paper but is more convenient for the rest of the implementation.
-  *)
+   This implements section 6.2, Approximating first and follow Partitions.
 
-  type reduction = {
-    (* The production that is being reduced *)
-    production: Production.t;
+   This algorithm computes a partition of tokens for each transition.
+   The partition is a bit finer than necessary, but the approximation is
+   still sound: merging the rows or columns of the matrices based on token
+   classes gives a correct result.
+*)
 
-    (* The set of lookahead terminals that allow this reduction to happen *)
-    lookahead: Terminal.set;
+module Classes = struct
+  type 'g partition = 'g terminal indexset array
 
-    (* The shape of the stack, all the transitions that are replaced by the
-       goto transition when the reduction is performed *)
-    steps: Transition.any index list;
-
-    (* The lr1 state at the top of the stack before reducing.
-       That is [state] can reduce [production] when the lookahead terminal
-       is in [lookahead]. *)
-    state: Lr1.t;
+  type 'g t = {
+    of_lr1 : ('g lr1, 'g partition) vector;
+    of_goto : ('g goto_transition, 'g partition) vector;
+    singletons : ('g terminal, 'g partition) vector;
+    all_terminals : 'g partition;
   }
 
-  (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
-  let unreduce : Transition.goto index -> reduction list =
-    let table = Vector.make Transition.goto [] in
-    (* [add_reduction lr1 (production, lookahead)] populates [table] by
-       simulating the reduction [production], starting from [lr1] when
-       lookahead is in [lookahead] *)
-    let add_reduction lr1 (production, lookahead) =
-      let production = Production.of_g production in
-      if Production.kind production = `REGULAR then begin
-        let lhs = Production.lhs production in
-        let rhs = Production.rhs production in
-        let states =
-          Array.fold_right (fun _ states ->
-              let expand acc (state, steps) =
-                List.fold_left (fun acc tr ->
-                    (Transition.source tr, tr :: steps) :: acc
-                  ) acc (Transition.predecessors state)
-              in
-              List.fold_left expand [] states
-            ) rhs [lr1, []]
-        in
-        List.iter (fun (source, steps) ->
-            table.@(Transition.find_goto source lhs) <-
-              List.cons { production; lookahead; steps; state=lr1 }
-          ) states
-      end
-    in
-    (* [get_reductions lr1] returns the list of productions and the lookahead
-       sets that allow reducing them from state [lr1] *)
-    let get_reductions lr1 =
-      let lr1 = Lr1.to_g lr1 in
-      match Grammar.Lr1.default_reduction lr1 with
-      | Some prod ->
-        (* State has a default reduction, the lookahead can be any terminal *)
-        [prod, Terminal.all]
-      | None ->
-        let raw =
-          let add acc (t, p) =
-            match Grammar.Terminal.kind t with
-            | `ERROR -> acc
-            | _ -> ((t, p) :: acc)
-          in
-          List.fold_left add [] (Grammar.Lr1.get_reductions lr1)
-        in
-        (* Regroup lookahead tokens by production *)
-        Utils.Misc.group_by raw
-          ~compare:(fun (_, p1) (_, p2) ->
-              compare_index (Production.of_g p1) (Production.of_g p2)
-            )
-          ~group:(fun (t, p) tps ->
-              let set = List.fold_left
-                  (fun set (t, _) -> IndexSet.add (Terminal.of_g t) set)
-                  (IndexSet.singleton (Terminal.of_g t)) tps
-              in
-              (p, set)
-            )
-    in
-    (* Populate [table] with the reductions of all state *)
-    Index.iter Lr1.n
-      (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1));
-    Vector.get table
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* Compute classes refinement.
-
-     This implements section 6.2, Approximating first and follow Partitions.
-
-     This algorithm computes a partition of tokens for each transition.
-     The partition is a bit finer than necessary, but the approximation is
-     still sound: merging the rows or columns of the matrices based on token
-     classes gives a correct result.
-  *)
-
-  module Classes = struct
-
-    (* A node of the graph is either an lr1 state or a goto transition *)
-    module Node = (val Sum.make Lr1.n Transition.goto)
-
+  let make (type g) ((module Info) : g info) unreduce =
+    let open Info in
     (* Represents the dependency graph of Equation 7-9, to compute the SCCs *)
-    module Gr = struct
+    (* First, a node of the graph is either an lr1 state or a goto transition *)
+    let module Node = (val Sum.make Lr1.n Transition.goto) in
+    let module Gr = struct
       type node = Node.n index
       let n = cardinal Node.n
 
@@ -294,49 +269,45 @@ struct
         | L lr1 -> visit_lr1 f lr1
         | R e -> List.iter
                    (fun {state; _} -> f (Node.inj_l state))
-                   (unreduce e)
+                   unreduce.:(e)
 
       let iter f = Index.iter Node.n f
-    end
-
-    module Scc = Tarjan.Run(Gr)
-
+    end in
+    (* Pre-compute the SCCs to speed-up fixed-points computation *)
+    let module Scc = Tarjan.Run(Gr) in
     (* Associate a class to each node *)
-
-    let classes = Vector.make Node.n IndexSet.Set.empty
-
+    let classes = Vector.make Node.n IndexSet.Set.empty in
     (* Evaluate classes for a node, directly computing equation 4-6.
        (compute follow for a goto node, first for an lr1 node)
-
-       [classes] vector is used to approximate recursive occurrences.
+       The [classes] vector is used to approximate recursive occurrences.
     *)
     let classes_of acc node =
       let acc = ref acc in
-      begin match Node.prj node with
-        | L lr1 ->
-          Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1
-        | R edge ->
-          List.iter (fun {lookahead; state; _} ->
-              let base = classes.:(Node.inj_l state) in
-              (* Comment the code below to have a partial order on partitions
-                 (remove the ↑Z in equation (6) *)
-              let base =
-                if lookahead != Terminal.all
-                then IndexSet.Set.map (IndexSet.inter lookahead) base
-                else base
-              in
-              (* Stop commenting here *)
-              acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
-            ) (unreduce edge)
-      end;
-      !acc
-
+      match Node.prj node with
+      | L lr1 ->
+        Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1;
+        !acc
+      | R edge ->
+        List.iter (fun {lookahead; state; _} ->
+            let base = classes.:(Node.inj_l state) in
+            (* Comment the code below to have a partial order on partitions
+               (remove the ↑Z in equation (6) *)
+            let base =
+              if lookahead != Terminal.all
+              then IndexSet.Set.map (IndexSet.inter lookahead) base
+              else base
+            in
+            (* Stop commenting here *)
+            acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
+          ) unreduce.:(edge);
+        !acc
+    in
     let partition_sets sets =
       sets
       |> IndexSet.Set.elements
       |> IndexRefine.partition
       |> IndexSet.Set.of_list
-
+    in
     let visit_scc _ nodes =
       (* Compute approximation for an SCC, as described in section 6.2 *)
       let coarse_classes =
@@ -353,7 +324,7 @@ struct
             List.iter
               (fun {lookahead; _} ->
                  coarse := IndexSet.union lookahead !coarse)
-              (unreduce e);
+              unreduce.:(e);
             classes.:(node) <-
               partition_sets (IndexSet.Set.map (IndexSet.inter !coarse) coarse_classes)
         end nodes;
@@ -365,513 +336,436 @@ struct
             Gr.visit_lr1 (fun n -> acc := IndexSet.Set.union classes.:(n) !acc) lr1;
             classes.:(node) <- partition_sets !acc
         end nodes
-
-    let () = Scc.rev_topological_iter visit_scc
-
+    in
+    Scc.rev_topological_iter visit_scc;
     (* Initialize classes of initial states and of states whose incoming
        symbol is a terminal *)
-    let () = Index.iter Lr1.n (fun lr1 ->
+    Index.iter Lr1.n (fun lr1 ->
         match Lr1.incoming lr1 with
         | Some sym when Symbol.is_nonterminal sym -> ()
         | None | Some _ ->
           classes.:(Node.inj_l lr1) <- IndexSet.Set.singleton Terminal.all
-      )
-
+      );
     (* We now have the final approximation.
        Classes will be identified and accessed by their index,
        random access is important.
     *)
-    let classes =
-      let prepare l =
-        let a = Array.of_seq (IndexSet.Set.to_seq l) in
-        Array.sort IndexSet.compare_minimum a;
-        a
-      in
-      Vector.map prepare classes
-
-    let for_edge nte =
-      classes.:(Node.inj_r nte)
-
-    let for_lr1 st =
-      classes.:(Node.inj_l st)
-
-    (* Precompute the singleton partitions, e.g. { {t}, T/{t} } for each t *)
-    let t_singletons =
-      Vector.init Terminal.n (fun t -> [|IndexSet.singleton t|])
-
-    let all_terminals =
-      [|Terminal.all|]
-
-    (* Just before taking a transition [tr], the lookahead has to belong to
-       one of the classes in [pre_transition tr].
-
-       [pre_transition tr] indexes the rows of cost matrix for [tr].
-    *)
-    let pre_transition tr =
-      match Symbol.desc (Transition.symbol tr) with
-      | T t -> t_singletons.:(t)
-      | N _ -> for_lr1 (Transition.source tr)
-
-    (* Just after taking a transition [tr], the lookahead has to belong to
-       one of the classes in [post_transition tr].
-
-       [post_transition tr] indexes the columns of cost matrix for [tr].
-    *)
-    let post_transition tr =
-      match Transition.split tr with
-      | L edge -> for_edge edge
-      | R _ -> all_terminals
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* We now construct the DAG (as a tree with hash-consing) of all matrix
-     products.
-
-     Each occurrence of [ccost(s,x)] is mapped to a leaf.
-     Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
-     that the chain of multiplication are re-associated.
-  *)
-  module ConsedTree () : sig
-    (* The finite set of nodes of the tree.
-       The set is not frozen yet: as long as its cardinal has not been
-       observed, new nodes can be added. *)
-    include CARDINAL
-
-    (* The set of inner nodes *)
-    module Inner : CARDINAL
-
-    (* [leaf tr] returns the node that corresponds [cost(s,x)]
-       where [s = source tr] and [x = symbol tr]. *)
-    val leaf : Transition.any index -> n index
-
-    (* [node l r] returns the inner-node that corresponds to
-       the matrix product [l * r]  *)
-    val node : n index -> n index -> n index
-
-    (* Get the tree node that corresponds to an inner node *)
-    val inject : Inner.n index -> n index
-
-    (* Determines whether a node is a leaf or an inner node *)
-    val split : n index -> (Transition.any index, Inner.n index) either
-
-    (* Once all nodes have been added, the DAG needs to be frozen *)
-    module FreezeTree() : sig
-      val define : Inner.n index -> n index * n index
-    end
-  end = struct
-    (* The fresh finite set of all inner nodes *)
-    module Inner = Gensym()
-    (* The nodes of the trees is the disjoint sum of all transitions
-       (the leaves) and the inner nodes. *)
-    include (val Sum.make Transition.any Inner.n)
-
-    let leaf = inj_l
-    let inject = inj_r
-    let split = prj
-
-    (* An inner node is made of the index of its left and right children *)
-    type pack = n index * n index
-    let pack t u = (t, u)
-    let unpack x = x
-
-    (* The node table is used to give a unique index to each inner node *)
-    let node_table : (pack, Inner.n index) Hashtbl.t = Hashtbl.create 7
-
-    (* Returns the index of an inner node, or allocate one for a new node *)
-    let node l r =
-      let p = pack l r in
-      let node_index =
-        try Hashtbl.find node_table p
-        with Not_found ->
-          let i = Inner.fresh () in
-          Hashtbl.add node_table p i;
-          i
-      in
-      inj_r node_index
-
-    (* When all nodes have been created, the set of nodes can be frozen.
-       A reverse index is created to get the children of an inner node. *)
-    module FreezeTree() =
-    struct
-      let rev_index = Vector.make' Inner.n
-          (fun () -> let dummy = Index.of_int n 0 in (dummy, dummy))
-
-      let define ix = rev_index.:(ix)
-
-      let () =
-        Hashtbl.iter
-          (fun pair index -> rev_index.:(index) <- unpack pair)
-          node_table
-    end
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* This module implements efficient representations of the coerce matrices,
-     as mentioned in section 6.5.
-
-     However, our implementation has one more optimization.
-     In general, we omit the last block of a partition (it can still be deduced
-     by removing the other blocks from the universe T, see section 6.1).  The
-     block that is omitted is one that is guaranteed to have infinite cost in
-     the compact cost matrix.
-     Therefore, we never need to represent the rows and columns that correspond
-     to the missing class; by construction we know they have infinite cost.
-     For instance for shift transitions, it means we only have a 1x1 matrix:
-     the two classes are the terminal being shifted, with a cost of one, and
-     its complement, with an infinite cost, that is omitted.
-
-     Our coercion functions are augmented to handle this special case.
-  *)
-  module Coercion = struct
-
-    (* Pre coercions are used to handle the minimum in equation (7):
-       ccost(s, A → ϵ•α) · creduce(s, A → α)
-
-       If α begins with a terminal, it will have only one class.
-       This is handled by the [Pre_singleton x] constructor that indicates that
-       this only class should be coerced to class [x].
-
-       If α begins with a non-terminal, [Pre_identity] is used: ccost(s, A) and
-       ccost(s, A → ϵ•α) are guaranteed to have the same "first" classes.
-    *)
-    type pre =
-      | Pre_identity
-      | Pre_singleton of int
-
-    (* Compute the pre coercion from a partition of the form
-         P = first(cost(s, A))
-       to a partition of the form
-         Q = first(ccost(s, A → ϵ•α)))
-
-       If α starts with a terminal, we look only for the
-    *)
-    let pre outer inner =
-      if outer == inner then
-        Some Pre_identity
-      else (
-        assert (Array.length inner = 1);
-        assert (IndexSet.is_singleton inner.(0));
-        let t = IndexSet.choose inner.(0) in
-        match Utils.Misc.array_findi (fun _ ts -> IndexSet.mem t ts) 0 outer with
-        | i -> Some (Pre_singleton i)
-        | exception Not_found ->
-          (* If the production that starts with the 'inner' partition cannot be
-             reduced (because of conflict resolution), the transition becomes
-             unreachable and the terminal `t` might belong to no classes.
-          *)
-          None
-      )
-
-    (* The type infix is the general representation for the coercion matrices
-       coerce(P, Q) appearing in M1 · coerce(P, Q) · M2
-
-       Since Q is finer than P, a class of P maps to multiple classes of Q.
-       This is represented by the forward array: a class p in P maps to all
-       classes q in array [forward.(p)].
-
-       The other direction is an injection: a class q in Q maps to class
-       [backward.(q)] in P.
-
-       The special class [-1] represents a class that is not mapped in the
-       partition (this occurs for instance when using creduce to filter a
-       partition).
-    *)
-    type forward = int array array
-    type backward = int array
-    type infix = { forward: forward; backward: backward }
-
-    (* Compute the infix coercion from two partitions P Q such that Q <= P.
-
-       The optional [lookahead] argument is used to filter classes outside of a
-       certain set of terminals, exactly like the ↓ operator on partitions.
-       This is used to implement creduce operator.
-    *)
-    let infix ?lookahead pre_classes post_classes =
-      let forward_size = Array.make (Array.length pre_classes) 0 in
-      let backward =
-        Array.map (fun ca ->
-            let keep = match lookahead with
-              | None -> true
-              | Some la -> quick_subset ca la
-            in
-            if keep then (
-              match
-                Utils.Misc.array_findi
-                  (fun _ cb -> quick_subset ca cb) 0 pre_classes
-              with
-              | exception Not_found -> -1
-              | i -> forward_size.(i) <- 1 + forward_size.(i); i
-            ) else (-1)
-          ) post_classes
-      in
-      let forward = Array.map (fun sz -> Array.make sz 0) forward_size in
-      Array.iteri (fun i_pre i_f ->
-          if i_f <> -1 then (
-            let pos = forward_size.(i_f) - 1 in
-            forward_size.(i_f) <- pos;
-            forward.(i_f).(pos) <- i_pre
-          )
-        ) backward;
-      { forward; backward }
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* The hash-consed tree of all matrix equations (products and minimums). *)
-  module Tree = struct
-    include ConsedTree()
-
-    type equations = {
-      nullable_lookaheads: Terminal.set;
-      nullable: reduction list;
-      non_nullable: (reduction * n index) list;
+    let final_partition l =
+      let a = Array.of_seq (IndexSet.Set.to_seq l) in
+      Array.sort IndexSet.compare_minimum a;
+      a
+    in
+    { of_lr1 = Vector.init Lr1.n
+          (fun gt -> final_partition classes.:(Node.inj_l gt));
+      of_goto = Vector.init Transition.goto
+          (fun gt -> final_partition classes.:(Node.inj_r gt));
+      (* Precompute the singleton partitions, e.g. { {t}, T/{t} } for each t *)
+      singletons = Vector.init Terminal.n (fun t -> [|IndexSet.singleton t|]);
+      all_terminals = [|Terminal.all|];
     }
 
-    let goto_equations =
-      (* Explicit representation of the rhs of equation (7).
-         This equation defines ccost(s, A) as the minimum of a set of
-         sub-matrices.
+  (* Just before taking a transition [tr], the lookahead has to belong to
+     one of the classes in [pre_transition tr].
 
-         Matrices of the form [creduce(s, A → α)] are represented by a
-         [TerminalSet.t], following section 6.5.
-
-         [goto_equations] are represented as pair [(nullable, non_nullable)]
-         such that, for each sub-equation [ccost(s, A→ϵ•α) · creduce(s, A→α)]:
-         - if [α = ϵ] (an empty production can reduce A),
-           [nullable] contains the terminals [creduce(s, A → α)]
-         - otherwise,
-           [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
-      *)
-      tabulate_finset Transition.goto @@ fun tr ->
-      (* Number of rows in the compact cost matrix for tr *)
-      let first_dim =
-        Array.length (Classes.pre_transition (Transition.of_goto tr))
-      in
-      (* Number of columns in the compact cost matrix for a transition tr' *)
-      let transition_size tr' =
-        Array.length (Classes.post_transition tr')
-      in
-      (* Import the solution to a matrix-chain ordering problem as a sub-tree *)
-      let rec import_mcop = function
-        | Mcop.Matrix l -> leaf l
-        | Mcop.Product (l, r) -> node (import_mcop l) (import_mcop r)
-      in
-      (* Compute the nullable terminal set and non_nullable list for a single
-         reduction, optimizing the matrix-product chain.  *)
-      let solve_ccost_path red =
-        let dimensions = first_dim :: List.map transition_size red.steps in
-        match Mcop.dynamic_solution (Array.of_list dimensions) with
-        | exception Mcop.Empty -> Either.Left red
-        | solution ->
-          let steps = Array.of_list red.steps in
-          let solution = Mcop.map_solution (fun i -> steps.(i)) solution in
-          Either.Right (red, import_mcop solution)
-      in
-      let nullable, non_nullable =
-        List.partition_map solve_ccost_path (unreduce tr)
-      in
-      {
-        nullable_lookaheads =
-          List.fold_left (fun set red -> IndexSet.union red.lookahead set)
-            IndexSet.empty nullable;
-        nullable;
-        non_nullable;
-      }
-
-    include FreezeTree()
-
-    (* Pre-compute classes before (pre) and after (post) a node *)
-
-    let table_pre = Vector.make Inner.n [||]
-    let table_post = Vector.make Inner.n [||]
-
-    let pre_classes t = match split t with
-      | L tr -> Classes.pre_transition tr
-      | R ix -> table_pre.:(ix)
-
-    let post_classes t = match split t with
-      | L tr -> Classes.post_transition tr
-      | R ix -> table_post.:(ix)
-
-    let pre_count t = Array.length (pre_classes t)
-    let post_count t = Array.length (post_classes t)
-
-    let () =
-      (* Nodes are allocated in topological order.
-         When iterating over all nodes, children are visited before parents. *)
-      Index.iter Inner.n @@ fun node ->
-      let l, r = define node in
-      table_pre.:(node) <- pre_classes l;
-      table_post.:(node) <- post_classes r
-
-    let split i = match split i with
-      | L _ as result -> result
-      | R n -> R (define n)
-  end
-
-  (* ---------------------------------------------------------------------- *)
-
-  (* Representation of matrix cells, the variables of the data flow problem.
-     There will be a lot of them. Actually, on large grammars, most of the
-     memory is consumed by cost matrices.
-
-     Therefore we want a rather compact encoding.
-     We use a two-level encoding:
-     - first the [table] vector maps a node index to a "compact cost matrix"
-     - each "compact cost matrix" is represented as a 1-dimensional array of
-       integers, of dimension |pre_classes n| * |post_classes n|
-
-     This module defines conversion functions between three different
-     representations of cells:
-
-     [Cell.t] identify a cell as a single integer
-     <=>
-     [Tree.n index * Cells.offset] identify a cell as a pair of a node and an
-     offset in the array of costs
-     <=>
-     [Tree.n index * Cells.row * Cells.column] identify a cell as a triple of
-     a node, a row index and a column index of the compact cost matrix
+     [pre_transition tr] indexes the rows of cost matrix for [tr].
   *)
-  module Cell : sig
-    include CARDINAL
+  let pre_transition (type g) (info : g info) classes tr =
+    let open (val info) in
+    match Symbol.desc (Transition.symbol tr) with
+    | T t -> classes.singletons.:(t)
+    | N _ -> classes.of_lr1.:(Transition.source tr)
 
-    (* A value of type row represents the index of a row of a matrix.
-       A row of node [n] belongs to the interval
-         0 .. Array.length (Tree.pre_classes n) - 1
-    *)
-    type row = int
+  (* Just after taking a transition [tr], the lookahead has to belong to
+     one of the classes in [post_transition tr].
 
-    (* A value of type column represents the index of a column of a matrix.
-       A column of node [n] belongs to the interval
-         0 .. Array.length (Tree.post_classes n) - 1
-    *)
-    type column = int
+     [post_transition tr] indexes the columns of cost matrix for [tr].
+  *)
+  let post_transition (type g) (info : g info) classes tr =
+    let open (val info) in
+    match Transition.split tr with
+    | L edge -> classes.of_goto.:(edge)
+    | R _ -> classes.all_terminals
+end
 
-    (* Get the cell corresponding to a node, a row, and a column *)
-    val encode : Tree.n index -> pre:row -> post:column -> n index
+(* From the classes, construct the DAG (as a tree with hash-consing) of all
+   matrix products *)
+module Problem = struct
+  module Var = Unsafe_cardinal()
+  type 'g var = 'g Var.t
 
-    (* Get the node, row, and column corresponding to a cell *)
-    val decode : n index -> Tree.n index * row * column
+  type 'g term = ('g transition, 'g var) Sum.n
 
-    (* Index of the first cell of matrix associated to a node *)
-    val first_cell : Tree.n index -> n index
+  type 'g equations = {
+    nullable_lookaheads: 'g terminal indexset;
+    nullable: 'g reduction_path list;
+    non_nullable: ('g reduction_path * 'g term index) list;
+  }
 
-    type goto
-    val goto : goto cardinal
+  type 'g t = {
+    equations: ('g goto_transition, 'g equations) vector;
+    pre_classes: ('g var, 'g Classes.partition) vector;
+    post_classes: ('g var, 'g Classes.partition) vector;
+  }
+
+  let terms_cardinal (type g) ((module Info) : g info) problem =
+    Sum.cardinal Info.Transition.any (Vector.length problem.pre_classes)
+
+  let pre_classes (type g) (info : g info) classes t i =
+    let open (val info) in
+    match Sum.prj Transition.any i with
+    | L tr -> Classes.pre_transition info classes tr
+    | R ix -> t.pre_classes.:(ix)
+
+  let post_classes (type g) (info : g info) classes t i =
+    let open (val info) in
+    match Sum.prj Transition.any i with
+    | L tr -> Classes.post_transition info classes tr
+    | R ix -> t.post_classes.:(ix)
+
+  let pre_count info classes t i = Array.length (pre_classes info classes t i)
+  let post_count info classes t i = Array.length (post_classes info classes t i)
+
+  let make (type g) (info : g info) unreduce classes =
+    let open (val info) in
+    let module ConsedTree : sig
+
+      (* The set of inner nodes *)
+      module Inner : sig
+        type t = g
+        include CARDINAL
+      end
+
+      (* The finite set of nodes of the tree.
+         The set is not frozen yet: as long as its cardinal has not been
+         observed, new nodes can be added. *)
+      include CARDINAL with type n = (Transition.any, Inner.n) Sum.n
+
+      (* [leaf tr] returns the node that corresponds [cost(s,x)]
+         where [s = source tr] and [x = symbol tr]. *)
+      val leaf : Transition.any index -> n index
+
+      (* [node l r] returns the inner-node that corresponds to
+         the matrix product [l * r]  *)
+      val node : n index -> n index -> n index
+
+      (* Get the tree node that corresponds to an inner node *)
+      val inject : Inner.n index -> n index
+
+      (* Determines whether a node is a leaf or an inner node *)
+      val split : n index -> (Transition.any index, Inner.n index) either
+
+      (* Once all nodes have been added, the DAG needs to be frozen *)
+      module FreezeTree() : sig
+        val define : Inner.n index -> n index * n index
+      end
+    end = struct
+      (* The fresh finite set of all inner nodes *)
+      module Inner = struct
+        type t = g
+        include Gensym()
+      end
+      (* The nodes of the trees is the disjoint sum of all transitions
+         (the leaves) and the inner nodes. *)
+      include (val Sum.make Transition.any Inner.n)
+
+      let leaf = inj_l
+      let inject = inj_r
+      let split = prj
+
+      (* An inner node is made of the index of its left and right children *)
+      type pack = n index * n index
+      let pack t u = (t, u)
+      let unpack x = x
+
+      (* The node table is used to give a unique index to each inner node *)
+      let node_table : (pack, Inner.n index) Hashtbl.t = Hashtbl.create 7
+
+      (* Returns the index of an inner node, or allocate one for a new node *)
+      let node l r =
+        let p = pack l r in
+        let node_index =
+          try Hashtbl.find node_table p
+          with Not_found ->
+            let i = Inner.fresh () in
+            Hashtbl.add node_table p i;
+            i
+        in
+        inj_r node_index
+
+      (* When all nodes have been created, the set of nodes can be frozen.
+         A reverse index is created to get the children of an inner node. *)
+      module FreezeTree() =
+      struct
+        let rev_index = Vector.make' Inner.n
+            (fun () -> let dummy = Index.of_int n 0 in (dummy, dummy))
+
+        let define ix = rev_index.:(ix)
+
+        let () =
+          Hashtbl.iter
+            (fun pair index -> rev_index.:(index) <- unpack pair)
+            node_table
+      end
+    end in
+
+    let module Var_is_Inner = Var.Eq(ConsedTree.Inner) in
+    let Refl = Var_is_Inner.eq in
+    (* ---------------------------------------------------------------------- *)
+
+    (* The hash-consed tree of all matrix equations (products and minimums). *)
+    let module Tree = struct
+      let goto_equations =
+        (* Explicit representation of the rhs of equation (7).
+           This equation defines ccost(s, A) as the minimum of a set of
+           sub-matrices.
+
+           Matrices of the form [creduce(s, A → α)] are represented by a
+           [TerminalSet.t], following section 6.5.
+
+           [goto_equations] are represented as pair [(nullable, non_nullable)]
+           such that, for each sub-equation [ccost(s, A→ϵ•α) · creduce(s, A→α)]:
+           - if [α = ϵ] (an empty production can reduce A),
+             [nullable] contains the terminals [creduce(s, A → α)]
+           - otherwise,
+             [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
+        *)
+        Vector.init Transition.goto @@ fun tr ->
+        (* Number of rows in the compact cost matrix for tr *)
+        let first_dim =
+          Array.length (Classes.pre_transition info classes (Transition.of_goto tr))
+        in
+        (* Number of columns in the compact cost matrix for a transition tr' *)
+        let transition_size tr' =
+          Array.length (Classes.post_transition info classes tr')
+        in
+        (* Import the solution to a matrix-chain ordering problem as a sub-tree *)
+        let rec import_mcop = function
+          | Mcop.Matrix l -> ConsedTree.leaf l
+          | Mcop.Product (l, r) -> ConsedTree.node (import_mcop l) (import_mcop r)
+        in
+        (* Compute the nullable terminal set and non_nullable list for a single
+           reduction, optimizing the matrix-product chain.  *)
+        let solve_ccost_path red =
+          let dimensions = first_dim :: List.map transition_size red.steps in
+          match Mcop.dynamic_solution (Array.of_list dimensions) with
+          | exception Mcop.Empty -> Either.Left red
+          | solution ->
+            let steps = Array.of_list red.steps in
+            let solution = Mcop.map_solution (fun i -> steps.(i)) solution in
+            Either.Right (red, import_mcop solution)
+        in
+        let nullable, non_nullable =
+          List.partition_map solve_ccost_path unreduce.:(tr)
+        in
+        {
+          nullable_lookaheads =
+            List.fold_left (fun set red -> IndexSet.union red.lookahead set)
+              IndexSet.empty nullable;
+          nullable;
+          non_nullable;
+        }
+
+      include ConsedTree.FreezeTree()
+
+    end in
+    let result = {
+      equations = Tree.goto_equations;
+      (* Pre-compute classes before (pre) and after (post) a node. *)
+      pre_classes = Vector.make ConsedTree.Inner.n [||];
+      post_classes = Vector.make ConsedTree.Inner.n [||];
+    } in
+    (* Nodes are allocated in topological order. When iterating over all nodes
+       in order, children are visited before parents. *)
+    Index.iter ConsedTree.Inner.n (fun node ->
+        let l, r = Tree.define node in
+        result.pre_classes.:(node) <- pre_classes info classes result l;
+        result.post_classes.:(node) <- post_classes info classes result r
+      );
+    result
+end
+
+module Cell_index = Unsafe_cardinal()
+type 'g cell = 'g Cell_index.t
+
+module Goto_cell_index = Unsafe_cardinal()
+type 'g goto_cell = 'g Goto_cell_index.t
+
+module Cell = struct
+
+  (* A value of type row represents the index of a row of a matrix.
+     A row of node [n] belongs to the interval
+       0 .. Array.length (Tree.pre_classes n) - 1
+  *)
+  type row = int
+
+  (* A value of type column represents the index of a column of a matrix.
+     A column of node [n] belongs to the interval
+       0 .. Array.length (Tree.post_classes n) - 1
+  *)
+  type column = int
+
+  type 'g mapping = {
+    first_cell: ('g Problem.term, int) vector;
+    description: ('g cell, int) vector;
+    pre_bits : int;
+    post_bits : int;
+    first_goto_cell : int;
+    last_goto_cell : int;
+    goto_cells : 'g goto_cell cardinal;
+  }
+
+  (* Get the node, row, and column corresponding to a cell *)
+  let decode map ix =
+    let i = map.description.:(ix) in
+    let post = i land (map.post_bits - 1) in
+    let i = i lsr map.post_bits in
+    let pre = i land (map.pre_bits - 1) in
+    (Index.of_int (Vector.length map.first_cell) (i lsr map.pre_bits), pre, post)
+
+  (* Get the cell corresponding to a node, a row, and a column *)
+  let encode info classes problem map i =
+    let first = map.first_cell.:(i) in
+    let post_count = Problem.post_count info classes problem i in
+    fun ~pre ~post ->
+      Index.of_int (Vector.length map.description) (first + pre * post_count + post)
+
+  (* Index of the first cell of matrix associated to a node *)
+  let first_cell map i =
+    Index.of_int (Vector.length map.description) map.first_cell.:(i)
+
+  let make (type g) (info : g info) classes (problem : g Problem.t)=
+    let max_pre = ref 0 in
+    let max_post = ref 0 in
+    let n = ref 0 in
+    let terms = Problem.terms_cardinal info problem in
+    Index.iter terms begin fun node ->
+      let pre = Problem.pre_count info classes problem node in
+      let post = Problem.post_count info classes problem node in
+      n := !n + pre * post;
+      max_pre := Int.max pre !max_pre;
+      max_post := Int.max post !max_post;
+    end;
+    let bits_needed n =
+      let i = ref 0 in
+      while 1 lsl !i <= n
+      do incr i; done;
+      !i
+    in
+    let module Cells = Cell_index.Const(struct type t = g let cardinal = !n end) in
+    let pre_bits = bits_needed !max_pre in
+    let post_bits = bits_needed !max_post in
+    let description = Vector.make Cells.n 0 in
+    let first_cell =
+      let index = ref 0 in
+      Vector.init terms @@ fun node ->
+      let first_index = !index in
+      let base = (node :> int) lsl (pre_bits + post_bits) in
+      let pre_count = Problem.pre_count info classes problem node in
+      let post_count = Problem.post_count info classes problem node in
+      for pre = 0 to pre_count - 1 do
+        let base = base lor (pre lsl post_bits) in
+        for post = 0 to post_count - 1 do
+          description.:(Index.of_int Cells.n !index) <- base lor post;
+          incr index
+        done
+      done;
+      first_index
+    in
+    let first_goto_cell, last_goto_cell =
+      let open (val info) in
+      match cardinal Transition.goto with
+      | 0 -> (0, -1)
+      | n ->
+        let tr i = Transition.of_goto (Index.of_int Transition.goto i) in
+        let first = first_cell.:(Index.of_int terms 0) in
+        let last : g Problem.term index = Sum.inj_l (tr (n - 1)) in
+        let next = Index.of_int terms ((last :> int) + 1) in
+        (first, first_cell.:(next) - 1)
+    in
+    let module Goto_cells = Goto_cell_index.Const(struct
+        type t = g
+        let cardinal = last_goto_cell - first_goto_cell + 1
+      end) in
+    {first_cell; description; pre_bits; post_bits;
+     first_goto_cell; last_goto_cell; goto_cells = Goto_cells.n}
+
+  (*val goto : goto cardinal
     val is_goto : n index -> goto index option
     val of_goto : goto index -> n index
     val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
     val goto_decode : goto index -> Transition.goto index * row * column
     val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
-  end = struct
-    type row = int
-    type column = int
+    end = struct
+                type row = int
+                type column = int*)
 
-    let n, pre_bits, post_bits =
-      let max_pre = ref 0 in
-      let max_post = ref 0 in
-      let n = ref 0 in
-      let bits_needed n =
-        let i = ref 0 in
-        while 1 lsl !i <= n
-        do incr i; done;
-        !i
-      in
-      Index.iter Tree.n begin fun node ->
-        let pre = Tree.pre_count node in
-        let post = Tree.post_count node in
-        n := !n + pre * post;
-        max_pre := Int.max pre !max_pre;
-        max_post := Int.max post !max_post;
-      end;
-      (!n, bits_needed !max_pre, bits_needed !max_post)
+  let cells_cardinal m = Vector.length m.description
+  let goto_cells_cardinal m = m.goto_cells
 
-    include Const(struct let cardinal = n end)
+  let is_goto (type g) (m : g mapping) (i : g cell index) =
+    let i = (i :> int) in
+    if m.first_goto_cell <= i && i <= m.last_goto_cell
+    then Some (Index.of_int m.goto_cells (i - m.first_goto_cell))
+    else None
 
-    let mapping = Vector.make n 0
+  let of_goto (type g) (m : g mapping) (i : g goto_cell index) =
+    Index.of_int (cells_cardinal m) (m.first_goto_cell + (i :> int))
 
-    let first_cell =
-      let index = ref 0 in
-      Vector.init Tree.n @@ fun node ->
-      let first_index = !index in
-      let base = (node :> int) lsl (pre_bits + post_bits) in
-      let pre_count = Tree.pre_count node in
-      let post_count = Tree.post_count node in
-      for pre = 0 to pre_count - 1 do
-        let base = base lor (pre lsl post_bits) in
-        for post = 0 to post_count - 1 do
-          mapping.:(Index.of_int n !index) <- base lor post;
-          incr index
-        done
-      done;
-      first_index
+  let goto_decode (type g) ((module Info) : g info) (m : g mapping) (i : g goto_cell index) =
+    let n, pre, post = decode m (of_goto m i) in
+    let gt = Index.of_int Info.Transition.goto ((n :> int) - m.first_goto_cell) in
+    (gt, pre, post)
 
-    let decode ix =
-      let i = mapping.:(ix) in
-      let post = i land (post_bits - 1) in
-      let i = i lsr post_bits in
-      let pre = i land (pre_bits - 1) in
-      (Index.of_int Tree.n (i lsr pre_bits), pre, post)
+  let goto_encode (type g) (info : g info) classes problem (m : g mapping) i =
+    let open (val info) in
+    let node = Sum.inj_l (Transition.of_goto i) in
+    let first = m.first_cell.:(node) - m.first_goto_cell in
+    let post_count = Problem.post_count info classes problem node in
+    let goto = goto_cells_cardinal m in
+    fun ~pre ~post ->
+      Index.of_int goto (first + pre * post_count + post)
 
-    let encode i =
-      let first = first_cell.:(i) in
-      let post_count = Tree.post_count i in
-      fun ~pre ~post ->
-        Index.of_int n (first + pre * post_count + post)
+  let iter_goto (type g) ((module Info) : g info) (m : g mapping) (gt : g goto_transition index) f =
+    let i = (gt :> int) in
+    let index_of i = m.first_cell.:(Sum.inj_l (Index.of_int Info.Transition.any i)) in
+    let n = goto_cells_cardinal m in
+    for j = index_of i to index_of (i + 1) - 1 do
+      f (Index.of_int n (j - m.first_goto_cell))
+    done
 
-    let first_goto_node, first_goto_cell, last_goto_cell =
-      match cardinal Transition.goto with
-      | 0 -> (0, 0, -1)
-      | n ->
-        let tr i = Transition.of_goto (Index.of_int Transition.goto i) in
-        let first_goto_node = Tree.leaf (tr 0) in
-        let first = first_cell.:(first_goto_node) in
-        let last = Tree.leaf (tr (n - 1)) in
-        let next = Index.of_int Tree.n ((last :> int) + 1) in
-        ((first_goto_node :> int), first, first_cell.:(next) - 1)
+  let first_cell m i = Index.of_int (cells_cardinal m) m.first_cell.:(i)
+end
 
-    module Goto = Const(struct
-        let cardinal = last_goto_cell - first_goto_cell + 1
-      end)
 
-    type goto = Goto.n
-    let goto = Goto.n
+  (* Get the node, row, and column corresponding to a cell *)
+  let decode : 'g Problem.t -> 'g cell index -> 'g Problem.term index * row * column
 
-    let is_goto (i : n index) =
-      let i = (i :> int) in
-      if first_goto_cell <= i && i <= last_goto_cell
-      then Some (Index.of_int goto (i - first_goto_cell))
-      else None
 
-    let of_goto (g : goto index) =
-      Index.of_int n (first_goto_cell + (g :> int))
+    (* This module implements efficient representations of the coerce matrices,
+       as mentioned in section 6.5.
 
-    let goto_decode (g : goto index) =
-      let n, pre, post = decode (of_goto g) in
-      let gt = Index.of_int Transition.goto ((n :> int) - first_goto_cell) in
-      (gt, pre, post)
+       However, our implementation has one more optimization.
+       In general, we omit the last block of a partition (it can still be deduced
+       by removing the other blocks from the universe T, see section 6.1).  The
+       block that is omitted is one that is guaranteed to have infinite cost in
+       the compact cost matrix.
+       Therefore, we never need to represent the rows and columns that correspond
+       to the missing class; by construction we know they have infinite cost.
+       For instance for shift transitions, it means we only have a 1x1 matrix:
+       the two classes are the terminal being shifted, with a cost of one, and
+       its complement, with an infinite cost, that is omitted.
 
-    let goto_encode i =
-      let node = Tree.leaf (Transition.of_goto i) in
-      let first = first_cell.:(node) - first_goto_cell in
-      let post_count = Tree.post_count node in
-      fun ~pre ~post ->
-        Index.of_int goto (first + pre * post_count + post)
+       Our coercion functions are augmented to handle this special case.
+    *)
 
-    let iter_goto (gt : Transition.goto index) f =
-      let i = (gt :> int) in
-      let index_of i = first_cell.:(Index.of_int Tree.n (first_goto_node + i)) in
-      for j = index_of i to index_of (i + 1) - 1 do
-        f (Index.of_int goto (j - first_goto_cell))
-      done
+(* , and compute the solution.
 
-    let first_cell i = Index.of_int n first_cell.:(i)
-
-  end
-
-  module Reverse_dependencies = struct
+   Each occurrence of [ccost(s,x)] is mapped to a leaf.
+   Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
+   that the chain of multiplication are re-associated.
+*)
+let solve (type g) (info : g info) unreduce classes =
+  let module Reverse_dependencies = struct
 
     (* Reverse dependencies record in which equations a node appears *)
     type t =
@@ -981,12 +875,12 @@ struct
           )
       in
       List.iter update_dep occurrences.:(node)
-  end
+  end in
 
   (* ---------------------------------------------------------------------- *)
 
   (* Represent the data flow problem to solve *)
-  module Solver = struct
+  let module Solver = struct
     let min_cost a b : int =
       if a < b then a else b
 
@@ -1016,7 +910,7 @@ struct
             visit_root (encode ~pre:i_pre ~post:i_post) 0
         in
         let update_col i_post c_post =
-          if quick_subset c_post eqn.nullable_lookaheads then
+          if IndexSet.quick_subset c_post eqn.nullable_lookaheads then
             Array.iteri (update_cell i_post c_post) pre
         in
         Array.iteri update_col post
@@ -1149,9 +1043,10 @@ struct
     end
     include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(BoolMap())
   end
-
-  module Analysis = struct
+  in
+  let module Analysis = struct
     let cost = Vector.get Solver.costs
     let finite = Solver.Finite.get
   end
-end
+  in
+  ()
