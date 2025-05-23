@@ -53,6 +53,9 @@ type 'g reduction_path = {
   state: 'g lr1 index;
 }
 
+let transitions (type g) ((module Info) : g info) =
+  Info.Transition.any
+
 module Coercion = struct
   (* Pre coercions are used to handle the minimum in equation (7):
      ccost(s, A → ϵ•α) · creduce(s, A → α)
@@ -402,12 +405,13 @@ module Problem = struct
   }
 
   type 'g t = {
+    define: ('g var, 'g term index * 'g term index) vector;
     equations: ('g goto_transition, 'g equations) vector;
     pre_classes: ('g var, 'g Classes.partition) vector;
     post_classes: ('g var, 'g Classes.partition) vector;
   }
 
-  let terms_cardinal (type g) ((module Info) : g info) problem =
+  let terms (type g) ((module Info) : g info) problem =
     Sum.cardinal Info.Transition.any (Vector.length problem.pre_classes)
 
   let pre_classes (type g) (info : g info) classes t i =
@@ -424,6 +428,17 @@ module Problem = struct
 
   let pre_count info classes t i = Array.length (pre_classes info classes t i)
   let post_count info classes t i = Array.length (post_classes info classes t i)
+
+  let classes (type g) (info : g info) classes t i =
+    let open (val info) in
+    match Sum.prj Transition.any i with
+    | L tr -> (Classes.pre_transition info classes tr,
+               Classes.post_transition info classes tr)
+    | R ix -> (t.pre_classes.:(ix), t.post_classes.:(ix))
+
+  let class_count info c t i =
+    let pre, post = classes info c t i in
+    (Array.length pre, Array.length post)
 
   let make (type g) (info : g info) unreduce classes =
     let open (val info) in
@@ -455,9 +470,7 @@ module Problem = struct
       val split : n index -> (Transition.any index, Inner.n index) either
 
       (* Once all nodes have been added, the DAG needs to be frozen *)
-      module FreezeTree() : sig
-        val define : Inner.n index -> n index * n index
-      end
+      val freeze : unit -> (Inner.n, n index * n index) vector
     end = struct
       (* The fresh finite set of all inner nodes *)
       module Inner = struct
@@ -494,18 +507,14 @@ module Problem = struct
 
       (* When all nodes have been created, the set of nodes can be frozen.
          A reverse index is created to get the children of an inner node. *)
-      module FreezeTree() =
-      struct
-        let rev_index = Vector.make' Inner.n
+      let freeze () =
+        let table = Vector.make' Inner.n
             (fun () -> let dummy = Index.of_int n 0 in (dummy, dummy))
-
-        let define ix = rev_index.:(ix)
-
-        let () =
-          Hashtbl.iter
-            (fun pair index -> rev_index.:(index) <- unpack pair)
-            node_table
-      end
+        in
+        Hashtbl.iter
+          (fun pair index -> table.:(index) <- unpack pair)
+          node_table;
+        table
     end in
 
     let module Var_is_Inner = Var.Eq(ConsedTree.Inner) in
@@ -565,10 +574,10 @@ module Problem = struct
           non_nullable;
         }
 
-      include ConsedTree.FreezeTree()
-
+      let define = ConsedTree.freeze()
     end in
     let result = {
+      define = Tree.define;
       equations = Tree.goto_equations;
       (* Pre-compute classes before (pre) and after (post) a node. *)
       pre_classes = Vector.make ConsedTree.Inner.n [||];
@@ -576,11 +585,10 @@ module Problem = struct
     } in
     (* Nodes are allocated in topological order. When iterating over all nodes
        in order, children are visited before parents. *)
-    Index.iter ConsedTree.Inner.n (fun node ->
-        let l, r = Tree.define node in
-        result.pre_classes.:(node) <- pre_classes info classes result l;
-        result.post_classes.:(node) <- post_classes info classes result r
-      );
+    Vector.iteri begin fun node (l, r) ->
+      result.pre_classes.:(node) <- pre_classes info classes result l;
+      result.post_classes.:(node) <- post_classes info classes result r
+    end Tree.define;
     result
 end
 
@@ -637,7 +645,7 @@ module Cell = struct
     let max_pre = ref 0 in
     let max_post = ref 0 in
     let n = ref 0 in
-    let terms = Problem.terms_cardinal info problem in
+    let terms = Problem.terms info problem in
     Index.iter terms begin fun node ->
       let pre = Problem.pre_count info classes problem node in
       let post = Problem.post_count info classes problem node in
@@ -736,35 +744,25 @@ module Cell = struct
   let first_cell m i = Index.of_int (cells_cardinal m) m.first_cell.:(i)
 end
 
+(* This module implements efficient representations of the coerce matrices,
+   as mentioned in section 6.5.
 
-  (* Get the node, row, and column corresponding to a cell *)
-  let decode : 'g Problem.t -> 'g cell index -> 'g Problem.term index * row * column
+   However, our implementation has one more optimization.
+   In general, we omit the last block of a partition (it can still be deduced
+   by removing the other blocks from the universe T, see section 6.1).  The
+   block that is omitted is one that is guaranteed to have infinite cost in
+   the compact cost matrix.
+   Therefore, we never need to represent the rows and columns that correspond
+   to the missing class; by construction we know they have infinite cost.
+   For instance for shift transitions, it means we only have a 1x1 matrix:
+   the two classes are the terminal being shifted, with a cost of one, and
+   its complement, with an infinite cost, that is omitted.
 
-
-    (* This module implements efficient representations of the coerce matrices,
-       as mentioned in section 6.5.
-
-       However, our implementation has one more optimization.
-       In general, we omit the last block of a partition (it can still be deduced
-       by removing the other blocks from the universe T, see section 6.1).  The
-       block that is omitted is one that is guaranteed to have infinite cost in
-       the compact cost matrix.
-       Therefore, we never need to represent the rows and columns that correspond
-       to the missing class; by construction we know they have infinite cost.
-       For instance for shift transitions, it means we only have a 1x1 matrix:
-       the two classes are the terminal being shifted, with a cost of one, and
-       its complement, with an infinite cost, that is omitted.
-
-       Our coercion functions are augmented to handle this special case.
-    *)
-
-(* , and compute the solution.
-
-   Each occurrence of [ccost(s,x)] is mapped to a leaf.
-   Occurrences of [(ccost(s, A → α•xβ)] are mapped to inner nodes, except
-   that the chain of multiplication are re-associated.
+   Our coercion functions are augmented to handle this special case.
 *)
-let solve (type g) (info : g info) unreduce classes =
+
+let solve (type g) (info : g info) unreduce classes problem mapping =
+  let open (val info) in
   let module Reverse_dependencies = struct
 
     (* Reverse dependencies record in which equations a node appears *)
@@ -773,61 +771,59 @@ let solve (type g) (info : g info) unreduce classes =
          goto transition.
          The dependency is accompanied with pre-coercion (see [Coercion.pre])
          and the forward coercion that represents the creduce(...). *)
-      | Leaf of Transition.goto index * Coercion.pre * Coercion.forward
+      | Leaf of g goto_transition index * Coercion.pre * Coercion.forward
 
       (* Equation (8): this node appears in some inner product.
          The dependency stores the index of the parent node as well as the
          coercion matrix. *)
-      | Inner of Tree.Inner.n index * Coercion.infix
+      | Inner of g Problem.var index * Coercion.infix
 
-    let occurrences : (Tree.n, t list) vector =
+    let occurrences : (g Problem.term, t list) vector =
       (* Store enough information with each node of the tree to compute
          which cells are affected if a cell of this node changes.
 
          Because of sharing, a node can have multiple parents.
       *)
-      Vector.make Tree.n []
+      Vector.make (Problem.terms info problem) []
 
     let () =
       Index.iter Transition.goto begin fun tr ->
         (* Record dependencies of a goto transition.  *)
-        let node = Tree.leaf (Transition.of_goto tr) in
-        let pre = Tree.pre_classes node in
-        let post = Tree.post_classes node in
+        let node = Sum.inj_l (Transition.of_goto tr) in
+        let pre, post = Problem.classes info classes problem node in
         (* Register dependencies to other reductions *)
         List.iter begin fun ({lookahead; _}, node') ->
-          match Coercion.pre pre (Tree.pre_classes node') with
+          let pre', post' = Problem.classes info classes problem node' in
+          match Coercion.pre pre pre' with
           | None ->
             (* The goto transition is unreachable because of conflict
                resolution.  Don't register any dependency. *)
             ()
           | Some coerce_pre ->
-            let post' = Tree.post_classes node' in
             let coerce_post = Coercion.infix post' post ~lookahead in
             occurrences.@(node') <-
               List.cons (Leaf (tr, coerce_pre, coerce_post.Coercion.forward))
-        end (Tree.goto_equations tr).non_nullable
+        end problem.equations.:(tr).non_nullable
       end;
       (* Record dependencies on a inner node. *)
-      Index.iter Tree.Inner.n begin fun node ->
-        let (l, r) = Tree.define node in
+      Vector.iteri begin fun node (l, r) ->
         (*(*sanity*)assert (Tree.pre_classes l == Tree.pre_classes node);*)
         (*(*sanity*)assert (Tree.post_classes r == Tree.post_classes node);*)
-        let c1 = Tree.post_classes l in
-        let c2 = Tree.pre_classes r in
+        let c1 = Problem.post_classes info classes problem l in
+        let c2 = Problem.pre_classes info classes problem r in
         let coercion = Coercion.infix c1 c2 in
         let dep = Inner (node, coercion) in
         assert (Array.length c2 = Array.length coercion.Coercion.backward);
         occurrences.@(l) <- List.cons dep;
         occurrences.@(r) <- List.cons dep
-      end
+      end problem.define
 
-    let visit_occurrences index
+    let visit_occurrences info classes problem mapping index
         ~visit_goto
         ~from_left ~acc ~acc_right
         ~from_right
       =
-      let node, i_pre, i_post = Cell.decode index in
+      let node, i_pre, i_post = Cell.decode mapping index in
       let update_dep = function
         | Leaf (parent, pre, post) ->
           (* If the production begins with a terminal,
@@ -836,7 +832,7 @@ let solve (type g) (info : g info) unreduce classes =
             | Coercion.Pre_singleton i -> i
             | Coercion.Pre_identity -> i_pre
           in
-          let encode = Cell.goto_encode parent in
+          let encode = Cell.goto_encode info classes problem mapping parent in
           Array.iter (fun i_post' -> visit_goto (encode ~pre:i_pre' ~post:i_post'))
             post.(i_post)
         | Inner (parent, inner) ->
@@ -844,12 +840,12 @@ let solve (type g) (info : g info) unreduce classes =
              of the form l . coercion . r
              We have to find whether the change comes from the [l] or the [r]
              node to update the right-hand cells of the parent *)
-          let l, r = Tree.define parent in
-          let encode_p = Cell.encode (Tree.inject parent) in
+          let l, r = problem.define.:(parent) in
+          let encode_p = Cell.encode info classes problem mapping (Sum.inj_r (transitions info) parent) in
           if l = node then (
             (* The left term has been updated *)
-            let encode_r = Cell.encode r in
-            for i_post' = 0 to Array.length (Tree.post_classes r) - 1 do
+            let encode_r = Cell.encode info classes problem mapping r in
+            for i_post' = 0 to Array.length (Problem.post_classes info classes problem r) - 1 do
               let acc =
                 Array.fold_left
                   (fun acc i_pre' ->
@@ -866,8 +862,8 @@ let solve (type g) (info : g info) unreduce classes =
             match inner.Coercion.backward.(i_pre) with
             | -1 -> ()
             | l_post ->
-              let encode_l = Cell.encode l in
-              for i_pre = 0 to Array.length (Tree.pre_classes l) - 1 do
+              let encode_l = Cell.encode info classes problem mapping l in
+              for i_pre = 0 to Array.length (Problem.pre_classes info classes problem l) - 1 do
                 from_right
                   ~left:(encode_l ~pre:i_pre ~post:l_post)
                   ~parent:(encode_p ~pre:i_pre ~post:i_post)
@@ -886,25 +882,25 @@ let solve (type g) (info : g info) unreduce classes =
 
     (* Initialize shift transitions to cost 1. *)
     let initialize_shift ~visit_root tr =
-      let node = Tree.leaf (Transition.of_shift tr) in
-      (*sanity*)assert (Array.length (Tree.pre_classes node) = 1);
-      (*sanity*)assert (Array.length (Tree.post_classes node) = 1);
-      visit_root (Cell.first_cell node) 1
+      let node = Sum.inj_l (Transition.of_shift tr) in
+      let pre, post = Problem.classes info classes problem node in
+      (*sanity*)assert (Array.length pre = 1);
+      (*sanity*)assert (Array.length post = 1);
+      visit_root (Cell.first_cell mapping node) 1
 
     (* Record dependencies on a goto transition.  *)
     let initialize_goto ~visit_root tr =
-      let node = Tree.leaf (Transition.of_goto tr) in
-      let eqn = Tree.goto_equations tr in
+      let node = Sum.inj_l (Transition.of_goto tr) in
+      let eqn = problem.equations.:(tr) in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
       if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
-        let pre = Tree.pre_classes node in
-        let post = Tree.post_classes node in
+        let pre, post = Problem.classes info classes problem node in
         (* We use:
            - [c_pre] and [i_pre] for a class in the pre partition and its index
            - [c_post] and [i_post] for a class in the post partition and its
              index
         *)
-        let encode = Cell.encode node in
+        let encode = Cell.encode info classes problem mapping node in
         let update_cell i_post c_post i_pre c_pre =
           if not (IndexSet.disjoint c_pre c_post) then
             visit_root (encode ~pre:i_pre ~post:i_post) 0
@@ -916,11 +912,11 @@ let solve (type g) (info : g info) unreduce classes =
         Array.iteri update_col post
       )
 
-    let costs = Vector.make Cell.n max_int
+    let costs = Vector.make (Cell.cells_cardinal mapping) max_int
 
     (* A graph representation suitable for the DataFlow solver *)
     module Graph = struct
-      type variable = Cell.n index
+      type variable = g cell index
 
       (* We cheat a bit. Normally a root is either the cell corresponding to a
          shift transition (initialized to 1) or the cells corresponding to the
@@ -949,7 +945,7 @@ let solve (type g) (info : g info) unreduce classes =
            This guarantees that the additions below do not overflow. *)
         assert (cost < max_int);
         Reverse_dependencies.visit_occurrences index
-          ~visit_goto:(fun cell -> f (Cell.of_goto cell) cost)
+          ~visit_goto:(fun cell -> f (Cell.of_goto mapping cell) cost)
           ~acc:max_int
           ~acc_right:(fun cost right -> min_cost cost costs.:(right))
           ~from_left:(fun ~right ~parent ->
@@ -970,7 +966,7 @@ let solve (type g) (info : g info) unreduce classes =
     (* Implement the interfaces required by DataFlow.ForCustomMaps *)
 
     module BoolMap() = struct
-      let table = Boolvector.make Cell.n false
+      let table = Boolvector.make (Cell.cells_cardinal mapping) false
       let get t = Boolvector.test table t
       let set t x =
         if x
@@ -993,13 +989,14 @@ let solve (type g) (info : g info) unreduce classes =
     module Finite = BoolMap()
 
     module FiniteGraph = struct
-      type variable = Cell.n index
+      type variable = g cell index
 
-      let count = Vector.make Cell.goto 0
+      let count = Vector.make (Cell.goto_cells_cardinal mapping) 0
 
       let () =
-        Index.iter Cell.n (fun cell ->
-            Reverse_dependencies.visit_occurrences cell
+        Index.iter (Cell.cells_cardinal mapping) (fun cell ->
+            Reverse_dependencies.visit_occurrences
+              info classes problem mapping cell
               ~visit_goto:(fun goto -> count.@(goto) <- succ)
               ~acc:()
               ~acc_right:(fun () _ -> ())
@@ -1009,12 +1006,12 @@ let solve (type g) (info : g info) unreduce classes =
 
       let foreach_root visit_root =
         Index.iter Transition.shift (fun sh ->
-            let node = Tree.leaf (Transition.of_shift sh) in
-            visit_root (Cell.first_cell node) true
+            let node = Sum.inj_l (Transition.of_shift sh) in
+            visit_root (Cell.first_cell mapping node) true
           );
         Index.iter Transition.goto (fun gt ->
-            Cell.iter_goto gt (fun gt' ->
-                let index = Cell.of_goto gt' in
+            Cell.iter_goto info mapping gt (fun gt' ->
+                let index = Cell.of_goto mapping gt' in
                 if costs.:(index) < max_int && count.:(gt') = 0 then
                   visit_root index true
               )
@@ -1028,7 +1025,8 @@ let solve (type g) (info : g info) unreduce classes =
       *)
       let foreach_successor index finite f =
         if finite then
-          Reverse_dependencies.visit_occurrences index
+          Reverse_dependencies.visit_occurrences
+            info classes problem mapping index
             ~visit_goto:(fun gt ->
                 let count' = count.:(gt) - 1  in
                 count.:(gt) <- count';

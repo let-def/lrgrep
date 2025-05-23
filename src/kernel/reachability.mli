@@ -102,7 +102,7 @@ module Problem : sig
 end
 
 (* Solve the reachability problem by assigning a cost to each cell *)
-module Solution : sig
+(*module Solution : sig
   type 'g cell
 
   (* A value of type row represents the index of a row of a matrix.
@@ -164,3 +164,4 @@ end
 end
 
 module Make (Info : Info.S)() : S with module Info := Info
+*)
