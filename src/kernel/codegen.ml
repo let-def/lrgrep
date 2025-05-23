@@ -7,9 +7,28 @@ open Lrgrep_support
 
 type priority = int
 
-module type SPEC = sig
-  val parser_name : string
-  val lexer_definition : Syntax.lexer_definition
+type spec = {
+  parser_name : string;
+  lexer_definition : Syntax.lexer_definition;
+}
+
+module Clause = Unsafe_cardinal()
+type 's clause = 's Clause.t
+
+type 's clauses = {
+  syntax : ('s clause, Syntax.clause) vector;
+  captures : ('s clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
+}
+
+module type BRANCH = sig
+  type g
+
+  include CARDINAL
+  module Clause : CLAUSE
+
+  val of_clauses : Clause.n index -> n indexset
+  val lookaheads : n index -> g terminal indexset option
+  val captures : n index -> Capture.n indexset
 end
 
 module type MACHINE = sig
@@ -41,22 +60,6 @@ module type MACHINE = sig
   val partial_captures : Capture.set
 end
 
-module type CLAUSE = sig
-  include CARDINAL
-  val syntax : n index -> Syntax.clause
-  val captures : n index -> (Capture.n, Syntax.capture_kind * string) indexmap
-end
-
-module type BRANCH = sig
-  type g
-
-  include CARDINAL
-  module Clause : CLAUSE
-
-  val of_clauses : Clause.n index -> n indexset
-  val lookaheads : n index -> g terminal indexset option
-  val captures : n index -> Capture.n indexset
-end
 
 module type RULE = sig
   val rule : Syntax.rule
