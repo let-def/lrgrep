@@ -32,6 +32,7 @@
 open Utils
 open Misc
 open Fix.Indexing
+open Info
 
 (* Flag to control the inclusion of expensive assertions for debugging *)
 let build_with_expensive_assertions = false
@@ -49,40 +50,38 @@ let style = "\
     compound=true;\
   "
 
+type 'g source = ('g Viable_reductions.viable, 'g lr1) Sum.n
+
+type 'g config = {
+  source: 'g source index;
+  lrcs: 'g Lrc.n indexset;
+}
+
 (* Signature of reachable reductions modules *)
 module type S = sig
-  module Info : Info.S
-  open Info
-
-  module Lrc : Lrc.S with module Info := Info
+  type g
 
   include CARDINAL
-  module Source : Sum.S with type l := g Viable_reductions.viable and type r := Lr1.n
 
-  type config = {
-    source: Source.n index;
-    lrcs: Lrc.set;
-  }
-
-  type target = n index * Reduction.t
+  type target = n index * g reduction index
 
   type transitions = target list list
 
   type desc = {
-    config: config;
+    config: g config;
     transitions: transitions;
   }
 
-  val initial : n index Lrc.map
+  val initial : (g Lrc.n, n index) indexmap
   val states : (n, desc) vector
 
-  val reject : n index -> Terminal.set
-  val rejectable : n index -> Terminal.set * (n index * Terminal.set) list
+  val reject : n index -> g terminal indexset
+  val rejectable : n index -> g terminal indexset * (n index * g terminal indexset) list
 
   val successors : (n, n indexset) vector
   val predecessors : (n, n indexset) vector
 
-  val reductions : n index -> n index -> Reduction.set
+  val reductions : n index -> n index -> g reduction indexset
 
   val iter_targets : transitions -> (target -> unit) -> unit
   val rev_iter_targets : transitions -> (target -> unit) -> unit
@@ -93,17 +92,17 @@ end
 (* Functor to create an instance of reachable reductions *)
 module Make
     (Info : Info.S)
-    (Viable: sig val viable : Info.g Viable_reductions.t end)
-    (LRC: Lrc.S with module Info := Info)
-    (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
-                                   and module Lrc := LRC)
-    () : S with module Info := Info
-            and module Lrc := LRC
+    (Reductions: sig
+       val viable : Info.g Viable_reductions.t
+       val lrc_graph : Info.g Lrc.t
+       val entrypoints : Info.g Lrc.entrypoints
+     end)
+    () : S with type g = Info.g
 =
 struct
   open Info
-  open Viable
-  module Lrc = LRC
+  open Reductions
+  type g = Info.g
 
   include IndexBuffer.Gen.Make()
 
@@ -112,17 +111,12 @@ struct
                       let n = Vector.length viable.reachable_from
                     end)(Lr1)
 
-  type config = {
-    source: Source.n index;
-    lrcs : Lrc.set;
-  }
-
   type target = n index * Reduction.t
 
   type transitions = target list list
 
   type desc = {
-    config: config;
+    config: g config;
     transitions: transitions;
   }
 
@@ -170,7 +164,7 @@ struct
     | {Viable_reductions. goto_transitions; _} :: rest ->
       let visit_goto_transition
           {Viable_reductions. target; lookahead=_; source=lr1s; reduction} =
-        let compatible_lrc lr1 = IndexSet.inter lrcs (Lrc.lrcs_of_lr1 lr1) in
+        let compatible_lrc lr1 = IndexSet.inter lrcs lrc_graph.lrcs_of.:(lr1) in
         let lrcs = indexset_bind lr1s compatible_lrc in
         if IndexSet.is_empty lrcs
         then None
@@ -180,20 +174,20 @@ struct
       let rest =
         match rest with
         | [] -> []
-        | rest -> visit_outer (indexset_bind lrcs Entrypoints.predecessors) rest
+        | rest -> visit_outer (indexset_bind lrcs (Vector.get entrypoints.predecessors)) rest
       in
       candidates :: rest
 
   (* Initial configurations for the state machine *)
   let initial =
     let process lrc =
-      let lr1 = Lrc.lr1_of_lrc lrc in
+      let lr1 = lrc_graph.lr1_of.:(lrc) in
       assert (not (IndexSet.mem lr1 Lr1.accepting));
       visit_config
         (IndexSet.singleton lrc)
         (Source.inj_r lr1)
     in
-    IndexMap.inflate process Entrypoints.wait
+    IndexMap.inflate process entrypoints.wait
 
   (* Freeze the state generator to finalize the state machine *)
   let states = IndexBuffer.Gen.freeze states
@@ -269,16 +263,14 @@ end
 (* Functor to create a covering tree for the Reachable_reductions module *)
 module Covering_tree
     (Info : Info.S)
-    (Viable: sig val viable : Info.g Viable_reductions.t end)
-    (Lrc: Lrc.S with module Info := Info)
-    (Reach : S with module Info := Info
-                and module Lrc := Lrc)
+    (Reductions: sig val viable : Info.g Viable_reductions.t end)
+    (Reach : S with type g = Info.g)
     ()
 =
 struct
   open Info
   open Reach
-  open Viable
+  open Reductions
 
   (* Enumerate the stack suffixes produced by following one or more goto
      transitions as part of a sequence of reductions.*)
@@ -287,7 +279,7 @@ struct
 
     (* Function to get the LR0 stack from a source *)
     let lr0_stack_of_source source =
-      match Source.prj source with
+      match Sum.prj (Vector.length viable.transitions) source with
       | L v -> List.rev_map Lr1.to_lr0 (Viable_reductions.get_stack viable v)
       | R lr1 -> [Lr1.to_lr0 lr1]
 
@@ -445,47 +437,43 @@ struct
 end
 
 module type FAILURE_NFA = sig
-  type lr1
-  type lrc
-  type terminal
+  type g
   include CARDINAL
-  val initial : (n, terminal indexset) indexmap
+  val initial : (n, g terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
-  val rejectable : n index -> terminal indexset
-  val top : n index -> lr1 index option
-  val goto : n index -> lr1 index list
+  val rejectable : n index -> g terminal indexset
+  val top : n index -> g lr1 index option
+  val goto : n index -> g lr1 index list
   val is_bottom : n index -> bool
-  val incoming : n index -> lr1 indexset
-  val incoming_lrc : n index -> lrc indexset
-  val transitions : n index -> (n, terminal indexset) indexmap
+  val incoming : n index -> g lr1 indexset
+  val incoming_lrc : n index -> g Lrc.n indexset
+  val transitions : n index -> (n, g terminal indexset) indexmap
   val to_string : n index -> string
 end
 
 module FailureNFA
     (Info : Info.S)
-    (Viable: sig val viable : Info.g Viable_reductions.t end)
-    (LRC: Lrc.S with module Info := Info)
-    (Entrypoints: Lrc.ENTRYPOINTS with module Lrc.Info := Info
-                                   and module Lrc := LRC)
-    (Reach : S with module Info := Info and module Lrc := LRC)
+    (Reductions: sig
+       val viable : Info.g Viable_reductions.t
+       val lrc_graph : Info.g Lrc.t
+       val entrypoints : Info.g Lrc.entrypoints
+     end)
+    (Reach : S with type g = Info.g)
     ()
-  : FAILURE_NFA with type terminal := Info.Terminal.n
-                 and type lr1 := Info.Lr1.n
-                 and type lrc := LRC.n
+  : FAILURE_NFA with type g = Info.g
 =
 struct
-  module Lrc = LRC
-  open Viable
+  type g = Info.g
+  open Reductions
 
   let () =
     if build_with_expensive_assertions then (
-      Index.iter Lrc.n (fun lrc ->
-          let lr1 = Lrc.lr1_of_lrc lrc in
+      Vector.iteri (fun lrc lr1 ->
           let lr1s' = Info.Lr1.predecessors lr1 in
           IndexSet.iter (fun lrc' ->
-              assert (IndexSet.mem (Lrc.lr1_of_lrc lrc') lr1s')
-            ) (Entrypoints.predecessors lrc)
-        );
+              assert (IndexSet.mem lrc_graph.lr1_of.:(lrc') lr1s')
+            ) entrypoints.predecessors.:(lrc)
+        ) lrc_graph.lr1_of;
       let validate {Reach. config; transitions} =
         let rec validate lrcs = function
           | [] -> ()
@@ -494,12 +482,12 @@ struct
                 let lrcs' = (Vector.get Reach.states reach').config.lrcs in
                 if not (IndexSet.subset lrcs' lrcs) then (
                   Printf.eprintf "%s not included in %s\n"
-                    (Lrc.set_to_string lrcs')
-                    (Lrc.set_to_string lrcs);
+                    (Lrc.set_to_string (module Info) lrc_graph lrcs')
+                    (Lrc.set_to_string (module Info) lrc_graph lrcs);
                   assert false
                 )
               ) x;
-            validate (indexset_bind lrcs Entrypoints.predecessors) xs
+            validate (indexset_bind lrcs (Vector.get entrypoints.predecessors)) xs
         in
         validate config.lrcs transitions
       in
@@ -509,14 +497,17 @@ struct
   module States = struct
     module Suffix = IndexBuffer.Gen.Make()
     module Reach_or_suffix = Sum.Make(Reach)(Suffix)
-    include Sum.Make(Lrc)(Reach_or_suffix)
+    include Sum.Make(struct
+        type n = g Lrc.n
+        let n = Vector.length lrc_graph.reachable_from
+      end)(Reach_or_suffix)
 
     let prefix i = inj_l i
     let suffix i = inj_r (Reach_or_suffix.inj_r i)
     let reach i = inj_r (Reach_or_suffix.inj_l i)
 
     type t =
-      | Prefix of Lrc.n index
+      | Prefix of g Lrc.n index
       | Suffix of Suffix.n index
       | Reach  of Reach.n index
 
@@ -561,16 +552,16 @@ struct
 
   let lrc_initials =
     IndexSet.filter
-      (fun lrc -> IndexSet.is_empty (Entrypoints.predecessors lrc))
-      Entrypoints.wait
+      (fun lrc -> IndexSet.is_empty entrypoints.predecessors.:(lrc))
+      entrypoints.wait
 
   let bottom =
     States.suffix
       (IndexBuffer.Gen.add suffix_transitions (IndexMap.empty, IndexSet.empty))
 
   let reach_transitions =
-    let preds lrcs = indexset_bind lrcs Entrypoints.predecessors in
-    let succs lrcs = indexset_bind lrcs Entrypoints.successors in
+    let preds lrcs = indexset_bind lrcs (Vector.get entrypoints.predecessors) in
+    let succs lrcs = indexset_bind lrcs (Vector.get entrypoints.successors) in
     let rec import lrcs = function
       | [] -> (IndexMap.empty, IndexSet.empty)
       | targets :: next ->
@@ -586,8 +577,8 @@ struct
         (*FIXME: Find out why it is not always a subset*)
         if not (IndexSet.subset lrcs1 lrcs) then (
           Printf.eprintf "expected: %s in %s\n"
-            (Lrc.set_to_string lrcs1)
-            (Lrc.set_to_string lrcs);
+            (Lrc.set_to_string (module Info) lrc_graph lrcs1)
+            (Lrc.set_to_string (module Info) lrc_graph lrcs);
           assert false
         );
         match next with
@@ -652,7 +643,7 @@ struct
     | States.Reach r ->
       let desc = Vector.get Reach.states r in
       let source = desc.config.source in
-      match Reach.Source.prj source with
+      match Sum.prj (Vector.length viable.transitions) source with
       | L v -> Some viable.config.:(v).top
       | R lr1 -> Some lr1
 
@@ -663,7 +654,7 @@ struct
     | States.Reach r ->
       let desc = Vector.get Reach.states r in
       let source = desc.config.source in
-      match Reach.Source.prj source with
+      match Sum.prj (Vector.length viable.transitions) source with
       | L v -> Viable_reductions.get_stack viable v
       | R _ -> []
 
@@ -674,16 +665,16 @@ struct
     | States.Suffix i -> snd (Vector.get suffix_transitions i)
 
   let reach_incoming =
-    let incoming desc = IndexSet.map Lrc.lr1_of_lrc desc.Reach.config.lrcs in
+    let incoming desc = IndexSet.map (Vector.get lrc_graph.lr1_of) desc.Reach.config.lrcs in
     Vector.map incoming Reach.states
 
   let suffix_incoming =
-    let incoming (_, lrcs) = IndexSet.map Lrc.lr1_of_lrc lrcs in
+    let incoming (_, lrcs) = IndexSet.map (Vector.get lrc_graph.lr1_of) lrcs in
     Vector.map incoming suffix_transitions
 
   let incoming i =
     match States.prj i with
-    | States.Prefix lrc -> IndexSet.singleton (Lrc.lr1_of_lrc lrc)
+    | States.Prefix lrc -> IndexSet.singleton lrc_graph.lr1_of.:(lrc)
     | States.Reach i -> Vector.get reach_incoming i
     | States.Suffix i -> Vector.get suffix_incoming i
 
@@ -691,7 +682,7 @@ struct
     match States.prj i with
     | States.Prefix lrc ->
       IndexMap.inflate (fun _ -> IndexSet.empty)
-        (IndexSet.map States.prefix (Entrypoints.predecessors lrc))
+        (IndexSet.map States.prefix entrypoints.predecessors.:(lrc))
     | States.Reach i -> Vector.get reach_transitions i
     | States.Suffix i -> fst (Vector.get suffix_transitions i)
 
@@ -705,7 +696,7 @@ struct
         let desc = Vector.get Reach.states i in
         Printf.sprintf "reach(%d, %s)"
           (Index.to_int i)
-          (Lrc.set_to_string desc.config.lrcs)
+          (Lrc.set_to_string (module Info) lrc_graph desc.config.lrcs)
       | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () =
@@ -725,10 +716,7 @@ end
 
 module Coverage_check
     (Info : Info.S)
-    (Lrc : Lrc.S with module Info := Info)
-    (NFA : FAILURE_NFA with type terminal := Info.Terminal.n
-                        and type lr1 := Info.Lr1.n
-                        and type lrc := Lrc.n)
+    (NFA : FAILURE_NFA with type g = Info.g)
     (DFA : sig
        open Info
        type n
