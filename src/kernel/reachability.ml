@@ -153,10 +153,12 @@ module type S = sig
     val finite : Cell.n index -> bool
   end
 end
-module Make (Info : Info.S)() : S with type g = Info.g =
-struct
-  open Info
-  type g = Info.g
+
+type 'g t = (module S with type g = 'g)
+
+let make (type g) (info : g info) : g t = (module struct
+  open (val info)
+  type nonrec g = g
 
   (* ---------------------------------------------------------------------- *)
 
@@ -1154,4 +1156,4 @@ struct
     let cost = Vector.get Solver.costs
     let finite = Solver.Finite.get
   end
-end
+end)

@@ -299,18 +299,9 @@ module T = struct
   let viable = Kernel.Viable_reductions.make (module Info)
   let indices = Kernel.Transl.Indices.make (module Info)
   let trie = Kernel.Transl.Reductum_trie.make viable
+  let reachability = Kernel.Reachability.make (module Info)
+  let lrc = Kernel.Lrc.make (module Info) reachability
 end
-
-module Reachability = Kernel.Reachability.Make(Info)()
-module Lrc = Kernel.Lrc.Make(Info)(Reachability)
-
-type lrc_subset = {
-  wait: Lrc.set;
-  reachable: Lrc.set;
-  entrypoints : Lrc.set;
-  successors : Lrc.n index -> Lrc.set;
-  predecessors : (Lrc.n, Lrc.set) vector;
-}
 
 let lrc_from_entrypoints =
   let cache = Hashtbl.create 7 in
@@ -318,26 +309,13 @@ let lrc_from_entrypoints =
     match Hashtbl.find_opt cache from_entrypoints with
     | Some ep -> ep
     | None ->
-      let ep =
-      if IndexSet.is_empty from_entrypoints then
-        let entrypoints = indexset_bind Info.Lr1.all_entrypoints Lrc.lrcs_of_lr1 in
-        let reachable =
-          IndexSet.init_interval
-            (Index.of_int Lrc.n 0)
-            (Index.of_int Lrc.n (cardinal Lrc.n - 1))
-        in
-        let wait = Lrc.all_wait in
-        let successors = Lrc.all_successors in
-        let predecessors = Misc.relation_reverse' Lrc.n successors in
-        { wait; reachable; entrypoints; successors; predecessors }
-      else
-        let entrypoints = indexset_bind from_entrypoints Lrc.lrcs_of_lr1 in
-        let reachable = indexset_bind entrypoints Lrc.reachable_from in
-        let wait = IndexSet.inter Lrc.all_wait reachable in
-        let successors s = IndexSet.inter reachable (Lrc.all_successors s) in
-        let predecessors = Misc.relation_reverse' Lrc.n successors in
-        { wait; reachable; entrypoints; successors; predecessors }
+      let lr1s =
+        if IndexSet.is_empty from_entrypoints
+        then Info.Lr1.all_entrypoints
+        else from_entrypoints
       in
+      let lrcs = indexset_bind lr1s (Vector.get T.lrc.lrcs_of) in
+      let ep = Kernel.Lrc.from_entrypoints (module Info) T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
@@ -382,14 +360,14 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
     end;
     let subset = lrc_from_entrypoints initial_states in
     let module Stacks = struct
-      type n = Lrc.n
-      let n = Lrc.n
+      type n = Info.g Kernel.Lrc.n
+      let n = Vector.length T.lrc.reachable_from
       let tops =
         if fst rule.error
         then subset.wait
         else subset.reachable
       let prev = Vector.get subset.predecessors
-      let label n = IndexSet.singleton (Lrc.lr1_of_lrc n)
+      let label n = IndexSet.singleton T.lrc.lr1_of.:(n)
     end in
     let module Rule = struct let rule = rule end in
     let module Automata = Kernel.Automata.Make(Info)(T)(Rule) in
