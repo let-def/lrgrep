@@ -25,3 +25,8 @@ let clear b n =
   let bit = n land 7 in
   Bytes.unsafe_set b cell
     (Char.unsafe_chr (Char.code (Bytes.unsafe_get b cell) land lnot (1 lsl bit)))
+
+let init c f =
+  let result = make c false in
+  Index.iter c (fun i -> if f i then set result i);
+  result
