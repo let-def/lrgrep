@@ -4,6 +4,7 @@ open Misc
 open Info
 open Regexp
 open Lrgrep_support
+open Spec
 
 type priority = int
 
@@ -16,24 +17,6 @@ type ('g, 'n) stacks = {
 type spec = {
   parser_name : string;
   lexer_definition : Syntax.lexer_definition;
-}
-
-module Clause = Unsafe_cardinal()
-type ('g, 'r) clause = ('g * 'r) Clause.t
-
-type ('g, 'r) clauses = {
-  syntax : (('g, 'r) clause, Syntax.clause) vector;
-  captures : (('g, 'r) clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
-}
-
-module Branch = Unsafe_cardinal()
-type ('g, 'r) branch = ('g * 'r) Branch.t
-
-type ('g, 'r) branches = {
-  of_clause : (('g, 'r) clause, ('g, 'r) branch indexset) vector;
-  lookaheads : (('g, 'r) branch, 'g terminal indexset option) vector;
-  clause: (('g, 'r) branch, ('g, 'r) clause index) vector;
-  br_captures : (('g, 'r) branch, Capture.n indexset) vector;
 }
 
 module type MACHINE = sig
