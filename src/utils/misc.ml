@@ -335,6 +335,18 @@ let rec fixpoint ?counter ~propagate todo = match !todo with
 let assert_equal_length v1 v2 =
   assert_equal_cardinal (Vector.length v1) (Vector.length v2)
 
+let bytes_match b i str =
+  Bytes.length b >= i + String.length str &&
+  let exception Exit in
+  match
+    for j = 0 to String.length str - 1 do
+      if Bytes.get b (i + j) <> String.get str j then
+        raise Exit
+    done
+  with
+  | () -> true
+  | exception Exit -> false
+
 let verbosity_level = ref 0
 
 let stopwatch_delta =
