@@ -431,9 +431,8 @@ module Dataflow = struct
             push todo (Packed s)
         in
         Vector.iter propagate data;
-        fixpoint ~propagate todo
-
-      let () = stopwatch 3 "Computed reachability"
+        fixpoint ~propagate todo;
+        stopwatch 3 "Computed reachability"
 
       let () =
         let process (Packed t) =
@@ -734,25 +733,6 @@ module Dataflow = struct
           !trivial_pairing
           !nontrivial_pairing
           !transitions_with_pairing
-      (*let count = ref 0 in
-        Vector.iter (fun (Packed t) ->
-          DFA.iter_transitions t (fun tr ->
-              match tr.pairings with
-              | [] -> ()
-              | pairings ->
-                Printf.eprintf "Transition with pairing #%d:\n" !count;
-                incr count;
-                List.iter (fun (clause, pairings) ->
-                    Printf.eprintf "- clause %d:" (Index.to_int clause);
-                    List.iter (fun (a, b) ->
-                        Printf.eprintf " %d->%d"
-                          (Order_chain.evaluate a)
-                          (Order_chain.evaluate b))
-                      pairings;
-                    Printf.eprintf "\n"
-                  ) pairings
-            )
-        ) states*)
 
       let accepts = Vector.map begin fun (Packed t) ->
           let remainder = ref t.chain in
@@ -850,12 +830,9 @@ module Dataflow = struct
      liveness = get_liveness; registers = get_registers}
 end
 
-module type MACHINE = sig
-  type g
-  type r
-
-  type label = {
-    filter: g lr1 indexset;
+module Machine = struct
+  type ('g, 'r) label = {
+    filter: 'g lr1 indexset;
     (** The set of lr1 states that allow this transition to be taken. *)
     captures: (Capture.t * Register.t) list;
     (** The set of variables captured, and the register in which to store the
@@ -865,63 +842,11 @@ module type MACHINE = sig
     moves: Register.t Register.map;
     (** Registers to move when taking this transition.
         The source register is used as a key and the target as a value. *)
-    priority: ((g, r) branch index * priority * priority) list;
+    priority: (('g, 'r) branch index * priority * priority) list;
     (** Dynamic priority levels to remap.
         An element (c, p1, p2) means that a match of clause [c] at priority
         [p1] in the source state corresponds to a match at priority [p2] in
         the target state. *)
-  }
-
-  type states
-  val states : states cardinal
-  val initial : states index option
-
-  type transitions
-  val transitions : transitions cardinal
-
-  val source : transitions index -> states index
-  val label : transitions index -> label
-  val target : transitions index -> states index
-
-  (* Transitions labelled by Lr1 states in [unhandled st] are reachable
-     (there exists viable stacks that can reach them), but are not defined
-     (there is no [transitions] for them).
-     They should be rejected at runtime. *)
-  val unhandled : states index -> g lr1 indexset
-
-  (* [outgoing st] is the set of transitions leaving [st] *)
-  val outgoing : states index -> transitions indexset
-
-  (* [matching st] is the set of clauses accepted when reaching [st].  Each
-     clause comes with a priority level and a mapping indicating in which
-     register captured variables can be found. *)
-  val matching : states index -> ((g, r) branch index * priority * Register.t Capture.map) list
-
-  (* [threads st] list the clauses being recognized in state [st].
-     The boolean indicates if the clause is accepted in this state. *)
-  val branches : states index -> ((g, r) branch index * bool * Register.t Capture.map) list
-
-  val partial_captures : Capture.set
-end
-
-module Minimize (X : sig
-    type g
-    type r
-    type dfa
-    val dfa : (g, r, dfa) DFA.t
-    val dataflow : (g, r, dfa) Dataflow.t
-    val branches : (g, r) branches
-  end) : MACHINE with type g = X.g and type r = X.r =
-struct
-  include X
-
-  (* Labels of DFA transitions *)
-  type label = {
-    filter: g lr1 indexset;
-    captures: (Capture.t * Register.t) list;
-    clear: Register.set;
-    moves: Register.t Register.map;
-    priority: ((g, r) branch index * int * int) list;
   }
 
   let label_compare t1 t2 =
@@ -938,89 +863,120 @@ struct
           let c = IndexSet.compare t1.clear t1.clear in
           c
 
-  module Transition = struct
-    type t = {
-      source: dfa index;
-      target: dfa index;
-      label: label;
-    }
+  type ('g, 'r, 'st, 'tr) t = {
+    initial: 'st index option;
+    source: ('tr, 'st index) vector;
+    target: ('tr, 'st index) vector;
 
-    let partial_captures = ref IndexSet.empty
+    label: ('tr, ('g, 'r) label) vector;
 
-    include Vector.Of_array(struct
-        type a = t
-        let array =
-          let dyn = Dynarray.create () in
-          let process_transition source src_regs
-              (DFA.Transition {label=filter; mapping; target; _}) pairings =
-            let tgt_regs = dataflow.registers target in
-            let captures = ref [] in
-            let moves = ref IndexMap.empty in
-            let clear = ref IndexSet.empty in
-            let process_mapping (src_i, (captured, _usage)) tgt_bank =
-              let src_bank = src_regs.:(src_i) in
-              let process_tgt_reg capture tgt_reg =
-                if IndexSet.mem capture captured then
-                  push captures (capture, tgt_reg)
-                else
-                  match IndexMap.find_opt capture src_bank with
-                  | Some src_reg ->
-                    if src_reg <> tgt_reg then
-                      moves := IndexMap.add src_reg tgt_reg !moves
-                  | None ->
-                    partial_captures := IndexSet.add capture !partial_captures;
-                    clear := IndexSet.add tgt_reg !clear
+    (* Transitions labelled by Lr1 states in [unhandled st] are reachable
+       (there exists viable stacks that can reach them), but are not defined
+       (there is no [transitions] for them).
+       They should be rejected at runtime. *)
+    unhandled: ('st, 'g lr1 indexset) vector;
+
+    (* [outgoing st] is the set of transitions leaving [st] *)
+    outgoing: ('st, 'tr indexset) vector;
+
+    (* [accepting.:(st)] lists the clauses accepted when reaching [st].  Each
+       clause comes with a priority level and a mapping indicating in which
+       register captured variables can be found. *)
+    accepting: ('st, (('g, 'r) branch index * priority * Register.t Capture.map) list) vector;
+
+    (* [branches.:(st)] lists the clauses being recognized in state [st].
+       The boolean indicates if the clause is accepted in this state. *)
+    branches: ('st, (('g, 'r) branch index * bool * Register.t Capture.map) list) vector;
+
+    register_count : int;
+    partial_captures : Capture.set;
+  }
+
+  type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
+
+
+  let minimize (type g r dfa)
+      (branches : (g, r) branches)
+      (dfa : (g, r, dfa) DFA.t)
+      (dataflow : (g, r, dfa) Dataflow.t)
+    =
+    let partial_captures = ref IndexSet.empty in
+    let module Transition = struct
+      type t = {
+        source: dfa index;
+        target: dfa index;
+        label: (g, r) label;
+      }
+      include Vector.Of_array(struct
+          type a = t
+          let array =
+            let dyn = Dynarray.create () in
+            let process_transition source src_regs
+                (DFA.Transition {label=filter; mapping; target; _}) pairings =
+              let tgt_regs = dataflow.registers target in
+              let captures = ref [] in
+              let moves = ref IndexMap.empty in
+              let clear = ref IndexSet.empty in
+              let process_mapping (src_i, (captured, _usage)) tgt_bank =
+                let src_bank = src_regs.:(src_i) in
+                let process_tgt_reg capture tgt_reg =
+                  if IndexSet.mem capture captured then
+                    push captures (capture, tgt_reg)
+                  else
+                    match IndexMap.find_opt capture src_bank with
+                    | Some src_reg ->
+                      if src_reg <> tgt_reg then
+                        moves := IndexMap.add src_reg tgt_reg !moves
+                    | None ->
+                      partial_captures := IndexSet.add capture !partial_captures;
+                      clear := IndexSet.add tgt_reg !clear
+                in
+                IndexMap.iter process_tgt_reg tgt_bank
               in
-              IndexMap.iter process_tgt_reg tgt_bank
+              Vector.iter2 process_mapping mapping tgt_regs;
+              let captures = !captures and moves = !moves and clear = !clear in
+              let priority = List.concat_map (fun (clause, pairs) ->
+                  List.map
+                    (fun (p1, p2) -> clause, Order_chain.evaluate p1, Order_chain.evaluate p2)
+                    pairs
+                ) pairings
+              in
+              let label = {filter; captures; moves; clear; priority} in
+              Dynarray.add_last dyn {source; target = target.index; label};
             in
-            Vector.iter2 process_mapping mapping tgt_regs;
-            let captures = !captures and moves = !moves and clear = !clear in
-            let priority = List.concat_map (fun (clause, pairs) ->
-                List.map
-                  (fun (p1, p2) -> clause, Order_chain.evaluate p1, Order_chain.evaluate p2)
-                  pairs
-              ) pairings
+            let process_state (DFA.Packed source) pairings =
+              List.iter2
+                (process_transition source.index (dataflow.registers source))
+                source.transitions pairings
             in
-            let label = {filter; captures; moves; clear; priority} in
-            Dynarray.add_last dyn {source; target = target.index; label};
-          in
-          let process_state (DFA.Packed source) pairings =
-            List.iter2
-              (process_transition source.index (dataflow.registers source))
-              source.transitions pairings
-          in
-          Vector.iter2 process_state dfa.states dataflow.pairings;
-          Dynarray.to_array dyn
-      end)
-
-    let n = Vector.length vector
-
-    let partial_captures = !partial_captures
-  end
-
-  let partial_captures =
-    let acc = Transition.partial_captures in
-    Vector.fold_left begin fun acc (DFA.Packed st) ->
-      Vector.fold_lefti2 begin fun acc i index regs ->
-        if Boolvector.test st.accepting i then
-          let cap = branches.br_captures.:(index) in
-          IndexSet.fold begin fun var acc ->
-            if IndexMap.mem var regs
-            then acc
-            else IndexSet.add var acc
-          end cap acc
-        else acc
-      end acc st.branches (dataflow.registers st)
-    end acc dfa.states
-
-  module Min = Valmari.Minimize_with_custom_decomposition(struct
+            Vector.iter2 process_state dfa.states dataflow.pairings;
+            Dynarray.to_array dyn
+        end)
+      let n = Vector.length vector
+    end in
+    let partial_captures =
+      let acc = !partial_captures in
+      Vector.fold_left begin fun acc (DFA.Packed st) ->
+        Vector.fold_lefti2 begin fun acc i index regs ->
+          if Boolvector.test st.accepting i then
+            let cap = branches.br_captures.:(index) in
+            IndexSet.fold begin fun var acc ->
+              if IndexMap.mem var regs
+              then acc
+              else IndexSet.add var acc
+            end cap acc
+          else acc
+        end acc st.branches (dataflow.registers st)
+      end acc dfa.states
+    in
+    let module Min = Valmari.Minimize_with_custom_decomposition(struct
       type states = dfa
       let states = DFA.state_count dfa
 
       type transitions = Transition.n
       let transitions = Transition.n
 
-      type [@ocaml.warning "-34"] nonrec label = label
+      type [@ocaml.warning "-34"] nonrec label = (g, r) label
       let label i = Transition.vector.:(i).label
       let source i = Transition.vector.:(i).source
       let target i = Transition.vector.:(i).target
@@ -1074,77 +1030,55 @@ struct
         in
         start actions
     end)
-
-  type states = Min.states
-  let states = Min.states
-
-  type transitions = Min.transitions
-  let transitions = Min.transitions
-
-  let source = Min.source
-  let label  = Min.label
-  let target = Min.target
-
-  let initial =
-    if Array.length Min.initials = 0
-    then None
-    else Some Min.initials.(0)
-
-  let outgoing = Vector.make Min.states IndexSet.empty
-  let unhandled = Vector.make Min.states IndexSet.empty
-
-  let () =
-    (* Initialize with all reachable labels *)
-    Index.iter (DFA.state_count dfa) begin fun big ->
-      match Min.transport_state big with
-      | None -> ()
-      | Some min -> unhandled.@(min) <- IndexSet.union dfa.domain.:(big)
-    end;
-    (* Remove the ones for which transitions exist *)
-    Index.rev_iter Min.transitions begin fun tr ->
-      let index = Min.source tr in
-      let label = Min.label tr in
-      let visited = unhandled.:(index) in
-      let visited = IndexSet.diff visited label.filter in
-      unhandled.:(index) <- visited;
-      outgoing.@(index) <- IndexSet.add tr
-    end
-
-  let outgoing = Vector.get outgoing
-  let unhandled = Vector.get unhandled
-
-  let matching state =
-    let DFA.Packed source = dfa.states.:(Min.represent_state state) in
-    let priorities = ref dataflow.accepts.:(source.index) in
-    let get_priority clause =
-      match !priorities with
-      | (clause', p) :: rest ->
-        if not (Index.equal clause clause') then (
-          Printf.eprintf "Accepting clause %d but got priority for clause %d?!\n"
-            (Index.to_int clause) (Index.to_int clause');
-          assert false
-        ) else if false then
-          Printf.eprintf "Accepting clause %d with priority %d\n"
-            (Index.to_int clause) p;
-        priorities := rest;
-        p
-      | [] -> assert false
     in
-    let add_accepting acc i index regs =
-      if Boolvector.test source.accepting i
-      then (index, get_priority index, regs) :: acc
-      else acc
+    let initial =
+      if Array.length Min.initials = 0
+      then None
+      else Some Min.initials.(0)
     in
-    let registers = dataflow.registers source in
-    List.rev (Vector.fold_lefti2 add_accepting [] source.branches registers)
-
-  let branches state =
-    let DFA.Packed source = dfa.states.:(Min.represent_state state) in
-    let add_accepting i branch regs acc =
-      (branch, Boolvector.test source.accepting i, regs) :: acc
+    let source = Vector.init Min.transitions Min.source in
+    let target = Vector.init Min.transitions Min.target in
+    let label = Vector.init Min.transitions Min.label in
+    let outgoing = Vector.make Min.states IndexSet.empty in
+    let unhandled = Vector.make Min.states IndexSet.empty in
+    let accepting =
+      Vector.init Min.states @@ fun state ->
+      let DFA.Packed source = dfa.states.:(Min.represent_state state) in
+      let priorities = ref dataflow.accepts.:(source.index) in
+      let get_priority clause =
+        match !priorities with
+        | (clause', p) :: rest ->
+          if not (Index.equal clause clause') then (
+            Printf.eprintf "Accepting clause %d but got priority for clause %d?!\n"
+              (Index.to_int clause) (Index.to_int clause');
+            assert false
+          ) else if false then
+            Printf.eprintf "Accepting clause %d with priority %d\n"
+              (Index.to_int clause) p;
+          priorities := rest;
+          p
+        | [] -> assert false
+      in
+      let add_accepting acc i index regs =
+        if Boolvector.test source.accepting i
+        then (index, get_priority index, regs) :: acc
+        else acc
+      in
+      let registers = dataflow.registers source in
+      List.rev (Vector.fold_lefti2 add_accepting [] source.branches registers)
     in
-    let registers = dataflow.registers source in
-    Vector.fold_righti2 add_accepting source.branches registers []
+    let branches =
+      Vector.init Min.states @@ fun state ->
+      let DFA.Packed source = dfa.states.:(Min.represent_state state) in
+      let add_branch i branch regs acc =
+        (branch, Boolvector.test source.accepting i, regs) :: acc
+      in
+      let registers = dataflow.registers source in
+      Vector.fold_righti2 add_branch source.branches registers []
+    in
+    stopwatch 3 "OutDFA";
+    T {initial; source; target; label; unhandled; outgoing; partial_captures;
+       register_count = dataflow.register_count; accepting; branches}
 
-  let () = stopwatch 3 "OutDFA"
+  let states t = Vector.length t.outgoing
 end

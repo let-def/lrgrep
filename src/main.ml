@@ -369,23 +369,9 @@ let do_compile spec (cp : Code_printer.t option) =
     let Kernel.Automata.DFA.T (type dfa) (dfa : (_, _, dfa) Kernel.Automata.DFA.t) =
       Kernel.Automata.DFA.determinize info branches stacks nfa in
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
-    let module Machine = struct
-      include Kernel.Automata.Minimize(struct
-          type g = Info.g
-          type nonrec r = r
-          type nonrec dfa = dfa
-          let dfa = dfa
-          let dataflow = dataflow
-          let branches = branches
-        end)
-      let register_count = dataflow.register_count
-      let priority tr = (label tr).priority
-      let captures tr = (label tr).captures
-      let clear tr = (label tr).clear
-      let moves tr = (label tr).moves
-      let label tr = (label tr).filter
-    end in
-    Kernel.Codegen.output_rule info spec rule clauses branches (module Machine) cp
+    let Kernel.Automata.Machine.T machine =
+      Kernel.Automata.Machine.minimize branches dfa dataflow in
+    Kernel.Codegen.output_rule info spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer info spec cp
 

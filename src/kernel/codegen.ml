@@ -2,8 +2,6 @@ open Fix.Indexing
 open Utils
 open Misc
 open Info
-open Regexp
-open Lrgrep_support
 open Spec
 
 type priority = int
@@ -13,48 +11,19 @@ type spec = {
   lexer_definition : Syntax.lexer_definition;
 }
 
-module type MACHINE = sig
-  type g
-  type r
-
-  type states
-  val states : states cardinal
-  val initial : states index option
-
-  type transitions
-  val transitions : transitions cardinal
-
-  val register_count : int
-
-  val source : transitions index -> states index
-  val target : transitions index -> states index
-  val label : transitions index -> g lr1 indexset
-  val captures : transitions index -> (Capture.t * Register.t) list
-  val clear : transitions index -> Register.set
-  val moves : transitions index -> Register.t Register.map
-  val priority : transitions index -> ((g, r) branch index * priority * priority) list
-
-  val unhandled : states index -> g lr1 indexset
-  val outgoing : states index -> transitions indexset
-  val matching : states index -> ((g, r) branch index * priority * Register.t Capture.map) list
-  val partial_captures : Capture.set
-end
-
-type ('g, 'r) machine = (module MACHINE with type g = 'g and type r = 'r)
-
 let print_literal_code cp (loc, txt) =
   if txt <> "" then
     Code_printer.print cp ~loc txt
 
-let output_table (type g r) out rule ((module M) : (g, r) machine) (program, table, remap) =
+let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t) (program, table, remap) =
   let print fmt = Code_printer.fmt out fmt in
   print "let lrgrep_program_%s : Lrgrep_runtime.program = {\n"
     rule.Syntax.name;
-  print "  registers = %d;\n" M.register_count;
+  print "  registers = %d;\n" machine.register_count;
   print "  initial = %d;\n" (
-    match M.initial with
+    match machine.initial with
     | None -> 0
-    | Some i -> remap.((i :> int))
+    | Some i -> remap.((i : _ index :> int))
   );
   print "  table = %S;\n" table;
   print "  code = %S;\n" program;
@@ -130,7 +99,7 @@ let rewrite_loc_keywords str =
   Bytes.to_string b
 
 let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
-    clauses (branches : (g, r) branches) ((module M) : (g, r) machine) : printer =
+    clauses (branches : (g, r) branches) (machine : (g, r, _, _) Automata.Machine.t) : printer =
   function
   | None -> ()
   | Some out ->
@@ -148,38 +117,40 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
         (clause, priority, registers)
       in
       let add_transition tr acc =
+        let label = machine.label.:(tr) in
         let actions = {
           Lrgrep_support.
-          move = IndexMap.bindings (M.moves tr);
-          store = List.map snd (M.captures tr);
-          clear = IndexSet.elements (M.clear tr);
-          target = M.target tr;
-          priority = M.priority tr;
+          move = IndexMap.bindings label.moves;
+          store = List.map snd label.captures;
+          clear = IndexSet.elements label.clear;
+          target = machine.target.:(tr);
+          priority = label.priority;
         } in
-        (M.label tr, actions) :: acc
+        (label.filter, actions) :: acc
       in
       {
         Lrgrep_support.
-        accept = List.map add_match (M.matching index);
-        halting = M.unhandled index;
-        transitions = IndexSet.fold add_transition (M.outgoing index) [];
+        accept = List.map add_match machine.accepting.:(index);
+        halting = machine.unhandled.:(index);
+        transitions = IndexSet.fold add_transition machine.outgoing.:(index) [];
       }
     in
-    let program = Lrgrep_support.compact M.states get_state_for_compaction in
-    output_table out rule (module M) program;
+    let program = Lrgrep_support.compact (Automata.Machine.states machine) get_state_for_compaction in
+    output_table out rule machine program;
     (* Step 2: output semantic actions *)
     let open (val info) in
     let captures_lr1 =
       let map = ref IndexMap.empty in
-      let process_transitions tr =
+      let process_transitions (label : _ Automata.Machine.label) =
         map := List.fold_left (fun map (cap, _reg) ->
+            let filter = label.filter in
             IndexMap.update cap (function
-                | None -> Some (M.label tr)
-                | Some set' -> Some (IndexSet.union set' (M.label tr))
+                | None -> Some filter
+                | Some set' -> Some (IndexSet.union set' filter)
               ) map
-          ) !map (M.captures tr)
+          ) !map label.captures
       in
-      Index.iter M.transitions process_transitions;
+      Vector.iter process_transitions machine.label;
       !map
     in
     let recover_type index =
@@ -213,7 +184,7 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
       | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Nonterminal.to_g n)
     in
     let bind_capture out ~roffset index (def, name) =
-      let is_optional = IndexSet.mem index M.partial_captures in
+      let is_optional = IndexSet.mem index machine.partial_captures in
       let none = if is_optional then "None" else "assert false" in
       let some x = if is_optional then "Some (" ^ x ^ ")" else x in
       let offset = !roffset in
