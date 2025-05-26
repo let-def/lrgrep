@@ -248,6 +248,7 @@ module Grammar =
   MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
 
 module Info = Kernel.Info.Make(Grammar)
+let info : Info.g Kernel.Info.info = (module Info)
 
 let () = stopwatch 1 "Loaded grammar %s" grammar_filename
 
@@ -324,16 +325,8 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.eprintf "Error line %d, column %d: " line col;
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
-let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t option) =
-  let module Codegen = Kernel.Codegen.Make(Info)(struct
-      let parser_name =
-        String.capitalize_ascii
-          (Filename.chop_extension
-             (Filename.basename grammar_filename))
-      let lexer_definition = input
-    end)
-  in
-  Codegen.output_header cp;
+let do_compile spec (cp : Code_printer.t option) =
+  Kernel.Codegen.output_header info spec cp;
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
     let unknown = ref [] in
     let initial_states =
@@ -359,38 +352,46 @@ let do_compile (input : Kernel.Syntax.lexer_definition) (cp : Code_printer.t opt
           names candidates
     end;
     let subset = lrc_from_entrypoints initial_states in
-    let module Stacks = struct
-      type n = Info.g Kernel.Lrc.n
-      let n = Vector.length T.lrc.reachable_from
-      let tops =
+    let stacks = {
+      Kernel.Automata.
+      tops =
         if fst rule.error
         then subset.wait
-        else subset.reachable
-      let prev = Vector.get subset.predecessors
-      let label n = IndexSet.singleton T.lrc.lr1_of.:(n)
-    end in
-    let module Rule = struct let rule = rule end in
-    let module Automata = Kernel.Automata.Make(Info)(T)(Rule) in
-    let module DFA      = Automata.Determinize(Stacks)() in
-    let module Dataflow = Automata.Dataflow(DFA) in
-    let module Machine  = Automata.Minimize(DFA)(Dataflow) in
-    let module Program  = Codegen.Rule(Rule)(Automata.Branch)(struct
-        include Machine
-        let captures tr = (label tr).captures
-        let clear tr = (label tr).clear
-        let moves tr = (label tr).moves
-        let priority tr = (label tr).priority
-        let label tr = (label tr).filter
-        let register_count = Dataflow.register_count
-      end)
+        else subset.reachable;
+      prev = Vector.get subset.predecessors;
+      label = (fun n -> IndexSet.singleton T.lrc.lr1_of.:(n));
+    } in
+    let Kernel.Spec.Rule (type r) (clauses, branches : (Info.g, r) Kernel.Spec.clauses *
+                                                       (Info.g, r) Kernel.Spec.branches) =
+      Kernel.Spec.import_rule info T.viable T.indices T.trie rule
     in
-    Program.output cp
-  end input.rules;
-  Codegen.output_trailer cp
+    let nfa = Kernel.Automata.NFA.from_branches info T.viable branches in
+    let Kernel.Automata.DFA.T (type dfa) (dfa : (_, _, dfa) Kernel.Automata.DFA.t) =
+      Kernel.Automata.DFA.determinize info branches stacks nfa in
+    let dataflow = Kernel.Automata.Dataflow.make branches dfa in
+    let module Machine = struct
+      include Kernel.Automata.Minimize(struct
+          type g = Info.g
+          type nonrec r = r
+          type nonrec dfa = dfa
+          let dfa = dfa
+          let dataflow = dataflow
+          let branches = branches
+        end)
+      let register_count = dataflow.register_count
+      let priority tr = (label tr).priority
+      let captures tr = (label tr).captures
+      let clear tr = (label tr).clear
+      let moves tr = (label tr).moves
+      let label tr = (label tr).filter
+    end in
+    Kernel.Codegen.output_rule info spec rule clauses branches (module Machine) cp
+  end spec.lexer_definition.rules;
+  Kernel.Codegen.output_trailer info spec cp
 
 let process_command = function
   | Compile options ->
-    let (input_file, input) = match spec with
+    let (input_file, lexer_definition) = match spec with
       | Some i -> i
       | None ->
         usage_error "compile: expecting a specification (-s <spec.mlyl>)"
@@ -401,7 +402,7 @@ let process_command = function
     in
     let oc = open_out_bin output_file in
     let cp = Code_printer.create ~filename:output_file (output_string oc) in
-    do_compile input (Some cp);
+    do_compile {parser_name; lexer_definition} (Some cp);
     close_out oc
   | _ -> failwith "TODO"
 

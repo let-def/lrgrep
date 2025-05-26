@@ -22,7 +22,7 @@ type ('g, 'r) branches = {
   of_clause : (('g, 'r) clause, ('g, 'r) branch indexset) vector;
   lookaheads : (('g, 'r) branch, 'g terminal indexset option) vector;
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
-  total: ('g, 'r) branch Boolvector.t;
+  is_total: ('g, 'r) branch Boolvector.t;
 }
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
@@ -101,7 +101,7 @@ let import_rule (type g) (info : g info)
           Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
       ) pattern
   in
-  let total =
+  let is_total =
     Boolvector.init branch_count @@ fun br ->
     Option.is_none lookaheads.:(br) &&
     match Clauses.vector.:(clause.:(br)).action with
@@ -152,5 +152,7 @@ let import_rule (type g) (info : g info)
     end) in
   let Refl = Branches_def.eq in
   let clauses = {syntax = Clauses.vector; captures} in
-  let branches = {clause; pattern; expr; of_clause; lookaheads; br_captures; total} in
+  let branches = {clause; pattern; expr; of_clause; lookaheads; br_captures; is_total} in
   Rule (clauses, branches)
+
+let branch_count branches = Vector.length branches.expr

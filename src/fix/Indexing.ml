@@ -363,9 +363,6 @@ module Vector = struct
   let fold_left (type n) f acc (Vector a : (n, _) t) =
     Array.fold_left f acc a
 
-  let fold_right(type n) f (Vector a : (n, _) t) acc =
-    Array.fold_right f a acc
-
   let fold_left2 (type n) f acc (Vector a : (n, _) t) (Vector b : (n, _) t) =
     let acc = ref acc in
     for i = 0 to Array.length a - 1 do
@@ -373,10 +370,41 @@ module Vector = struct
     done;
     !acc
 
+  let fold_lefti (type n) f acc (Vector a : (n, _) t) =
+    let acc = ref acc in
+    for i = 0 to Array.length a - 1 do
+      acc := f !acc i a.(i)
+    done;
+    !acc
+
+  let fold_lefti2 (type n) f acc (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    let acc = ref acc in
+    for i = 0 to Array.length a - 1 do
+      acc := f !acc i a.(i) b.(i)
+    done;
+    !acc
+
+  let fold_right (type n) f (Vector a : (n, _) t) acc =
+    Array.fold_right f a acc
+
   let fold_right2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
     let acc = ref acc in
     for i = Array.length a - 1 downto 0 do
       acc := f a.(i) b.(i) !acc
+    done;
+    !acc
+
+  let fold_righti (type n) f (Vector a : (n, _) t) acc =
+    let acc = ref acc in
+    for i = Array.length a - 1 downto 0 do
+      acc := f i a.(i) !acc
+    done;
+    !acc
+
+  let fold_righti2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
+    let acc = ref acc in
+    for i = Array.length a - 1 downto 0 do
+      acc := f i a.(i) b.(i) !acc
     done;
     !acc
 

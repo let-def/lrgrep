@@ -8,12 +8,6 @@ open Spec
 
 type priority = int
 
-type ('g, 'n) stacks = {
-  tops : 'n indexset;
-  prev : ('n, 'n indexset) vector;
-  label : ('n, 'g lr1 indexset) vector;
-}
-
 type spec = {
   parser_name : string;
   lexer_definition : Syntax.lexer_definition;

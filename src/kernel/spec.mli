@@ -19,8 +19,10 @@ type ('g, 'r) branches = {
   of_clause : (('g, 'r) clause, ('g, 'r) branch indexset) vector;
   lookaheads : (('g, 'r) branch, 'g terminal indexset option) vector;
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
-  total: ('g, 'r) branch Boolvector.t;
+  is_total: ('g, 'r) branch Boolvector.t;
 }
+
+val branch_count : ('g, 'r) branches -> ('g, 'r) branch cardinal
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 

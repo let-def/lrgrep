@@ -283,10 +283,16 @@ module Vector : sig
   val rev_iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
 
   val fold_left : ('a -> 'b -> 'a) -> 'a -> (_, 'b) t -> 'a
-  val fold_right : ('b -> 'a -> 'a) -> (_, 'b) t -> 'a -> 'a
-
   val fold_left2 : ('a -> 'b -> 'c -> 'a) -> 'a -> ('n, 'b) t -> ('n, 'c) t -> 'a
+
+  val fold_lefti : ('a -> 'n index -> 'b -> 'a) -> 'a -> ('n, 'b) t -> 'a
+  val fold_lefti2 : ('a -> 'n index -> 'b -> 'c -> 'a) -> 'a -> ('n, 'b) t -> ('n, 'c) t -> 'a
+
+  val fold_right : ('b -> 'a -> 'a) -> (_, 'b) t -> 'a -> 'a
   val fold_right2 : ('b -> 'c -> 'a -> 'a) -> ('n, 'b) t -> ('n, 'c) t -> 'a -> 'a
+
+  val fold_righti : ('n index -> 'b -> 'a -> 'a) -> ('n, 'b) t -> 'a -> 'a
+  val fold_righti2 : ('n index -> 'b -> 'c -> 'a -> 'a) -> ('n, 'b) t -> ('n, 'c) t -> 'a -> 'a
 
   val cast_array : 'n cardinal -> 'a array -> ('n, 'a) t
   val as_array : (_, 'a) t -> 'a array

@@ -30,3 +30,9 @@ let init c f =
   let result = make c false in
   Index.iter c (fun i -> if f i then set result i);
   result
+
+let from_vector vec f =
+  let n = Vector.length vec in
+  let result = make n false in
+  Index.iter n (fun i -> if f (Vector.get vec i) then set result i);
+  result
