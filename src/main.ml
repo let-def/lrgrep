@@ -361,12 +361,11 @@ let do_compile spec (cp : Code_printer.t option) =
       prev = Vector.get subset.predecessors;
       label = (fun n -> IndexSet.singleton T.lrc.lr1_of.:(n));
     } in
-    let Kernel.Spec.Rule (type r) (clauses, branches : (Info.g, r) Kernel.Spec.clauses *
-                                                       (Info.g, r) Kernel.Spec.branches) =
+    let Kernel.Spec.Rule (clauses, branches) =
       Kernel.Spec.import_rule info T.viable T.indices T.trie rule
     in
     let nfa = Kernel.Automata.NFA.from_branches info T.viable branches in
-    let Kernel.Automata.DFA.T (type dfa) (dfa : (_, _, dfa) Kernel.Automata.DFA.t) =
+    let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize info branches stacks nfa in
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
     let Kernel.Automata.Machine.T machine =
