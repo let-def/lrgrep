@@ -43,7 +43,7 @@ let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
   let vsize = String.get_uint8 table 1 in
   assert (index >= 0 && lr1 >= 0);
   let offset = 2 + (index + lr1) * (ksize + vsize) in
-  if offset + 4 > String.length table then
+  if offset + (ksize + vsize) > String.length table then
     None
   else if get_int table ~offset ksize = lr1 + 1 then
     Some (get_int table ~offset:(offset + ksize) vsize)
