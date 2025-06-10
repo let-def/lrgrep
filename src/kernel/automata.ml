@@ -56,9 +56,13 @@ module NFA = struct
     k: 'g K.t;
     transitions: ('g Label.t * ('g, 'r) t lazy_t) list;
     branch: ('g, 'r) branch index;
-    accept: bool;
     mutable mark: unit ref;
   }
+
+  let is_accepting t =
+    match t.k with
+    | K.Done -> true
+    | _ -> false
 
   let dump g ?(only_forced=false) oc t =
     let p fmt = Printf.fprintf oc fmt in
@@ -70,7 +74,7 @@ module NFA = struct
     in
     visit t;
     let print t =
-      p "  st%d[label=%S];\n" t.uid (if t.accept then "Accept" else "");
+      p "  st%d[label=%S];\n" t.uid (if is_accepting t then "Accept" else "");
       List.iter (fun (label, t') ->
           if not only_forced || Lazy.is_val t' then (
             let lazy t' = t' in
@@ -107,7 +111,6 @@ module NFA = struct
       match KMap.find_opt k !nfa with
       | Some t -> t
       | None ->
-        let accept = ref false in
         let rec process_transitions = function
           | [] -> []
           | (label, None) :: rest -> (label, accepting) :: process_transitions rest
@@ -123,8 +126,7 @@ module NFA = struct
           |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
         in
         let uid = uid () in
-        let accept = !accept in
-        let t = {uid; k; transitions; branch; accept; mark=default_mark} in
+        let t = {uid; k; transitions; branch; mark=default_mark} in
         nfa := KMap.add k t !nfa;
         t
     and accepting = lazy (aux K.Done)
@@ -221,8 +223,8 @@ module DFA = struct
                   (filter, (i, (captures, usage), t))
                 in
                 kernel_fold
-                  (fun i (nfa : (g, r) NFA.t) acc ->
-                     if nfa.accept && Boolvector.test branches.is_total nfa.branch then
+                  (fun i nfa acc ->
+                     if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
                        accept := Some nfa.branch;
                      List.rev_map (make i) nfa.transitions @ acc)
                   kernel []
@@ -336,7 +338,7 @@ module DFA = struct
     let states =
       let make (Construction.Prepacked {index; kernel; _}) =
         let branches = Vector.map (fun t -> t.NFA.branch) kernel in
-        let accepting = Boolvector.from_vector kernel (fun t -> t.NFA.accept) in
+        let accepting = Boolvector.from_vector kernel NFA.is_accepting in
         Packed {index; branches; accepting; transitions = []}
       in
       Vector.map make Construction.prestates
