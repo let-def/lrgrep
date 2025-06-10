@@ -500,3 +500,17 @@ let allocate qs =
   let qs' = allocate result !qs in
   qs := qs';
   !result
+
+let rec to_seq q =
+  match q with
+  | N -> Seq.empty
+  | C (addr, mask, q') ->
+    c addr mask q' 0
+
+and c addr mask q' i =
+  if i > word_size then
+    to_seq q'
+  else if mask land (1 lsl i) = 0 then
+    c addr mask q' (i + 1)
+  else
+    fun () -> Seq.Cons (addr + i, c addr mask q' (i + 1))

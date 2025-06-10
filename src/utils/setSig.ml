@@ -170,6 +170,7 @@ module type S1 = sig
   val filter : ('a element -> bool) -> 'a t -> 'a t
   val filter_map : ('a element -> 'b element option) -> 'a t -> 'b t
   val split: 'a element -> 'a t -> 'a t * bool * 'a t
+  val to_seq : 'a t -> 'a element Seq.t
 end
 
 module type S0 = sig
