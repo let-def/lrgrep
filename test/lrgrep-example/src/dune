@@ -1,0 +1,29 @@
+;; The lexer is produced by ocamllex.
+
+(ocamllex
+  (modules lexer))
+
+;; The parser is produced by Menhir.
+;; We ask Menhir to produce a .cmly file,
+;; which lrgrep can read.
+
+(menhir
+  (modules parser)
+  (flags :standard --inspection --table --cmly))
+
+;; The file errors.ml,
+;; which contains the code that handles syntax errors,
+;; is produced by lrgrep.
+
+(rule
+  (targets errors.ml)
+  (deps    parser.cmly errors.mlyl)
+  (action
+     (run lrgrep compile -s errors.mlyl -g parser.cmly -o errors.ml)))
+
+;; This is the executable file for this demo.
+
+(executable
+  (public_name main)
+  (libraries menhirLib lrgrep.runtime)
+)

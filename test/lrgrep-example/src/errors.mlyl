@@ -1,0 +1,108 @@
+{
+
+  open Lexing
+  open Printf
+
+  (* This function is analagous to [MenhirLib.LexerUtil.range] but does not
+     print the file name or the trailing colon and newline. *)
+  let range' (pos1, pos2) =
+    let line = pos1.pos_lnum in
+    let char1 = pos1.pos_cnum - pos1.pos_bol in
+    let char2 = pos2.pos_cnum - pos1.pos_bol in (* yes, [pos1.pos_bol] *)
+    sprintf "line %d, characters %d-%d"
+      line char1 char2
+      (* use [char1 + 1] and [char2 + 1] if *not* using Caml mode *)
+
+  (* This global reference gives us access to the content of the current
+     file. Using global mutable state is not very elegant. An alternative
+     would be to parameterize every semantic action (below) with [content].
+     TODO do this, once lrgrep supports it *)
+
+  let content =
+    ref None
+
+  open MenhirLib.ErrorReports
+
+  (* [slice w] extracts and returns the input slice delimited by the pair
+     of positions [w]. The resulting string is clean and fits on a line. *)
+
+  let slice (w : position * position) =
+    extract (Option.get !content) w
+    |> sanitize
+    |> compress
+    |> shorten 32
+
+  (* [read thing w] indicates that a "thing" has been read, displays the
+     positions, and displays the corresponding input slice. *)
+
+  let read (thing : string) (w : position * position) =
+    sprintf "%s has been read (%s):\n  %s\n"
+      thing (range' w) (slice w)
+
+  let lparen w =
+    read "An opening parenthesis" w
+
+  let expr w =
+    read "An expression" w
+
+  let binop w =
+    read "A binary operator" w
+
+  let comma w =
+    read "A comma" w
+
+}
+
+rule error_message = parse error (main)
+
+| e=expr; o=PLUS / _* . expr _*
+| e=expr; o=MINUS / _* . expr _*
+| e=expr; o=DIV / _* . expr _*
+| e=expr; o=TIMES / _* . expr _*
+    {
+      expr ($startloc(e), $endloc(e)) ^
+      binop ($startloc(o), $endloc(o)) ^
+      "An expression is now expected."
+    }
+
+| l=LPAREN / _* . expr _*
+    {
+      lparen ($startloc(l), $endloc(l)) ^
+      "An expression is now expected."
+    }
+
+| l=LPAREN; e=[expr / _* . RPAREN]
+    {
+      lparen ($startloc(l), $endloc(l)) ^
+      expr ($startloc(e), $endloc(e)) ^
+      "If this expression is complete,\na closing parenthesis or a comma is now expected."
+    }
+
+| l=LPAREN; e=expr; c=COMMA / _* . expr _*
+    {
+      lparen ($startloc(l), $endloc(l)) ^
+      expr ($startloc(e), $endloc(e)) ^
+      comma ($startloc(c), $endloc(c)) ^
+      "An expression is now expected."
+    }
+
+| l=LPAREN; e1=expr; c=COMMA; e2=[expr / _* . RPAREN]
+    {
+      lparen ($startloc(l), $endloc(l)) ^
+      expr ($startloc(e1), $endloc(e1)) ^
+      comma ($startloc(c), $endloc(c)) ^
+      expr ($startloc(e2), $endloc(e2)) ^
+      "A closing parenthesis is now expected."
+    }
+
+| e=[expr / _* . EOF]
+    {
+      expr ($startloc(e), $endloc(e)) ^
+      "If this expression is complete, the end of the file is now expected."
+    }
+
+| / _* . main
+    (* The file is empty or begins with an unacceptable token. *)
+    {
+      "An expression is now expected."
+    }
