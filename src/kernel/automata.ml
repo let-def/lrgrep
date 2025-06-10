@@ -79,14 +79,19 @@ module NFA = struct
           if not only_forced || Lazy.is_val t' then (
             let lazy t' = t' in
             let filter =
-              label.Label.filter
-              |> IndexSet.to_seq
-              |> Seq.take 5
-              |> List.of_seq
-              |> List.map (Lr1.to_string g)
+              if IndexSet.equal label.Label.filter (Lr1.all g) then
+                "<any>"
+              else
+                let filter =
+                  label.Label.filter
+                  |> IndexSet.to_seq
+                  |> Seq.take 5
+                  |> List.of_seq
+                  |> List.map (Lr1.to_string g)
+                in
+                let filter = if List.length filter = 5 then filter @ ["..."] else filter in
+                String.concat "|" filter
             in
-            let filter = if List.length filter = 5 then filter @ ["..."] else filter in
-            let filter = String.concat "; " filter in
             p "  st%d -> st%d [label=%S];\n" t.uid t'.uid filter;
             visit t'
           )
