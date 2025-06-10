@@ -108,7 +108,43 @@ let arg_to_text = function
   | Long l -> "--" ^ l
   | Text t -> t
 
-let rec parse_compile acc = function
+let conf_grammar_file = ref None
+
+let set_grammar_file text =
+  match !conf_grammar_file with
+  | None -> conf_grammar_file := Some text
+  | Some text' ->
+    usage_error "-g %S: grammar has already been set to %S" text text'
+
+let conf_spec_file = ref None
+
+let set_spec_file text =
+  match !conf_spec_file with
+  | None -> conf_spec_file := Some text
+  | Some text' ->
+    usage_error "-s %S: spec has already been set to %S" text text'
+
+let parse_common_option = function
+  | (Short 'g' | Long "grammar") :: Text file :: rest ->
+    set_grammar_file file;
+    Some rest
+
+  | (Short 's' | Long "spec") :: Text file :: rest ->
+    set_spec_file file;
+    Some rest
+
+  | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
+    usage_error "expecting filename after %s" (arg_to_text arg)
+
+  | _ -> None
+
+let rec parse_common_options args =
+  match parse_common_option args with
+  | Some args' -> parse_common_options args'
+  | None -> args
+
+let rec parse_compile acc args =
+  match parse_common_options args with
   | (Short 'o' | Long "output" as arg) :: rest ->
     begin match acc.compile_output with
       | None -> ()
@@ -127,38 +163,8 @@ let rec parse_compile acc = function
 
 let parse_interpret () _ = failwith "interpret: TODO"
 let parse_cover () _ = failwith "cover: TODO"
-let parse_recover   () _ = failwith "recover: TODO"
-let parse_complete  () _ = failwith "complete: TODO"
-
-let conf_grammar_file = ref None
-
-let set_grammar_file text =
-  match !conf_grammar_file with
-  | None -> conf_grammar_file := Some text
-  | Some text' ->
-    usage_error "-g %S: grammar has already been set to %S" text text'
-
-let conf_spec_file = ref None
-
-let set_spec_file text =
-  match !conf_spec_file with
-  | None -> conf_spec_file := Some text
-  | Some text' ->
-    usage_error "-s %S: spec has already been set to %S" text text'
-
-let rec parse_common_options = function
-  | (Short 'g' | Long "grammar") :: Text file :: rest ->
-    set_grammar_file file;
-    parse_common_options rest
-
-  | (Short 's' | Long "spec") :: Text file :: rest ->
-    set_spec_file file;
-    parse_common_options rest
-
-  | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
-    usage_error "expecting filename after %s" (arg_to_text arg)
-
-  | rest -> rest
+let parse_recover () _ = failwith "recover: TODO"
+let parse_complete () _ = failwith "complete: TODO"
 
 let rec parse_commands acc command args =
   let command, args = match command with
@@ -182,40 +188,43 @@ let rec parse_commands acc command args =
 
 let anon_arguments = ref []
 let rec parse_global_options args =
-  match parse_common_options args with
-  | Short 'v' :: rest ->
-    incr Misc.verbosity_level;
-    parse_global_options rest
-
-  | (Short 'h' | Long "help") :: _ ->
-    print_string usage;
-    exit 2
-
-  | (Short 'V' | Long "version") :: _ ->
-    print_string version;
-    exit 0
-
-  | Short o :: _ ->
-    usage_error "invalid option -- %C.\n" o
-
-  | Long f :: _ ->
-    usage_error "unrecognized option -- %S.\n" f
-
-  | Text text :: rest ->
-    begin match is_command text with
-    | None ->
-      push anon_arguments text;
-      (*begin ;*)
+  match parse_common_option args with
+  | Some rest -> parse_global_options rest
+  | None ->
+    match args with
+    | Short 'v' :: rest ->
+      incr Misc.verbosity_level;
       parse_global_options rest
 
-    | Some command ->
-      parse_commands [] command rest
-    end
+    | (Short 'h' | Long "help") :: _ ->
+      print_string usage;
+      exit 2
 
-  | [] ->
-    usage_error
-      "Expecting a command \
-       (compile, interpret, enumerate, recover, complete).\n"
+    | (Short 'V' | Long "version") :: _ ->
+      print_string version;
+      exit 0
+
+    | Short o :: _ ->
+      usage_error "invalid option -- %C.\n" o
+
+    | Long f :: _ ->
+      usage_error "unrecognized option -- %S.\n" f
+
+    | Text text :: rest ->
+      begin match is_command text with
+        | None ->
+          push anon_arguments text;
+          (*begin ;*)
+          parse_global_options rest
+
+        | Some command ->
+          parse_commands [] command rest
+      end
+
+    | [] ->
+      usage_error
+        "Expecting a command \
+         (compile, interpret, enumerate, recover, complete).\n"
 
 let commands = parse_global_options
     (List.concat_map parse_arg (List.tl (Array.to_list Sys.argv)))
