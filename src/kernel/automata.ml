@@ -60,6 +60,37 @@ module NFA = struct
     mutable mark: unit ref;
   }
 
+  let dump g ?(only_forced=false) oc t =
+    let p fmt = Printf.fprintf oc fmt in
+    p "digraph G {\n";
+    let todo = ref [] in
+    let mark = ref () in
+    let visit t =
+      if t.mark != mark then (t.mark <- mark; push todo t)
+    in
+    visit t;
+    let print t =
+      p "  st%d[label=%S];\n" t.uid (if t.accept then "Accept" else "");
+      List.iter (fun (label, t') ->
+          if not only_forced || Lazy.is_val t' then (
+            let lazy t' = t' in
+            let filter =
+              label.Label.filter
+              |> IndexSet.to_seq
+              |> Seq.take 5
+              |> List.of_seq
+              |> List.map (Lr1.to_string g)
+            in
+            let filter = if List.length filter = 5 then filter @ ["..."] else filter in
+            let filter = String.concat "; " filter in
+            p "  st%d -> st%d [label=%S];\n" t.uid t'.uid filter;
+            visit t'
+          )
+        ) t.transitions;
+    in
+    fixpoint ~propagate:print todo;
+    p "}\n"
+
   let compare t1 t2 =
     Int.compare t1.uid t2.uid
 
