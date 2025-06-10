@@ -285,11 +285,11 @@ let compact (type dfa clause lr1)
   let rec emit_moves = function
     | (j, i) :: rest ->
       if i < j then (
-        emit_moves rest;
         Code_emitter.emit code (Move (j, i));
+        emit_moves rest;
       ) else if i > j then (
-        Code_emitter.emit code (Move (j, i));
         emit_moves rest;
+        Code_emitter.emit code (Move (j, i));
       ) else
         emit_moves rest
     | [] -> ()
