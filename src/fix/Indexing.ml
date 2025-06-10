@@ -65,7 +65,13 @@ let const c : (module CARDINAL) =
   assert (c >= 0);
   (module struct type n = unit let n = Cardinal (lazy c) end)
 
-module Unsafe_cardinal() = struct
+module type UNSAFE_CARDINAL = sig
+  type 'a t
+  module Const(M : sig type t val cardinal : int end) : CARDINAL with type n = M.t t
+  module Eq(M : sig type t include CARDINAL end) : sig val eq : (M.t t, M.n) eq end
+end
+
+module Unsafe_cardinal() : UNSAFE_CARDINAL = struct
   type 'a t = unit
   module Const(M : sig type t val cardinal : int end) = struct
     type n = M.t t

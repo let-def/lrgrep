@@ -70,11 +70,13 @@ end
    set whose cardinal is [c]. [c] must be nonnegative. *)
 module Const (X : sig val cardinal : int end) : CARDINAL
 
-module Unsafe_cardinal() : sig
+module type UNSAFE_CARDINAL = sig
   type 'a t
   module Const(M : sig type t val cardinal : int end) : CARDINAL with type n = M.t t
   module Eq(M : sig type t include CARDINAL end) : sig val eq : (M.t t, M.n) eq end
 end
+
+module Unsafe_cardinal() : UNSAFE_CARDINAL
 
 (**The function {!const} is a value-level analogue of the functor {!Const}. *)
 val const : int -> (module CARDINAL)
