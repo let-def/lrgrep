@@ -45,8 +45,8 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 
 (** Information module is the representation of the grammar and LR automaton we
     are going to use. *)
-module Info = Kernel.Info.Make(Grammar)
-open Info
+open Kernel.Info
+include Lift(Grammar)
 
 (** {1 Helpers} *)
 
@@ -62,15 +62,15 @@ let (.@()<-) v i f = v.:(i) <- f v.:(i)
 (** Display an item as string *)
 let item_to_string (prod, pos) =
   let comps = ref [] in
-  let rhs = Production.rhs prod in
+  let rhs = Production.rhs grammar prod in
   for i = Array.length rhs - 1 downto pos do
-    comps := Symbol.name rhs.(i) :: !comps
+    comps := Symbol.name grammar rhs.(i) :: !comps
   done;
   comps := "." :: !comps;
   for i = pos - 1 downto 0 do
-    comps := Symbol.name rhs.(i) :: !comps
+    comps := Symbol.name grammar rhs.(i) :: !comps
   done;
-  Nonterminal.to_string (Production.lhs prod) ^ ": " ^ String.concat " " !comps
+  Nonterminal.to_string grammar (Production.lhs grammar prod) ^ ": " ^ String.concat " " !comps
 
 (** Convert a set to a list, mapping function [f] over elements *)
 let list_from_set ss f =
@@ -106,9 +106,9 @@ let warn (pos : Kernel.Syntax.position) fmt =
 
 (** Check if a symbol is not nullable *)
 let non_nullable_symbol sym =
-  match Symbol.prj sym with
-  | L _ -> true
-  | R n -> not (Nonterminal.nullable n)
+  match Symbol.desc grammar sym with
+  | T _ -> true
+  | N n -> not (Nonterminal.nullable grammar n)
 
 (** Lazily compute and memoize a function on a finite set *)
 let lazy_lookup f =
@@ -146,12 +146,12 @@ module Reduction_NFA = struct
   *)
   type state =
     | Initial
-    | Suffix of Lr1.t list * Terminal.set
-    | Reduce of Lr1.t list * Terminal.set * Nonterminal.t * int
+    | Suffix of g lr1 index list * g terminal indexset
+    | Reduce of g lr1 index list * g terminal indexset * g nonterminal index * int
 
   (** Label of a transition is an optional LR(1) state, where [None] denotes ϵ
       (epsilon). *)
-  type label = Lr1.t option
+  type label = g lr1 index option
 
   (** A transition is represented as a pair of a label and a target state. *)
   type transition = label * state
@@ -161,32 +161,32 @@ module Reduction_NFA = struct
       Since we are only recognizing reduce-filter patterns matching errors, the
       subset of the reduction automaton starting from wait states is sufficient
       (Definition 14 (wait states), section 4.2.1). *)
-  let initial_reductions = Lr1.wait
+  let initial_reductions = Lr1.wait grammar
 
   (** The transition function *)
   let transitions : state -> transition list = function
     | Initial ->
       (* Visit all initial states *)
       list_from_set initial_reductions
-        (fun lr1 -> Some (Some lr1, Suffix ([lr1], Terminal.all)))
+        (fun lr1 -> Some (Some lr1, Suffix ([lr1], Terminal.all grammar)))
     | Suffix (stack, lookaheads) ->
       (* The current state of the LR automaton is at the top of the stack *)
       let current = List.hd stack in
       (* Visit all reductions applicable to the top state *)
-      list_from_set (Reduction.from_lr1 current)
+      list_from_set (Reduction.from_lr1 grammar current)
         (fun red ->
            (* Find lookaheads compatible with this reduction *)
            let lookaheads =
-             Terminal.intersect lookaheads (Reduction.lookaheads red)
+             Terminal.intersect grammar lookaheads (Reduction.lookaheads grammar red)
            in
            if IndexSet.is_empty lookaheads then
              (* Give up if there are none *)
              None
            else
              (* Otherwise, enter a reduction state *)
-             let production = Reduction.production red in
-             let lhs = Production.lhs production in
-             let rhs = Production.length production in
+             let production = Reduction.production grammar red in
+             let lhs = Production.lhs grammar production in
+             let rhs = Production.length grammar production in
              Some (None, Reduce (stack, lookaheads, lhs, rhs))
         )
     (* End of a reduction sequence *)
@@ -194,12 +194,12 @@ module Reduction_NFA = struct
       (* The current state of the LR automaton is at the top of the stack *)
       let current = List.hd stack in
       (* Find the target of the goto transition labelled [lhs] *)
-      let target = Transition.find_goto_target current lhs in
+      let target = Transition.find_goto_target grammar current lhs in
       [None, Suffix (target :: stack, lookaheads)]
     (* Reducing an empty suffix: consume one more symbol of the stack *)
     | Reduce ([current], lookaheads, lhs, n) ->
       (* Look at possible predecessors *)
-      list_from_set (Lr1.predecessors current)
+      list_from_set (Lr1.predecessors grammar current)
         (fun lr1 ->
            Some (Some lr1, Reduce ([lr1], lookaheads, lhs, n - 1)))
     (* Reducing from the current suffix *)
@@ -220,8 +220,8 @@ module Reduction_DFA = struct
       whose stacks are suffixed by [stack] and looking ahead at a symbol
       in [lookaheads]. *)
   type suffix = {
-    stack: Lr1.t list;
-    lookaheads: Terminal.set;
+    stack: g lr1 index list;
+    lookaheads: g terminal indexset;
     child: suffix list;
   }
 
@@ -266,7 +266,7 @@ module Reduction_DFA = struct
         needed to identify them. *)
   type desc = {
     suffixes: suffix list;
-    transitions: n index Lr1.map;
+    transitions: (g lr1, n index) indexmap;
   }
 
   (** Construct the DFA *)
@@ -342,19 +342,19 @@ module Reduction_DFA = struct
      registering the first LR-paths reaching each state. *)
   let rev_stack_prefix =
     lazy_lookup begin fun () ->
-      let table = Vector.make Lr1.n [] in
+      let table = Vector.make (Lr1.cardinal grammar) [] in
       let todo = ref [] in
       let propagate (x, path) =
         match table.:(x) with
         | _ :: _ -> ()
         | [] ->
           table.:(x) <- path;
-          List.iter
-            (fun tr -> Misc.push todo (Transition.target tr, x :: path))
-            (Transition.successors x)
+          IndexSet.iter
+            (fun tr -> Misc.push todo (Transition.target grammar tr, x :: path))
+            (Transition.successors grammar x)
       in
       let entrypoints =
-        Hashtbl.fold (fun _ -> IndexSet.add) Lr1.entrypoints IndexSet.empty
+        Hashtbl.fold (fun _ -> IndexSet.add) (Lr1.entrypoint_table grammar) IndexSet.empty
       in
       IndexSet.iter
         (fun lr1 -> propagate (lr1, []))
@@ -410,7 +410,7 @@ end
 module Unreductions = struct
   (** The productions appearing in items of the form [(prod, 0)] in the
       item-closure of an LR(1) state. *)
-  let prods_by_lr1 = Vector.make Lr1.n IndexSet.empty
+  let prods_by_lr1 = Vector.make (Lr1.cardinal grammar) IndexSet.empty
 
   (** A list of paths, expressed as a sequence of transitions, that permit
       following a goto transition when reduced.
@@ -420,26 +420,26 @@ module Unreductions = struct
 
       We can use this as part of answering reachability questions: which input
       sequences permits following the transition [goto]?*)
-  let paths = Vector.make Transition.goto []
+  let paths = Vector.make (Transition.goto grammar) []
 
-  let () = Index.iter Lr1.n (fun lr1 ->
+  let () = Index.iter (Lr1.cardinal grammar) (fun lr1 ->
       let prods =
-        IndexSet.elements (Reduction.from_lr1 lr1)
-        |> List.map Reduction.production
+        IndexSet.elements (Reduction.from_lr1 grammar lr1)
+        |> List.map (Reduction.production grammar)
         |> List.sort (fun p1 p2 ->
-            Int.compare (Production.length p1)
-                        (Production.length p2))
+            Int.compare (Production.length grammar p1)
+                        (Production.length grammar p2))
       in
       let rec steps depth lr1 path = function
         | [] -> ()
-        | p :: ps when Production.length p = depth ->
+        | p :: ps when Production.length grammar p = depth ->
           prods_by_lr1.@(lr1) <- IndexSet.add p;
-          paths.@(Transition.find_goto lr1 (Production.lhs p)) <- List.cons path;
+          paths.@(Transition.find_goto grammar lr1 (Production.lhs grammar p)) <- List.cons path;
           steps depth lr1 path ps
         | ps ->
-          List.iter
-            (fun tr -> steps (depth + 1) (Transition.source tr) (tr :: path) ps)
-            (Transition.predecessors lr1)
+          IndexSet.iter
+            (fun tr -> steps (depth + 1) (Transition.source grammar tr) (tr :: path) ps)
+            (Transition.predecessors grammar lr1)
       in
       steps 0 lr1 [] prods
     )
@@ -570,8 +570,8 @@ module Transl = struct
         (for reasoning modulo reduction)
    *)
   type filter =
-    | Filter of Lr1.set * position
-    | Consume of filter * Lr1.set * position
+    | Filter of g lr1 indexset * position
+    | Consume of filter * g lr1 indexset * position
 
   type reduce =
     | Reduce_yes
@@ -592,18 +592,18 @@ module Transl = struct
   }
 
   (** The default filter matches all states (rejecting nothing). *)
-  let default_filter position = Filter (Lr1.all, position)
+  let default_filter position = Filter (Lr1.all grammar, position)
 
   (** Refine a filter by intersecting it with another state set.
       Warn if no states are recognized. *)
   let refine_filter states = function
     | Filter (states', position) ->
-      let states = Lr1.intersect states states' in
+      let states = Lr1.intersect grammar states states' in
       if IndexSet.is_empty states then
         warn position "these filters reject all states";
       Filter (states, position)
     | Consume (filter', states', position) ->
-      let states = Lr1.intersect states states' in
+      let states = Lr1.intersect grammar states states' in
       if IndexSet.is_empty states then
         warn position "these filters reject all states";
       Consume (filter', states, position)
@@ -640,8 +640,8 @@ module Transl = struct
       user-provided ones by serializing them first. *)
   let parse_symbol =
     let table = Hashtbl.create 7 in
-    let add_symbol s = Hashtbl.add table (Symbol.name ~mangled:false s) s in
-    Index.iter Symbol.n add_symbol;
+    let add_symbol s = Hashtbl.add table (Symbol.name grammar ~mangled:false s) s in
+    Index.iter (Symbol.cardinal grammar) add_symbol;
     fun pos sym ->
       let sym = string_of_symbol sym in
       match Hashtbl.find_opt table sym with
@@ -650,7 +650,7 @@ module Transl = struct
 
   (** Match the right-hand side of a filter to an item *)
   let match_rhs rfilter item =
-    let (prod, dot) = Item.desc item in
+    let (prod, dot) = Item.desc grammar item in
     let found = ref false in
     let rec loop rhs index = function
       | [] ->
@@ -682,7 +682,7 @@ module Transl = struct
         in
         skip_sym index (skip_skip rest)
     in
-    loop (Production.rhs prod) 0 rfilter
+    loop (Production.rhs grammar prod) 0 rfilter
 
   (** Translate a filter to the set of matching LR(1) states *)
   let process_filter lhs rhs =
@@ -690,29 +690,30 @@ module Transl = struct
       let match_lhs item = function
         | None -> true
         | Some lhs ->
-          Index.equal lhs (Production.lhs (Item.production item))
+          Index.equal lhs (Production.lhs grammar (Item.production grammar item))
       in
       let match_item item =
         match_lhs item lhs && match_rhs rhs item
       in
-      let match_closed prod = match_item (Item.make prod 0) in
-      IndexSet.exists match_item (Lr1.items lr1) ||
+      let match_closed prod = match_item (Item.make grammar prod 0) in
+      IndexSet.exists match_item (Lr1.items grammar lr1) ||
       IndexSet.exists match_closed
         Unreductions.prods_by_lr1.:(lr1)
     in
-    IndexSet.init_from_set Lr1.n match_lr1
+    IndexSet.init_from_set (Lr1.cardinal grammar) match_lr1
 
   (** Translate an atom to the set of LR1 states it matches *)
   let process_atom =
     (* Index states by their incoming symbol *)
-    let table = Vector.make Symbol.n IndexSet.empty in
-    Index.iter Lr1.n (fun lr1 -> match Lr1.incoming lr1 with
+    let table = Vector.make (Symbol.cardinal grammar) IndexSet.empty in
+    Index.iter (Lr1.cardinal grammar) (fun lr1 ->
+        match Lr1.incoming grammar lr1 with
         | None -> ()
         | Some sym -> table.@(sym) <- IndexSet.add lr1);
     fun pos -> function
     | None ->
       (* A wildcard symbol matches all states *)
-      Lr1.all
+      Lr1.all grammar
     | Some sym ->
       (* A normal symbol matches states by their incoming symbol *)
       table.:(parse_symbol pos sym)
@@ -744,9 +745,9 @@ module Transl = struct
       let lhs = match lhs with
         | None -> None
         | Some sym ->
-          match Symbol.prj (parse_symbol expr.position sym) with
-          | L _ -> error expr.position "expecting a non-terminal"
-          | R n -> Some n
+          match Symbol.desc grammar (parse_symbol expr.position sym) with
+          | T _ -> error expr.position "expecting a non-terminal"
+          | N n -> Some n
       in
       refine_filter (process_filter lhs rhs) filter
 
@@ -874,10 +875,10 @@ let () = match nt_inclusion with
   | None -> ()
   | Some fname ->
     (* Generate the inclusion graph as a relation ⊆ N × N *)
-    let inclusions = Vector.make Nonterminal.n IndexSet.empty in
+    let inclusions = Vector.make (Nonterminal.cardinal grammar) IndexSet.empty in
     (* Visit each production to populate the graph *)
-    Index.iter Production.n begin fun prod ->
-      let rhs = Production.rhs prod in
+    Index.iter (Production.cardinal grammar) begin fun prod ->
+      let rhs = Production.rhs grammar prod in
       (* Count non-nullable symbols to find how the lhs relates to the rhs *)
       let non_nullable = ref 0 in
       for i = 0 to Array.length rhs - 1 do
@@ -887,22 +888,22 @@ let () = match nt_inclusion with
         | 0 ->
           (* If there are only nullable symbols, each symbol contributes to L(lhs) *)
           Array.fold_left (fun set sym ->
-              match Symbol.prj sym with
-              | L _ -> assert false
-              | R n -> IndexSet.add n set
+              match Symbol.desc grammar sym with
+              | T _ -> assert false
+              | N n -> IndexSet.add n set
             ) IndexSet.empty rhs
         | 1 ->
           (* If there is only one non-nullable symbol A, then L(A) ⊆ L(lhs) *)
           begin match Array.find_opt non_nullable_symbol rhs with
             | None -> assert false
             | Some sym ->
-              match Symbol.prj sym with
-              | L _ -> IndexSet.empty (* It is a terminal, ignore it *)
-              | R n -> IndexSet.singleton n
+              match Symbol.desc grammar sym with
+              | T _ -> IndexSet.empty (* It is a terminal, ignore it *)
+              | N n -> IndexSet.singleton n
           end
         | _ -> IndexSet.empty (* No direct relation, it is more complex *)
       in
-      inclusions.@(Production.lhs prod) <- IndexSet.union inclusion
+      inclusions.@(Production.lhs grammar prod) <- IndexSet.union inclusion
     end;
     (* Output the graph (to a file or to xdot) *)
     let oc = open_file_or_xdot fname in
@@ -916,7 +917,7 @@ let () = match nt_inclusion with
       (* .. to prune the trivial parts of the graph
          (non-terminals not related to any other) *)
       if not (IndexSet.is_empty nts) || IndexSet.mem nt on_rhs then (
-        p " st%d[label=%S];\n" (Index.to_int nt) (Nonterminal.to_string nt);
+        p " st%d[label=%S];\n" (Index.to_int nt) (Nonterminal.to_string grammar nt);
         IndexSet.iter
           (fun nt' -> p " st%d -> st%d;\n" (Index.to_int nt) (Index.to_int nt'))
           nts
@@ -1112,8 +1113,8 @@ module Sentence = struct
   (** The code work by reversing the effect of a reduction, replacing a goto
       transition by the stack suffix that would permit reducing it. *)
   type unreduce = {
-    goto: Transition.goto index;     (** This [goto] transition... *)
-    path: Transition.any index list; (** is reachable by reducing a stack suffixed by [path]. *)
+    goto: g goto_transition index;     (** This [goto] transition... *)
+    path: g transition index list; (** is reachable by reducing a stack suffixed by [path]. *)
     mutable unknowns: int;           (** Remaining number of transitions with unknown cost. *)
     mutable cost: int;               (** Cost of the known parts of the path. *)
   }
@@ -1137,13 +1138,13 @@ module Sentence = struct
 
   (** Vector to store the cost of reaching each goto transition.
       It is initialized with [max_int], representing an infinite cost. *)
-  let transition_cost = Vector.make Transition.goto max_int
+  let transition_cost = Vector.make (Transition.goto grammar) max_int
 
   (** Vector to store the dependencies for each goto transition. *)
-  let transition_deps = Vector.make Transition.goto []
+  let transition_deps = Vector.make (Transition.goto grammar) []
 
   (** Heap to manage transitions to be processed. *)
-  let todo : (unit, Transition.goto index) Heap.t ref = ref Heap.empty
+  let todo : (unit, g goto_transition index) Heap.t ref = ref Heap.empty
 
   (** Schedule an unreduce record for processing. *)
   let schedule {path = _; unknowns; goto; cost} =
@@ -1159,7 +1160,7 @@ module Sentence = struct
   let transition_reds = Vector.mapi begin fun goto paths ->
       List.map begin fun path ->
         let (unknowns, cost) = List.fold_left (fun (unknowns, cost) tr ->
-            match Transition.split tr with
+            match Transition.split grammar tr with
             | R _sh -> (unknowns, cost + 1)
             | L _gt -> (unknowns + 1, cost)
           ) (0, 0) path
@@ -1167,7 +1168,7 @@ module Sentence = struct
         let unreduce = { path; goto; unknowns; cost } in
         if unknowns = 0 then schedule unreduce else
           List.iter (fun tr ->
-              match Transition.split tr with
+              match Transition.split grammar tr with
               | R _  -> ()
               | L gt -> transition_deps.@(gt) <- List.cons unreduce
             ) path;
@@ -1214,16 +1215,16 @@ module Sentence = struct
   let () =
     Vector.iteri (fun goto reds ->
         if transition_cost.:(goto) = max_int then
-          let tr = Transition.of_goto goto in
+          let tr = Transition.of_goto grammar goto in
           Printf.eprintf "Failed to synthesize %s -> %s, paths:\n"
-            (Lr1.to_string (Transition.source tr))
-            (Lr1.to_string (Transition.target tr));
+            (Lr1.to_string grammar (Transition.source grammar tr))
+            (Lr1.to_string grammar (Transition.target grammar tr));
           List.iter (fun unr ->
               Printf.eprintf "- %s\n"
                 (Misc.string_concat_map " " (fun tr ->
-                     let lr1 = Lr1.to_string (Transition.target tr) in
+                     let lr1 = Lr1.to_string grammar (Transition.target grammar tr) in
                      let cost =
-                       match Transition.split tr with
+                       match Transition.split grammar tr with
                        | R _ -> 1
                        | L g -> transition_cost.:(g)
                      in
@@ -1259,28 +1260,28 @@ module Enum = struct
   (** Produce reduce-filter patterns for each leaf *)
   let maximal_patterns =
     let irreducible_item item =
-      let p, i = Item.desc item in
-      let rhs = Production.rhs p in
+      let p, i = Item.desc grammar item in
+      let rhs = Production.rhs grammar p in
       i < Array.length rhs &&
       non_nullable_symbol rhs.(i)
     in
     let pattern_from_stack stack =
       let filter =
-        IndexSet.filter irreducible_item (Lr1.items (List.hd stack))
+        IndexSet.filter irreducible_item (Lr1.items grammar (List.hd stack))
       in
       let max_dot =
-        IndexSet.fold (fun item max -> Int.max max (Item.position item)) filter 0
+        IndexSet.fold (fun item max -> Int.max max (Item.position grammar item)) filter 0
       in
       let filter = IndexSet.filter (fun item ->
-          let (prod, dot) = Item.desc item in
+          let (prod, dot) = Item.desc grammar item in
           dot = max_dot && (
             max_dot <> 1 ||
             not (Index.equal
-                   (Symbol.inj_r (Production.lhs prod))
-                   (Production.rhs prod).(0))
+                   (Symbol.inj_n grammar (Production.lhs grammar prod))
+                   (Production.rhs grammar prod).(0))
           )
         ) filter in
-      let reduce = List.filter_map Lr1.incoming (List.tl (List.rev stack)) in
+      let reduce = List.filter_map (Lr1.incoming grammar) (List.tl (List.rev stack)) in
       (reduce, filter)
     in
     let table = Hashtbl.create 7 in
@@ -1320,8 +1321,8 @@ module Enum = struct
       |> keep_minima []
     in
     let add_lookahead acc item =
-      let (prod, pos) = Item.desc item in
-      let rhs = Production.rhs prod in
+      let (prod, pos) = Item.desc grammar item in
+      let rhs = Production.rhs grammar prod in
       if pos < Array.length rhs then
         IndexSet.add rhs.(pos) acc
       else acc
@@ -1357,14 +1358,14 @@ module Enum = struct
     List.iteri (fun i sym ->
         Printf.eprintf "%s%s"
           (if i = 0 then "" else ", ")
-          (Symbol.name sym)
+          (Symbol.name grammar sym)
       ) (List.rev (IndexSet.elements totally_uncovered_lookaheads));
     Printf.eprintf "\n";
     Printf.eprintf "Partially uncovered expected symbols:\n";
     List.iteri (fun i sym ->
         Printf.eprintf "%s%s"
           (if i = 0 then "" else ", ")
-          (Symbol.name sym)
+          (Symbol.name grammar sym)
       ) (List.rev (IndexSet.elements partially_uncovered_lookaheads));
     Printf.eprintf "\n"
 
@@ -1376,25 +1377,25 @@ module Enum = struct
           List.iteri (fun i item ->
               Printf.eprintf "%c /%s\n"
                 (if i = 0 then '|' else ' ')
-                (Item.to_string item)
+                (Item.to_string grammar item)
             ) filter
         | _ ->
-          let reduce = Misc.string_concat_map "; " Symbol.name reduce in
+          let reduce = Misc.string_concat_map "; " (Symbol.name grammar) reduce in
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
-                Printf.eprintf "| [%s /%s" reduce (Item.to_string item)
+                Printf.eprintf "| [%s /%s" reduce (Item.to_string grammar item)
               else
-                Printf.eprintf "\n   %s /%s" padding (Item.to_string item)
+                Printf.eprintf "\n   %s /%s" padding (Item.to_string grammar item)
             ) filter;
           Printf.eprintf "]\n"
         end;
         let dfa, _ = Suffix.desc.:(suffix) in
         let stack = Reduction_DFA.stack_visiting dfa in
         let print_lr1_seq path =
-          let symbols = List.filter_map Lr1.incoming path in
+          let symbols = List.filter_map (Lr1.incoming grammar) path in
           let symbols = List.filter non_nullable_symbol symbols in
-          Misc.string_concat_map " " Symbol.name symbols
+          Misc.string_concat_map " " (Symbol.name grammar) symbols
         in
         Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq stack)
       ) generalized_patterns

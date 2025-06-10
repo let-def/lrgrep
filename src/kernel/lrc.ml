@@ -67,14 +67,12 @@ let lookahead (type g) ((module Reachability) : g Reachability.t) t lrc =
 let count t = Vector.length t.lr1_of
 
 (* Functor to create an LRC module from an Info module and Reachability module *)
-let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
-  let open (val info) in
-
+let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   (* Compute the total number of LRC states *)
   let n =
     let count lr1 = Array.length (Reachability.Classes.for_lr1 lr1) in
     let sum = ref 0 in
-    Index.iter Lr1.n (fun lr1 -> sum := !sum + count lr1);
+    Index.iter (Lr1.cardinal g) (fun lr1 -> sum := !sum + count lr1);
     !sum
   in
 
@@ -87,7 +85,7 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
   in
 
   (* Map from LRC states to their corresponding LR1 states *)
-  let lr1_of = Vector.make' n (fun () -> Index.of_int Lr1.n 0) in
+  let lr1_of = Vector.make' n (fun () -> Index.of_int (Lr1.cardinal g) 0) in
 
   (* Map from LR1 states to their corresponding set of LRC states *)
   let lrcs_of =
@@ -105,7 +103,7 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
       done;
       !all
     in
-    Vector.init Lr1.n init_lr1
+    Vector.init (Lr1.cardinal g) init_lr1
   in
 
   (* Map from LR1 states to their first LRC state *)
@@ -114,7 +112,7 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
   in
 
   (* Set of wait LRC states *)
-  let all_wait = IndexSet.map (Vector.get first_lrc_of) Lr1.wait in
+  let all_wait = IndexSet.map (Vector.get first_lrc_of) (Lr1.wait g) in
 
   (* Step timing after computing the LRC set *)
   stopwatch 2 "Computed LRC set";
@@ -123,19 +121,18 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
   let predecessors = Vector.make n IndexSet.empty in
   let process lr1 =
     let tgt_first = first_lrc_of.:(lr1) in
-    match Option.map Symbol.desc (Lr1.incoming lr1) with
+    match Option.map (Symbol.desc g) (Lr1.incoming g lr1) with
     | None -> ()
     | Some (T t) ->
-      Vector.set predecessors tgt_first @@
-      List.fold_left (fun acc tr ->
-          let src = Transition.source tr in
-          let class_index =
-            Misc.array_findi
-              (fun _ classe -> IndexSet.mem t classe) 0 (Reachability.Classes.for_lr1 src)
-          in
-          let src_index = index_shift first_lrc_of.:(src) class_index in
-          IndexSet.add src_index acc
-        ) IndexSet.empty (Transition.predecessors lr1)
+      predecessors.:(tgt_first) <-
+        IndexSet.map (fun tr ->
+            let src = Transition.source g tr in
+            let class_index =
+              Misc.array_findi
+                (fun _ classe -> IndexSet.mem t classe) 0 (Reachability.Classes.for_lr1 src)
+            in
+            index_shift first_lrc_of.:(src) class_index
+          ) (Transition.predecessors g lr1)
     | Some _ ->
       let process_transition tr =
         let node = Reachability.Tree.leaf tr in
@@ -146,7 +143,7 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
           Reachability.Coercion.infix post_classes
             (Reachability.Classes.for_lr1 lr1)
         in
-        let src_first = first_lrc_of.:(Transition.source tr) in
+        let src_first = first_lrc_of.:(Transition.source g tr) in
         let pre_classes = Array.length pre_classes in
         let post_classes = Array.length post_classes in
         for post = 0 to post_classes - 1 do
@@ -161,9 +158,9 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
             coercion.forward.(post)
         done
       in
-      List.iter process_transition (Transition.predecessors lr1)
+      IndexSet.iter process_transition (Transition.predecessors g lr1)
   in
-  Index.iter Lr1.n process;
+  Index.iter (Lr1.cardinal g) process;
   let all_successors = Misc.relation_reverse n predecessors in
   stopwatch 2 "Computed LRC successors";
   let reachable_from = Misc.relation_closure ~reverse:predecessors all_successors in
@@ -171,9 +168,9 @@ let make (type g) (info : g info) ((module Reachability) : g Reachability.t) =
   {lr1_of; lrcs_of; first_lrc_of; all_wait; all_successors; reachable_from}
 
 (* Convert an LRC state to a string representation *)
-let to_string (type g) ((module Info) : g info) t lrc =
+let to_string g t lrc =
   Printf.sprintf "%s/%d"
-    (Info.Lr1.to_string t.lr1_of.:(lrc))
+    (Lr1.to_string g t.lr1_of.:(lrc))
     (class_index t lrc)
 
 (* Convert a set of LRC states to a string representation *)
@@ -191,8 +188,7 @@ type 'g entrypoints = {
 
 (* Find states reachable from specific states by closing over raw reachability
    information *)
-let from_entrypoints (type g) (info: g info) lrc_graph entrypoints : g entrypoints =
-  let open (val info) in
+let from_entrypoints (type g) (g: g grammar) lrc_graph entrypoints : g entrypoints =
   (* Set of reachable states *)
   let reachable = ref IndexSet.empty in
   (* Compute transitive successors for each state and populate reachable set *)
@@ -240,7 +236,7 @@ let from_entrypoints (type g) (info: g info) lrc_graph entrypoints : g entrypoin
         | _ -> ()
       in
       Vector.iteri (fun lr1 lrc0 ->
-          if Option.is_none (Lr1.incoming lr1) then
+          if Option.is_none (Lr1.incoming g lr1) then
             expand [] lrc0)
         lrc_graph.first_lrc_of;
       let propagate (succ, prefix) =

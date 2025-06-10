@@ -247,8 +247,8 @@ let grammar_filename = match !conf_grammar_file with
 module Grammar =
   MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
 
-module Info = Kernel.Info.Make(Grammar)
-let info : Info.g Kernel.Info.info = (module Info)
+open Kernel.Info
+include Lift(Grammar)
 
 let () = stopwatch 1 "Loaded grammar %s" grammar_filename
 
@@ -297,11 +297,11 @@ let parser_name =
        (Filename.basename grammar_filename))
 
 module T = struct
-  let viable = Kernel.Viable_reductions.make (module Info)
-  let indices = Kernel.Transl.Indices.make (module Info)
+  let viable = Kernel.Viable_reductions.make grammar
+  let indices = Kernel.Transl.Indices.make grammar
   let trie = Kernel.Transl.Reductum_trie.make viable
-  let reachability = Kernel.Reachability.make (module Info)
-  let lrc = Kernel.Lrc.make (module Info) reachability
+  let reachability = Kernel.Reachability.make grammar
+  let lrc = Kernel.Lrc.make grammar reachability
 end
 
 let lrc_from_entrypoints =
@@ -312,11 +312,11 @@ let lrc_from_entrypoints =
     | None ->
       let lr1s =
         if IndexSet.is_empty from_entrypoints
-        then Info.Lr1.all_entrypoints
+        then Lr1.entrypoints grammar
         else from_entrypoints
       in
       let lrcs = indexset_bind lr1s (Vector.get T.lrc.lrcs_of) in
-      let ep = Kernel.Lrc.from_entrypoints (module Info) T.lrc lrcs in
+      let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
@@ -326,12 +326,12 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
 let do_compile spec (cp : Code_printer.t option) =
-  Kernel.Codegen.output_header info spec cp;
+  Kernel.Codegen.output_header grammar spec cp;
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
     let unknown = ref [] in
     let initial_states =
       List.filter_map (fun (sym, pos) ->
-          let result = Hashtbl.find_opt Info.Lr1.entrypoints sym in
+          let result = Hashtbl.find_opt (Lr1.entrypoint_table grammar) sym in
           if Option.is_none result then
             push unknown (sym, pos);
           result
@@ -343,7 +343,7 @@ let do_compile spec (cp : Code_printer.t option) =
       | (_, pos) :: _ as unknowns ->
         let names = String.concat ", " (List.map fst unknowns) in
         let candidates =
-          String.concat ", " (List.of_seq (Hashtbl.to_seq_keys Info.Lr1.entrypoints))
+          String.concat ", " (List.of_seq (Hashtbl.to_seq_keys (Lr1.entrypoint_table grammar)))
         in
         report_error pos
           "Unknown start symbols %s.\n\
@@ -362,17 +362,17 @@ let do_compile spec (cp : Code_printer.t option) =
       label = (fun n -> IndexSet.singleton T.lrc.lr1_of.:(n));
     } in
     let Kernel.Spec.Rule (clauses, branches) =
-      Kernel.Spec.import_rule info T.viable T.indices T.trie rule
+      Kernel.Spec.import_rule grammar T.viable T.indices T.trie rule
     in
-    let nfa = Kernel.Automata.NFA.from_branches info T.viable branches in
+    let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
     let Kernel.Automata.DFA.T dfa =
-      Kernel.Automata.DFA.determinize info branches stacks nfa in
+      Kernel.Automata.DFA.determinize branches stacks nfa in
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
-    Kernel.Codegen.output_rule info spec rule clauses branches machine cp
+    Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
-  Kernel.Codegen.output_trailer info spec cp
+  Kernel.Codegen.output_trailer grammar spec cp
 
 let process_command = function
   | Compile options ->

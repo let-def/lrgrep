@@ -107,6 +107,8 @@ type 'g grammar = {
   reduction_from_lr1 : ('g lr1, 'g reduction indexset) vector;
 }
 
+let raw g = g.raw
+
 module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
   type g
 
@@ -496,6 +498,12 @@ module Terminal = struct
     if a == g.terminal_all then b
     else if b == g.terminal_all then a
     else IndexSet.inter a b
+
+  let is_error g i =
+    let open (val g.raw) in
+    match Terminal.kind (Terminal.of_int (i : _ index :> int)) with
+    | `ERROR -> true
+    | _ -> false
 end
 
 module Nonterminal = struct
@@ -521,6 +529,13 @@ module Nonterminal = struct
   let nullable g i =
     let open (val g.raw) in
     Nonterminal.nullable (Nonterminal.of_int (Index.to_int i))
+
+  let first g i =
+    let open (val g.raw) in
+    Nonterminal.of_int (Index.to_int i)
+    |> Nonterminal.first
+    |> List.map (fun t -> Index.of_int g.terminal_n (Terminal.to_int t))
+    |> IndexSet.of_list
 end
 
 module Symbol = struct
@@ -559,6 +574,9 @@ module Symbol = struct
     | R n -> Nonterminal.semantic_value g n
 
   let all g = g.symbol_all
+
+  let inj_t _ t = Sum.inj_l t
+  let inj_n g n = Sum.inj_r g.terminal_n n
 end
 
 module Production = struct
@@ -712,6 +730,11 @@ module Lr1 = struct
     else if b == g.lr1_all then a
     else IndexSet.inter a b
 
+  let default_reduction g i =
+    let open (val g.raw) in
+    match Lr1.default_reduction (Lr1.of_int (i : _ index :> int)) with
+    | None -> None
+    | Some p -> Some (Index.of_int (Vector.length g.production_rhs) (Production.to_int p))
 end
 
 module Reduction = struct

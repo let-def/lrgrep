@@ -69,7 +69,7 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  let make (type g) ((module Info) : g info) viable branch =
+  let make (type g) (g : g grammar) viable branch =
     let module KMap = Map.Make(struct type t = g Regexp.K.t let compare = Regexp.K.compare end) in
     let nfa = ref KMap.empty in
     let rec aux k =
@@ -85,7 +85,7 @@ module NFA = struct
         let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
         let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
         let transitions =
-          K.derive viable Info.Lr1.all k
+          K.derive viable (Lr1.all g) k
           |> process_transitions
           |> List.map inj
           |> IndexRefine.annotated_partition
@@ -132,10 +132,9 @@ module DFA = struct
   type ('g, 'r) _t = T : ('g, 'r, 'dfa) t -> ('g, 'r) _t
 
   let determinize (type g r s)
-      (info : g info) (branches: (g, r) branches)
+      (branches: (g, r) branches)
       (stacks: (g, s) stacks) initial : (g, r) _t
     =
-    let open (val info) in
     let module Construction = struct
       include IndexBuffer.Gen.Make()
 

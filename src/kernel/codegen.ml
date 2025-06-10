@@ -44,10 +44,14 @@ let output_wrapper out {Syntax.name; args; _} =
 
 type printer = Code_printer.t option -> unit
 
-let output_header (type g) ((module Info) : g info) spec : printer = function
+let grammar_parameters g =
+  let (module Raw) = raw g in
+  Raw.Grammar.parameters
+
+let output_header (type g) (g : g grammar) spec : printer = function
   | None -> ()
   | Some out ->
-    begin match Info.Grammar.Grammar.parameters with
+    begin match grammar_parameters g with
       | [] -> ()
       | parameters ->
         Code_printer.print out "module Make";
@@ -70,12 +74,12 @@ let output_header (type g) ((module Info) : g info) spec : printer = function
       "include Lrgrep_runtime.Interpreter(%s.MenhirInterpreter)\n"
       spec.parser_name
 
-let output_trailer (type g) ((module Info) : g info) spec : printer = function
+let output_trailer (type g) (g : g grammar) spec : printer = function
   | None -> ()
   | Some out ->
     Code_printer.print out "\n";
     print_literal_code out spec.lexer_definition.Syntax.trailer;
-    match Info.Grammar.Grammar.parameters with
+    match grammar_parameters g with
     | [] -> ()
     | _ -> Code_printer.print out "\nend\n"
 
@@ -98,7 +102,7 @@ let rewrite_loc_keywords str =
   done;
   Bytes.to_string b
 
-let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
+let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
     clauses (branches : (g, r) branches) (machine : (g, r, _, _) Automata.Machine.t) : printer =
   function
   | None -> ()
@@ -138,7 +142,6 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
     let program = Lrgrep_support.compact (Automata.Machine.states machine) get_state_for_compaction in
     output_table out rule machine program;
     (* Step 2: output semantic actions *)
-    let open (val info) in
     let captures_lr1 =
       let map = ref IndexMap.empty in
       let process_transitions (label : _ Automata.Machine.label) =
@@ -157,13 +160,13 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
       try
         let lr1s = IndexMap.find index captures_lr1 in
         let symbols = IndexSet.map (fun lr1 ->
-            match Lr1.incoming lr1 with
+            match Lr1.incoming g lr1 with
             | None -> raise Not_found
             | Some sym -> sym
           ) lr1s
         in
         let typ = IndexSet.fold (fun sym acc ->
-            let typ = match Symbol.semantic_value sym with
+            let typ = match Symbol.semantic_value g sym with
               | None -> raise Not_found
               | Some typ -> String.trim typ
             in
@@ -179,9 +182,9 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
         | Some typ -> Some (symbols, typ)
       with Not_found -> None
     in
-    let symbol_matcher s = match Symbol.prj s with
-      | L t -> "T T_" ^ Terminal.to_string t
-      | R n -> "N N_" ^ Grammar.Nonterminal.mangled_name (Nonterminal.to_g n)
+    let symbol_matcher s =
+      (if Symbol.is_terminal g s then "T T_" else "N N_") ^
+      Symbol.name g ~mangled:true s
     in
     let bind_capture out ~roffset index (def, name) =
       let is_optional = IndexSet.mem index machine.partial_captures in
@@ -247,8 +250,8 @@ let output_rule (type g r) (info : g info) {parser_name; _} (rule : Syntax.rule)
       | None -> None
       | Some terms ->
         let term_pattern t =
-          Terminal.to_string t ^
-          match Terminal.semantic_value t with
+          Terminal.to_string g t ^
+          match Terminal.semantic_value g t with
           | None -> ""
           | Some _ -> " _"
         in

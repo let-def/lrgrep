@@ -80,12 +80,11 @@ type 'g t = {
 }
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-let group_reductions (type g) ((module Info) : g info) =
-  let open Info in
+let group_reductions (type g) (g : g grammar) =
   let rec group depth : g reduction index list -> g reduction indexset list =
     function
     | [] -> []
-    | red :: rest when depth = Production.length (Reduction.production red) ->
+    | red :: rest when depth = Production.length g (Reduction.production g red) ->
       begin match group depth rest with
         | [] -> [IndexSet.singleton red]
         | reds :: tail ->
@@ -94,10 +93,10 @@ let group_reductions (type g) ((module Info) : g info) =
     | otherwise ->
       IndexSet.empty :: group (depth + 1) otherwise
   in
-  Vector.init Lr1.n
-    (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 lr1)))
+  Vector.init (Lr1.cardinal g)
+    (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 g lr1)))
 
-let make (type g) ((module Info) : g info) : g t =
+let make (type g) (g : g grammar) : g t =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   let module VEq = Viable.Eq(struct type t = g include States end) in
@@ -106,7 +105,7 @@ let make (type g) ((module Info) : g info) : g t =
   let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
   let nodes = Hashtbl.create 7 in
-  let reductions = group_reductions (module Info) in
+  let reductions = group_reductions g in
   (* Create states by visiting configurations and their outgoing transitions. *)
   let rec visit_config config =
     match Hashtbl.find_opt nodes config with
@@ -131,12 +130,12 @@ let make (type g) ((module Info) : g info) : g t =
           ([], visit_outers config.lookahead (IndexSet.singleton config.top) next)
       in
       let process_goto red =
-        let prod = Reduction.production red in
-        let lookahead = Terminal.intersect (Reduction.lookaheads red) config.lookahead in
+        let prod = Reduction.production g red in
+        let lookahead = Terminal.intersect g (Reduction.lookaheads g red) config.lookahead in
         if IndexSet.is_empty lookahead then
           None
         else
-          let top = Transition.find_goto_target config.top (Production.lhs prod) in
+          let top = Transition.find_goto_target g config.top (Production.lhs g prod) in
           let rest = config.top :: config.rest in
           let target = visit_config {top; rest; lookahead} in
           Some {target; lookahead; source=(); reduction=red}
@@ -147,20 +146,20 @@ let make (type g) ((module Info) : g info) : g t =
   and visit_outers lookahead lr1_states = function
     | [] -> []
     | gotos :: next ->
-      let lr1_states = indexset_bind lr1_states Lr1.predecessors in
+      let lr1_states = indexset_bind lr1_states (Lr1.predecessors g) in
       visit_outer lookahead lr1_states gotos next
   (* Helper function for visiting a single outer transition. *)
   and visit_outer lookahead lr1_states gotos next =
     let next = visit_outers lookahead lr1_states next in
     let process_goto red acc =
       let lookahead =
-        Terminal.intersect lookahead (Reduction.lookaheads red)
+        Terminal.intersect g lookahead (Reduction.lookaheads g red)
       in
       if IndexSet.is_empty lookahead then acc
       else
-        let lhs = Production.lhs (Reduction.production red) in
+        let lhs = Production.lhs g (Reduction.production g red) in
         let process_target source acc =
-          let target_lhs = Transition.find_goto_target source lhs in
+          let target_lhs = Transition.find_goto_target g source lhs in
           IndexMap.update target_lhs (function
             | Some (sources, target) ->
               Some (IndexSet.add source sources, target)
@@ -183,11 +182,11 @@ let make (type g) ((module Info) : g info) : g t =
     gotos :: next
   in
   (* Compute the initial set of transitions for each LR(1) state. *)
-  let initial = Vector.init Lr1.n (fun lr1 ->
+  let initial = Vector.init (Lr1.cardinal g) (fun lr1 ->
       match Vector.get reductions lr1 with
       | [] -> []
       | gotos :: next ->
-        visit_outer Terminal.regular (IndexSet.singleton lr1) gotos next
+        visit_outer (Terminal.regular g) (IndexSet.singleton lr1) gotos next
     )
   in
   let states = IndexBuffer.Gen.freeze states in
@@ -235,5 +234,5 @@ let get_stack vr state =
 
 (* [string_of_stack st] is a string representing the suffix of the stacks
    recognized by when reaching state [st]. *)
-let string_of_stack (type g) ((module Info) : g info) vr state =
-  string_concat_map " " Info.Lr1.to_string (get_stack vr state)
+let string_of_stack g vr state =
+  string_concat_map " " (Lr1.to_string g) (get_stack vr state)

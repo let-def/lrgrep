@@ -27,13 +27,12 @@ type ('g, 'r) branches = {
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 
-let import_rule (type g) (info : g info)
+let import_rule (type g) (g : g grammar)
     (viable : g Viable_reductions.t)
     (indices : g Transl.Indices.t)
     (trie : g Transl.Reductum_trie.t)
     (rule : Syntax.rule) : g _rule
   =
-  let open (val info) in
   let open struct type r end in
   let module Clauses = Vector.Of_array(struct
       type a = Syntax.clause
@@ -78,27 +77,24 @@ let import_rule (type g) (info : g info)
           let sym_pattern (sym, pos) =
             match sym with
             | Syntax.Apply ("first", [sym]) ->
-              begin match Symbol.prj (Transl.Indices.get_symbol indices pos sym) with
-                | L t ->
-                  let t = Terminal.to_string t in
+              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+                | T t ->
+                  let t = Terminal.to_string g t in
                   failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
                             t ^ " is a terminal")
-                | R n ->
-                  Nonterminal.to_g n
-                  |> Grammar.Nonterminal.first
-                  |> List.map Terminal.of_g
+                | N n -> Nonterminal.first g n
               end
             | Syntax.Name _ ->
-              begin match Symbol.prj (Transl.Indices.get_symbol indices pos sym) with
-                | R n ->
+              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+                | N n ->
                   failwith (lookahead_msg ^ "; " ^
-                            Nonterminal.to_string n ^ " is a nonterminal")
-                | L t -> [t]
+                            Nonterminal.to_string g n ^ " is a nonterminal")
+                | T t -> IndexSet.singleton t
               end
             | _ ->
               failwith lookahead_msg
           in
-          Some (IndexSet.of_list (List.concat_map sym_pattern symbols))
+          Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
       ) pattern
   in
   let is_total =
@@ -129,9 +125,7 @@ let import_rule (type g) (info : g info)
         index
     in
     let translate_branch (br : Branches.n index) =
-      let cap, exp =
-        Transl.transl info viable indices trie ~capture pattern.:(br).expr
-      in
+      let cap, exp = Transl.transl g viable indices trie ~capture pattern.:(br).expr in
       br_captures.:(br) <- cap;
       expr.:(br) <- exp;
     in

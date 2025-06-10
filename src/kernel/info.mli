@@ -82,6 +82,9 @@ module Terminal : sig
 
   (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
   val intersect : 'g grammar -> 'g n indexset -> 'g n indexset -> 'g n indexset
+
+  (** Is it the special `error` symbol *)
+  val is_error : 'g grammar -> 'g n index -> bool
 end
 
 module Nonterminal : sig
@@ -91,6 +94,7 @@ module Nonterminal : sig
   val kind : 'g grammar -> 'g n index -> [`REGULAR | `START]
   val semantic_value : 'g grammar -> 'g n index -> string option
   val nullable : 'g grammar -> 'g n index -> bool
+  val first : 'g grammar -> 'g n index -> 'g terminal indexset
 end
 
 module Symbol : sig
@@ -109,6 +113,9 @@ module Symbol : sig
   val semantic_value : 'g grammar -> 'g n index -> string option
 
   val all : 'g grammar -> 'g n indexset
+
+  val inj_t : 'g grammar -> 'g terminal index -> 'g symbol index
+  val inj_n : 'g grammar -> 'g nonterminal index -> 'g symbol index
 end
 
 module Production : sig
@@ -198,6 +205,8 @@ module Lr1 : sig
   val is_entrypoint : 'g grammar -> 'g n index -> 'g production index option
   val entrypoint_table : 'g grammar -> (string, 'g n index) Hashtbl.t
   val entrypoints : 'g grammar -> 'g n indexset
+
+  val default_reduction : 'g grammar -> 'g n index -> 'g production index option
 end
 
 module Transition : sig
@@ -269,3 +278,5 @@ module Reduction : sig
   (* All reductions applicable to an lr1 state. *)
   val from_lr1: 'g grammar -> 'g lr1 index -> 'g n indexset
 end
+
+val raw : _ grammar -> (module MenhirSdk.Cmly_api.GRAMMAR)

@@ -91,27 +91,29 @@ end
 
 (* Functor to create an instance of reachable reductions *)
 module Make
-    (Info : Info.S)
-    (Reductions: sig
-       val viable : Info.g Viable_reductions.t
-       val lrc_graph : Info.g Lrc.t
-       val entrypoints : Info.g Lrc.entrypoints
+    (X: sig
+       type g
+       val g : g grammar
+       val viable : g Viable_reductions.t
+       val lrc_graph : g Lrc.t
+       val entrypoints : g Lrc.entrypoints
      end)
-    () : S with type g = Info.g
+    () : S with type g = X.g
 =
 struct
-  open Info
-  open Reductions
-  type g = Info.g
+  open X
+  type g = X.g
 
   include IndexBuffer.Gen.Make()
 
-  module Source = Sum.Make(struct
-                      type n = g Viable_reductions.viable
-                      let n = Vector.length viable.reachable_from
-                    end)(Lr1)
+  module Source = struct
+    let viable = Vector.length viable.reachable_from
+    let inj_l = Sum.inj_l
+    let inj_r x = Sum.inj_r viable x
+    let prj x = Sum.prj viable x
+  end
 
-  type target = n index * Reduction.t
+  type target = n index * g reduction index
 
   type transitions = target list list
 
@@ -182,7 +184,7 @@ struct
   let initial =
     let process lrc =
       let lr1 = lrc_graph.lr1_of.:(lrc) in
-      assert (not (IndexSet.mem lr1 Lr1.accepting));
+      assert (not (IndexSet.mem lr1 (Lr1.accepting g)));
       visit_config
         (IndexSet.singleton lrc)
         (Source.inj_r lr1)
@@ -229,8 +231,8 @@ struct
     match Source.prj config.source with
     | L v ->
       let config = viable.config.:(v) in
-      IndexSet.inter (Lr1.reject config.top) config.lookahead
-    | R lr1 -> IndexSet.inter (Lr1.reject lr1) Terminal.regular
+      IndexSet.inter (Lr1.reject g config.top) config.lookahead
+    | R lr1 -> IndexSet.inter (Lr1.reject g lr1) (Terminal.regular g)
 
   (* Compute the set of terminals that can be rejected by successors of a state *)
   let rejectable =
@@ -262,13 +264,14 @@ end
 
 (* Functor to create a covering tree for the Reachable_reductions module *)
 module Covering_tree
-    (Info : Info.S)
-    (Reductions: sig val viable : Info.g Viable_reductions.t end)
-    (Reach : S with type g = Info.g)
+    (Reductions: sig
+       type g
+       val g : g grammar
+       val viable : g Viable_reductions.t end)
+    (Reach : S with type g = Reductions.g)
     ()
 =
 struct
-  open Info
   open Reach
   open Reductions
 
@@ -280,8 +283,8 @@ struct
     (* Function to get the LR0 stack from a source *)
     let lr0_stack_of_source source =
       match Sum.prj (Vector.length viable.transitions) source with
-      | L v -> List.rev_map Lr1.to_lr0 (Viable_reductions.get_stack viable v)
-      | R lr1 -> [Lr1.to_lr0 lr1]
+      | L v -> List.rev_map (Lr1.to_lr0 g) (Viable_reductions.get_stack viable v)
+      | R lr1 -> [Lr1.to_lr0 g lr1]
 
     let def = get_generator ()
 
@@ -312,8 +315,8 @@ struct
   (* Type representing a node in the covering tree *)
   type node = {
     state: n index;
-    rejected: Terminal.set;
-    mutable handled: Terminal.set;
+    rejected: g terminal indexset;
+    mutable handled: g terminal indexset;
     mutable children: node list;
   }
 
@@ -452,24 +455,25 @@ module type FAILURE_NFA = sig
 end
 
 module FailureNFA
-    (Info : Info.S)
     (Reductions: sig
-       val viable : Info.g Viable_reductions.t
-       val lrc_graph : Info.g Lrc.t
-       val entrypoints : Info.g Lrc.entrypoints
+       type g
+       val g : g grammar
+       val viable : g Viable_reductions.t
+       val lrc_graph : g Lrc.t
+       val entrypoints : g Lrc.entrypoints
      end)
-    (Reach : S with type g = Info.g)
+    (Reach : S with type g = Reductions.g)
     ()
-  : FAILURE_NFA with type g = Info.g
+  : FAILURE_NFA with type g = Reductions.g
 =
 struct
-  type g = Info.g
+  type g = Reductions.g
   open Reductions
 
   let () =
     if build_with_expensive_assertions then (
       Vector.iteri (fun lrc lr1 ->
-          let lr1s' = Info.Lr1.predecessors lr1 in
+          let lr1s' = Lr1.predecessors g lr1 in
           IndexSet.iter (fun lrc' ->
               assert (IndexSet.mem lrc_graph.lr1_of.:(lrc') lr1s')
             ) entrypoints.predecessors.:(lrc)
@@ -482,8 +486,8 @@ struct
                 let lrcs' = (Vector.get Reach.states reach').config.lrcs in
                 if not (IndexSet.subset lrcs' lrcs) then (
                   Printf.eprintf "%s not included in %s\n"
-                    (Lrc.set_to_string (module Info) lrc_graph lrcs')
-                    (Lrc.set_to_string (module Info) lrc_graph lrcs);
+                    (Lrc.set_to_string g lrc_graph lrcs')
+                    (Lrc.set_to_string g lrc_graph lrcs);
                   assert false
                 )
               ) x;
@@ -577,8 +581,8 @@ struct
         (*FIXME: Find out why it is not always a subset*)
         if not (IndexSet.subset lrcs1 lrcs) then (
           Printf.eprintf "expected: %s in %s\n"
-            (Lrc.set_to_string (module Info) lrc_graph lrcs1)
-            (Lrc.set_to_string (module Info) lrc_graph lrcs);
+            (Lrc.set_to_string g lrc_graph lrcs1)
+            (Lrc.set_to_string g lrc_graph lrcs);
           assert false
         );
         match next with
@@ -696,7 +700,7 @@ struct
         let desc = Vector.get Reach.states i in
         Printf.sprintf "reach(%d, %s)"
           (Index.to_int i)
-          (Lrc.set_to_string (module Info) lrc_graph desc.config.lrcs)
+          (Lrc.set_to_string g lrc_graph desc.config.lrcs)
       | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () =
@@ -715,20 +719,20 @@ struct
 end
 
 module Coverage_check
-    (Info : Info.S)
-    (NFA : FAILURE_NFA with type g = Info.g)
+    (G : sig type g val g : g grammar end)
+    (NFA : FAILURE_NFA with type g = G.g)
     (DFA : sig
        open Info
        type n
        val n : n cardinal
        val initial : n index
-       val successors : n index -> (Lr1.set * n index) list
-       val accept : n index -> Terminal.set
+       val successors : n index -> (G.g lr1 indexset * n index) list
+       val accept : n index -> G.g terminal indexset
      end)
     ()
 =
 struct
-  open Info
+  open G
 
   module FDFA = struct
     let table = Hashtbl.create 7
@@ -776,7 +780,7 @@ struct
       stopwatch 3 "Determinized Failure NFA with %d states" (Hashtbl.length table)
   end
 
-  let pts ts = string_of_indexset ~index:Terminal.to_string ts
+  let pts ts = string_of_indexset ~index:(Terminal.to_string g) ts
 
   let () =
     let oc = open_out_bin "dfa.dot" in
@@ -791,7 +795,7 @@ struct
         List.iter (fun (lbl, tgt) ->
             p "  st%d -> st%d [label=%S]"
               (Index.to_int src) (Index.to_int tgt)
-              (Lr1.set_to_string lbl)
+              (Lr1.set_to_string g lbl)
         ) (DFA.successors src);
       );
     p "}";
@@ -799,8 +803,8 @@ struct
 
   module Image = struct
     type t = {
-      handled: Terminal.set;
-      rejected: Terminal.set;
+      handled: g terminal indexset;
+      rejected: g terminal indexset;
     }
 
     let empty = {rejected=IndexSet.empty; handled=IndexSet.empty}
@@ -852,13 +856,13 @@ struct
 
   type desc = {
     state: State.n index;
-    mutable successors: (Lr1.set * Terminal.set * State.n index) list;
-    mutable predecessors: (Lr1.set * Terminal.set * State.n index) list;
+    mutable successors: (g lr1 indexset * g terminal indexset * State.n index) list;
+    mutable predecessors: (g lr1 indexset * g terminal indexset * State.n index) list;
 
-    uncovered: Lr1.set;
+    uncovered: g lr1 indexset;
     mutable image: Image.t;
-    mutable failing: Terminal.set;
-    mutable failing_successors: (Lr1.set * (Terminal.set * desc)) list;
+    mutable failing: g terminal indexset;
+    mutable failing_successors: (g lr1 indexset * (g terminal indexset * desc)) list;
 
     mutable mark: bool;
     mutable todo: Image.t;
@@ -1026,14 +1030,14 @@ struct
     in
     Printf.eprintf "Backpropagated failing lookaheads in %d steps.\n" !counter;
     Printf.eprintf "Unhandled lookaheads: %s.\n"
-      (string_concat_map ", " Terminal.to_string
+      (string_concat_map ", " (Terminal.to_string g)
          (IndexSet.elements initial_failing))
 
   (* Generate sentences and determinize on the fly *)
 
   type step = {
-    label: Lr1.set;
-    goto: Lr1.t list list;
+    label: g lr1 indexset;
+    goto: g lr1 index list list;
   }
 
   let union_all l =
@@ -1108,17 +1112,17 @@ struct
     enum_uncovered ~f:(fun path failing ->
         incr count;
         Printf.eprintf "Sentence %d, failing when looking ahead at %s:\n"
-          !count (string_of_indexset ~index:Terminal.to_string failing);
+          !count (string_of_indexset ~index:(Terminal.to_string g) failing);
         let print_step i step =
-          let plr1 lr1 = Lr1.symbol_to_string lr1 in
+          let plr1 lr1 = Lr1.symbol_to_string g lr1 in
           let lr1 = IndexSet.choose step.label in
           Printf.eprintf "- %s\n" (plr1 lr1);
           match step.goto with
           | [] ->
             if i = 0 then
               Printf.eprintf "  [ %s]\n"
-              (string_concat_map " " Item.to_string
-                 (IndexSet.elements (Lr1.items lr1)))
+              (string_concat_map " " (Item.to_string g)
+                 (IndexSet.elements (Lr1.items g lr1)))
           | goto ->
             List.iter (fun goto ->
                 let lr1' = List.hd goto in
@@ -1129,12 +1133,11 @@ struct
                 IndexSet.iter (fun item ->
                     if !need_sep then Printf.eprintf "\n    %s" pad;
                     need_sep := true;
-                    Printf.eprintf "%s" (Item.to_string item);
-                  ) (Lr1.items lr1');
+                    Printf.eprintf "%s" (Item.to_string g item);
+                  ) (Lr1.items g lr1');
                 Printf.eprintf "]\n";
               ) goto
         in
         List.iteri print_step (List.rev path)
       )
-
 end

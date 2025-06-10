@@ -14,11 +14,11 @@ type 'g t = {
   reachable_from: ('g n, 'g n indexset) vector;
 }
 
-val make : 'g info -> 'g Reachability.t -> 'g t
+val make : 'g grammar -> 'g Reachability.t -> 'g t
 val lookahead : 'g Reachability.t -> 'g t -> 'g n index -> 'g terminal indexset
 val class_index : 'g t -> 'g n index -> int
-val to_string : 'g info -> 'g t -> 'g n index -> string
-val set_to_string : 'g info -> 'g t -> 'g n indexset -> string
+val to_string : 'g grammar -> 'g t -> 'g n index -> string
+val set_to_string : 'g grammar -> 'g t -> 'g n indexset -> string
 
 type 'g entrypoints = {
   reachable: 'g n indexset;
@@ -29,4 +29,4 @@ type 'g entrypoints = {
   some_prefix: 'g n index -> 'g n index list;
 }
 
-val from_entrypoints : 'g info -> 'g t -> 'g n indexset -> 'g entrypoints
+val from_entrypoints : 'g grammar -> 'g t -> 'g n indexset -> 'g entrypoints

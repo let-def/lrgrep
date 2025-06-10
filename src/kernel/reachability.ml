@@ -156,8 +156,7 @@ end
 
 type 'g t = (module S with type g = 'g)
 
-let make (type g) (info : g info) : g t = (module struct
-  open (val info)
+let make (type g) (g : g grammar) : g t = (module struct
   type nonrec g = g
 
   (* ---------------------------------------------------------------------- *)
@@ -179,44 +178,43 @@ let make (type g) (info : g info) : g t = (module struct
 
   type reduction = {
     (* The production that is being reduced *)
-    production: Production.t;
+    production: g production index;
 
     (* The set of lookahead terminals that allow this reduction to happen *)
-    lookahead: Terminal.set;
+    lookahead: g terminal indexset;
 
     (* The shape of the stack, all the transitions that are replaced by the
        goto transition when the reduction is performed *)
-    steps: Transition.any index list;
+    steps: g transition index list;
 
     (* The lr1 state at the top of the stack before reducing.
        That is [state] can reduce [production] when the lookahead terminal
        is in [lookahead]. *)
-    state: Lr1.t;
+    state: g lr1 index;
   }
 
   (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
-  let unreduce : Transition.goto index -> reduction list =
-    let table = Vector.make Transition.goto [] in
+  let unreduce : g goto_transition index -> reduction list =
+    let table = Vector.make (Transition.goto g) [] in
     (* [add_reduction lr1 (production, lookahead)] populates [table] by
        simulating the reduction [production], starting from [lr1] when
        lookahead is in [lookahead] *)
     let add_reduction lr1 (production, lookahead) =
-      let production = Production.of_g production in
-      if Production.kind production = `REGULAR then begin
-        let lhs = Production.lhs production in
-        let rhs = Production.rhs production in
+      if Production.kind g production = `REGULAR then begin
+        let lhs = Production.lhs g production in
+        let rhs = Production.rhs g production in
         let states =
           Array.fold_right (fun _ states ->
               let expand acc (state, steps) =
-                List.fold_left (fun acc tr ->
-                    (Transition.source tr, tr :: steps) :: acc
-                  ) acc (Transition.predecessors state)
+                IndexSet.fold (fun tr acc ->
+                    (Transition.source g tr, tr :: steps) :: acc
+                  ) (Transition.predecessors g state) acc
               in
               List.fold_left expand [] states
             ) rhs [lr1, []]
         in
         List.iter (fun (source, steps) ->
-            table.@(Transition.find_goto source lhs) <-
+            table.@(Transition.find_goto g source lhs) <-
               List.cons { production; lookahead; steps; state=lr1 }
           ) states
       end
@@ -224,35 +222,17 @@ let make (type g) (info : g info) : g t = (module struct
     (* [get_reductions lr1] returns the list of productions and the lookahead
        sets that allow reducing them from state [lr1] *)
     let get_reductions lr1 =
-      let lr1 = Lr1.to_g lr1 in
-      match Grammar.Lr1.default_reduction lr1 with
+      match Lr1.default_reduction g lr1 with
       | Some prod ->
         (* State has a default reduction, the lookahead can be any terminal *)
-        [prod, Terminal.all]
+        [prod, Terminal.all g]
       | None ->
-        let raw =
-          let add acc (t, p) =
-            match Grammar.Terminal.kind t with
-            | `ERROR -> acc
-            | _ -> ((t, p) :: acc)
-          in
-          List.fold_left add [] (Grammar.Lr1.get_reductions lr1)
-        in
-        (* Regroup lookahead tokens by production *)
-        Utils.Misc.group_by raw
-          ~compare:(fun (_, p1) (_, p2) ->
-              compare_index (Production.of_g p1) (Production.of_g p2)
-            )
-          ~group:(fun (t, p) tps ->
-              let set = List.fold_left
-                  (fun set (t, _) -> IndexSet.add (Terminal.of_g t) set)
-                  (IndexSet.singleton (Terminal.of_g t)) tps
-              in
-              (p, set)
-            )
+        IndexSet.fold
+          (fun red acc -> (Reduction.production g red, Reduction.lookaheads g red) :: acc)
+          (Reduction.from_lr1 g lr1) []
     in
     (* Populate [table] with the reductions of all state *)
-    Index.iter Lr1.n
+    Index.iter (Lr1.cardinal g)
       (fun lr1 -> List.iter (add_reduction lr1) (get_reductions lr1));
     Vector.get table
 
@@ -271,7 +251,7 @@ let make (type g) (info : g info) : g t = (module struct
   module Classes = struct
 
     (* A node of the graph is either an lr1 state or a goto transition *)
-    module Node = (val Sum.make Lr1.n Transition.goto)
+    module Node = (val Sum.make (Lr1.cardinal g) (Transition.goto g))
 
     (* Represents the dependency graph of Equation 7-9, to compute the SCCs *)
     module Gr = struct
@@ -281,14 +261,14 @@ let make (type g) (info : g info) : g t = (module struct
       let index = Index.to_int
 
       let visit_lr1 f lr1 =
-        match Lr1.incoming lr1 with
-        | Some sym when Symbol.is_nonterminal sym ->
-          List.iter (fun tr ->
-              match Transition.split tr with
+        match Lr1.incoming g lr1 with
+        | Some sym when Symbol.is_nonterminal g sym ->
+          IndexSet.iter (fun tr ->
+              match Transition.split g tr with
               | L nt -> f (Node.inj_r nt)
               | R _ -> assert false
             )
-            (Transition.predecessors lr1)
+            (Transition.predecessors g lr1)
         | _ -> ()
 
       let successors f i =
@@ -323,7 +303,7 @@ let make (type g) (info : g info) : g t = (module struct
               (* Comment the code below to have a partial order on partitions
                  (remove the ↑Z in equation (6) *)
               let base =
-                if lookahead != Terminal.all
+                if lookahead != Terminal.all g
                 then IndexSet.Set.map (IndexSet.inter lookahead) base
                 else base
               in
@@ -372,11 +352,11 @@ let make (type g) (info : g info) : g t = (module struct
 
     (* Initialize classes of initial states and of states whose incoming
        symbol is a terminal *)
-    let () = Index.iter Lr1.n (fun lr1 ->
-        match Lr1.incoming lr1 with
-        | Some sym when Symbol.is_nonterminal sym -> ()
+    let () = Index.iter (Lr1.cardinal g) (fun lr1 ->
+        match Lr1.incoming g lr1 with
+        | Some sym when Symbol.is_nonterminal g sym -> ()
         | None | Some _ ->
-          classes.:(Node.inj_l lr1) <- IndexSet.Set.singleton Terminal.all
+          classes.:(Node.inj_l lr1) <- IndexSet.Set.singleton (Terminal.all g)
       )
 
     (* We now have the final approximation.
@@ -399,10 +379,10 @@ let make (type g) (info : g info) : g t = (module struct
 
     (* Precompute the singleton partitions, e.g. { {t}, T/{t} } for each t *)
     let t_singletons =
-      Vector.init Terminal.n (fun t -> [|IndexSet.singleton t|])
+      Vector.init (Terminal.cardinal g) (fun t -> [|IndexSet.singleton t|])
 
     let all_terminals =
-      [|Terminal.all|]
+      [|Terminal.all g|]
 
     (* Just before taking a transition [tr], the lookahead has to belong to
        one of the classes in [pre_transition tr].
@@ -410,9 +390,9 @@ let make (type g) (info : g info) : g t = (module struct
        [pre_transition tr] indexes the rows of cost matrix for [tr].
     *)
     let pre_transition tr =
-      match Symbol.desc (Transition.symbol tr) with
+      match Symbol.desc g (Transition.symbol g tr) with
       | T t -> t_singletons.:(t)
-      | N _ -> for_lr1 (Transition.source tr)
+      | N _ -> for_lr1 (Transition.source g tr)
 
     (* Just after taking a transition [tr], the lookahead has to belong to
        one of the classes in [post_transition tr].
@@ -420,7 +400,7 @@ let make (type g) (info : g info) : g t = (module struct
        [post_transition tr] indexes the columns of cost matrix for [tr].
     *)
     let post_transition tr =
-      match Transition.split tr with
+      match Transition.split g tr with
       | L edge -> for_edge edge
       | R _ -> all_terminals
   end
@@ -445,7 +425,7 @@ let make (type g) (info : g info) : g t = (module struct
 
     (* [leaf tr] returns the node that corresponds [cost(s,x)]
        where [s = source tr] and [x = symbol tr]. *)
-    val leaf : Transition.any index -> n index
+    val leaf : g transition index -> n index
 
     (* [node l r] returns the inner-node that corresponds to
        the matrix product [l * r]  *)
@@ -455,7 +435,7 @@ let make (type g) (info : g info) : g t = (module struct
     val inject : Inner.n index -> n index
 
     (* Determines whether a node is a leaf or an inner node *)
-    val split : n index -> (Transition.any index, Inner.n index) either
+    val split : n index -> (g transition index, Inner.n index) either
 
     (* Once all nodes have been added, the DAG needs to be frozen *)
     module FreezeTree() : sig
@@ -466,7 +446,7 @@ let make (type g) (info : g info) : g t = (module struct
     module Inner = Gensym()
     (* The nodes of the trees is the disjoint sum of all transitions
        (the leaves) and the inner nodes. *)
-    include (val Sum.make Transition.any Inner.n)
+    include (val Sum.make (Transition.any g) Inner.n)
 
     let leaf = inj_l
     let inject = inj_r
@@ -626,7 +606,7 @@ let make (type g) (info : g info) : g t = (module struct
     include ConsedTree()
 
     type equations = {
-      nullable_lookaheads: Terminal.set;
+      nullable_lookaheads: g terminal indexset;
       nullable: reduction list;
       non_nullable: (reduction * n index) list;
     }
@@ -646,10 +626,10 @@ let make (type g) (info : g info) : g t = (module struct
          - otherwise,
            [non_nullable] contains the pair [ccost(s, A→ϵ•α)], [creduce(s, A→α)}
       *)
-      tabulate_finset Transition.goto @@ fun tr ->
+      tabulate_finset (Transition.goto g) @@ fun tr ->
       (* Number of rows in the compact cost matrix for tr *)
       let first_dim =
-        Array.length (Classes.pre_transition (Transition.of_goto tr))
+        Array.length (Classes.pre_transition (Transition.of_goto g tr))
       in
       (* Number of columns in the compact cost matrix for a transition tr' *)
       let transition_size tr' =
@@ -764,9 +744,9 @@ let make (type g) (info : g info) : g t = (module struct
     val goto : goto cardinal
     val is_goto : n index -> goto index option
     val of_goto : goto index -> n index
-    val goto_encode : Transition.goto index -> pre:row -> post:column -> goto index
-    val goto_decode : goto index -> Transition.goto index * row * column
-    val iter_goto : Transition.goto index -> (goto index -> unit) -> unit
+    val goto_encode : g goto_transition index -> pre:row -> post:column -> goto index
+    val goto_decode : goto index -> g goto_transition index * row * column
+    val iter_goto : g goto_transition index -> (goto index -> unit) -> unit
   end = struct
     type row = int
     type column = int
@@ -824,10 +804,10 @@ let make (type g) (info : g info) : g t = (module struct
         Index.of_int n (first + pre * post_count + post)
 
     let first_goto_node, first_goto_cell, last_goto_cell =
-      match cardinal Transition.goto with
+      match cardinal (Transition.goto g) with
       | 0 -> (0, 0, -1)
       | n ->
-        let tr i = Transition.of_goto (Index.of_int Transition.goto i) in
+        let tr i = Transition.of_goto g (Index.of_int (Transition.goto g) i) in
         let first_goto_node = Tree.leaf (tr 0) in
         let first = first_cell.:(first_goto_node) in
         let last = Tree.leaf (tr (n - 1)) in
@@ -850,19 +830,19 @@ let make (type g) (info : g info) : g t = (module struct
     let of_goto (g : goto index) =
       Index.of_int n (first_goto_cell + (g :> int))
 
-    let goto_decode (g : goto index) =
-      let n, pre, post = decode (of_goto g) in
-      let gt = Index.of_int Transition.goto ((n :> int) - first_goto_cell) in
+    let goto_decode (gt : goto index) =
+      let n, pre, post = decode (of_goto gt) in
+      let gt = Index.of_int (Transition.goto g) ((n :> int) - first_goto_cell) in
       (gt, pre, post)
 
     let goto_encode i =
-      let node = Tree.leaf (Transition.of_goto i) in
+      let node = Tree.leaf (Transition.of_goto g i) in
       let first = first_cell.:(node) - first_goto_cell in
       let post_count = Tree.post_count node in
       fun ~pre ~post ->
         Index.of_int goto (first + pre * post_count + post)
 
-    let iter_goto (gt : Transition.goto index) f =
+    let iter_goto (gt : g goto_transition index) f =
       let i = (gt :> int) in
       let index_of i = first_cell.:(Index.of_int Tree.n (first_goto_node + i)) in
       for j = index_of i to index_of (i + 1) - 1 do
@@ -881,7 +861,7 @@ let make (type g) (info : g info) : g t = (module struct
          goto transition.
          The dependency is accompanied with pre-coercion (see [Coercion.pre])
          and the forward coercion that represents the creduce(...). *)
-      | Leaf of Transition.goto index * Coercion.pre * Coercion.forward
+      | Leaf of g goto_transition index * Coercion.pre * Coercion.forward
 
       (* Equation (8): this node appears in some inner product.
          The dependency stores the index of the parent node as well as the
@@ -897,9 +877,9 @@ let make (type g) (info : g info) : g t = (module struct
       Vector.make Tree.n []
 
     let () =
-      Index.iter Transition.goto begin fun tr ->
+      Index.iter (Transition.goto g) begin fun tr ->
         (* Record dependencies of a goto transition.  *)
-        let node = Tree.leaf (Transition.of_goto tr) in
+        let node = Tree.leaf (Transition.of_goto g tr) in
         let pre = Tree.pre_classes node in
         let post = Tree.post_classes node in
         (* Register dependencies to other reductions *)
@@ -994,14 +974,14 @@ let make (type g) (info : g info) : g t = (module struct
 
     (* Initialize shift transitions to cost 1. *)
     let initialize_shift ~visit_root tr =
-      let node = Tree.leaf (Transition.of_shift tr) in
+      let node = Tree.leaf (Transition.of_shift g tr) in
       (*sanity*)assert (Array.length (Tree.pre_classes node) = 1);
       (*sanity*)assert (Array.length (Tree.post_classes node) = 1);
       visit_root (Cell.first_cell node) 1
 
     (* Record dependencies on a goto transition.  *)
     let initialize_goto ~visit_root tr =
-      let node = Tree.leaf (Transition.of_goto tr) in
+      let node = Tree.leaf (Transition.of_goto g tr) in
       let eqn = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
       if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
@@ -1042,8 +1022,8 @@ let make (type g) (info : g info) : g t = (module struct
            - shift transitions have cost 1 by definition
            - nullable goto transitions have cost 0
         *)
-        Index.iter Transition.shift (initialize_shift ~visit_root);
-        Index.iter Transition.goto (initialize_goto ~visit_root)
+        Index.iter (Transition.shift g) (initialize_shift ~visit_root);
+        Index.iter (Transition.goto g) (initialize_goto ~visit_root)
 
       (* Visit all the successors of a cell.
          This amounts to:
@@ -1116,11 +1096,11 @@ let make (type g) (info : g info) : g t = (module struct
           )
 
       let foreach_root visit_root =
-        Index.iter Transition.shift (fun sh ->
-            let node = Tree.leaf (Transition.of_shift sh) in
+        Index.iter (Transition.shift g) (fun sh ->
+            let node = Tree.leaf (Transition.of_shift g sh) in
             visit_root (Cell.first_cell node) true
           );
-        Index.iter Transition.goto (fun gt ->
+        Index.iter (Transition.goto g) (fun gt ->
             Cell.iter_goto gt (fun gt' ->
                 let index = Cell.of_goto gt' in
                 if costs.:(index) < max_int && count.:(gt') = 0 then
