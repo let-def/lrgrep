@@ -261,6 +261,14 @@ type ('state, 'clause, 'lr1) state = {
 
 type compact_dfa = RT.program_code * RT.sparse_table * RT.program_counter array
 
+let compare_priority (i1, s1, t1) (i2, s2, t2) =
+  let c = compare_index i1 i2 in
+  if c <> 0 then c else
+    let c = Int.compare s1 s2 in
+    if c <> 0 then c else
+      let c = Int.compare t1 t2 in
+      c
+
 let compare_transition_action t1 t2 =
   let c = Int.compare (Index.to_int t1.target) (Index.to_int t2.target) in
   if c <> 0 then c else
@@ -269,7 +277,9 @@ let compare_transition_action t1 t2 =
       let c = List.compare compare_index t1.store t2.store in
       if c <> 0 then c else
         let c = List.compare compare_index t1.clear t2.clear in
-        c
+        if c <> 0 then c else
+          let c = List.compare compare_priority t1.priority t2.priority in
+          c
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
