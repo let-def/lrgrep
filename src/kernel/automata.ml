@@ -49,6 +49,20 @@ type ('g, 'n) stacks = {
 
 type priority = int
 
+let label_to_short_string g label =
+  if IndexSet.equal label (Lr1.all g) then
+    "<any>"
+  else
+    let filter =
+      label
+      |> IndexSet.to_seq
+      |> Seq.take 5
+      |> List.of_seq
+      |> List.map (Lr1.to_string g)
+    in
+    let filter = if List.length filter = 5 then filter @ ["..."] else filter in
+    String.concat "|" filter
+
 module NFA = struct
 
   type ('g, 'r) t = {
@@ -78,21 +92,8 @@ module NFA = struct
       List.iter (fun (label, t') ->
           if not only_forced || Lazy.is_val t' then (
             let lazy t' = t' in
-            let filter =
-              if IndexSet.equal label.Label.filter (Lr1.all g) then
-                "<any>"
-              else
-                let filter =
-                  label.Label.filter
-                  |> IndexSet.to_seq
-                  |> Seq.take 5
-                  |> List.of_seq
-                  |> List.map (Lr1.to_string g)
-                in
-                let filter = if List.length filter = 5 then filter @ ["..."] else filter in
-                String.concat "|" filter
-            in
-            p "  st%d -> st%d [label=%S];\n" t.uid t'.uid filter;
+            p "  st%d -> st%d [label=%S];\n" t.uid t'.uid
+              (label_to_short_string g label.Label.filter);
             visit t'
           )
         ) t.transitions;
@@ -166,6 +167,28 @@ module DFA = struct
     states: ('dfa, ('g, 'r, 'dfa) packed) vector;
     domain: ('dfa, 'g lr1 indexset) vector;
   }
+
+  let dump g oc t =
+    let p fmt = Printf.fprintf oc fmt in
+    p "digraph G {\n";
+    Vector.iter (fun (Packed state) ->
+        let acc = ref [] in
+        Vector.iteri (fun i br ->
+            if Boolvector.test state.accepting i then
+              push acc br
+          ) state.branches;
+        p "  st%d[label=%S];\n"
+          (Index.to_int state.index)
+          (string_concat_map "," string_of_index (List.rev !acc));
+        List.iter (fun (Transition tr) ->
+            p "  st%d -> st%d [label=%S];\n"
+              (Index.to_int state.index)
+              (Index.to_int tr.target.index)
+              (label_to_short_string g tr.label);
+          ) state.transitions;
+      ) t.states;
+    p "}\n"
+
 
   type ('g, 'r) _t = T : ('g, 'r, 'dfa) t -> ('g, 'r) _t
 

@@ -374,8 +374,19 @@ let do_compile spec (cp : Code_printer.t option) =
       Kernel.Spec.import_rule grammar T.viable T.indices T.trie rule
     in
     let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
+    Vector.iteri (fun br nfa ->
+        let oc = open_out_bin (Printf.sprintf "/tmp/%s_br_%d_line_%d.dot"
+                                 parser_name
+                                 (br : _ index :> int)
+                                 branches.expr.:(br).position.line) in
+        Kernel.Automata.NFA.dump grammar oc nfa;
+        close_out oc;
+      ) nfa;
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
+    let oc = open_out_bin (Printf.sprintf "/tmp/%s_dfa.dot" parser_name) in
+    Kernel.Automata.DFA.dump grammar oc dfa;
+    close_out oc;
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
