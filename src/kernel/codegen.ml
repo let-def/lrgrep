@@ -30,12 +30,11 @@ let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t)
   print "}\n"
 
 let output_wrapper out {Syntax.name; args; _} =
-  let args = "lrgrep_lookahead" :: args in
   let args = String.concat " " args in
   Code_printer.fmt out
-    "let %s _lrgrep_env %s = (\n\
+    "let %s %s _lrgrep_env _lrgrep_lookahead = (\n\
     \  List.find_map \n\
-    \    (fun m -> lrgrep_execute_%s m %s)\n\
+    \    (fun m -> lrgrep_execute_%s %s m _lrgrep_lookahead)\n\
     \    (lrgrep_run lrgrep_program_%s _lrgrep_env)\n\
      )\n"
     name args
