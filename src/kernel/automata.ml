@@ -1113,8 +1113,6 @@ module Machine = struct
     let source = Vector.init Min.transitions Min.source in
     let target = Vector.init Min.transitions Min.target in
     let label = Vector.init Min.transitions Min.label in
-    let outgoing = Vector.make Min.states IndexSet.empty in
-    let unhandled = Vector.make Min.states IndexSet.empty in
     let accepting =
       Vector.init Min.states @@ fun state ->
       let DFA.Packed source = dfa.states.:(Min.represent_state state) in
@@ -1150,6 +1148,25 @@ module Machine = struct
       let registers = dataflow.registers source in
       Vector.fold_righti2 add_branch source.branches registers []
     in
+    let outgoing = Vector.make Min.states IndexSet.empty in
+    let unhandled = Vector.make Min.states IndexSet.empty in
+    (* Initialize unhandled with all reachable labels *)
+    Index.iter (DFA.state_count dfa) begin fun st ->
+      match Min.transport_state st with
+      | None -> ()
+      | Some index ->
+        unhandled.@(index) <- IndexSet.union dfa.domain.:(st)
+    end;
+    (* Remove the ones for which transitions exist.
+       Populate outgoing. *)
+    Index.rev_iter Min.transitions begin fun tr ->
+      let index = Min.source tr in
+      let label = Min.label tr in
+      let visited = Vector.get unhandled index in
+      let visited = IndexSet.diff visited label.filter in
+      Vector.set unhandled index visited;
+      outgoing.@(index) <- IndexSet.add tr
+    end;
     stopwatch 3 "OutDFA";
     T {initial; source; target; label; unhandled; outgoing; partial_captures;
        register_count = dataflow.register_count; accepting; branches}
