@@ -347,7 +347,7 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
   let immediate = ref IndexSet.empty in
   let rec step (node : g Reductum_trie.t) k =
     let process_next : g Label.t * _ -> unit = function
-      | (label, None) ->
+      | (label, K.Accept) ->
         if node == trie then
           immediate := IndexSet.union !immediate label.filter
         else
@@ -361,7 +361,7 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
                   else acc
                 ) node.sub !reached
           )
-      | (label, Some k') ->
+      | (label, k') ->
         IndexMap.iter (fun lr1 node' ->
             if IndexSet.mem lr1 label.filter then
               step node' k'

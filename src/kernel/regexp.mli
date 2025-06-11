@@ -120,6 +120,7 @@ end
 
 module K : sig
   type 'g t =
+    | Accept
     | Done
     | More of 'g Expr.t * 'g t
     | Reducing of {
@@ -143,5 +144,5 @@ module K : sig
      expressions ϵ and _ which will both lead to "Done" while matching no
      transitions.
   *)
-  val derive :  'g Viable_reductions.t -> 'g lr1 indexset -> 'g t -> ('g Label.t * 'g t option) list
+  val derive :  'g Viable_reductions.t -> 'g lr1 indexset -> 'g t -> ('g Label.t * 'g t) list
 end

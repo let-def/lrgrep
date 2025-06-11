@@ -191,6 +191,7 @@ open Viable_reductions
 module K = struct
 
   type 'g t =
+    | Accept
     | Done
     | More of 'g Expr.t * 'g t
     | Reducing of {
@@ -224,6 +225,7 @@ module K = struct
   let rec compare t1 t2 =
     if t1 == t2 then 0 else
       match t1, t2 with
+      | Accept, Accept -> 0
       | Done, Done -> 0
       | More (e1, t1'), More (e2, t2') ->
         let c = Expr.compare e1 e2 in
@@ -235,7 +237,9 @@ module K = struct
           let c = list_compare compare_reduction_step r1.transitions r2.transitions in
           if c <> 0 then c else
             compare r1.next r2.next
+      | Accept, (More _ | Reducing _ | Done) -> -1
       | Done, (More _ | Reducing _) -> -1
+      | (More _ | Reducing _ | Done), Accept -> +1
       | (More _ | Reducing _), Done -> +1
       | More _, Reducing _ -> -1
       | Reducing _, More _ -> +1
@@ -275,6 +279,8 @@ module K = struct
     end trs
 
   let rec cmon ?lr1 = function
+    | Accept ->
+      Cmon.constant "Accept"
     | Done ->
       Cmon.constant "Done"
     | More (re, next) ->
@@ -320,17 +326,11 @@ module K = struct
     !matched
 
   let derive viable filter k =
-    let accept r label = match !r with
-      | (label', None) :: r' ->
-        r := (Label.union label' label, None) :: r'
-      | r' ->
-        r := (label, None) :: r'
-    in
     let continue r label next = match !r with
-      | (label', (Some next' as k)) :: r' when next' == next ->
-        r := (Label.union label' label, k) :: r'
+      | (label', next') :: r' when next' == next ->
+        r := (Label.union label' label, next) :: r'
       | r' ->
-        r := (label, Some next) :: r'
+        r := (label, next) :: r'
     in
     let reduce_outer matching ks next label reduction transitions =
       let rec visit_transitions label reduction = function
@@ -339,7 +339,7 @@ module K = struct
           begin match transitions with
             | step' :: _ when live_redstep reduction step' ->
               let reducing = Reducing {reduction; transitions; next} in
-              push ks (label, Some reducing)
+              push ks (label, reducing)
             | _ -> ()
           end
         | _ -> ()
@@ -357,15 +357,18 @@ module K = struct
     in
     let ks = ref [] in
     let rec process_k label = function
+      | Accept ->
+        ()
+
       | Done ->
-        accept ks label
+        continue ks label Accept
 
       | More (re, next) as self ->
         process_re label self next re.desc
 
       | Reducing {reduction; transitions; next} ->
         let l' = ref IndexSet.empty in
-        let ks' = ref [] in
+        let ks' : ('a Label.t * 'a t) list ref = ref [] in
         reduce_outer l' ks' next label reduction transitions;
         match Label.filter label !l', reduction.policy with
         | None, _ ->

@@ -75,7 +75,7 @@ module NFA = struct
 
   let is_accepting t =
     match t.k with
-    | K.Done -> true
+    | K.Accept -> true
     | _ -> false
 
   let dump g ?(only_forced=false) oc t =
@@ -117,11 +117,6 @@ module NFA = struct
       match KMap.find_opt k !nfa with
       | Some t -> t
       | None ->
-        let rec process_transitions = function
-          | [] -> []
-          | (label, None) :: rest -> (label, accepting) :: process_transitions rest
-          | (label, Some k') :: rest -> (label, lazy (aux k')) :: process_transitions rest
-        in
         let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
         let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
         let transitions =
@@ -135,7 +130,9 @@ module NFA = struct
         let t = {uid; k; transitions; branch; mark=default_mark} in
         nfa := KMap.add k t !nfa;
         t
-    and accepting = lazy (aux K.Done)
+    and process_transitions = function
+      | [] -> []
+      | (label, k') :: rest -> (label, lazy (aux k')) :: process_transitions rest
     in
     aux
 
