@@ -266,20 +266,13 @@ let () = stopwatch 1 "Loaded grammar %s" grammar_filename
 let spec =
   let print_parse_error_and_exit lexbuf exn =
     let bt = Printexc.get_raw_backtrace () in
-    begin match exn with
-      | Front.Parser.Error ->
-        let p = Lexing.lexeme_start_p lexbuf in
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: syntax error.\n"
-          p.Lexing.pos_fname p.Lexing.pos_lnum
-          (p.Lexing.pos_cnum - p.Lexing.pos_bol)
-      | Front.Lexer.Lexical_error {msg; file; line; col} ->
-        Printf.fprintf stderr
-          "File \"%s\", line %d, character %d: %s.\n"
-          file line col msg
-      | _ -> Printexc.raise_with_backtrace exn bt
-    end;
-    exit 3
+    match exn with
+    | Front.Parser.Error ->
+      let pos = Lexing.lexeme_start_p lexbuf in
+      Kernel.Syntax.error pos "syntax error."
+    | Front.Lexer.Lexical_error {msg; pos} ->
+      Kernel.Syntax.error pos "%s." msg
+    | _ -> Printexc.raise_with_backtrace exn bt
   in
   let parse_spec source_file =
     let ic = open_in_bin source_file in
@@ -330,10 +323,6 @@ let lrc_from_entrypoints =
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
 
-let report_error {Kernel.Syntax. line; col} fmt =
-  Printf.eprintf "Error line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
-
 let with_output_file fmt =
   Printf.ksprintf (fun str k ->
       let oc = open_out_bin str in
@@ -361,8 +350,8 @@ let do_compile spec (cp : Code_printer.t option) =
         let candidates =
           String.concat ", " (List.of_seq (Hashtbl.to_seq_keys (Lr1.entrypoint_table grammar)))
         in
-        report_error pos
-          "Unknown start symbols %s.\n\
+        Kernel.Syntax.error pos
+          "unknown start symbols %s.\n\
            Start symbols of this grammar are:\n\
            %s\n"
           names candidates
@@ -385,7 +374,7 @@ let do_compile spec (cp : Code_printer.t option) =
         with_output_file
           "/tmp/%s_br_%d_line_%d.dot"
           parser_name (br : _ index :> int)
-          branches.expr.:(br).position.line
+          branches.expr.:(br).position.pos_lnum
           (fun oc -> Kernel.Automata.NFA.dump grammar oc nfa);
       ) nfa;
     let Kernel.Automata.DFA.T dfa =

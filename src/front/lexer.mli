@@ -16,9 +16,4 @@
 val ic: in_channel option ref
 val main: Lexing.lexbuf -> Parser.token
 
-exception Lexical_error of {msg: string; file: string; line: int; col: int}
-
-(*
-val line_num: int ref
-val line_start_pos: int ref
-*)
+exception Lexical_error of {msg: string; pos: Lexing.position}

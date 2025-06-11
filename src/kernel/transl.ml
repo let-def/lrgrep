@@ -5,14 +5,6 @@ open Fix.Indexing
 open Regexp
 open Info
 
-let error {line; col} fmt =
-  Printf.eprintf "Error line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
-
-let warn {line; col} fmt =
-  Printf.eprintf "Warning line %d, column %d: " line col;
-  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt
-
 (* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
 module Indices = struct
   open Info
