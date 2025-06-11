@@ -334,6 +334,13 @@ let report_error {Kernel.Syntax. line; col} fmt =
   Printf.eprintf "Error line %d, column %d: " line col;
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
 
+let with_output_file fmt =
+  Printf.ksprintf (fun str k ->
+      let oc = open_out_bin str in
+      k oc;
+      close_out oc;
+    ) fmt
+
 let do_compile spec (cp : Code_printer.t option) =
   Kernel.Codegen.output_header grammar spec cp;
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
@@ -375,21 +382,21 @@ let do_compile spec (cp : Code_printer.t option) =
     in
     let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
     Vector.iteri (fun br nfa ->
-        let oc = open_out_bin (Printf.sprintf "/tmp/%s_br_%d_line_%d.dot"
-                                 parser_name
-                                 (br : _ index :> int)
-                                 branches.expr.:(br).position.line) in
-        Kernel.Automata.NFA.dump grammar oc nfa;
-        close_out oc;
+        with_output_file
+          "/tmp/%s_br_%d_line_%d.dot"
+          parser_name (br : _ index :> int)
+          branches.expr.:(br).position.line
+          (fun oc -> Kernel.Automata.NFA.dump grammar oc nfa);
       ) nfa;
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
-    let oc = open_out_bin (Printf.sprintf "/tmp/%s_dfa.dot" parser_name) in
-    Kernel.Automata.DFA.dump grammar oc dfa;
-    close_out oc;
+    with_output_file "/tmp/%s_dfa.dot" parser_name
+      (fun oc -> Kernel.Automata.DFA.dump grammar oc dfa);
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
+    with_output_file "/tmp/%s_machine.dot" parser_name
+      (fun oc -> Kernel.Automata.Machine.dump grammar oc machine);
     Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer grammar spec cp

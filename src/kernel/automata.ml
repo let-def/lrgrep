@@ -949,8 +949,25 @@ module Machine = struct
     partial_captures : Capture.set;
   }
 
-  type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
+  let dump g oc t =
+    let p fmt = Printf.fprintf oc fmt in
+    p "digraph G {\n";
+    Vector.iteri (fun st accept ->
+        let accept = List.map (fun (br, _, _) -> br) accept in
+        p "  st%d[label=%S];\n"
+          (Index.to_int st)
+          (string_concat_map "," string_of_index accept ^ "\n" ^
+           label_to_short_string g t.unhandled.:(st));
+      ) t.accepting;
+    Vector.iteri (fun tr label ->
+        p "  st%d -> st%d [label=%S];\n"
+          (Index.to_int t.source.:(tr))
+          (Index.to_int t.target.:(tr))
+          (label_to_short_string g label.filter);
+      ) t.label;
+    p "}\n"
 
+  type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
 
   let minimize (type g r dfa)
       (branches : (g, r) branches)
