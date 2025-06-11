@@ -31,14 +31,6 @@ type t = {
   mutable last_is_nl: bool; (* Flag indicating if the last output character was a newline *)
 }
 
-type location = {
-  loc_file : string;   (* File name where the location points *)
-  start_pos : int;     (* Starting position in the file *)
-  end_pos : int;       (* Ending position in the file *)
-  start_line : int;    (* Starting line in the file *)
-  start_col : int;     (* Starting column in the file *)
-}
-
 (* Output a string, updating line count and newline status *)
 let output t = function
   | "" -> ()
@@ -61,9 +53,9 @@ let print_loc_dir t filename line =
   output t (Printf.sprintf "# %d %S\n" (line + 1) filename)
 
 (* Print relocation information for a given location *)
-let print_loc t loc =
-  print_loc_dir t loc.loc_file (loc.start_line - 1);
-  output t (String.make loc.start_col ' ')
+let print_loc t (pos : Lexing.position) =
+  print_loc_dir t pos.pos_fname (pos.pos_lnum - 1);
+  output t (String.make (pos.pos_cnum - pos.pos_bol) ' ')
 
 (* Print a message, optionally with relocation information *)
 let print ?loc t msg =

@@ -118,7 +118,7 @@ module Expr = struct
 
   (** A regular expression term with its unique ID, its description and its
       position. *)
-  let empty = {uid = 0; desc = Alt[]; position = Syntax.invalid_position}
+  let empty = {uid = 0; desc = Alt[]; position = Lexing.dummy_pos}
 
   (** Introduce a new term, allocating a unique ID *)
   let make position desc =

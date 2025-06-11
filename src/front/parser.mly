@@ -17,7 +17,7 @@
 
 %{
 open Kernel.Syntax
-let mk_re desc pos = {desc; position = make_position pos}
+let mk_re desc position = {desc; position}
 %}
 
 %token <string> IDENT
@@ -63,7 +63,7 @@ ident:
 header:
 | ACTION { $1 }
 | (*empty*)
-  { ({loc_file=""; start_pos=0; end_pos=0; start_line=1; start_col=0}, "") }
+  { (Lexing.dummy_pos, "") }
 ;
 
 startsymbols:
@@ -94,7 +94,7 @@ case_action:
 
 
 positioned(X):
-| X { ($1, make_position $startpos) }
+| X { ($1, $startpos) }
 ;
 
 lookaheads:

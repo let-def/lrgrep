@@ -523,18 +523,15 @@ module Dataflow = struct
         let rec check (re : Syntax.regular_expr) =
           match re.desc with
           | Atom (_, _, mark) | Reduce {mark; _} ->
-            if Usage.is_unused mark then (
-              Printf.eprintf "Warning: expression line %d, column %d is unreachable\n"
-                re.position.line re.position.col
-            )
+            if Usage.is_unused mark then
+              Syntax.warn re.position "expression is unreachable"
           | _ -> iter_re check re
         in
         Vector.iteri (fun branch (pattern : Syntax.pattern) ->
             if IndexSet.mem branch reachable_branches then
               check pattern.expr
             else
-              Printf.eprintf "Warning: clause line %d, column %d is unreachable\n"
-                pattern.expr.position.line pattern.expr.position.col
+              Syntax.warn pattern.expr.position "clause is unreachable"
           ) branches.pattern
 
       let () = stopwatch 3 "Dead-code analysis"
