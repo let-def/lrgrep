@@ -413,12 +413,16 @@ module Dataflow = struct
     pairings : ('dfa, (('g, 'r) branch index * chain) list list) vector;
     accepts : ('dfa, (('g, 'r) branch index * priority) list) vector;
     liveness : ('dfa, Capture.set array) vector;
+    defined : ('dfa, Capture.set array) vector;
     registers : ('dfa, Register.t Capture.map array) vector;
     register_count : int;
   }
 
   let liveness (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
     Vector.cast_array (Vector.length st.branches) t.liveness.:(st.index)
+
+  let defined (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
+    Vector.cast_array (Vector.length st.branches) t.defined.:(st.index)
 
   let registers (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
     Vector.cast_array (Vector.length st.branches) t.registers.:(st.index)
@@ -438,16 +442,20 @@ module Dataflow = struct
     Vector.iter (fun (DFA.Packed state) ->
         let acc = ref [] in
         let live = ref IndexSet.empty in
+        let def = ref IndexSet.empty in
         let liveness = liveness t state in
+        let defined = defined t state in
         Vector.iteri (fun i br ->
+            live := IndexSet.union liveness.:(i) !live;
+            def := IndexSet.union defined.:(i) !def;
             if Boolvector.test state.accepting i then
-              push acc br;
-            live := IndexSet.union liveness.:(i) !live
+              push acc br
           ) state.branches;
         p "  st%d[label=%S];\n"
           (Index.to_int state.index)
           (string_concat_map "," string_of_index (List.rev !acc) ^ "\n" ^
-           string_of_indexset ~index:string_of_cap !live);
+           "live: " ^ string_of_indexset ~index:string_of_cap !live ^ "\n" ^
+           "defined: " ^ string_of_indexset ~index:string_of_cap !def);
         List.iter (fun (DFA.Transition tr) ->
             p "  st%d -> st%d [label=%S];\n"
               (Index.to_int state.index)
@@ -854,8 +862,10 @@ module Dataflow = struct
       Vector.iteri test_branch branches;
       List.rev !acc
     in
-    (* Pass 7: Compute liveness of variables (Section 4.4.1, Definition 16) *)
-    let liveness =
+    let liveness, defined =
+      let get (type n) v (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
+        Vector.cast_array (Vector.length st.branches) v.:(st.index)
+      in
       let todo = ref [] in
       let schedule st =
         if not st.queued then (
@@ -863,6 +873,7 @@ module Dataflow = struct
           push todo (Packed st);
         )
       in
+      (* Pass 7: Compute liveness of variables (Section 4.4.1, Definition 16) *)
       let liveness =
         dfa.states |> Vector.map @@ fun (DFA.Packed st) ->
         let immediate = st.branches |> Vector.mapi @@ fun i br ->
@@ -872,17 +883,14 @@ module Dataflow = struct
         in
         Vector.as_array immediate
       in
-      let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
-        Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
-      in
       let propagate (Packed tgt) =
         assert tgt.queued;
         tgt.queued <- false;
-        let live_tgt = get_liveness tgt.state in
+        let live_tgt = get liveness tgt.state in
         iter_reverse_transitions tgt.state
           begin fun (Rev_mapping (src, mapping)) ->
             let changed = ref false in
-            let live_src = get_liveness src in
+            let live_src = get liveness src in
             let src = get_data src in
             let process_mapping tgt_j (src_i, (captures, _usage)) =
               let successors = IndexSet.diff live_tgt.:(tgt_j) captures in
@@ -899,11 +907,49 @@ module Dataflow = struct
       in
       fixpoint ~propagate todo;
       stopwatch 3 "Computed liveness";
-      liveness
+      (* Pass 8: Compute defined variables (Section 4.4.1, Definition 17) *)
+      let defined =
+        dfa.states |> Vector.map @@ fun (DFA.Packed tgt) ->
+        let live = get liveness tgt in
+        let result = Vector.make (Vector.length live) IndexSet.empty in
+        iter_reverse_transitions tgt begin fun (Rev_mapping (_src, mapping)) ->
+          let process_mapping tgt_j (_, (captures, _usage)) =
+            let captures = IndexSet.inter live.:(tgt_j) captures in
+            result.@(tgt_j) <- IndexSet.union captures
+          in
+          Vector.iteri process_mapping mapping;
+        end;
+        if Vector.exists (fun set -> not (IndexSet.is_empty set)) result then
+          schedule (get_data tgt);
+        Vector.as_array result
+      in
+      let propagate (Packed src) =
+        assert src.queued;
+        src.queued <- false;
+        let def_src = get defined src.state in
+        List.iter begin fun (DFA.Transition {target; mapping; _}) ->
+          let changed = ref false in
+          let live_tgt = get liveness target in
+          let def_tgt = get defined target in
+          let process_mapping tgt_j (src_i, (_captures, _usage)) =
+            let def = def_tgt.:(tgt_j) in
+            let def' = IndexSet.union (IndexSet.inter def_src.:(src_i) live_tgt.:(tgt_j)) def in
+            if def != def' then (
+              changed := true;
+              def_tgt.:(tgt_j) <- def'
+            )
+          in
+          Vector.iteri process_mapping mapping;
+          if !changed then schedule (get_data target)
+        end src.state.transitions
+      in
+      fixpoint ~propagate todo;
+      stopwatch 3 "Computed defined";
+      (liveness, defined)
     in
-    (* Pass 8: (Naive) register allocation *)
+    (* Pass 9: (Naive) register allocation *)
     let registers : (dfa, Register.t Capture.map array) vector =
-      liveness |> Vector.map @@ fun live ->
+      defined |> Vector.map @@ fun live ->
       let last_reg = ref (-1) in
       let alloc_reg _ =
         incr last_reg;
@@ -930,7 +976,7 @@ module Dataflow = struct
       !max_index + 1
     in
     (* Collect results *)
-    {pairings; accepts; register_count; liveness; registers}
+    {pairings; accepts; register_count; liveness; defined; registers}
 end
 
 module Machine = struct
