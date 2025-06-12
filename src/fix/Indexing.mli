@@ -244,6 +244,7 @@ module Vector : sig
   (**{!length} is analogous to [Array.length], but returns a cardinal instead
      of an ordinary integer. *)
   val length : ('n, 'a) t -> 'n cardinal
+  val length_as_int : ('n, 'a) t -> int
 
   (**{!get} is [Array.get], but expects an index instead of an ordinary
      integer. This guarantees that the index is within bounds. *)

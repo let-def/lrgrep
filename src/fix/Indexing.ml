@@ -307,6 +307,8 @@ module Vector = struct
   let set_cons t i x =
     set t i (x :: get t i)
 
+  let length_as_int (type n) (Vector a : (n, _) vector) = Array.length a
+
   let length (type n) (Vector a : (n, _) t) : n cardinal =
     let n = Array.length a in
     Cardinal (lazy n)
