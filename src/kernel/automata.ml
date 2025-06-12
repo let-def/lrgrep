@@ -481,7 +481,7 @@ module Dataflow = struct
         let Refl = assert_equal_length mapping0 t.branches in
         List.iter f xs
     in
-    let module Dataflow = struct
+    let open struct
       type 'n data = {
         state: (g, r, dfa, 'n) DFA.state;
         mutable reachable: 'n indexset;
@@ -492,164 +492,163 @@ module Dataflow = struct
 
       type packed = Packed : 'n data -> packed [@@ocaml.unboxed]
 
-      let data =
-        Vector.map (fun (DFA.Packed t) ->
-            let n = Vector.length t.branches in
-            let reachable = IndexSet.init_from_set n (Boolvector.test t.accepting) in
-            let splits = IndexSet.empty in
-            let new_splits = IndexSet.empty in
-            Packed {state=t; reachable; splits; new_splits; chain=[]}
-          ) dfa.states
+      let data = dfa.states |> Vector.map @@ fun (DFA.Packed t) ->
+        let n = Vector.length t.branches in
+        let reachable = IndexSet.init_from_set n (Boolvector.test t.accepting) in
+        let splits = IndexSet.empty in
+        let new_splits = IndexSet.empty in
+        Packed {state=t; reachable; splits; new_splits; chain=[]}
 
       let get_data (type n) (st : (g, r, dfa, n) DFA.state) : n data =
         let Packed split = data.:(st.index) in
         let Refl = assert_equal_length st.branches split.state.branches in
         split
-
-      let () =
-        let todo = ref [] in
-        let propagate (Packed t) =
-          let reach = t.reachable in
-          iter_reverse_transitions t.state @@ fun (Rev_mapping (src, mapping)) ->
-          let s = get_data src in
-          let changed = ref false in
-          IndexSet.iter (fun i ->
-              let j, _ = mapping.:(i) in
-              let reach' = s.reachable in
-              let reach'' = IndexSet.add j reach' in
-              if not (IndexSet.equal reach' reach'') then (
-                s.reachable <- reach'';
-                changed := true;
-              )
-            ) reach;
-          if !changed then
-            push todo (Packed s)
-        in
-        Vector.iter propagate data;
-        fixpoint ~propagate todo;
-        stopwatch 3 "Computed reachability"
-
-      let () =
-        let process (Packed t) =
-          let reach = t.reachable in
-          iter_reverse_transitions t.state @@ fun (Rev_mapping (_, mapping)) ->
-          IndexSet.iter (fun i ->
-              let _, (_, usage) = mapping.:(i) in
-              Usage.mark_used usage
-            ) reach
-        in
-        Vector.iter process data
-
-      let () =
-        let reachable_branches =
-          let Packed t = data.:(dfa.initial) in
-          IndexSet.map (Vector.get t.state.branches) t.reachable
-        in
-        let iter_re f (re : Syntax.regular_expr) =
-          match re.desc with
-          | Atom _ -> ()
-          | Filter _ -> ()
-          | Repetition {expr; policy = _} ->
-            f expr
-          | Reduce {capture = _; mark = _; expr; policy = _} ->
-            f expr
-          | Alternative res ->
-            List.iter f res
-          | Concat res ->
-            List.iter f res
-        in
-        let rec check (re : Syntax.regular_expr) =
-          match re.desc with
-          | Atom (_, _, mark) | Reduce {mark; _} ->
-            if Usage.is_unused mark then
-              Syntax.warn re.position "expression is unreachable"
-          | _ -> iter_re check re
-        in
-        Vector.iteri (fun branch (pattern : Syntax.pattern) ->
-            if IndexSet.mem branch reachable_branches then
-              check pattern.expr
-            else
-              Syntax.warn pattern.expr.position "clause is unreachable"
-          ) branches.pattern
-
-      let () = stopwatch 3 "Dead-code analysis"
-
-      let () =
-        let count = ref 0 in
-        let todo = ref [] in
-        Vector.iter (fun (Packed t) ->
-            t.new_splits <-
-              IndexSet.init_from_set
-                (Vector.length t.state.branches)
-                (Boolvector.test t.state.accepting);
-            if not (IndexSet.is_empty t.new_splits) then
-              push todo (Packed t);
-          ) data;
-        let schedule (type n) (t : n data) (splits : n indexset) =
+    end
+    in
+    (* First pass: compute reachable branches *)
+    begin
+      let todo = ref [] in
+      let propagate (Packed t) =
+        let reach = t.reachable in
+        iter_reverse_transitions t.state @@ fun (Rev_mapping (src, mapping)) ->
+        let s = get_data src in
+        let changed = ref false in
+        IndexSet.iter (fun i ->
+            let j, _ = mapping.:(i) in
+            let reach' = s.reachable in
+            let reach'' = IndexSet.add j reach' in
+            if not (IndexSet.equal reach' reach'') then (
+              s.reachable <- reach'';
+              changed := true;
+            )
+          ) reach;
+        if !changed then
+          push todo (Packed s)
+      in
+      Vector.iter propagate data;
+      fixpoint ~propagate todo;
+      stopwatch 3 "Computed reachability";
+    end;
+    (* Pass 2: Mark reachable transitions *)
+    Vector.iter begin fun (Packed t) ->
+      let reach = t.reachable in
+      iter_reverse_transitions t.state @@ fun (Rev_mapping (_, mapping)) ->
+      IndexSet.iter (fun i ->
+          let _, (_, usage) = mapping.:(i) in
+          Usage.mark_used usage
+        ) reach
+    end data;
+    (* Pass 3: Report unmarked entities *)
+    begin
+      let reachable_branches =
+        let Packed t = data.:(dfa.initial) in
+        IndexSet.map (Vector.get t.state.branches) t.reachable
+      in
+      let iter_re f (re : Syntax.regular_expr) =
+        match re.desc with
+        | Atom _ -> ()
+        | Filter _ -> ()
+        | Repetition {expr; policy = _} ->
+          f expr
+        | Reduce {capture = _; mark = _; expr; policy = _} ->
+          f expr
+        | Alternative res ->
+          List.iter f res
+        | Concat res ->
+          List.iter f res
+      in
+      let rec check (re : Syntax.regular_expr) =
+        match re.desc with
+        | Atom (_, _, mark) | Reduce {mark; _} ->
+          if Usage.is_unused mark then
+            Syntax.warn re.position "expression is unreachable"
+        | _ -> iter_re check re
+      in
+      Vector.iteri (fun branch (pattern : Syntax.pattern) ->
+          if IndexSet.mem branch reachable_branches then
+            check pattern.expr
+          else
+            Syntax.warn pattern.expr.position "clause is unreachable"
+        ) branches.pattern
+    end;
+    stopwatch 3 "Dead-code analysis";
+    (* Pass 4: Compute priority splits *)
+    begin
+      let count = ref 0 in
+      let todo = ref [] in
+      Vector.iter begin fun (Packed t) ->
+        t.new_splits <-
+          IndexSet.init_from_set
+            (Vector.length t.state.branches)
+            (Boolvector.test t.state.accepting);
+        if not (IndexSet.is_empty t.new_splits) then
+          push todo (Packed t);
+      end data;
+      let schedule (type n) (t : n data) (splits : n indexset) =
+        let splits = IndexSet.diff splits t.splits in
+        if IndexSet.is_empty splits then
+          ()
+        else if IndexSet.is_empty t.new_splits then (
+          incr count;
+          push todo (Packed t);
+          t.new_splits <- splits;
+        ) else
+          t.new_splits <- IndexSet.union t.new_splits splits
+      in
+      let rec schedule_one : type n. n data -> n indexset -> unit =
+        fun (type n) (t : n data) (splits : n indexset) ->
           let splits = IndexSet.diff splits t.splits in
           if IndexSet.is_empty splits then
             ()
           else if IndexSet.is_empty t.new_splits then (
-            incr count;
-            push todo (Packed t);
             t.new_splits <- splits;
+            propagate (Packed t)
           ) else
             t.new_splits <- IndexSet.union t.new_splits splits
-        in
-        let rec schedule_one : type n. n data -> n indexset -> unit =
-          fun (type n) (t : n data) (splits : n indexset) ->
-            let splits = IndexSet.diff splits t.splits in
-            if IndexSet.is_empty splits then
-              ()
-            else if IndexSet.is_empty t.new_splits then (
-              t.new_splits <- splits;
-              propagate (Packed t)
-            ) else
-              t.new_splits <- IndexSet.union t.new_splits splits
-        and propagate (Packed src) =
-          let new_splits = src.new_splits in
-          src.new_splits <- IndexSet.empty;
-          src.splits <- IndexSet.union src.splits new_splits;
-          let new_splits = IndexSet.elements new_splits in
-          let rec map_one mapping tgt i x xs =
-            let n = Array.length mapping in
-            if i >= n then
-              IndexSet.empty
+      and propagate (Packed src) =
+        let new_splits = src.new_splits in
+        src.new_splits <- IndexSet.empty;
+        src.splits <- IndexSet.union src.splits new_splits;
+        let new_splits = IndexSet.elements new_splits in
+        let rec map_one mapping tgt i x xs =
+          let n = Array.length mapping in
+          if i >= n then
+            IndexSet.empty
+          else
+            let x', _ = mapping.(i) in
+            if x' < x then
+              map_one mapping tgt (i + 1) x xs
             else
-              let x', _ = mapping.(i) in
-              if x' < x then
-                map_one mapping tgt (i + 1) x xs
+              let branch = src.state.branches.:(x) in
+              let acc = map_splits mapping tgt (i + 1) xs in
+              if Index.equal src.state.branches.:(x') branch then
+                IndexSet.add (Index.of_int (Vector.length tgt.DFA.branches) i) acc
               else
-                let branch = src.state.branches.:(x) in
-                let acc = map_splits mapping tgt (i + 1) xs in
-                if Index.equal src.state.branches.:(x') branch then
-                  IndexSet.add (Index.of_int (Vector.length tgt.DFA.branches) i) acc
-                else
-                  acc
-          and map_splits mapping tgt i = function
-            | [] -> IndexSet.empty
-            | x :: xs -> map_one mapping tgt i x xs
-          in
-          match src.state.transitions with
-          | [] -> ()
-          | [DFA.Transition {mapping; target; _}] ->
-            schedule_one
+                acc
+        and map_splits mapping tgt i = function
+          | [] -> IndexSet.empty
+          | x :: xs -> map_one mapping tgt i x xs
+        in
+        match src.state.transitions with
+        | [] -> ()
+        | [DFA.Transition {mapping; target; _}] ->
+          schedule_one
+            (get_data target)
+            (map_splits (Vector.as_array mapping) target 0 new_splits)
+        | xs ->
+          List.iter begin fun (DFA.Transition {mapping; target; _}) ->
+            schedule
               (get_data target)
               (map_splits (Vector.as_array mapping) target 0 new_splits)
-          | xs ->
-            List.iter begin fun (DFA.Transition {mapping; target; _}) ->
-              schedule
-                (get_data target)
-                (map_splits (Vector.as_array mapping) target 0 new_splits)
-            end xs
-        in
-        fixpoint ~propagate todo;
-        stopwatch 3 "computed priority splits (%d refinements)" !count
-
-      let chain = Order_chain.make ()
-
-      let pairings = Vector.make (DFA.state_count dfa) []
-
+          end xs
+      in
+      fixpoint ~propagate todo;
+      stopwatch 3 "computed priority splits (%d refinements)" !count
+    end;
+    (* Pass 5: Construct priority chain and remapping *)
+    let chain = Order_chain.make () in
+    let pairings = Vector.make (DFA.state_count dfa) [] in
+    begin
       let group_by_branch t = function
         | [] -> []
         | (i, _) as x :: xs ->
@@ -663,7 +662,7 @@ module Dataflow = struct
                 loop branch' [x] ((branch, List.rev acc) :: accs) xs
           in
           loop t.branches.:(i) [x] [] xs
-
+      in
       let rec chain_next_split i element = function
         | (i', element') :: rest ->
           let c = Index.compare i' i in
@@ -674,247 +673,242 @@ module Dataflow = struct
           else
             (Order_chain.extend element, rest)
         | [] -> (Order_chain.next element, [])
-
-      let () =
-        let chain_processed = Boolvector.make (DFA.state_count dfa) false in
-        let root = Order_chain.root chain in
-        let Packed initial = data.:(dfa.initial) in
-        initial.chain <- (
-          match IndexSet.elements initial.splits with
-          | [] -> []
-          | splits ->
-            let rec fresh_chain branch element = function
-              | [] -> []
-              | m :: ms ->
-                let branch' = initial.state.branches.:(m) in
-                let element =
-                  if Index.equal branch branch'
-                  then Order_chain.next element
-                  else root
-                in
-                (m, element) :: fresh_chain branch' element ms
-            in
-            fresh_chain (Index.of_int (branch_count branches) 0) root splits
-        );
-        Boolvector.set chain_processed dfa.initial;
-        let direct_transitions = ref 0 in
-        let shared_transitions = ref 0 in
-        let trivial_pairing = ref 0 in
-        let nontrivial_pairing = ref 0 in
-        let transitions_with_pairing = ref 0 in
-        let process_direct_transition src mapping tgt =
-          assert (not (Boolvector.test chain_processed tgt.state.DFA.index));
-          incr direct_transitions;
-          let sbranches = src.state.branches in
-          let tbranches = tgt.state.branches in
-          let rec extract_branch branch acc = function
-            | (n, _) as x :: xs when Index.equal sbranches.:(n) branch ->
-              extract_branch branch (x :: acc) xs
-            | rest -> List.rev acc, rest
-          in
-          let rec seek_branch branch = function
-            | [] -> [], []
-            | ((n, _) as x :: xs) as xxs ->
-              let c = Index.compare sbranches.:(n) branch in
-              if c < 0 then
-                seek_branch branch xs
-              else if c = 0 then
-                extract_branch branch [x] xs
-              else
-                ([], xxs)
-          in
-          let rec process_splits chain = function
+      in
+      let chain_processed = Boolvector.make (DFA.state_count dfa) false in
+      let root = Order_chain.root chain in
+      let Packed initial = data.:(dfa.initial) in
+      initial.chain <- (
+        match IndexSet.elements initial.splits with
+        | [] -> []
+        | splits ->
+          let rec fresh_chain branch element = function
             | [] -> []
             | m :: ms ->
-              let branch = tbranches.:(m) in
-              let chain, rest = seek_branch branch chain in
-              process_branch branch chain rest m ms
-          and process_branch branch chain rest m ms =
-            let i, _ = mapping.:(m) in
-            let split, chain = chain_next_split i root chain in
-            (m, split) :: process_continue_branch branch chain rest ms
-          and process_continue_branch branch chain rest = function
-            | m :: ms when Index.equal tbranches.:(m) branch ->
-              process_branch branch chain rest m ms
-            | ms -> process_splits rest ms
-          in
-          tgt.chain <- process_splits src.chain (IndexSet.elements tgt.splits);
-          Boolvector.set chain_processed tgt.state.index
-        in
-        let process_shared_transition src mapping tgt =
-          incr shared_transitions;
-          assert (Boolvector.test chain_processed src.state.index);
-          assert (Boolvector.test chain_processed tgt.state.index);
-          let src_chain = group_by_branch src.state src.chain in
-          let tgt_chain = group_by_branch tgt.state tgt.chain in
-          let rec find_element i element = function
-            | [] -> element, []
-            | (i', element') :: xs as xxs ->
-              if (i' : _ index) > i
-              then element, xxs
-              else find_element i element' xs
-          in
-          let rec pair_elements src_elements = function
-            | [] -> []
-            | (i, tgt_element) :: rest ->
-              let src_element, src_elements =
-                find_element (fst mapping.:(i)) root src_elements
+              let branch' = initial.state.branches.:(m) in
+              let element =
+                if Index.equal branch branch'
+                then Order_chain.next element
+                else root
               in
-              let tl = pair_elements src_elements rest in
-              if src_element == tgt_element then (
-                incr trivial_pairing;
-                tl
-              ) else (
-                incr nontrivial_pairing;
-                (src_element, tgt_element) :: tl
-              )
+              (m, element) :: fresh_chain branch' element ms
           in
-          let rec process_tgt clause elements next = function
-            | (clause', _) :: rest when compare_index clause' clause < 0 ->
-              process_tgt clause elements next rest
-            | (clause', elements') :: rest when equal_index clause clause' ->
-              let tl = process_next rest next in
-              begin match pair_elements elements' elements with
-                | [] -> tl
-                | hd -> (clause, hd) :: tl
-              end
-            | src_chain -> process_next src_chain next
-          and process_next src_chain = function
-            | [] -> []
-            | (clause, elements) :: next ->
-              process_tgt clause elements next src_chain
-          in
-          process_next src_chain tgt_chain
+          fresh_chain (Index.of_int (branch_count branches) 0) root splits
+      );
+      Boolvector.set chain_processed dfa.initial;
+      let direct_transitions = ref 0 in
+      let shared_transitions = ref 0 in
+      let trivial_pairing = ref 0 in
+      let nontrivial_pairing = ref 0 in
+      let transitions_with_pairing = ref 0 in
+      let process_direct_transition src mapping tgt =
+        assert (not (Boolvector.test chain_processed tgt.state.DFA.index));
+        incr direct_transitions;
+        let sbranches = src.state.branches in
+        let tbranches = tgt.state.branches in
+        let rec extract_branch branch acc = function
+          | (n, _) as x :: xs when Index.equal sbranches.:(n) branch ->
+            extract_branch branch (x :: acc) xs
+          | rest -> List.rev acc, rest
         in
-        let visit acc (_, Packed src) =
-          assert (Boolvector.test chain_processed src.state.index);
-          let acc = ref acc in
-          let process_transition (DFA.Transition {label; target; mapping; _}) =
-            let tgt = get_data target in
-            let pairing =
-              if Boolvector.test chain_processed target.index then
-                process_shared_transition src mapping tgt
-              else (
-                process_direct_transition src mapping tgt;
-                push acc (label, Packed tgt);
-                []
-              )
+        let rec seek_branch branch = function
+          | [] -> [], []
+          | ((n, _) as x :: xs) as xxs ->
+            let c = Index.compare sbranches.:(n) branch in
+            if c < 0 then
+              seek_branch branch xs
+            else if c = 0 then
+              extract_branch branch [x] xs
+            else
+              ([], xxs)
+        in
+        let rec process_splits chain = function
+          | [] -> []
+          | m :: ms ->
+            let branch = tbranches.:(m) in
+            let chain, rest = seek_branch branch chain in
+            process_branch branch chain rest m ms
+        and process_branch branch chain rest m ms =
+          let i, _ = mapping.:(m) in
+          let split, chain = chain_next_split i root chain in
+          (m, split) :: process_continue_branch branch chain rest ms
+        and process_continue_branch branch chain rest = function
+          | m :: ms when Index.equal tbranches.:(m) branch ->
+            process_branch branch chain rest m ms
+          | ms -> process_splits rest ms
+        in
+        tgt.chain <- process_splits src.chain (IndexSet.elements tgt.splits);
+        Boolvector.set chain_processed tgt.state.index
+      in
+      let process_shared_transition src mapping tgt =
+        incr shared_transitions;
+        assert (Boolvector.test chain_processed src.state.index);
+        assert (Boolvector.test chain_processed tgt.state.index);
+        let src_chain = group_by_branch src.state src.chain in
+        let tgt_chain = group_by_branch tgt.state tgt.chain in
+        let rec find_element i element = function
+          | [] -> element, []
+          | (i', element') :: xs as xxs ->
+            if (i' : _ index) > i
+            then element, xxs
+            else find_element i element' xs
+        in
+        let rec pair_elements src_elements = function
+          | [] -> []
+          | (i, tgt_element) :: rest ->
+            let src_element, src_elements =
+              find_element (fst mapping.:(i)) root src_elements
             in
-            if not (List.is_empty pairing) then
-              incr transitions_with_pairing;
-            pairing
-          in
-          let pairings' = List.map process_transition src.state.transitions in
-          pairings.:(src.state.index) <- pairings';
-          !acc
+            let tl = pair_elements src_elements rest in
+            if src_element == tgt_element then (
+              incr trivial_pairing;
+              tl
+            ) else (
+              incr nontrivial_pairing;
+              (src_element, tgt_element) :: tl
+            )
         in
-        let rec loop = function
-          | [] -> ()
-          | xs ->
-            loop (List.fold_left visit []
-                    (List.sort (fun (l1, _) (l2, _) -> IndexSet.compare l1 l2) xs))
+        let rec process_tgt clause elements next = function
+          | (clause', _) :: rest when compare_index clause' clause < 0 ->
+            process_tgt clause elements next rest
+          | (clause', elements') :: rest when equal_index clause clause' ->
+            let tl = process_next rest next in
+            begin match pair_elements elements' elements with
+              | [] -> tl
+              | hd -> (clause, hd) :: tl
+            end
+          | src_chain -> process_next src_chain next
+        and process_next src_chain = function
+          | [] -> []
+          | (clause, elements) :: next ->
+            process_tgt clause elements next src_chain
         in
-        loop (visit [] ((), Packed initial));
-        stopwatch 3
-          "constructed order chain with %d elements \
-           (%d direct transitions, %d shared, %d trivial pairings, \
-           %d non-trivial pairings, %d transitions with pairings)"
-          (Order_chain.freeze chain)
-          !direct_transitions
-          !shared_transitions
-          !trivial_pairing
-          !nontrivial_pairing
-          !transitions_with_pairing
-
-      let accepts = Vector.map begin fun (Packed t) ->
-          let remainder = ref t.chain in
-          let accepting = t.state.accepting in
-          let branches = t.state.branches in
-          let rec loop i element = function
-            | (i', element') :: rest
-              when Index.compare i' i <= 0 &&
-                   Index.equal branches.:(i') branches.:(i) ->
-              loop i element' rest
-            | rest ->
-              remainder := rest;
-              element
+        process_next src_chain tgt_chain
+      in
+      let visit acc (_, Packed src) =
+        assert (Boolvector.test chain_processed src.state.index);
+        let acc = ref acc in
+        let process_transition (DFA.Transition {label; target; mapping; _}) =
+          let tgt = get_data target in
+          let pairing =
+            if Boolvector.test chain_processed target.index then
+              process_shared_transition src mapping tgt
+            else (
+              process_direct_transition src mapping tgt;
+              push acc (label, Packed tgt);
+              []
+            )
           in
-          let get_element i = loop i (Order_chain.root chain) !remainder in
-          let acc = ref [] in
-          let test_branch i index =
-            if Boolvector.test accepting i then
-              push acc (index, Order_chain.evaluate (get_element i))
-          in
-          Vector.iteri test_branch branches;
-          List.rev !acc
-        end data
-
-      let liveness =
-        Vector.map
-          (fun (DFA.Packed st) ->
-             Array.make (Array.length (Vector.as_array st.branches)) IndexSet.empty)
-          dfa.states
-
-      let () =
-        let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
-          Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
+          if not (List.is_empty pairing) then
+            incr transitions_with_pairing;
+          pairing
         in
-        let todo = ref [] in
-        let propagate (Packed src) =
-          let live_src = get_liveness src.state in
-          let process_transition (DFA.Transition {mapping; target; _}) =
-            let changed = ref false in
-            let tgt = get_data target in
-            let live_tgt = get_liveness tgt.state in
-            let process_mapping tgt_j (src_i, (captures, _usage)) =
-              let live = IndexSet.union live_src.:(src_i) captures in
-              let live' = live_tgt.:(tgt_j) in
-              if not (IndexSet.equal live live') then (
-                live_tgt.:(tgt_j) <- live;
-                changed := true;
-              )
-            in
-            Vector.iteri process_mapping mapping;
-            if !changed then push todo (Packed tgt)
-          in
-          List.iter process_transition src.state.transitions
-        in
-        Vector.iter propagate data;
-        fixpoint ~propagate todo
-
-      let () = stopwatch 3 "Computed liveness"
-
-      (* Naive allocator *)
-      let registers : (dfa, Register.t Capture.map array) vector =
-        Vector.map (fun live ->
-            let last_reg = ref (-1) in
-            let alloc_reg _ =
-              incr last_reg;
-              Register.of_int !last_reg
-            in
-            Array.map (IndexMap.inflate alloc_reg) live
-          ) liveness
-
-      let register_count =
-        let max_live = ref 0 in
-        let max_index = ref (-1) in
-        let check_state (DFA.Packed state) =
-          let regs = registers.:(state.index) in
-          let max_live' =
-            Array.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
-          in
-          max_live := max !max_live max_live';
-          Array.iter (IndexMap.iter (fun _ reg ->
-              max_index := max !max_index (Index.to_int reg))) regs;
-        in
-        Vector.iter check_state dfa.states;
-        stopwatch 3
-          "allocated registers (max live registers: %d, register count: %d)"
-          !max_live (!max_index + 1);
-        !max_index + 1
-    end
+        let pairings' = List.map process_transition src.state.transitions in
+        pairings.:(src.state.index) <- pairings';
+        !acc
+      in
+      let rec loop = function
+        | [] -> ()
+        | xs ->
+          loop (List.fold_left visit []
+                  (List.sort (fun (l1, _) (l2, _) -> IndexSet.compare l1 l2) xs))
+      in
+      loop (visit [] ((), Packed initial));
+      stopwatch 3
+        "constructed order chain with %d elements \
+         (%d direct transitions, %d shared, %d trivial pairings, \
+         %d non-trivial pairings, %d transitions with pairings)"
+        (Order_chain.freeze chain)
+        !direct_transitions
+        !shared_transitions
+        !trivial_pairing
+        !nontrivial_pairing
+        !transitions_with_pairing;
+    end;
+    (* Pass 6: Collect accepted branches and their priority level *)
+    let accepts = data |> Vector.map @@ fun (Packed t) ->
+      let remainder = ref t.chain in
+      let accepting = t.state.accepting in
+      let branches = t.state.branches in
+      let rec loop i element = function
+        | (i', element') :: rest
+          when Index.compare i' i <= 0 &&
+               Index.equal branches.:(i') branches.:(i) ->
+          loop i element' rest
+        | rest ->
+          remainder := rest;
+          element
+      in
+      let get_element i = loop i (Order_chain.root chain) !remainder in
+      let acc = ref [] in
+      let test_branch i index =
+        if Boolvector.test accepting i then
+          push acc (index, Order_chain.evaluate (get_element i))
+      in
+      Vector.iteri test_branch branches;
+      List.rev !acc
     in
-    let open Dataflow in
+    (* Pass 7: Compute liveness of variables *)
+    let liveness =
+      dfa.states |> Vector.map @@ fun (DFA.Packed st) ->
+      Array.make (Vector.length_as_int st.branches) IndexSet.empty
+    in
+    begin
+      let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
+        Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
+      in
+      let todo = ref [] in
+      let propagate (Packed src) =
+        let live_src = get_liveness src.state in
+        let process_transition (DFA.Transition {mapping; target; _}) =
+          let changed = ref false in
+          let tgt = get_data target in
+          let live_tgt = get_liveness tgt.state in
+          let process_mapping tgt_j (src_i, (captures, _usage)) =
+            let live = IndexSet.union live_src.:(src_i) captures in
+            let live' = live_tgt.:(tgt_j) in
+            if not (IndexSet.equal live live') then (
+              live_tgt.:(tgt_j) <- live;
+              changed := true;
+            )
+          in
+          Vector.iteri process_mapping mapping;
+          if !changed then push todo (Packed tgt)
+        in
+        List.iter process_transition src.state.transitions
+      in
+      Vector.iter propagate data;
+      fixpoint ~propagate todo;
+      stopwatch 3 "Computed liveness";
+    end;
+    (* Pass 8: (Naive) register allocation *)
+    let registers : (dfa, Register.t Capture.map array) vector =
+      liveness |> Vector.map @@ fun live ->
+      let last_reg = ref (-1) in
+      let alloc_reg _ =
+        incr last_reg;
+        Register.of_int !last_reg
+      in
+      Array.map (IndexMap.inflate alloc_reg) live
+    in
+    let register_count =
+      let max_live = ref 0 in
+      let max_index = ref (-1) in
+      let check_state (DFA.Packed state) =
+        let regs = registers.:(state.index) in
+        let max_live' =
+          Array.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
+        in
+        max_live := max !max_live max_live';
+        Array.iter (IndexMap.iter (fun _ reg ->
+            max_index := max !max_index (Index.to_int reg))) regs;
+      in
+      Vector.iter check_state dfa.states;
+      stopwatch 3
+        "allocated registers (max live registers: %d, register count: %d)"
+        !max_live (!max_index + 1);
+      !max_index + 1
+    in
+    (* Collect results *)
     {pairings; accepts; register_count; liveness; registers}
 end
 
