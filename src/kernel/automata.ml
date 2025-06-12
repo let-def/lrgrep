@@ -449,7 +449,10 @@ module Dataflow = struct
             p "  st%d -> st%d [label=%S];\n"
               (Index.to_int state.index)
               (Index.to_int tr.target.index)
-              (label_to_short_string g tr.label);
+              (label_to_short_string g tr.label ^ "\n" ^
+               let caps = ref IndexSet.empty in
+               Vector.iter (fun (_, (cap, _)) -> caps := IndexSet.union cap !caps) tr.mapping;
+               string_of_indexset ~index:string_of_cap !caps);
           ) state.transitions;
       ) dfa.DFA.states;
     p "}\n"
@@ -488,6 +491,7 @@ module Dataflow = struct
         mutable splits: 'n indexset;
         mutable new_splits: 'n indexset;
         mutable chain: ('n index * Order_chain.element) list;
+        mutable queued: bool;
       }
 
       type packed = Packed : 'n data -> packed [@@ocaml.unboxed]
@@ -497,7 +501,7 @@ module Dataflow = struct
         let reachable = IndexSet.init_from_set n (Boolvector.test t.accepting) in
         let splits = IndexSet.empty in
         let new_splits = IndexSet.empty in
-        Packed {state=t; reachable; splits; new_splits; chain=[]}
+        Packed {state=t; reachable; splits; new_splits; chain=[]; queued=false}
 
       let get_data (type n) (st : (g, r, dfa, n) DFA.state) : n data =
         let Packed split = data.:(st.index) in
@@ -847,39 +851,53 @@ module Dataflow = struct
       Vector.iteri test_branch branches;
       List.rev !acc
     in
-    (* Pass 7: Compute liveness of variables *)
+    (* Pass 7: Compute liveness of variables (Section 4.4.1, Definition 16) *)
     let liveness =
-      dfa.states |> Vector.map @@ fun (DFA.Packed st) ->
-      Array.make (Vector.length_as_int st.branches) IndexSet.empty
-    in
-    begin
+      let todo = ref [] in
+      let schedule st =
+        if not st.queued then (
+          st.queued <- true;
+          push todo (Packed st);
+        )
+      in
+      let liveness =
+        dfa.states |> Vector.map @@ fun (DFA.Packed st) ->
+        let immediate = st.branches |> Vector.mapi @@ fun i br ->
+          if Boolvector.test st.accepting i
+          then (schedule (get_data st); branches.br_captures.:(br))
+          else IndexSet.empty
+        in
+        Vector.as_array immediate
+      in
       let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
         Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
       in
-      let todo = ref [] in
-      let propagate (Packed src) =
-        let live_src = get_liveness src.state in
-        let process_transition (DFA.Transition {mapping; target; _}) =
-          let changed = ref false in
-          let tgt = get_data target in
-          let live_tgt = get_liveness tgt.state in
-          let process_mapping tgt_j (src_i, (captures, _usage)) =
-            let live = IndexSet.union live_src.:(src_i) captures in
-            let live' = live_tgt.:(tgt_j) in
-            if not (IndexSet.equal live live') then (
-              live_tgt.:(tgt_j) <- live;
-              changed := true;
-            )
-          in
-          Vector.iteri process_mapping mapping;
-          if !changed then push todo (Packed tgt)
-        in
-        List.iter process_transition src.state.transitions
+      let propagate (Packed tgt) =
+        assert tgt.queued;
+        tgt.queued <- false;
+        let live_tgt = get_liveness tgt.state in
+        iter_reverse_transitions tgt.state
+          begin fun (Rev_mapping (src, mapping)) ->
+            let changed = ref false in
+            let live_src = get_liveness src in
+            let src = get_data src in
+            let process_mapping tgt_j (src_i, (captures, _usage)) =
+              let successors = IndexSet.diff live_tgt.:(tgt_j) captures in
+              let live = live_src.:(src_i) in
+              let live' = IndexSet.union successors live in
+              if live' != live then (
+                live_src.:(src_i) <- live';
+                changed := true;
+              )
+            in
+            Vector.iteri process_mapping mapping;
+            if !changed then schedule src
+          end;
       in
-      Vector.iter propagate data;
       fixpoint ~propagate todo;
       stopwatch 3 "Computed liveness";
-    end;
+      liveness
+    in
     (* Pass 8: (Naive) register allocation *)
     let registers : (dfa, Register.t Capture.map array) vector =
       liveness |> Vector.map @@ fun live ->
