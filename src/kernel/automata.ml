@@ -84,6 +84,7 @@ module NFA = struct
   let dump g ?(only_forced=false) t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
+    p "  node[shape=rect];\n";
     let todo = ref [] in
     let mark = ref () in
     let visit t =
@@ -172,6 +173,7 @@ module DFA = struct
   let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
+    p "  node[shape=rect];\n";
     Vector.iter (fun (Packed state) ->
         let acc = ref [] in
         Vector.iteri (fun i br ->
@@ -432,6 +434,7 @@ module Dataflow = struct
   let dump g dfa t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
+    p "  node[shape=rect];\n";
     Vector.iter (fun (DFA.Packed state) ->
         let acc = ref [] in
         let live = ref IndexSet.empty in
@@ -995,6 +998,7 @@ module Machine = struct
   let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
+    p "  node[shape=rect];\n";
     Vector.iteri (fun st accept ->
         let accept = List.map (fun (br, _, captures) ->
             string_of_index br ^ "[" ^
