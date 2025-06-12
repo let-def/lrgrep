@@ -375,17 +375,19 @@ let do_compile spec (cp : Code_printer.t option) =
           "/tmp/%s_br_%d_line_%d.dot"
           parser_name (br : _ index :> int)
           branches.expr.:(br).position.pos_lnum
-          (fun oc -> Kernel.Automata.NFA.dump grammar oc nfa);
+          (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
     with_output_file "/tmp/%s_dfa.dot" parser_name
-      (fun oc -> Kernel.Automata.DFA.dump grammar oc dfa);
+      (Kernel.Automata.DFA.dump grammar dfa);
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
+    with_output_file "/tmp/%s_dataflow.dot" parser_name
+      (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
     with_output_file "/tmp/%s_machine.dot" parser_name
-      (fun oc -> Kernel.Automata.Machine.dump grammar oc machine);
+      (Kernel.Automata.Machine.dump grammar machine);
     Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer grammar spec cp

@@ -63,6 +63,9 @@ let label_to_short_string g label =
     let filter = if List.length filter = 5 then filter @ ["..."] else filter in
     String.concat "|" filter
 
+let string_of_cap (i : Capture.t) =
+  "v" ^ string_of_index i
+
 module NFA = struct
 
   type ('g, 'r) t = {
@@ -78,7 +81,7 @@ module NFA = struct
     | K.Accept -> true
     | _ -> false
 
-  let dump g ?(only_forced=false) oc t =
+  let dump g ?(only_forced=false) t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     let todo = ref [] in
@@ -89,11 +92,12 @@ module NFA = struct
     visit t;
     let print t =
       p "  st%d[label=%S];\n" t.uid (if is_accepting t then "Accept" else "");
-      List.iter (fun (label, t') ->
+      List.iter (fun ((label : _ Label.t), t') ->
           if not only_forced || Lazy.is_val t' then (
             let lazy t' = t' in
             p "  st%d -> st%d [label=%S];\n" t.uid t'.uid
-              (label_to_short_string g label.Label.filter);
+              (label_to_short_string g label.filter ^ "\n" ^
+               string_of_indexset ~index:string_of_cap label.captures);
             visit t'
           )
         ) t.transitions;
@@ -165,7 +169,7 @@ module DFA = struct
     domain: ('dfa, 'g lr1 indexset) vector;
   }
 
-  let dump g oc t =
+  let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     Vector.iter (fun (Packed state) ->
@@ -181,11 +185,14 @@ module DFA = struct
             p "  st%d -> st%d [label=%S];\n"
               (Index.to_int state.index)
               (Index.to_int tr.target.index)
-              (label_to_short_string g tr.label);
+              (label_to_short_string g tr.label ^ "\n" ^
+               let caps = ref IndexSet.empty in
+               Vector.iter (fun (_, (cap, _)) -> caps := IndexSet.union cap !caps) tr.mapping;
+               string_of_indexset ~index:string_of_cap !caps
+              );
           ) state.transitions;
       ) t.states;
     p "}\n"
-
 
   type ('g, 'r) _t = T : ('g, 'r, 'dfa) t -> ('g, 'r) _t
 
@@ -421,6 +428,31 @@ module Dataflow = struct
   type ('g, 'r, 'dfa) packed_rev_mapping = Rev_packed
       :  ('g, 'r, 'dfa, 'n) rev_mapping list
       -> ('g, 'r, 'dfa) packed_rev_mapping [@@ocaml.unboxed]
+
+  let dump g dfa t oc =
+    let p fmt = Printf.fprintf oc fmt in
+    p "digraph G {\n";
+    Vector.iter (fun (DFA.Packed state) ->
+        let acc = ref [] in
+        let live = ref IndexSet.empty in
+        let liveness = liveness t state in
+        Vector.iteri (fun i br ->
+            if Boolvector.test state.accepting i then
+              push acc br;
+            live := IndexSet.union liveness.:(i) !live
+          ) state.branches;
+        p "  st%d[label=%S];\n"
+          (Index.to_int state.index)
+          (string_concat_map "," string_of_index (List.rev !acc) ^ "\n" ^
+           string_of_indexset ~index:string_of_cap !live);
+        List.iter (fun (DFA.Transition tr) ->
+            p "  st%d -> st%d [label=%S];\n"
+              (Index.to_int state.index)
+              (Index.to_int tr.target.index)
+              (label_to_short_string g tr.label);
+          ) state.transitions;
+      ) dfa.DFA.states;
+    p "}\n"
 
   let reverse_transitions dfa =
     let table = Vector.make (DFA.state_count dfa) (Rev_packed []) in
@@ -948,21 +980,38 @@ module Machine = struct
     partial_captures : Capture.set;
   }
 
-  let dump g oc t =
+  let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     Vector.iteri (fun st accept ->
-        let accept = List.map (fun (br, _, _) -> br) accept in
+        let accept = List.map (fun (br, _, captures) ->
+            string_of_index br ^ "[" ^
+            string_concat_map ","
+              (fun (cap, reg) -> string_of_cap cap ^ " = !" ^ string_of_index reg)
+              (IndexMap.bindings captures)
+            ^ "]"
+                              ) accept in
         p "  st%d[label=%S];\n"
           (Index.to_int st)
-          (string_concat_map "," string_of_index accept ^ "\n" ^
-           label_to_short_string g t.unhandled.:(st));
+          (String.concat "," accept);
       ) t.accepting;
     Vector.iteri (fun tr label ->
         p "  st%d -> st%d [label=%S];\n"
           (Index.to_int t.source.:(tr))
           (Index.to_int t.target.:(tr))
-          (label_to_short_string g label.filter);
+          (label_to_short_string g label.filter ^ "\n" ^
+           String.concat "\n" (
+             List.map
+               (fun (src, dst) ->
+                  string_of_index dst ^ " <- " ^ string_of_index src)
+               (IndexMap.bindings label.moves)
+             @ [
+               string_concat_map ", "
+                 (fun (cap, reg) -> string_of_cap cap ^ " = !" ^ string_of_index reg)
+                 label.captures
+             ]
+           )
+          );
       ) t.label;
     p "}\n"
 
