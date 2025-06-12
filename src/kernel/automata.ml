@@ -403,10 +403,16 @@ module Dataflow = struct
   type ('g, 'r, 'dfa) t = {
     pairings : ('dfa, (('g, 'r) branch index * chain) list list) vector;
     accepts : ('dfa, (('g, 'r) branch index * priority) list) vector;
-    liveness : 'n. ('g, 'r, 'dfa, 'n) DFA.state -> ('n, Capture.set) vector;
-    registers : 'n. ('g, 'r, 'dfa, 'n) DFA.state -> ('n, Register.t Capture.map) vector;
+    liveness : ('dfa, Capture.set array) vector;
+    registers : ('dfa, Register.t Capture.map array) vector;
     register_count : int;
   }
+
+  let liveness (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
+    Vector.cast_array (Vector.length st.branches) t.liveness.:(st.index)
+
+  let registers (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
+    Vector.cast_array (Vector.length st.branches) t.registers.:(st.index)
 
   type ('g, 'r, 'dfa, 'tgt) rev_mapping = Rev_mapping
       :  ('g, 'r, 'dfa, 'src) DFA.state * ('src, 'tgt) DFA.mapping
@@ -817,10 +823,10 @@ module Dataflow = struct
              Array.make (Array.length (Vector.as_array st.branches)) IndexSet.empty)
           dfa.states
 
-      let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
-        Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
-
       let () =
+        let get_liveness (type n) (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
+          Vector.cast_array (Vector.length st.branches) liveness.:(st.index)
+        in
         let todo = ref [] in
         let propagate (Packed src) =
           let live_src = get_liveness src.state in
@@ -857,19 +863,16 @@ module Dataflow = struct
             Array.map (IndexMap.inflate alloc_reg) live
           ) liveness
 
-      let get_registers (type m) (st : (_, _, _, m) DFA.state) : (m, _) vector =
-        Vector.cast_array (Vector.length st.branches) registers.:(st.index)
-
       let register_count =
         let max_live = ref 0 in
         let max_index = ref (-1) in
         let check_state (DFA.Packed state) =
-          let regs = get_registers state in
+          let regs = registers.:(state.index) in
           let max_live' =
-            Vector.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
+            Array.fold_left (fun sum map -> sum + IndexMap.cardinal map) 0 regs
           in
           max_live := max !max_live max_live';
-          Vector.iter (IndexMap.iter (fun _ reg ->
+          Array.iter (IndexMap.iter (fun _ reg ->
               max_index := max !max_index (Index.to_int reg))) regs;
         in
         Vector.iter check_state dfa.states;
@@ -880,8 +883,7 @@ module Dataflow = struct
     end
     in
     let open Dataflow in
-    {pairings; accepts; register_count;
-     liveness = get_liveness; registers = get_registers}
+    {pairings; accepts; register_count; liveness; registers}
 end
 
 module Machine = struct
@@ -984,7 +986,7 @@ module Machine = struct
             let dyn = Dynarray.create () in
             let process_transition source src_regs
                 (DFA.Transition {label=filter; mapping; target; _}) pairings =
-              let tgt_regs = dataflow.registers target in
+              let tgt_regs = Dataflow.registers dataflow target in
               let captures = ref [] in
               let moves = ref IndexMap.empty in
               let clear = ref IndexSet.empty in
@@ -1017,7 +1019,8 @@ module Machine = struct
             in
             let process_state (DFA.Packed source) pairings =
               List.iter2
-                (process_transition source.index (dataflow.registers source))
+                (process_transition source.index
+                   (Dataflow.registers dataflow source))
                 source.transitions pairings
             in
             Vector.iter2 process_state dfa.states dataflow.pairings;
@@ -1037,7 +1040,7 @@ module Machine = struct
               else IndexSet.add var acc
             end cap acc
           else acc
-        end acc st.branches (dataflow.registers st)
+        end acc st.branches (Dataflow.registers dataflow st)
       end acc dfa.states
     in
     let module Min = Valmari.Minimize_with_custom_decomposition(struct
@@ -1133,7 +1136,7 @@ module Machine = struct
         then (index, get_priority index, regs) :: acc
         else acc
       in
-      let registers = dataflow.registers source in
+      let registers = Dataflow.registers dataflow source in
       List.rev (Vector.fold_lefti2 add_accepting [] source.branches registers)
     in
     let branches =
@@ -1142,7 +1145,7 @@ module Machine = struct
       let add_branch i branch regs acc =
         (branch, Boolvector.test source.accepting i, regs) :: acc
       in
-      let registers = dataflow.registers source in
+      let registers = Dataflow.registers dataflow source in
       Vector.fold_righti2 add_branch source.branches registers []
     in
     let outgoing = Vector.make Min.states IndexSet.empty in
