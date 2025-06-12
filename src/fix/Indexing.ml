@@ -359,6 +359,12 @@ module Vector = struct
     in
     loop 0 (Array.length a)
 
+  let for_all (type n) f (Vector a : (n, _) t) =
+    Array.for_all f a
+
+  let exists (type n) f (Vector a : (n, _) t) =
+    Array.exists f a
+
   let iter (type n) f (Vector a : (n, _) t) =
     Array.iter f a
 

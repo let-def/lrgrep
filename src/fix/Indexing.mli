@@ -279,6 +279,10 @@ module Vector : sig
 
   val copy : ('n, 'a) t -> ('n, 'a) t
   val mapi : ('n index -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
+
+  val for_all : ('a -> bool) -> ('n, 'a) t -> bool
+  val exists : ('a -> bool) -> ('n, 'a) t -> bool
+
   val iter : ('a -> unit) -> ('n, 'a) t -> unit
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
   val iter2 : ('a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit
