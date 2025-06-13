@@ -124,6 +124,9 @@ let set_spec_file text =
   | Some text' ->
     usage_error "-s %S: spec has already been set to %S" text text'
 
+(* Dump automata as ".dot" graphviz files *)
+let dump_dot = ref false
+
 let parse_common_option = function
   | (Short 'g' | Long "grammar") :: Text file :: rest ->
     set_grammar_file file;
@@ -131,6 +134,10 @@ let parse_common_option = function
 
   | (Short 's' | Long "spec") :: Text file :: rest ->
     set_spec_file file;
+    Some rest
+
+  | Long "dump-dot" :: rest ->
+    dump_dot := true;
     Some rest
 
   | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
@@ -371,21 +378,25 @@ let do_compile spec (cp : Code_printer.t option) =
     in
     let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
     Vector.iteri (fun br nfa ->
-        with_output_file "/tmp/%s_%s_br_%d_line_%d.dot" parser_name rule.name
-          (br : _ index :> int) branches.expr.:(br).position.pos_lnum
-          (Kernel.Automata.NFA.dump grammar nfa);
+        if !dump_dot then
+          with_output_file "%s_%s_br_%d_line_%d.dot" parser_name rule.name
+            (br : _ index :> int) branches.expr.:(br).position.pos_lnum
+            (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
-    with_output_file "/tmp/%s_%s_dfa.dot" parser_name rule.name
-      (Kernel.Automata.DFA.dump grammar dfa);
+    if !dump_dot then
+      with_output_file "%s_%s_dfa.dot" parser_name rule.name
+        (Kernel.Automata.DFA.dump grammar dfa);
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
-    with_output_file "/tmp/%s_%s_dataflow.dot" parser_name rule.name
-      (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
+    if !dump_dot then
+      with_output_file "%s_%s_dataflow.dot" parser_name rule.name
+        (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
-    with_output_file "/tmp/%s_%s_machine.dot" parser_name rule.name
-      (Kernel.Automata.Machine.dump grammar machine);
+    if !dump_dot then
+      with_output_file "%s_%s_machine.dot" parser_name rule.name
+        (Kernel.Automata.Machine.dump grammar machine);
     Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer grammar spec cp
