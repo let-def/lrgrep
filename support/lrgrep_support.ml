@@ -321,12 +321,17 @@ let compact (type dfa clause lr1)
       ) priority;
     Code_emitter.emit_yield_reloc code (Vector.get pcs target);
   in
-  let goto_action action = (*function
-    | ([], target) -> pcs.(target)
-    | action ->*)
-      let position = Code_emitter.position code in
-      emit_action action;
-      ref position
+  let goto_action =
+    let table = Hashtbl.create 7 in
+    fun action ->
+      match Hashtbl.find_opt table action with
+      | Some r -> r
+      | None ->
+        let position = Code_emitter.position code in
+        emit_action action;
+        let r = ref position in
+        Hashtbl.add table action r;
+        r
   in
   let transition_count = ref 0 in
   let transition_dom = ref 0 in
