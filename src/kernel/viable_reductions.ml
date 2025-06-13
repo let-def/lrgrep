@@ -225,7 +225,7 @@ let make (type g) (g : g grammar) : g t =
   let initial = Vector.map process_steps initial in
   let config = Vector.map fst states in
   let transitions = Vector.map make_reduction_step states in
-  stopwatch 2 "Cosntruct viable reduction graph with %d nodes" (cardinal States.n);
+  stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
   {initial; reachable_from; config; transitions}
 
 let get_stack vr state =
