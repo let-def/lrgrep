@@ -432,7 +432,7 @@ module Dataflow = struct
   let registers (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
     Vector.cast_array (Vector.length st.branches) t.registers.:(st.index)
 
-  let var_classes (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state)
+  let classes (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state)
     : n var indexset list =
     let V vc = t.classes.:(st.index) in
     let Refl = assert_equal_cardinal vc.domain (Vector.length st.branches) in
@@ -454,11 +454,17 @@ module Dataflow = struct
         let acc = ref [] in
         let live = ref IndexSet.empty in
         let def = ref IndexSet.empty in
+        let regs = ref IndexMap.empty in
         let liveness = liveness t state in
         let defined = defined t state in
+        let registers = registers t state in
+        let classes = classes t state in
         Vector.iteri (fun i br ->
             live := IndexSet.union liveness.:(i) !live;
             def := IndexSet.union defined.:(i) !def;
+            IndexMap.iter (fun cap reg ->
+                regs := IndexMap.update reg (cons_update cap) !regs
+              ) registers.:(i);
             if Boolvector.test state.accepting i then
               push acc br
           ) state.branches;
@@ -466,7 +472,18 @@ module Dataflow = struct
           (Index.to_int state.index)
           (string_concat_map "," string_of_index (List.rev !acc) ^ "\n" ^
            "live: " ^ string_of_indexset ~index:string_of_cap !live ^ "\n" ^
-           "defined: " ^ string_of_indexset ~index:string_of_cap !def);
+           "defined: " ^ string_of_indexset ~index:string_of_cap !def ^ "\n" ^
+           "classes: " ^ string_concat_map ", " (fun vars ->
+              string_of_indexset
+                ~index:(fun var -> string_of_cap (snd (Prod.prj (Vector.length state.branches) var)))
+                vars) classes ^ "\n" ^
+           "registers: " ^
+           string_concat_map "; "
+             (fun (reg, caps) ->
+                Printf.sprintf "%d: %s"
+                  (Index.to_int reg)
+                  (string_concat_map "," string_of_cap caps))
+             (IndexMap.bindings !regs));
         List.iter (fun (DFA.Transition tr) ->
             p "  st%d -> st%d [label=%S];\n"
               (Index.to_int state.index)
