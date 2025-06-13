@@ -371,22 +371,20 @@ let do_compile spec (cp : Code_printer.t option) =
     in
     let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
     Vector.iteri (fun br nfa ->
-        with_output_file
-          "/tmp/%s_br_%d_line_%d.dot"
-          parser_name (br : _ index :> int)
-          branches.expr.:(br).position.pos_lnum
+        with_output_file "/tmp/%s_%s_br_%d_line_%d.dot" parser_name rule.name
+          (br : _ index :> int) branches.expr.:(br).position.pos_lnum
           (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
-    with_output_file "/tmp/%s_dfa.dot" parser_name
+    with_output_file "/tmp/%s_%s_dfa.dot" parser_name rule.name
       (Kernel.Automata.DFA.dump grammar dfa);
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
-    with_output_file "/tmp/%s_dataflow.dot" parser_name
+    with_output_file "/tmp/%s_%s_dataflow.dot" parser_name rule.name
       (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
-    with_output_file "/tmp/%s_machine.dot" parser_name
+    with_output_file "/tmp/%s_%s_machine.dot" parser_name rule.name
       (Kernel.Automata.Machine.dump grammar machine);
     Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
   end spec.lexer_definition.rules;
