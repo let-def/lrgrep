@@ -290,6 +290,41 @@ let compare_transition_action t1 t2 =
 
 let same_action a1 a2 = compare_transition_action a1 a2 = 0
 
+(* Appendix A *)
+let emit_moves code moves =
+  let n = 1 + List.fold_left (fun n (src, _dst) -> Int.max n src) (-1) moves in
+  (* A.1 Initialization *)
+  let aux = Array.init n Fun.id in
+  let mark = Array.make n false in
+  let dup = Array.make n false in
+  List.iter (fun (j, _) ->
+      if mark.(j)
+      then dup.(j) <- true
+      else mark.(j) <- true
+    ) moves;
+  (* A.2 First pass *)
+  List.iter (fun (j, i) ->
+      if mark.(j) then (
+        mark.(j) <- false;
+        let j = aux.(j) in
+        if i != j then (
+          if i < n && (mark.(i) || dup.(i)) then (
+            Code_emitter.emit code (Swap (j, i));
+            aux.(i) <- j
+          ) else
+            Code_emitter.emit code (Move (j, i))
+        );
+        aux.(j) <- i
+      )
+    ) moves;
+  (* A.3 Second pass *)
+  List.iter (fun (j, i) ->
+      if mark.(j) then (
+        Code_emitter.emit code (Move (aux.(j), i))
+      ) else
+        mark.(j) <- true
+    ) moves
+
 let compact (type dfa clause lr1)
     (dfa : dfa cardinal)
     (get_state : dfa index -> (dfa, clause, lr1) state)
@@ -299,28 +334,8 @@ let compact (type dfa clause lr1)
   let halt_pc = ref (Code_emitter.position code) in
   Code_emitter.emit code Halt;
   let pcs = Vector.init dfa (fun _ -> ref (-1)) in
-  let rec emit_moves = function
-    | (j, i) :: rest ->
-      if i < j then (
-        Code_emitter.emit code (Move (j, i));
-        emit_moves rest;
-      ) else if i > j then (
-        emit_moves rest;
-        Code_emitter.emit code (Move (j, i));
-      ) else
-        emit_moves rest
-    | [] -> ()
-  in
-  let rec check_moves = function
-    | (j1, i1) :: ((j2, i2) :: _ as rest) ->
-      assert (j1 < j2);
-      assert (i1 < i2);
-      check_moves rest
-    | _ -> ()
-  in
   let emit_action {move; store; clear; priority; target} =
-    check_moves move;
-    emit_moves (move : (_ index * _ index) list :> (int * int) list);
+    emit_moves code (move : (_ index * _ index) list :> (int * int) list);
     List.iter (fun i -> Code_emitter.emit code (Store (i : _ index :> int))) store;
     List.iter (fun i -> Code_emitter.emit code (Clear (i : _ index :> int))) clear;
     List.iter (fun (c, i, j) ->
