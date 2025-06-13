@@ -409,11 +409,16 @@ end
 module Dataflow = struct
   type chain = (Order_chain.element * Order_chain.element) list
 
+  type 'n var = ('n, Capture.n) Prod.n
+  type 'n _var_classes = { domain: 'n cardinal; mutable classes : 'n var indexset list }
+  type var_classes = V : 'n _var_classes -> var_classes [@@ocaml.unboxed]
+
   type ('g, 'r, 'dfa) t = {
     pairings : ('dfa, (('g, 'r) branch index * chain) list list) vector;
     accepts : ('dfa, (('g, 'r) branch index * priority) list) vector;
     liveness : ('dfa, Capture.set array) vector;
     defined : ('dfa, Capture.set array) vector;
+    classes : ('dfa, var_classes) vector;
     registers : ('dfa, Register.t Capture.map array) vector;
     register_count : int;
   }
@@ -426,6 +431,12 @@ module Dataflow = struct
 
   let registers (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
     Vector.cast_array (Vector.length st.branches) t.registers.:(st.index)
+
+  let var_classes (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state)
+    : n var indexset list =
+    let V vc = t.classes.:(st.index) in
+    let Refl = assert_equal_cardinal vc.domain (Vector.length st.branches) in
+    vc.classes
 
   type ('g, 'r, 'dfa, 'tgt) rev_mapping = Rev_mapping
       :  ('g, 'r, 'dfa, 'src) DFA.state * ('src, 'tgt) DFA.mapping
@@ -862,17 +873,18 @@ module Dataflow = struct
       Vector.iteri test_branch branches;
       List.rev !acc
     in
+    (* Worklist on states for computing fixed points *)
+    let todo = ref [] in
+    let schedule st =
+      if not st.queued then (
+        st.queued <- true;
+        push todo (Packed st);
+      )
+    in
+    let get (type n) v (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
+      Vector.cast_array (Vector.length st.branches) v.:(st.index)
+    in
     let liveness, defined =
-      let get (type n) v (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
-        Vector.cast_array (Vector.length st.branches) v.:(st.index)
-      in
-      let todo = ref [] in
-      let schedule st =
-        if not st.queued then (
-          st.queued <- true;
-          push todo (Packed st);
-        )
-      in
       (* Pass 7: Compute liveness of variables (Section 4.4.1, Definition 16) *)
       let liveness =
         dfa.states |> Vector.map @@ fun (DFA.Packed st) ->
@@ -947,15 +959,84 @@ module Dataflow = struct
       stopwatch 3 "Computed defined";
       (liveness, defined)
     in
-    (* Pass 9: (Naive) register allocation *)
-    let registers : (dfa, Register.t Capture.map array) vector =
-      defined |> Vector.map @@ fun live ->
-      let last_reg = ref (-1) in
-      let alloc_reg _ =
-        incr last_reg;
-        Register.of_int !last_reg
+    (* Pass 9: Classes *)
+    let classes =
+      let lift_class domain i caps = IndexSet.map (Prod.inj domain i) caps in
+      let classes = Vector.mapi (fun i def ->
+          let Vector.Packed v = Vector.of_array def in
+          let domain = Vector.length v in
+          let vc =
+            Vector.fold_righti
+              (fun i caps -> IndexSet.union (lift_class domain i caps))
+              v IndexSet.empty
+          in
+          let Packed st = data.:(i) in
+          let classes = if IndexSet.is_empty vc then [] else (schedule st; [vc]) in
+          V {domain = Vector.length v; classes}
+        ) defined
       in
-      Array.map (IndexMap.inflate alloc_reg) live
+      let get_classes (type n) (st : (_, _, _, n) DFA.state) : n var indexset list =
+        let V {domain; classes} = classes.:(st.index) in
+        let Refl = assert_equal_cardinal domain (Vector.length st.branches) in
+        classes
+      in
+      let set_classes (type n) (st : (_, _, _, n) DFA.state) (vc : n var indexset list) =
+        let V v = classes.:(st.index) in
+        if List.compare_lengths v.classes vc <> 0 then
+          let Refl = assert_equal_cardinal v.domain (Vector.length st.branches) in
+          schedule (get_data st);
+          v.classes <- vc
+      in
+      let propagate (Packed src) =
+        assert src.queued;
+        src.queued <- false;
+        let sdomain = Vector.length src.state.branches in
+        let vc' = get_classes src.state in
+        List.iter begin fun (DFA.Transition {target; mapping; _}) ->
+          let vc = get_classes target in
+          let caps = ref IndexSet.empty in
+          let tdomain = Vector.length target.branches in
+          let defined = get defined target in
+          let rmap = Vector.make sdomain None in
+          Vector.iteri (fun tgt_j (src_i, (caps', _)) ->
+              rmap.:(src_i) <- Some tgt_j;
+              caps := IndexSet.union (lift_class tdomain tgt_j caps') !caps;
+            ) mapping;
+          let caps = !caps in
+          let vc' = List.map (fun set ->
+              IndexSet.filter_map (fun v ->
+                  let i, j = Prod.prj sdomain v in
+                  match rmap.:(i) with
+                  | Some i' when IndexSet.mem j defined.:(i')->
+                    let v' = Prod.inj tdomain i' j in
+                    if IndexSet.mem v' caps then None
+                    else Some v'
+                  | _ -> None
+                ) set
+            ) vc' in
+          set_classes target (IndexRefine.partition (caps :: vc @ vc'));
+        end src.state.transitions
+      in
+      fixpoint ~propagate todo;
+      stopwatch 3 "Computed classes";
+      classes
+    in
+    (* Pass 10: (Naive) register allocation *)
+    let registers : (dfa, Register.t Capture.map array) vector =
+      defined |> Vector.mapi @@ fun i live ->
+      let Vector.Packed live = Vector.of_array live in
+      let domain = Vector.length live in
+      let V vc = classes.:(i) in
+      let Refl = assert_equal_cardinal vc.domain domain in
+      let result = Vector.make domain IndexMap.empty in
+      List.iteri (fun reg vars ->
+          let reg = Register.of_int reg in
+          IndexSet.iter (fun var ->
+              let i, cap = Prod.prj domain var in
+              result.@(i) <- IndexMap.add cap reg
+            ) vars;
+        ) vc.classes;
+      Vector.as_array result
     in
     let register_count =
       let max_live = ref 0 in
@@ -976,7 +1057,7 @@ module Dataflow = struct
       !max_index + 1
     in
     (* Collect results *)
-    {pairings; accepts; register_count; liveness; defined; registers}
+    {pairings; accepts; register_count; liveness; defined; classes; registers}
 end
 
 module Machine = struct
