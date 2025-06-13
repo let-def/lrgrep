@@ -220,7 +220,7 @@ module Prod = struct
       Cardinal (lazy (l * Lazy.force r))
 
   let inj (type l) (Cardinal (lazy l) : l cardinal) lx rx =
-    l * lx + rx
+    lx + rx * l
 
   let prj (type l) (Cardinal (lazy l) : l cardinal) x =
     (x mod l, x / l)
