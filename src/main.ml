@@ -192,7 +192,7 @@ let rec parse_global_options args =
   | Some rest -> parse_global_options rest
   | None ->
     match args with
-    | Short 'v' :: rest ->
+    | (Short 'v' | Long "verbose") :: rest ->
       incr Misc.verbosity_level;
       parse_global_options rest
 
