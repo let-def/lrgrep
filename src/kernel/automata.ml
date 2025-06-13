@@ -971,7 +971,7 @@ module Dataflow = struct
       in
       Vector.iter check_state dfa.states;
       stopwatch 3
-        "allocated registers (max live registers: %d, register count: %d)"
+        "allocated registers (max live variables: %d, register count: %d)"
         !max_live (!max_index + 1);
       !max_index + 1
     in
