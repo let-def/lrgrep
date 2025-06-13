@@ -54,6 +54,9 @@ type program_instruction =
     (** [Store r] stores the state at the top of the parser stack in
         register [r]. *)
   | Move of register * register
+    (** [Move (src, dst)] sets register [dst] to the value in register [src]. *)
+  | Swap of register * register
+    (** [Swap (r1, r2)] exchanges the values of register [r1] and [r2]. *)
   | Clear of register
   | Yield of program_counter
     (** Jump and consume input:

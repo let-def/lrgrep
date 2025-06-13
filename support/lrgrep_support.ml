@@ -183,6 +183,13 @@ end = struct
         Buffer.add_uint8 t.buffer i;
         Buffer.add_uint8 t.buffer j
       )
+    | Swap (i, j) ->
+      assert (i < 0xFF && j < 0xFF);
+      if i <> j then (
+        Buffer.add_char t.buffer '\x09';
+        Buffer.add_uint8 t.buffer i;
+        Buffer.add_uint8 t.buffer j
+      )
     | Clear i ->
       assert (i < 0xFF);
       Buffer.add_char t.buffer '\x03';

@@ -15,6 +15,7 @@ type priority = int
 type program_instruction =
   | Store of register
   | Move of register * register
+  | Swap of register * register
   | Clear of register
   | Yield of program_counter
   | Accept of clause * priority * register option array
@@ -63,6 +64,9 @@ let program_step (t : program_code) (r : program_counter ref)
   | '\x02' ->
     r := !r + 3;
     Move (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
+  | '\x09' ->
+    r := !r + 3;
+    Swap (String.get_uint8 t (pc + 1), String.get_uint8 t (pc + 2))
   | '\x03' ->
     r := !r + 2;
     Clear (String.get_uint8 t (pc + 1))
@@ -187,6 +191,12 @@ struct
       | Move (r1, r2) ->
         if debug then eprintf "Move %d -> %d\n" r1 r2;
         bank.(r2) <- bank.(r1);
+        loop ()
+      | Swap (r1, r2) ->
+        if debug then eprintf "Swap %d <-> %d\n" r1 r2;
+        let v2 = bank.(r2) in
+        bank.(r2) <- bank.(r1);
+        bank.(r1) <- v2;
         loop ()
       | Clear r1 ->
         if debug then eprintf "Clear %d\n" r1;
