@@ -87,6 +87,16 @@ type 'a indexset = 'a IndexSet.t
 (** Convenient alias for [IndexMap] *)
 type ('n, 'a) indexmap = ('n, 'a) IndexMap.t
 
+(** A function for consing a value when using Map.update *)
+let cons_update x = function
+  | None -> Some [x]
+  | Some xs -> Some (x :: xs)
+
+(** A function for unioning sets when using Map.update *)
+let union_update x = function
+  | None -> Some x
+  | Some y -> Some (IndexSet.union x y)
+
 (** Optimize stdlib's (@) to avoid copying the lhs when the rhs is empty *)
 let (@) l1 l2 =
   match l1, l2 with

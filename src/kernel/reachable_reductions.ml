@@ -243,11 +243,7 @@ struct
         prev
       else
         let delta = IndexSet.diff sreject treject in
-        let update = function
-          | None -> Some delta
-          | Some ts -> Some (IndexSet.union ts delta)
-        in
-        (treject', IndexMap.update source update trejects)
+        (treject', IndexMap.update source (union_update delta) trejects)
     in
     fix_relation ~propagate predecessors table;
     let project (ts, edges) = (ts, IndexMap.bindings edges) in

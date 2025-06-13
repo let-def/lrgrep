@@ -211,11 +211,7 @@ module Reduction_DFA = struct
       fold_transitions acc state
     | Some lr1 ->
       let suffixes, targets = acc in
-      let targets =
-        IndexMap.update lr1
-          (function None -> Some [state] | Some states -> Some (state :: states))
-          targets
-      in
+      let targets = IndexMap.update lr1 (cons_update state) targets in
       (suffixes, targets)
 
   and fold_transitions acc (state : Reduction_NFA.state) =

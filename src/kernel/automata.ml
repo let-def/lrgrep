@@ -994,12 +994,13 @@ module Dataflow = struct
         let vc' = get_classes src.state in
         List.iter begin fun (DFA.Transition {target; mapping; _}) ->
           let vc = get_classes target in
-          let caps = ref IndexSet.empty in
           let tdomain = Vector.length target.branches in
           let defined = get defined target in
           let rmap = Vector.make sdomain None in
-          Vector.iteri (fun tgt_j (src_i, (caps', _)) ->
+          let caps = ref IndexSet.empty in
+          Vector.rev_iteri (fun tgt_j (src_i, (caps', _)) ->
               rmap.:(src_i) <- Some tgt_j;
+              let caps' = IndexSet.inter defined.:(tgt_j) caps' in
               caps := IndexSet.union (lift_class tdomain tgt_j caps') !caps;
             ) mapping;
           let caps = !caps in

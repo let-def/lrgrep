@@ -126,11 +126,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
       let map = ref IndexMap.empty in
       let process_transitions (label : _ Automata.Machine.label) =
         map := List.fold_left (fun map (cap, _reg) ->
-            let filter = label.filter in
-            IndexMap.update cap (function
-                | None -> Some filter
-                | Some set' -> Some (IndexSet.union set' filter)
-              ) map
+            IndexMap.update cap (Misc.union_update label.filter) map
           ) !map label.captures
       in
       Vector.iter process_transitions machine.label;

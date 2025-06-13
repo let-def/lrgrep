@@ -14,12 +14,9 @@ module Increasing_ref = struct
     | (_, img) :: tl when IndexSet.is_empty img ->
       piecewise tl
     | (dom, img) :: tl ->
-      IndexSet.fold (fun x m ->
-        IndexMap.update x (function
-          | None -> Some img
-          | Some img' -> Some (IndexSet.union img img')
-        ) m
-      ) dom (piecewise tl)
+      IndexSet.fold
+        (fun x m -> IndexMap.update x (Misc.union_update img) m)
+        dom (piecewise tl)
 
   let less_than m1 m2 =
     IndexMap.for_all (fun x s ->
@@ -32,10 +29,7 @@ module Increasing_ref = struct
     if IndexSet.is_empty y then
       t
     else
-      IndexMap.update x (function
-          | None -> Some y
-          | Some y' -> Some (IndexSet.union y y')
-        ) t
+      IndexMap.update x (Misc.union_update y) t
 
   let increase ?(ignore=IndexSet.empty) m1 m2 =
     let delta = ref IndexMap.empty in
