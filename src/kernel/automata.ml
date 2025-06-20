@@ -219,10 +219,8 @@ module DFA = struct
 
       let prestates = get_generator ()
 
-      module KernelMap = Map.Make(struct
-          type t = (g, r) NFA.t array
-          let compare g1 g2 = array_compare NFA.compare g1 g2
-        end)
+      let compare_kernel g1 g2 = array_compare NFA.compare g1 g2
+      module KernelMap = Map.Make(struct type t = (g, r) NFA.t array let compare = compare_kernel end)
 
       let kernel_make (type a) (prj : a -> (g, r) NFA.t) (ts : a list) : a array =
         let mark = ref () in
@@ -244,7 +242,7 @@ module DFA = struct
       let dfa = ref KernelMap.empty
 
       let initial =
-        let rec determinize : type n . (n, (g, r) NFA.t) vector -> n prestate =
+        let rec determinize_kernel : type n . (n, (g, r) NFA.t) vector -> n prestate =
           fun kernel ->
             match KernelMap.find_opt (Vector.as_array kernel) !dfa with
             | Some (Prepacked t') ->
@@ -275,7 +273,7 @@ module DFA = struct
                     |> Vector.of_array
                   in
                   Fwd_mapping ((Vector.map snd result),
-                               determinize (Vector.map fst result))
+                               determinize_kernel (Vector.map fst result))
                 )
               in
               let raw_transitions = ref [] in
@@ -295,7 +293,7 @@ module DFA = struct
         let Vector.Packed kernel =
           Vector.of_array (kernel_make Fun.id (Vector.to_list initial))
         in
-        (determinize kernel).index
+        (determinize_kernel kernel).index
 
       let () = stopwatch 3 "Processed initial states"
 
