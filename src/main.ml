@@ -371,7 +371,7 @@ let do_compile spec (cp : Code_printer.t option) =
         then subset.wait
         else subset.reachable;
       prev = Vector.get subset.predecessors;
-      label = (fun n -> IndexSet.singleton T.lrc.lr1_of.:(n));
+      label = Vector.get T.lrc.lr1_of;
     } in
     let Kernel.Spec.Rule (clauses, branches) =
       Kernel.Spec.import_rule grammar T.viable T.indices T.trie rule

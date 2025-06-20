@@ -44,7 +44,7 @@ open Regexp
 type ('g, 'n) stacks = {
   tops: 'n indexset;
   prev: 'n index -> 'n indexset;
-  label: 'n index -> 'g lr1 indexset;
+  label: 'n index -> 'g lr1 index;
 }
 
 type priority = int
@@ -329,14 +329,22 @@ module DFA = struct
           let todo = scheduled.*(t.index) in
           visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
           scheduled.*(t.index) <- IndexSet.empty;
+          let by_label =
+            IndexSet.fold (fun stack map ->
+                IndexMap.update
+                  (stacks.label stack)
+                  (union_update (stacks.prev stack))
+                  map
+              ) todo IndexMap.empty
+          in
           List.iter begin fun (label, target) ->
             let really_empty = ref true in
-            let expand_stack stack =
-              if IndexSet.disjoint (stacks.label stack) label
-              then IndexSet.empty
-              else (really_empty := false; stacks.prev stack)
+            let expand_stack lr1 =
+              match IndexMap.find_opt lr1 by_label with
+              | None -> IndexSet.empty
+              | Some stacks -> really_empty := false; stacks
             in
-            let stacks = indexset_bind todo expand_stack in
+            let stacks = indexset_bind label expand_stack in
             if not !really_empty then
               let lazy (Fwd_mapping (_, t')) = target in
               if not (IndexSet.is_empty stacks) then
@@ -365,7 +373,7 @@ module DFA = struct
       let prestates = IndexBuffer.Gen.freeze prestates
 
       let domain =
-        Vector.init n (fun i -> indexset_bind visited.*(i) stacks.label)
+        Vector.init n (fun i -> IndexSet.map stacks.label visited.*(i))
     end in
     let states =
       let make (Construction.Prepacked {index; kernel; _}) =
