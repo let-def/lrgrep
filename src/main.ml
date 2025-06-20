@@ -383,11 +383,22 @@ let do_compile spec (cp : Code_printer.t option) =
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
             (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
+    Perfctl.enable ();
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
+    Perfctl.disable ();
     if !dump_dot then
       with_output_file "%s_%s_dfa.dot" parser_name rule.name
         (Kernel.Automata.DFA.dump grammar dfa);
+    begin
+      let states = Vector.length_as_int dfa.states in
+      let branches = ref 0 in
+      Vector.iter (fun (Kernel.Automata.DFA.Packed st) ->
+          branches := !branches + Vector.length_as_int st.branches
+        ) dfa.states;
+      Printf.eprintf "Determinization: %d states, %d branches (average %.02f branch/state)\n"
+        states !branches (float !branches /. float states);
+    end;
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
     if !dump_dot then
       with_output_file "%s_%s_dataflow.dot" parser_name rule.name

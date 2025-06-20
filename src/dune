@@ -7,7 +7,7 @@
  ;         compile_command
  ;         enum_command enum
  ;         interpret_command)
- (libraries front fix cmon utils menhirSdk valmari support))
+ (libraries front fix cmon utils menhirSdk valmari support perfctl))
 
 (executable
  (name minilrgrep)
