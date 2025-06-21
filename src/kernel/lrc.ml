@@ -161,9 +161,21 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
       IndexSet.iter process_transition (Transition.predecessors g lr1)
   in
   Index.iter (Lr1.cardinal g) process;
+  stopwatch 2 "Computed LRC predecessors";
   let all_successors = Misc.relation_reverse n predecessors in
   stopwatch 2 "Computed LRC successors";
-  let reachable_from = Misc.relation_closure ~reverse:predecessors all_successors in
+  let module Scc = Tarjan.IndexedSCC(struct
+                       type n = g N.t
+                       let n = n
+                       let successors f i = IndexSet.iter f all_successors.:(i)
+                       end)
+  in
+  stopwatch 2 "LRC scc";
+  let reachable_from = Vector.copy all_successors in
+  Vector.rev_iteri (fun _scc nodes ->
+      let set = indexset_bind nodes (Vector.get reachable_from) in
+      IndexSet.iter (fun i -> reachable_from.:(i) <- set) nodes
+    ) Scc.nodes;
   stopwatch 2 "Closed LRC successors";
   {lr1_of; lrcs_of; first_lrc_of; all_wait; all_successors; reachable_from}
 
