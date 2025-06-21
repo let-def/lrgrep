@@ -97,6 +97,7 @@ let group_reductions (type g) (g : g grammar) =
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 g lr1)))
 
 let make (type g) (g : g grammar) : g t =
+  stopwatch 2 "constructing viable reduction graph";
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   let module VEq = Viable.Eq(struct type t = g include States end) in
