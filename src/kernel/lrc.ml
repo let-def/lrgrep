@@ -158,9 +158,9 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
             coercion.forward.(post)
         done
       in
-      IndexSet.iter process_transition (Transition.predecessors g lr1)
+      IndexSet.rev_iter process_transition (Transition.predecessors g lr1)
   in
-  Index.iter (Lr1.cardinal g) process;
+  Index.rev_iter (Lr1.cardinal g) process;
   stopwatch 2 "Computed LRC predecessors";
   let all_successors = Misc.relation_reverse n predecessors in
   stopwatch 2 "Computed LRC successors";
