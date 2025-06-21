@@ -405,6 +405,8 @@ let make (type g) (g : g grammar) : g t = (module struct
       | R _ -> all_terminals
   end
 
+  let () = stopwatch 2 "reachability: computed classes"
+
   (* ---------------------------------------------------------------------- *)
 
   (* We now construct the DAG (as a tree with hash-consing) of all matrix
@@ -693,6 +695,8 @@ let make (type g) (g : g grammar) : g t = (module struct
       | R n -> R (define n)
   end
 
+  let () = stopwatch 2 "reachability: constructed tree"
+
   (* ---------------------------------------------------------------------- *)
 
   (* Representation of matrix cells, the variables of the data flow problem.
@@ -850,8 +854,9 @@ let make (type g) (g : g grammar) : g t = (module struct
       done
 
     let first_cell i = Index.of_int n first_cell.:(i)
-
   end
+
+  let () = stopwatch 2 "reachability: indexed matrix cells"
 
   module Reverse_dependencies = struct
 
@@ -964,6 +969,8 @@ let make (type g) (g : g grammar) : g t = (module struct
       in
       List.iter update_dep occurrences.:(node)
   end
+
+  let () = stopwatch 2 "reachability: reversed matrix dependencies"
 
   (* ---------------------------------------------------------------------- *)
 

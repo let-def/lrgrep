@@ -383,10 +383,8 @@ let do_compile spec (cp : Code_printer.t option) =
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
             (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
-    Perfctl.enable ();
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
-    Perfctl.disable ();
     if !dump_dot then
       with_output_file "%s_%s_dfa.dot" parser_name rule.name
         (Kernel.Automata.DFA.dump grammar dfa);

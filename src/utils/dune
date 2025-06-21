@@ -1,4 +1,4 @@
 (library
  (name utils)
  (public_name lrgrep.internal.utils)
- (libraries cmon fix))
+ (libraries cmon fix perfctl))

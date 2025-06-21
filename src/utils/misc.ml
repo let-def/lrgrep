@@ -376,13 +376,47 @@ let stopwatch_delta =
   last := (level, time) :: last';
   (time -. time')
 
+let stopwatch_counter = ref 0
+
+let stopwatch_perfs =
+  ref @@
+  match Sys.getenv_opt "STOPWATCH_PERF" with
+  | None -> []
+  | Some list ->
+    let steps = String.split_on_char ',' list in
+    List.mapi (fun i step ->
+        (i land 1 = 0),
+        int_of_string step
+      ) steps
+
+let stopwatch_perf_step i =
+  match !stopwatch_perfs with
+  | (_, j) :: _ as steps when j <= i ->
+    let rec loop = function
+      | [] -> []
+      | (_, j) :: _ as rest when j > i ->
+        rest
+      | (_, j) :: rest when j < i ->
+        loop rest
+      | (true, _) :: rest ->
+        Perfctl.enable ();
+        loop rest
+      | (false, _) :: rest ->
+        Perfctl.disable ();
+        loop rest
+    in
+    stopwatch_perfs := loop steps
+  | _ -> ()
+
 let stopwatch level fmt =
   if level <= !verbosity_level then (
     let delta = stopwatch_delta level in
+    incr stopwatch_counter;
+    stopwatch_perf_step !stopwatch_counter;
     if delta < 10. then
-      Printf.eprintf "[% 5.0fms]" (delta *. 1000.)
+      Printf.eprintf "[%03d: % 5.0fms]" !stopwatch_counter (delta *. 1000.)
     else
-      Printf.eprintf "[% 5.01fs]" delta;
+      Printf.eprintf "[%03d: % 5.01fs]" !stopwatch_counter delta;
     Printf.fprintf stderr "%s-> " (String.make level ' ');
     Printf.kfprintf
       (fun _ -> prerr_newline ()) stderr fmt
