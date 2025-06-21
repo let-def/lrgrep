@@ -118,7 +118,7 @@ let index_fold n a f =
 (** [indexset_bind s f] returns the union of all sets [f i] for [i] in [s] *)
 let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
-  IndexSet.union_all (IndexSet.fold (fun lr1 acc -> f lr1 :: acc) s [])
+  IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
 
 (* Vector get *)
 let (.:()) = Vector.get
