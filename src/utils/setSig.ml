@@ -73,6 +73,8 @@ module type S1 = sig
 
   val union: 'a t -> 'a t -> 'a t
 
+  val union_all: 'a t list -> 'a t
+
   (* [inter s t] returns the set intersection of [s] and [t], that is,
      $s\cap t$. *)
 

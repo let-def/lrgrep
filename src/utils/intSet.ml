@@ -249,6 +249,45 @@ let rec union s1 s2 =
       then s1
       else C (addr1, ss, qs)
 
+module AddrHeap = Heap.Make(struct
+                     type nonrec _ t = t
+                     let compare a b = match a, b with
+                       | N, N -> 0
+                       | N, _ -> -1
+                       | _, N -> +1
+                       | C (aa, _, _), C (ab, _, _) ->
+                         Int.compare aa ab
+                   end)
+
+let union_all = function
+  | [] -> empty
+  | [x] -> x
+  | [x; y] -> union x y
+  | [x; y; z] -> union x (union y z)
+  | [x; y; z; w] -> union (union x y) (union z w)
+  | xys ->
+    let insert h = function
+      | N -> h
+      | C _ as x -> AddrHeap.insert x () h
+    in
+    let rec loop addr ss = function
+      | AddrHeap.Leaf -> C (addr, ss, N)
+      | AddrHeap.Node (l, C (addr', ss', qs'), (), r, _) ->
+        let h = insert (AddrHeap.merge l r) qs' in
+        if addr = addr' then
+          loop addr (ss lor ss') h
+        else
+          C (addr, ss, loop addr' ss' h)
+      | AddrHeap.Node (_, N, (), _, _) ->
+        assert false
+    in
+    match List.fold_left insert AddrHeap.empty xys with
+    | AddrHeap.Leaf -> empty
+    | AddrHeap.Node (l, C (addr, ss, qs), (), r, _) ->
+      loop addr ss (insert (AddrHeap.merge l r) qs)
+    | AddrHeap.Node (_, N, (), _, _) ->
+      assert false
+
 let rec inter s1 s2 =
   match s1, s2 with
   | N, _
