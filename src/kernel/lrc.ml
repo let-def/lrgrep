@@ -42,7 +42,6 @@ type 'g n = 'g N.t
 type 'g t = {
   lr1_of: ('g n, 'g lr1 index) vector;
   lrcs_of: ('g lr1, 'g n indexset) vector;
-  first_lrc_of: ('g lr1, 'g n index) vector;
   all_wait: 'g n indexset;
   all_successors: ('g n, 'g n indexset) vector;
   reachable_from: ('g n, 'g n indexset) vector;
@@ -54,15 +53,7 @@ let index_delta (type n) (i : n index) (j : n index) =
 
 (* Compute the index of the class of an LRC state *)
 let class_index t lrc =
-  index_delta lrc t.first_lrc_of.:(t.lr1_of.:(lrc))
-
-(* Compute the lookahead terminals for an LRC state *)
-let lookahead (type g) ((module Reachability) : g Reachability.t) t lrc =
-  let lr1 = t.lr1_of.:(lrc) in
-  (Reachability.Classes.for_lr1 lr1).(index_delta lrc t.first_lrc_of.:(lr1))
-
-(*val to_string : 'g info -> 'g t -> 'g n index -> string
-  val set_to_string : 'g info -> 'g t -> 'g n indexset -> string*)
+  index_delta lrc (Option.get (IndexSet.minimum t.lrcs_of.:(t.lr1_of.:(lrc))))
 
 let count t = Vector.length t.lr1_of
 
@@ -115,7 +106,7 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let all_wait = IndexSet.map (Vector.get first_lrc_of) (Lr1.wait g) in
 
   (* Step timing after computing the LRC set *)
-  stopwatch 2 "Computed LRC set";
+  stopwatch 2 "Computed LRC set (%d elements)" (cardinal n);
 
   (* Compute transitions for each LRC state *)
   let predecessors = Vector.make n IndexSet.empty in
@@ -127,11 +118,10 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
       predecessors.:(tgt_first) <-
         IndexSet.map (fun tr ->
             let src = Transition.source g tr in
-            let class_index =
-              Misc.array_findi
-                (fun _ classe -> IndexSet.mem t classe) 0 (Reachability.Classes.for_lr1 src)
-            in
-            index_shift first_lrc_of.:(src) class_index
+            let classes = Reachability.Classes.for_lr1 src in
+            let class_index _ classe = IndexSet.mem t classe in
+            index_shift first_lrc_of.:(src)
+              (Misc.array_findi class_index 0 classes)
           ) (Transition.predecessors g lr1)
     | Some _ ->
       let process_transition tr =
@@ -165,10 +155,10 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let all_successors = Misc.relation_reverse n predecessors in
   stopwatch 2 "Computed LRC successors";
   let module Scc = Tarjan.IndexedSCC(struct
-                       type n = g N.t
+                       type nonrec n = n
                        let n = n
                        let successors f i = IndexSet.iter f all_successors.:(i)
-                       end)
+                     end)
   in
   stopwatch 2 "LRC scc";
   let reachable_from = Vector.copy all_successors in
@@ -177,7 +167,7 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
       IndexSet.iter (fun i -> reachable_from.:(i) <- set) nodes
     ) Scc.nodes;
   stopwatch 2 "Closed LRC successors";
-  {lr1_of; lrcs_of; first_lrc_of; all_wait; all_successors; reachable_from}
+  {lr1_of; lrcs_of; all_wait; all_successors; reachable_from}
 
 (* Convert an LRC state to a string representation *)
 let to_string g t lrc =
@@ -247,10 +237,10 @@ let from_entrypoints (type g) (g: g grammar) lrc_graph entrypoints : g entrypoin
             push todo (succ, prefix)
         | _ -> ()
       in
-      Vector.iteri (fun lr1 lrc0 ->
+      Vector.iteri (fun lr1 lrcs ->
           if Option.is_none (Lr1.incoming g lr1) then
-            expand [] lrc0)
-        lrc_graph.first_lrc_of;
+            expand [] (Option.get (IndexSet.minimum lrcs)))
+        lrc_graph.lrcs_of;
       let propagate (succ, prefix) =
         IndexSet.iter (expand prefix) succ
       in
