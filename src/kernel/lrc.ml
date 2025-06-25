@@ -176,8 +176,9 @@ let intset_bind s f =
 let determinize (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let open IndexBuffer in
   let module State = Gen.Make() in
+  let module Transitions = Gen.Make() in
   let states = State.get_generator () in
-  let predecessors = Dyn.make IndexSet.empty in
+  let transitions = Transitions.get_generator () in
   let table = Hashtbl.create 7 in
   let todo = ref [] in
   let visit lr1 classes =
@@ -193,33 +194,55 @@ let determinize (type g) (g : g grammar) ((module Reachability) : g Reachability
   let propagate index =
     let (lr1, classes) = Gen.get states index in
     let post_classes = Reachability.Classes.for_lr1 lr1 in
-    let preds =
-      IndexSet.map (fun tr ->
-          let pre_classes = Reachability.Classes.pre_transition tr in
-          let mid_classes = Reachability.Classes.post_transition tr in
-          let node = Reachability.Tree.leaf tr in
-          let encode = Reachability.Cell.encode node in
-          let classes' =
-            intset_bind classes (fun post_index ->
-                let ca = post_classes.(post_index) in
-                match
-                  Utils.Misc.array_findi
-                    (fun _ cb -> IndexSet.quick_subset ca cb) 0 mid_classes
-                with
-                | exception Not_found -> IntSet.empty
-                | post ->
-                  IntSet.init_subset 0 (Array.length pre_classes - 1)
-                    (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
-              )
-          in
-          visit (Transition.source g tr) classes'
-        ) (Transition.predecessors g lr1)
-    in
-    Dyn.set predecessors index preds
+    IndexSet.iter (fun tr ->
+        let pre_classes = Reachability.Classes.pre_transition tr in
+        let mid_classes = Reachability.Classes.post_transition tr in
+        let node = Reachability.Tree.leaf tr in
+        let encode = Reachability.Cell.encode node in
+        let classes' =
+          intset_bind classes (fun post_index ->
+              let ca = post_classes.(post_index) in
+              match
+                Utils.Misc.array_findi
+                  (fun _ cb -> IndexSet.quick_subset ca cb) 0 mid_classes
+              with
+              | exception Not_found -> IntSet.empty
+              | post ->
+                IntSet.init_subset 0 (Array.length pre_classes - 1)
+                  (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
+            )
+        in
+        ignore (Gen.add transitions (index, visit (Transition.source g tr) classes'))
+      ) (Transition.predecessors g lr1)
   in
   let wait = IndexSet.map (fun lr1 -> visit lr1 (IntSet.singleton 0)) (Lr1.wait g) in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc wait: %d states\n" (Hashtbl.length table);
+  let module Min = Valmari.Minimize(struct
+                       type t = g lr1 index
+                       let compare =  Index.compare
+                     end)(struct
+                       let source tr = fst (Gen.get transitions tr)
+                       let target tr = snd (Gen.get transitions tr)
+                       let label tr = fst (Gen.get states (source tr))
+
+                       let initials f = IndexSet.iter f wait
+
+                       let refinements _ = ()
+
+                       let finals f =
+                         IndexSet.iter (fun lr1 ->
+                             match Hashtbl.find_opt table (lr1, IntSet.singleton 0) with
+                             | None -> ()
+                             | Some index -> f index
+                           ) (Lr1.entrypoints g)
+                       type states = State.n
+                       let states = State.n
+                       type transitions = Transitions.n
+                       let transitions = Transitions.n
+                     end)
+  in
+  stopwatch 2 "Minimized deterministic Lrc: %d states\n" (cardinal Min.states);
   ignore wait
   (*IndexSet.iter (fun lr1 ->
       Array.iteri
