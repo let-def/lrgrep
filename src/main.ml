@@ -306,11 +306,21 @@ let parser_name =
        (Filename.basename grammar_filename))
 
 module T = struct
+  let compute_reachability () =
+    let reachability = Kernel.Reachability.make grammar in
+    let lrc = Kernel.Lrc.make grammar reachability in
+    (reachability, lrc)
+
+  let d = match Sys.getenv_opt "SINGLE" with
+    | None ->
+      let d = Domain.spawn compute_reachability in
+      lazy (Domain.join d)
+    | Some _ -> Lazy.from_fun compute_reachability
+
   let viable = Kernel.Viable_reductions.make grammar
   let indices = Kernel.Transl.Indices.make grammar
   let trie = Kernel.Transl.Reductum_trie.make viable
-  let reachability = Kernel.Reachability.make grammar
-  let lrc = Kernel.Lrc.make grammar reachability
+  let reachability, lrc = Lazy.force d
 end
 
 let lrc_from_entrypoints =
