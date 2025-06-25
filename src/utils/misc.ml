@@ -392,34 +392,35 @@ let stopwatch_perfs =
 let stopwatch_perf_step i =
   match !stopwatch_perfs with
   | (_, j) :: _ as steps when j <= i ->
+    let result = ref None in
     let rec loop = function
       | [] -> []
       | (_, j) :: _ as rest when j > i ->
         rest
       | (_, j) :: rest when j < i ->
         loop rest
-      | (true, _) :: rest ->
-        Perfctl.enable ();
-        loop rest
-      | (false, _) :: rest ->
-        Perfctl.disable ();
+      | (result', _) :: rest ->
+        result := Some result';
         loop rest
     in
-    stopwatch_perfs := loop steps
-  | _ -> ()
+    stopwatch_perfs := loop steps;
+    !result
+  | _ -> None
 
 let stopwatch level fmt =
   if level <= !verbosity_level then (
     let delta = stopwatch_delta level in
     incr stopwatch_counter;
-    stopwatch_perf_step !stopwatch_counter;
-    if delta < 10. then
-      Printf.eprintf "[%03d: % 5.0fms]" !stopwatch_counter (delta *. 1000.)
-    else
-      Printf.eprintf "[%03d: % 5.01fs]" !stopwatch_counter delta;
+    let perf_status = stopwatch_perf_step !stopwatch_counter in
+    if perf_status = Some false then Perfctl.disable ();
+    if delta < 10.
+    then Printf.eprintf "[%03d: % 5.0fms]" !stopwatch_counter (delta *. 1000.)
+    else Printf.eprintf "[%03d: % 5.01fs]" !stopwatch_counter delta;
     Printf.fprintf stderr "%s-> " (String.make level ' ');
-    Printf.kfprintf
-      (fun _ -> prerr_newline ()) stderr fmt
+    Printf.kfprintf (fun _ ->
+        prerr_newline ();
+        if perf_status = Some true then Perfctl.enable ();
+      ) stderr fmt
   ) else
     Printf.ifprintf stderr fmt
 
