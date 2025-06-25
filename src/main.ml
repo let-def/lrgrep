@@ -263,10 +263,12 @@ let grammar_filename = match !conf_grammar_file with
 module Grammar =
   MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
 
+let () = stopwatch 1 "Loaded file %s" grammar_filename
+
 open Kernel.Info
 include Lift(Grammar)
 
-let () = stopwatch 1 "Loaded grammar %s" grammar_filename
+let () = stopwatch 1 "Imported grammar"
 
 (* Load and parse specification, if any *)
 
