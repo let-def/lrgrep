@@ -17,23 +17,23 @@ type 'n cardinal =
 
 (* The function [cardinal] forces the cardinal to become fixed. *)
 
-let cardinal (type n) (Cardinal (lazy c) : n cardinal) = c
+let cardinal (type n) (Cardinal c : n cardinal) = Lazy.force_val c
 
 let is_val (type n) (Cardinal l : n cardinal) = Lazy.is_val l
 
 type (_, _) eq = Refl : ('a, 'a) eq
 
 let assert_equal_cardinal (type n m) (n : n cardinal) (m : m cardinal) : (n, m) eq =
-  let Cardinal (lazy n) = n in
-  let Cardinal (lazy m) = m in
-  if not (Int.equal n m) then
+  let Cardinal n = n in
+  let Cardinal m = m in
+  if not (Int.equal (Lazy.force_val n) (Lazy.force_val m)) then
     invalid_arg "Indexing.equal_cardinal: not equal";
   Refl
 
 let check_equal_cardinal (type n m) (n : n cardinal) (m : m cardinal) : (n, m) eq option =
-  let Cardinal (lazy n) = n in
-  let Cardinal (lazy m) = m in
-  if Int.equal n m
+  let Cardinal n = n in
+  let Cardinal m = m in
+  if Int.equal (Lazy.force_val n) (Lazy.force_val m)
   then Some Refl
   else None
 
@@ -149,18 +149,19 @@ module Sum = struct
   end
 
   let cardinal (type l r)
-        (Cardinal (lazy l) : l cardinal)
-        (Cardinal (lazy r) : r cardinal)
+        (l : l cardinal)
+        (r : r cardinal)
       : (l, r) n cardinal =
-    let c = l + r in
+    let c = cardinal l + cardinal r in
     Cardinal (lazy c)
 
   let inj_l x = x
 
-  let inj_r (type l r) (Cardinal (lazy l) : l cardinal) (x : r index) =
-    l + x
+  let inj_r (type l r) (Cardinal l : l cardinal) (x : r index) =
+    Lazy.force_val l + x
 
-  let prj (type l r) (Cardinal (lazy l) : l cardinal) (x : (l, r) n index) : (l index, r index) either =
+  let prj (type l r) (Cardinal l : l cardinal) (x : (l, r) n index) : (l index, r index) either =
+    let l = Lazy.force_val l in
     if x < l then L x else R (x - l)
 
   let make (type l r) (l : l cardinal) (r : r cardinal) =
@@ -210,19 +211,21 @@ module Prod = struct
   end
 
   let cardinal (type l r)
-        (Cardinal (lazy l) : l cardinal)
+        (Cardinal l : l cardinal)
         (Cardinal r : r cardinal)
       : (l, r) n cardinal =
+    let l = Lazy.force_val l in
     if Lazy.is_val r then
-      let c = l * Lazy.force r in
+      let c = l * Lazy.force_val r in
       Cardinal (lazy c)
     else
-      Cardinal (lazy (l * Lazy.force r))
+      Cardinal (lazy (l * Lazy.force_val r))
 
-  let inj (type l) (Cardinal (lazy l) : l cardinal) lx rx =
-    lx + rx * l
+  let inj (type l) (Cardinal l : l cardinal) lx rx =
+    lx + rx * (Lazy.force_val l)
 
-  let prj (type l) (Cardinal (lazy l) : l cardinal) x =
+  let prj (type l) (Cardinal l : l cardinal) x =
+    let l = Lazy.force_val l in
     (x mod l, x / l)
 
   let make (type l r) (l : l cardinal) (r : r cardinal) =
@@ -316,15 +319,15 @@ module Vector = struct
   let empty : (Empty.n, _) t = Vector [||]
 
   let make (type n) (Cardinal n : n cardinal) x : (n, _) t =
-    Vector (Array.make (Lazy.force n) x)
+    Vector (Array.make (Lazy.force_val n) x)
 
   let make' (type n) (Cardinal n : n cardinal) f : (n, _) t=
-    match Lazy.force n with
+    match Lazy.force_val n with
     | 0 -> empty
     | n -> Vector (Array.make n (f()))
 
   let init (type n) (Cardinal n : n cardinal) f : (n, _) t=
-    Vector (Array.init (Lazy.force n) f)
+    Vector (Array.init (Lazy.force_val n) f)
 
   let map (type n) f (Vector a : (n, _) t) : (n, _) t =
     Vector (Array.map f a)
@@ -432,7 +435,7 @@ module Vector = struct
   let to_list (type n) (Vector a : (n, _) t) = Array.to_list a
 
   let cast_array (type n) (Cardinal n : n cardinal) arr : (n, _) t =
-    if Lazy.force n <> Array.length arr then
+    if Lazy.force_val n <> Array.length arr then
       invalid_arg "Vector.cast_array: incorrect length";
     Vector arr
 
