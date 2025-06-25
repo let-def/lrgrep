@@ -169,6 +169,56 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   stopwatch 2 "Closed LRC successors";
   {lr1_of; lrcs_of; all_wait; all_successors; reachable_from}
 
+let intset_bind s f =
+  IntSet.fold_right (fun acc x -> IntSet.union (f x) acc) IntSet.empty s
+
+(* Determinize *)
+let determinize (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
+  let table = Hashtbl.create 7 in
+  let todo = ref [] in
+  let visit lr1 classes =
+    let key = (lr1, classes) in
+    match Hashtbl.find_opt table key with
+    | Some () -> ()
+    | None ->
+      Hashtbl.add table key ();
+      push todo key;
+      ()
+  in
+  let propagate (lr1, classes) =
+    let post_classes = Reachability.Classes.for_lr1 lr1 in
+    IndexSet.iter (fun tr ->
+        let pre_classes = Reachability.Classes.pre_transition tr in
+        let mid_classes = Reachability.Classes.post_transition tr in
+        let node = Reachability.Tree.leaf tr in
+        let encode = Reachability.Cell.encode node in
+        let classes' =
+          intset_bind classes (fun post_index ->
+              let ca = post_classes.(post_index) in
+              match
+                Utils.Misc.array_findi
+                  (fun _ cb -> IndexSet.quick_subset ca cb) 0 mid_classes
+              with
+              | exception Not_found -> IntSet.empty
+              | post ->
+                IntSet.init_subset 0 (Array.length pre_classes - 1)
+                  (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
+            )
+        in
+        visit (Transition.source g tr) classes'
+      ) (Transition.predecessors g lr1)
+  in
+  IndexSet.iter (fun lr1 -> visit lr1 (IntSet.singleton 0)) (Lr1.wait g);
+  fixpoint ~propagate todo;
+  stopwatch 2 "Determinized Lrc wait: %d states\n" (Hashtbl.length table);
+  IndexSet.iter (fun lr1 ->
+      Array.iteri
+        (fun i _ -> visit lr1 (IntSet.singleton i))
+        (Reachability.Classes.for_lr1 lr1)
+    ) (Lr1.wait g);
+  fixpoint ~propagate todo;
+  stopwatch 2 "Determinized Lrc all: %d states\n" (Hashtbl.length table)
+
 (* Convert an LRC state to a string representation *)
 let to_string g t lrc =
   Printf.sprintf "%s/%d"

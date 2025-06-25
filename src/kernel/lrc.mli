@@ -14,6 +14,7 @@ type 'g t = {
 }
 
 val make : 'g grammar -> 'g Reachability.t -> 'g t
+val determinize : 'g grammar -> 'g Reachability.t -> unit
 val to_string : 'g grammar -> 'g t -> 'g n index -> string
 val set_to_string : 'g grammar -> 'g t -> 'g n indexset -> string
 
