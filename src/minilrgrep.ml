@@ -21,12 +21,17 @@ let usage () =
     Sys.argv.(0)
     Sys.argv.(0)
 
+let args = List.filter (function
+               | "-v" -> incr verbosity_level; false
+               | _ -> true
+             ) (List.tl (Array.to_list Sys.argv))
+
 (** Parse command line arguments for grammar and specification files *)
 let parse_arguments () =
-  match Sys.argv with
-  | [|_; "compile"; grammar_file; spec_file|] ->
+  match args with
+  | ["compile"; grammar_file; spec_file] ->
     (true, grammar_file, Some spec_file)
-  | [|_; "enumerate"; grammar_file|] ->
+  | ["enumerate"; grammar_file] ->
     (false, grammar_file, None)
   | _ ->
     usage ();
