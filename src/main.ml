@@ -32,8 +32,8 @@ Commands:
     -o <-|file>          Output file for the invalid sentences.
 
 Examples:
-  lrgrep -v grammar.cmly error.mlyl compile -o error.ml
-  lrgrep grammar.cmly error.mlyl interpret -i \"invalid sentence\"
+  lrgrep -v -g grammar.cmly -s error.mlyl compile -o error.ml
+  lrgrep -g grammar.cmly -s error.mlyl interpret -i \"invalid sentence\"
 "
 
 (*
@@ -50,8 +50,7 @@ let version = "LRgrep 1.0\n"
 
 let usage_error fmt =
   prerr_string "lrgrep: ";
-  Printf.kfprintf (fun _ -> prerr_newline (); exit 2) stderr fmt
-
+  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n%s" usage; exit 2) stderr fmt
 
 (* Quick'n'dirty argument parsing *)
 
