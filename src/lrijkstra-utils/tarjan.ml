@@ -285,3 +285,23 @@ end) = struct
       ) nodes
 end
 
+open Utils
+open Misc
+
+let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
+  fun s f ->
+  IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
+
+let close_relation (type n) (rel : (n, _) vector) =
+  let module Scc = IndexedSCC(struct
+                     type nonrec n = n
+                     let n = Vector.length rel
+                     let successors f i =
+                       Utils.IndexSet.iter f (Vector.get rel i)
+                   end)
+  in
+  Vector.rev_iteri (fun _scc nodes ->
+    let f i = indexset_bind rel.:(i) (Vector.get rel) in
+    let set = indexset_bind nodes f in
+    IndexSet.iter (fun i -> rel.:(i) <- set) nodes
+  ) Scc.nodes

@@ -191,6 +191,7 @@ let make (type g) (g : g grammar) : g t =
     )
   in
   let states = IndexBuffer.Gen.freeze states in
+  stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
   (* Compute the set reachable states (closure of successors). *)
   let reachable_from =
     let add_target acc step = IndexSet.add step.target acc in
@@ -202,7 +203,8 @@ let make (type g) (g : g grammar) : g t =
          add_targets (add_targets (IndexSet.singleton self) inner) outer)
       states
   in
-  close_relation reachable_from;
+  Tarjan.close_relation reachable_from;
+  stopwatch 2 "closed the big-step successors";
   (* Compute reachability for all steps of a reduction *)
   let rec process_steps = function
     | [] -> []
@@ -226,7 +228,7 @@ let make (type g) (g : g grammar) : g t =
   let initial = Vector.map process_steps initial in
   let config = Vector.map fst states in
   let transitions = Vector.map make_reduction_step states in
-  stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
+  stopwatch 2 "closed the small-step successors";
   {initial; reachable_from; config; transitions}
 
 let get_stack vr state =

@@ -195,12 +195,6 @@ let close_relation ?reverse rel =
   fix_relation rev rel
     ~propagate:(fun _ v _ v' -> IndexSet.union v v')
 
-let relation_closure ?reverse rel =
-  let rel = Vector.copy rel in
-  close_relation ?reverse rel;
-  rel
-
-
 (** Equality on indices *)
 let equal_index =
   (Int.equal : int -> int -> bool :> 'a index -> 'a index -> bool)

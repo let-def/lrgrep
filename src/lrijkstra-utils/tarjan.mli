@@ -93,3 +93,5 @@ sig
   val nodes : (n, G.n Utils.IndexSet.t) vector
   val component : (G.n, n index) vector
 end
+
+val close_relation : ('n, 'n Utils.IndexSet.t) vector -> unit
