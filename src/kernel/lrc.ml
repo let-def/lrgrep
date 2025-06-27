@@ -390,6 +390,8 @@ let check_equivalence g t1 t2 s1 s2 =
       push todo (path, s1, s2)
     )
   in
+  let p1 = relation_reverse (Vector.length t1.all_successors) t1.all_successors in
+  let p2 = relation_reverse (Vector.length t2.all_successors) t2.all_successors in
   schedule [] s1 s2;
   let propagate (path, s1, s2) =
     let m1 = transitions_of_states t1 s1 in
@@ -398,11 +400,13 @@ let check_equivalence g t1 t2 s1 s2 =
       begin match s1', s2' with
       | Some s1', Some s2' ->
         incr successes;
-        schedule (lr1 :: path) s1' s2'
+        schedule (lr1 :: path)
+          (IndexSet.bind s1' (Vector.get p1))
+          (IndexSet.bind s2' (Vector.get p2))
       | _ ->
         incr failures;
-        Printf.eprintf "Path %s is reachable only on %s side\n"
-          (Lr1.list_to_string g (List.rev (lr1 :: path)))
+        Printf.eprintf "Suffix %s is reachable only on %s side\n"
+          (Lr1.list_to_string g (lr1 :: path))
           (if Option.is_none s1' then "right" else "left")
       end;
       None
