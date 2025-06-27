@@ -309,6 +309,7 @@ let parser_name =
 module T = struct
   let compute_reachability () =
     let reachability = Kernel.Reachability.make grammar in
+    stopwatch 2 "Done with reachability";
     let lrc = Kernel.Lrc.make grammar reachability in
     (reachability, lrc)
 
