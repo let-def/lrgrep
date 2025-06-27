@@ -95,8 +95,8 @@ module Make
        type g
        val g : g grammar
        val viable : g Viable_reductions.t
-       val lrc_graph : g Lrc.t
-       val entrypoints : g Lrc.entrypoints
+       val lrc_graph : (g, g Lrc.n) Lrc.t
+       val entrypoints : g Lrc.n Lrc.entrypoints
      end)
     () : S with type g = X.g
 =
@@ -455,8 +455,8 @@ module FailureNFA
        type g
        val g : g grammar
        val viable : g Viable_reductions.t
-       val lrc_graph : g Lrc.t
-       val entrypoints : g Lrc.entrypoints
+       val lrc_graph : (g, g Lrc.n) Lrc.t
+       val entrypoints : g Lrc.n Lrc.entrypoints
      end)
     (Reach : S with type g = Reductions.g)
     ()

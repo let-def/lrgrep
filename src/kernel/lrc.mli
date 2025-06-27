@@ -5,26 +5,30 @@ open Info
 
 type 'g n
 
-type 'g t = {
-  lr1_of: ('g n, 'g lr1 index) vector;
-  lrcs_of: ('g lr1, 'g n indexset) vector;
-  all_wait: 'g n indexset;
-  all_successors: ('g n, 'g n indexset) vector;
-  reachable_from: ('g n, 'g n indexset) vector;
+type ('g, 'n) t = {
+  lr1_of: ('n, 'g lr1 index) vector;
+  lrcs_of: ('g lr1, 'n indexset) vector;
+  all_wait: 'n indexset;
+  all_leaf: 'n indexset;
+  all_successors: ('n, 'n indexset) vector;
+  reachable_from: ('n, 'n indexset) vector;
 }
 
-val make : 'g grammar -> 'g Reachability.t -> 'g t
-val determinize : 'g grammar -> 'g Reachability.t -> unit
-val to_string : 'g grammar -> 'g t -> 'g n index -> string
-val set_to_string : 'g grammar -> 'g t -> 'g n indexset -> string
+val make : 'g grammar -> 'g Reachability.t -> ('g, 'g n) t
+val to_string : 'g grammar -> ('g, 'g n) t -> 'g n index -> string
+val set_to_string : 'g grammar -> ('g, 'g n) t -> 'g n indexset -> string
 
-type 'g entrypoints = {
-  reachable: 'g n indexset;
-  wait: 'g n indexset;
-  entrypoints: 'g n indexset;
-  successors: ('g n, 'g n indexset) vector;
-  predecessors: ('g n, 'g n indexset) vector;
-  some_prefix: 'g n index -> 'g n index list;
+type 'n entrypoints = {
+  reachable: 'n indexset;
+  wait: 'n indexset;
+  entrypoints: 'n indexset;
+  successors: ('n, 'n indexset) vector;
+  predecessors: ('n, 'n indexset) vector;
+  some_prefix: 'n index -> 'n index list;
 }
 
-val from_entrypoints : 'g grammar -> 'g t -> 'g n indexset -> 'g entrypoints
+val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
+
+type 'g mlrc
+
+val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t
