@@ -431,6 +431,7 @@ let process_command = function
       | None ->
         usage_error "compile: expecting a specification (-s <spec.mlyl>)"
     in
+    Printf.eprintf "# Processing %s\n" (try Unix.realpath input_file with _ -> input_file);
     let output_file = match options.compile_output with
       | Some o -> o
       | None -> Filename.remove_extension input_file ^ ".ml"
