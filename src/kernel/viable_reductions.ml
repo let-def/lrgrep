@@ -81,17 +81,17 @@ type 'g t = {
 
 (* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
 let group_reductions (type g) (g : g grammar) =
-  let rec group depth : g reduction index list -> g reduction indexset list =
+  let rec group depth : g reduction index list -> g reduction index list list =
     function
     | [] -> []
     | red :: rest when depth = Production.length g (Reduction.production g red) ->
       begin match group depth rest with
-        | [] -> [IndexSet.singleton red]
+        | [] -> [[red]]
         | reds :: tail ->
-          IndexSet.add red reds :: tail
+          (red :: reds) :: tail
       end
     | otherwise ->
-      IndexSet.empty :: group (depth + 1) otherwise
+      [] :: group (depth + 1) otherwise
   in
   Vector.init (Lr1.cardinal g)
     (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 g lr1)))
@@ -119,7 +119,7 @@ let make (type g) (g : g grammar) : g t =
       index
   (* Visit all outgoing transitions of a given configuration. *)
   and visit_transitions config =
-    visit_inner config (Vector.get reductions config.top)
+    visit_inner config reductions.:(config.top)
   (* Follow inner transitions for a given configuration and list of reductions. *)
   and visit_inner config = function
     | [] -> ([], [])
@@ -141,7 +141,7 @@ let make (type g) (g : g grammar) : g t =
           let target = visit_config {top; rest; lookahead} in
           Some {target; lookahead; source=(); reduction=red}
       in
-      (List.filter_map process_goto (IndexSet.elements gotos) :: inner, outer)
+      (List.filter_map process_goto gotos :: inner, outer)
   (* Follow outer transitions for a given lookahead set,
      set of LR(1) states, and list of reductions. *)
   and visit_outers lookahead lr1_states = function
@@ -152,7 +152,7 @@ let make (type g) (g : g grammar) : g t =
   (* Helper function for visiting a single outer transition. *)
   and visit_outer lookahead lr1_states gotos next =
     let next = visit_outers lookahead lr1_states next in
-    let process_goto red acc =
+    let process_goto acc red =
       let lookahead =
         Terminal.intersect g lookahead (Reduction.lookaheads g red)
       in
@@ -160,31 +160,27 @@ let make (type g) (g : g grammar) : g t =
       else
         let lhs = Production.lhs g (Reduction.production g red) in
         let process_target source acc =
-          let target_lhs = Transition.find_goto_target g source lhs in
-          IndexMap.update target_lhs (function
-            | Some (sources, target) ->
-              Some (IndexSet.add source sources, target)
-            | None ->
-              let config = {
-                top = target_lhs;
-                rest = [];
-                lookahead;
-              } in
-              Some (IndexSet.singleton source, visit_config config)
-          ) acc
+          (source, Transition.find_goto_target g source lhs) :: acc
         in
-        let by_target = IndexSet.fold process_target lr1_states IndexMap.empty in
-        let add_target _ (source, target) acc =
-          {source; target; lookahead; reduction=red} :: acc
-        in
-        IndexMap.fold add_target by_target acc
+        IndexSet.fold process_target lr1_states []
+        |> List.sort (fun (s1,t1) (s2,t2) ->
+             let c = Index.compare t1 t2 in
+             if c <> 0 then c else Index.compare s1 s2)
+        |> merge_group
+           ~equal:Index.equal
+           ~group:(fun top sources ->
+             let config = {top; rest = []; lookahead} in
+             let source = IndexSet.of_list sources in
+             let target = visit_config config in
+             {source; target; lookahead; reduction=red}
+           )
     in
-    let gotos = IndexSet.fold process_goto gotos [] in
+    let gotos = List.fold_left process_goto [] gotos in
     gotos :: next
   in
   (* Compute the initial set of transitions for each LR(1) state. *)
   let initial = Vector.init (Lr1.cardinal g) (fun lr1 ->
-      match Vector.get reductions lr1 with
+      match reductions.:(lr1) with
       | [] -> []
       | gotos :: next ->
         visit_outer (Terminal.regular g) (IndexSet.singleton lr1) gotos next
@@ -215,10 +211,8 @@ let make (type g) (g : g grammar) : g t =
         | x :: _ -> x.reachable
       in
       let reachable =
-        List.fold_left (fun acc candidate ->
-            IndexSet.union acc
-              (Vector.get reachable_from candidate.target))
-          acc step
+        let add_reach acc c = IndexSet.union acc reachable_from.:(c.target) in
+        List.fold_left add_reach acc step
       in
       {reachable; goto_transitions=step} :: steps
   in
