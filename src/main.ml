@@ -335,7 +335,7 @@ let lrc_from_entrypoints =
         then Lr1.entrypoints grammar
         else from_entrypoints
       in
-      let lrcs = indexset_bind lr1s (Vector.get T.lrc.lrcs_of) in
+      let lrcs = IndexSet.bind lr1s (Vector.get T.lrc.lrcs_of) in
       let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 2 "Computed LRC subset reachable from entrypoints";

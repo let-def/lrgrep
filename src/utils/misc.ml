@@ -115,11 +115,6 @@ let index_fold n a f =
   Index.iter n (fun i -> a := f i !a);
   !a
 
-(** [indexset_bind s f] returns the union of all sets [f i] for [i] in [s] *)
-let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
-  fun s f ->
-  IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
-
 (* Vector get *)
 let (.:()) = Vector.get
 
@@ -128,18 +123,6 @@ let (.:()<-) = Vector.set
 
 (* Vector update cell *)
 let (.@()<-) v i f = v.:(i) <- f v.:(i)
-
-(*
-  (** [vector_set_add v i elt] adds element [elt] to the [i]'th set of [v],
-      a vector of sets. *)
-  let vector_set_add vec index value =
-    Vector.set vec index (IndexSet.add value (Vector.get vec index))
-
-  (** [vector_set_union v i set] adds elements of [set] to the [i]'th set of [v],
-      a vector of sets. *)
-  let vector_set_union vec index value =
-    Vector.set vec index (IndexSet.union value (Vector.get vec index))
-*)
 
 (** [tabulate_finset n f] tabulates function [f] over all indices in the
     finite set of cardinal [n] *)

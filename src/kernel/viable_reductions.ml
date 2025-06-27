@@ -147,7 +147,7 @@ let make (type g) (g : g grammar) : g t =
   and visit_outers lookahead lr1_states = function
     | [] -> []
     | gotos :: next ->
-      let lr1_states = indexset_bind lr1_states (Lr1.predecessors g) in
+      let lr1_states = IndexSet.bind lr1_states (Lr1.predecessors g) in
       visit_outer lookahead lr1_states gotos next
   (* Helper function for visiting a single outer transition. *)
   and visit_outer lookahead lr1_states gotos next =

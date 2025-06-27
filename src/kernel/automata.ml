@@ -344,7 +344,7 @@ module DFA = struct
               | None -> IndexSet.empty
               | Some stacks -> really_empty := false; stacks
             in
-            let stacks = indexset_bind label expand_stack in
+            let stacks = IndexSet.bind label expand_stack in
             if not !really_empty then
               let lazy (Fwd_mapping (_, t')) = target in
               if not (IndexSet.is_empty stacks) then

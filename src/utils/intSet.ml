@@ -514,3 +514,5 @@ and c addr mask q' i =
     c addr mask q' (i + 1)
   else
     fun () -> Seq.Cons (addr + i, c addr mask q' (i + 1))
+
+let bind m f = fold (fun elt acc -> union (f elt) acc) m empty

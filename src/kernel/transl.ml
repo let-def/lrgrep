@@ -331,7 +331,7 @@ let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
         IndexSet.union indices.by_items.:(Item.make g prod pos) acc)
       (matching_dots prod) IndexSet.empty
   in
-  indexset_bind prods matching_states
+  IndexSet.bind prods matching_states
 
 let compile_reduce_expr (type g) (g : g grammar) viable trie re =
   let open Info in

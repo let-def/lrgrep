@@ -167,7 +167,7 @@ struct
       let visit_goto_transition
           {Viable_reductions. target; lookahead=_; source=lr1s; reduction} =
         let compatible_lrc lr1 = IndexSet.inter lrcs lrc_graph.lrcs_of.:(lr1) in
-        let lrcs = indexset_bind lr1s compatible_lrc in
+        let lrcs = IndexSet.bind lr1s compatible_lrc in
         if IndexSet.is_empty lrcs
         then None
         else Some (visit_config lrcs (Source.inj_l target), reduction)
@@ -176,7 +176,7 @@ struct
       let rest =
         match rest with
         | [] -> []
-        | rest -> visit_outer (indexset_bind lrcs (Vector.get entrypoints.predecessors)) rest
+        | rest -> visit_outer (IndexSet.bind lrcs (Vector.get entrypoints.predecessors)) rest
       in
       candidates :: rest
 
@@ -487,7 +487,7 @@ struct
                   assert false
                 )
               ) x;
-            validate (indexset_bind lrcs (Vector.get entrypoints.predecessors)) xs
+            validate (IndexSet.bind lrcs (Vector.get entrypoints.predecessors)) xs
         in
         validate config.lrcs transitions
       in
@@ -560,8 +560,8 @@ struct
       (IndexBuffer.Gen.add suffix_transitions (IndexMap.empty, IndexSet.empty))
 
   let reach_transitions =
-    let preds lrcs = indexset_bind lrcs (Vector.get entrypoints.predecessors) in
-    let succs lrcs = indexset_bind lrcs (Vector.get entrypoints.successors) in
+    let preds lrcs = IndexSet.bind lrcs (Vector.get entrypoints.predecessors) in
+    let succs lrcs = IndexSet.bind lrcs (Vector.get entrypoints.successors) in
     let rec import lrcs = function
       | [] -> (IndexMap.empty, IndexSet.empty)
       | targets :: next ->
