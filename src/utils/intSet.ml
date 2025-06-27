@@ -124,16 +124,16 @@ let rec fold f s accu =
   | N ->
     accu
   | C (base, ss, qs) ->
-    loop f qs base ss accu
+    loop1 f qs base ss accu
 
-and loop f qs i ss accu =
+and loop1 f qs i ss accu =
   if ss = 0 then
     fold f qs accu
   else
     (* One could in principle check whether [ss land 0x3] is zero and if
        so move to [i + 2] and [ss lsr 2], and similarly for various sizes.
        In practice, this does not seem to make a measurable difference. *)
-    loop f qs (i + 1) (ss lsr 1) (if ss land 1 = 1 then f i accu else accu)
+    loop1 f qs (i + 1) (ss lsr 1) (if ss land 1 = 1 then f i accu else accu)
 
 let map f t =
   fold (fun x xs -> add (f x) xs) t empty
@@ -438,16 +438,16 @@ let init_interval i j =
     let word = (1 lsl (j - i + 1) - 1) lsl (i - addr) in
     C (addr, word, N)
   else
-    let rec loop acc addr =
+    let rec loop2 acc addr =
       if addr <= i
       then C (addr, -1 lsl (i - addr), acc)
-      else loop (C (addr, -1, acc)) (addr - word_size)
+      else loop2 (C (addr, -1, acc)) (addr - word_size)
     in
-    loop (C (addr, (-1) lsr (word_size - (j - addr + 1)), N)) (addr - word_size)
+    loop2 (C (addr, (-1) lsr (word_size - (j - addr + 1)), N)) (addr - word_size)
 
 let init_subset i j f =
   let i, j = if i < j then i, j else j, i in
-  let rec loop i addr =
+  let rec loop3 i addr =
     if addr > j then N else
       let addr' = addr + word_size in
       let k = if j < addr' then j else (addr' - 1) in
@@ -457,10 +457,10 @@ let init_subset i j f =
       done;
       let word = !word in
       if word = 0
-      then loop addr' addr'
-      else C (addr, word, loop addr' addr')
+      then loop3 addr' addr'
+      else C (addr, word, loop3 addr' addr')
   in
-  loop i (i - i mod word_size)
+  loop3 i (i - i mod word_size)
 
 let rec filter f = function
   | N -> N
