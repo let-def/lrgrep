@@ -372,3 +372,43 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
   {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
+
+let transitions_of_states t ss =
+  IndexSet.fold
+    (fun s acc -> IndexMap.update t.lr1_of.:(s) (add_update s) acc)
+    ss IndexMap.empty
+
+let check_equivalence g t1 t2 s1 s2 =
+  let table = Hashtbl.create 7 in
+  let successes = ref 0 in
+  let failures = ref 0 in
+  let todo = ref [] in
+  let schedule path s1 s2 =
+    let key = (s1, s2) in
+    if not (Hashtbl.mem table key) then (
+      Hashtbl.add table key ();
+      push todo (path, s1, s2)
+    )
+  in
+  schedule [] s1 s2;
+  let propagate (path, s1, s2) =
+    let m1 = transitions_of_states t1 s1 in
+    let m2 = transitions_of_states t2 s2 in
+    let merge lr1 s1' s2' =
+      begin match s1', s2' with
+      | Some s1', Some s2' ->
+        incr successes;
+        schedule (lr1 :: path) s1' s2'
+      | _ ->
+        incr failures;
+        Printf.eprintf "Path %s is reachable only on %s side\n"
+          (Lr1.list_to_string g (List.rev (lr1 :: path)))
+          (if Option.is_none s1' then "right" else "left")
+      end;
+      None
+    in
+    ignore (IndexMap.merge merge m1 m2)
+  in
+  fixpoint ~propagate todo;
+  Printf.eprintf "Tested %d successful paths, %d failing paths\n"
+    !successes !failures

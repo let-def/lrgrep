@@ -92,6 +92,11 @@ let cons_update x = function
   | None -> Some [x]
   | Some xs -> Some (x :: xs)
 
+(** A function for adding an element to a set when using Map.update *)
+let add_update x = function
+  | None -> Some (IndexSet.singleton x)
+  | Some y -> Some (IndexSet.add x y)
+
 (** A function for unioning sets when using Map.update *)
 let union_update x = function
   | None -> Some x

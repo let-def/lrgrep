@@ -32,3 +32,5 @@ val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
 type 'g mlrc
 
 val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t
+
+val check_equivalence : 'g grammar -> ('g, 'n1) t -> ('g, 'n2) t -> 'n1 indexset -> 'n2 indexset -> unit

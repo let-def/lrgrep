@@ -310,7 +310,9 @@ module T = struct
   let compute_reachability () =
     let reachability = Kernel.Reachability.make grammar in
     stopwatch 2 "Done with reachability";
-    let lrc = Kernel.Lrc.make grammar reachability in
+    let lrc' = Kernel.Lrc.make grammar reachability in
+    let lrc = Kernel.Lrc.make_minimal grammar reachability in
+    Kernel.Lrc.check_equivalence grammar lrc' lrc lrc'.all_wait lrc.all_wait;
     (reachability, lrc)
 
   let d = match Sys.getenv_opt "SINGLE" with
