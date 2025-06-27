@@ -56,11 +56,9 @@ let label_to_short_string g label =
     let filter =
       label
       |> IndexSet.to_seq
-      |> Seq.take 5
+      |> Seq.map (Lr1.to_string g)
       |> List.of_seq
-      |> List.map (Lr1.to_string g)
     in
-    let filter = if List.length filter = 5 then filter @ ["..."] else filter in
     String.concat "|" filter
 
 let string_of_cap (i : Capture.t) =
@@ -81,7 +79,7 @@ module NFA = struct
     | K.Accept -> true
     | _ -> false
 
-  let dump g ?(only_forced=false) t oc =
+  let dump g ?(only_forced=true) t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     p "  node[shape=rect];\n";
