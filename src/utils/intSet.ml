@@ -222,7 +222,14 @@ let quick_subset s1 s2 =
     quick_subset a1 ss1 s2
 
 let mem i s =
-  subset (singleton i) s
+  let ioffset = i mod word_size in
+  let iaddr = i - ioffset and imask = 1 lsl ioffset in
+  let rec loop4 = function
+    | C (a, _, qs) when a < iaddr -> loop4 qs
+    | C (a, ss, _) when a = iaddr -> ss land imask != 0
+    | _ -> false
+  in
+  loop4 s
 
 let rec union s1 s2 =
   match s1, s2 with
