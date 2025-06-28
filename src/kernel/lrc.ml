@@ -336,6 +336,7 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let table = Hashtbl.create 7 in
   let todo = ref [] in
   let visit lr1 classes =
+    assert (not (IntSet.is_empty classes));
     let key = (lr1, classes) in
     match Hashtbl.find_opt table key with
     | Some index -> index
@@ -366,25 +367,26 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
                   (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
             )
         in
-        ignore (Gen.add transitions (index, visit (Transition.source g tr) classes'))
+        if not (IntSet.is_empty classes') then
+          ignore (Gen.add transitions (index, visit (Transition.source g tr) classes'))
       ) (Transition.predecessors g lr1)
   in
   let fast_map s f =
     let l = IndexSet.fold (fun x acc -> match f x with None -> acc | Some y -> y :: acc) s [] in
     IndexSet.of_list l
   in
-  let all_wait = fast_map (Lr1.wait g) (fun lr1 -> Some (visit lr1 (IntSet.singleton 0))) in
+  let visit_state lr1 =
+    let len = Array.length (Reachability.Classes.for_lr1 lr1) in
+    if len > 0 then
+      let set = IntSet.init_interval 0 (len - 1) in
+      Some (visit lr1 set)
+    else
+      None
+  in
+  let all_wait = fast_map (Lr1.wait g) visit_state in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc wait: %d states" (Hashtbl.length table);
-  let all_leaf = fast_map (Lr1.all g) (fun lr1 ->
-                     let len = Array.length (Reachability.Classes.for_lr1 lr1) in
-                     if len > 0 then
-                       let set = IntSet.init_interval 0 (len - 1) in
-                       Some (visit lr1 set)
-                     else
-                       None
-                   )
-  in
+  let all_leaf = fast_map (Lr1.all g) visit_state in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
   let module Min =
