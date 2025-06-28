@@ -310,6 +310,7 @@ module T = struct
   let compute_reachability () =
     let reachability = Kernel.Reachability.make grammar in
     stopwatch 2 "Done with reachability";
+    Kernel.Lrc.check_deterministic grammar reachability;
     let lrc = Kernel.Lrc.make grammar reachability in
     (*let lrc' = Kernel.Lrc.make_deterministic grammar reachability in*)
     let lrc' = Kernel.Lrc.make_minimal grammar reachability in

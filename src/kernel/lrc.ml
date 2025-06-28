@@ -246,29 +246,20 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
 
 (* Alternative formulation with minimization *)
 
-module Dlrc = Unsafe_cardinal()
-type 'g dlrc = 'g Dlrc.t
-
-let make_deterministic (type g) (g : g grammar) ((module Reachability) : g Reachability.t) : (g, g dlrc) t =
-  let open IndexBuffer in
-  let module State = Gen.Make() in
-  let module Transitions = Gen.Make() in
-  let states = State.get_generator () in
-  let transitions = Transitions.get_generator () in
-  let table = Hashtbl.create 7 in
+let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let todo = ref [] in
-  let visit lr1 classes =
+  let table = Hashtbl.create 7 in
+  let visit path lr1 classes =
+    assert (not (IntSet.is_empty classes));
     let key = (lr1, classes) in
-    match Hashtbl.find_opt table key with
-    | Some index -> index
-    | None ->
-      let index = Gen.add states key in
-      Hashtbl.add table key index;
-      push todo index;
-      index
+    let path = key :: path in
+    if not (Hashtbl.mem table key) then (
+      Hashtbl.add table key ();
+      push todo path
+    )
   in
-  let propagate index =
-    let (lr1, classes) = Gen.get states index in
+  let propagate path =
+    let (lr1, classes) = List.hd path in
     let post_classes = Reachability.Classes.for_lr1 lr1 in
     IndexSet.iter (fun tr ->
         let pre_classes = Reachability.Classes.pre_transition tr in
@@ -276,53 +267,37 @@ let make_deterministic (type g) (g : g grammar) ((module Reachability) : g Reach
         let node = Reachability.Tree.leaf tr in
         let encode = Reachability.Cell.encode node in
         let classes' =
-          IntSet.bind classes (fun post_index ->
-              let ca = post_classes.(post_index) in
-              match
-                Utils.Misc.array_findi
-                  (fun _ cb -> IndexSet.quick_subset ca cb) 0 mid_classes
-              with
-              | exception Not_found -> IntSet.empty
-              | post ->
-                IntSet.init_subset 0 (Array.length pre_classes - 1)
-                  (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
-            )
+          IntSet.bind classes @@ fun post_index ->
+          let ca = post_classes.(post_index) in
+          match
+            Utils.Misc.array_findi
+              (fun _ cb -> IndexSet.subset ca cb) 0 mid_classes
+          with
+          | exception Not_found -> IntSet.empty
+          | post ->
+            IntSet.init_subset 0 (Array.length pre_classes - 1)
+              (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
         in
-        ignore (Gen.add transitions (index, visit (Transition.source g tr) classes'))
+        if IntSet.is_empty classes' then
+          Printf.eprintf "Found dead-end: %s@{%d/%d} -> %s\n"
+            (Lr1.to_string g (Transition.source g tr))
+            0 (Array.length (Reachability.Classes.for_lr1 (Transition.source g tr)))
+            (string_concat_map " -> "
+               (fun (lr1,classes) ->
+                  Lr1.to_string g lr1 ^
+                  "@{" ^ string_of_int (IntSet.cardinal classes) ^ "}")
+               path)
+        else
+          visit path (Transition.source g tr) classes'
       ) (Transition.predecessors g lr1)
   in
-  let fast_map s f =
-    let l = IndexSet.fold (fun x acc -> match f x with None -> acc | Some y -> y :: acc) s [] in
-    IndexSet.of_list l
-  in
-  let all_wait = fast_map (Lr1.wait g) (fun lr1 -> Some (visit lr1 (IntSet.singleton 0))) in
+  Index.iter (Lr1.cardinal g) (fun lr1 ->
+      let len = Array.length (Reachability.Classes.for_lr1 lr1) in
+      if len > 0 then
+        visit [] lr1 (IntSet.init_interval 0 (len - 1))
+    );
   fixpoint ~propagate todo;
-  stopwatch 2 "Determinized Lrc wait: %d states" (Hashtbl.length table);
-  let all_leaf = fast_map (Lr1.all g) (fun lr1 ->
-                     let len = Array.length (Reachability.Classes.for_lr1 lr1) in
-                     if len > 0 then
-                       let set = IntSet.init_interval 0 (len - 1) in
-                       Some (visit lr1 set)
-                     else
-                       None
-                   )
-  in
-  fixpoint ~propagate todo;
-  stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
-  let lr1_of = Gen.freeze_map states (fun _ (lr1, _) -> lr1) in
-  let lrcs_of = Vector.make (Lr1.cardinal g) IndexSet.empty in
-  Vector.rev_iteri (fun lrc lr1 -> lrcs_of.@(lr1) <- IndexSet.add lrc)
-    lr1_of;
-  let all_successors = Vector.make State.n IndexSet.empty in
-  Index.rev_iter Transitions.n
-    (fun tr ->
-      let src, tgt = Gen.get transitions tr in
-      all_successors.@(tgt) <- IndexSet.add src);
-  let open Dlrc.Eq(struct type t = g include State end) in
-  let Refl = eq in
-  let reachable_from = Vector.copy all_successors in
-  Tarjan.close_relation reachable_from;
-  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
+  stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table)
 
 module Mlrc = Unsafe_cardinal()
 type 'g mlrc = 'g Mlrc.t
@@ -389,10 +364,52 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let all_leaf = fast_map (Lr1.all g) visit_state in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
+  if false then
+  begin
+    let predecessors = Vector.make State.n IndexSet.empty in
+    Index.rev_iter Transitions.n
+      (fun tr ->
+         let src, tgt = Gen.get transitions tr in
+         predecessors.@(src) <- IndexSet.add tgt);
+    let print_st st =
+      let lr1 = fst (Gen.get states st) in
+      "LRC" ^ string_of_index st ^ " (" ^ Lr1.to_string g lr1 ^ ")"
+    in
+    let rec find_path next = function
+      | (st, path) :: rest ->
+        let lr1 = fst (Gen.get states st) in
+        let path = st :: path in
+        if IndexSet.mem lr1 (Lr1.entrypoints g) then
+          Printf.eprintf "Path from 165: %s\n" (string_concat_map " -> " print_st (List.rev path));
+        let next =
+          IndexSet.fold (fun st' next -> (st', path) :: next)
+            predecessors.:(st) next
+        in
+        predecessors.:(st) <- IndexSet.empty;
+        find_path next rest
+      | [] ->
+        match next with
+        | [] -> ()
+        | curr -> find_path [] curr
+    in
+    find_path [] [Index.of_int State.n 165, []]
+  end;
+  (*IndexSet.iter (fun st ->
+      Printf.eprintf "lrc%d has label %s\n" (Index.to_int st) (Lr1.to_string g (fst (Gen.get states st)))
+    ) all_wait;*)
+  (*Hashtbl.iter (fun (lr1, classes) state ->
+      if IndexSet.mem lr1 (Lr1.entrypoints g) then (
+        Printf.eprintf
+          "LRC%d represent entrypoint %s with classes %s (lr1 has %d classes)\n"
+          (Index.to_int state)
+          (Lr1.to_string g lr1)
+          (string_concat_map ~wrap:("{","}") "," string_of_int (IntSet.elements classes))
+          (Array.length (Reachability.Classes.for_lr1 lr1))
+      )
+    ) table;*)
   let module Min =
     Valmari.Minimize(struct
         type t = g lr1 index
-        let compare =  Index.compare
         let compare = Index.compare
       end)(struct
         let source tr = fst (Gen.get transitions tr)
@@ -403,7 +420,9 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
 
         let finals f =
           IndexSet.iter (fun lr1 ->
-              f (Hashtbl.find table (lr1, IntSet.singleton 0))
+              let state = (Hashtbl.find table (lr1, IntSet.singleton 0)) in
+              (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
+              f state
             ) (Lr1.entrypoints g)
 
         let refinements f =
@@ -439,7 +458,6 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
     );
   let all_wait = IndexSet.filter_map Min.transport_state all_wait in
   let all_leaf = IndexSet.filter_map Min.transport_state all_leaf in
-  (*let predecessors = Vector.make Min.states IndexSet.empty in*)
   let all_successors = Vector.make Min.states IndexSet.empty in
   Index.rev_iter Min.transitions
     (fun tr -> all_successors.@(Min.target tr) <- IndexSet.add (Min.source tr));
@@ -450,19 +468,6 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
-  (*let lr1_of = Gen.freeze_map states (fun _ (lr1, _) -> lr1) in
-  let lrcs_of = Vector.make (Lr1.cardinal g) IndexSet.empty in
-  Vector.rev_iteri (fun lrc lr1 -> lrcs_of.@(lr1) <- IndexSet.add lrc)
-    lr1_of;
-  let all_successors = Vector.make State.n IndexSet.empty in
-  Index.rev_iter Transitions.n
-    (fun tr ->
-      let src, tgt = Gen.get transitions tr in
-      all_successors.@(tgt) <- IndexSet.add src);
-  let open Mlrc.Eq(struct type t = g include State end) in
-  let Refl = eq in
-  let reachable_from = Vector.copy all_successors in
-  Tarjan.close_relation reachable_from;*)
   {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
 
 let transitions_of_states t ss =
@@ -543,16 +548,20 @@ let check_equivalence g t1 t2 s1 s2 =
           (IndexSet.bind s2' (Vector.get pred2))
       | _ ->
         incr failures;
-        Printf.eprintf "Suffix %s is reachable only on %s side (%s)\n"
-          (Lr1.list_to_string g (lr1 :: path))
-          (if Option.is_none s1' then "right" else "left")
-          (match s1', s2' with
-          | Some s1', _ ->
-            Lr1.list_to_string g (List.map (Vector.get t1.lr1_of) prefix1.:(IndexSet.choose s1'))
-          | _, Some s2' ->
-            Lr1.list_to_string g (List.map (Vector.get t2.lr1_of) prefix2.:(IndexSet.choose s2'))
+        let p l =
+          Printf.eprintf "Suffix %s is reachable only on %s side (%s)\n"
+            (Lr1.list_to_string g (lr1 :: path))
+            (if Option.is_none s1' then "right" else "left")
+            (Lr1.list_to_string g l)
+        in
+        let l =
+          match s1', s2' with
+          | Some s1', _ -> List.map (Vector.get t1.lr1_of) prefix1.:(IndexSet.choose s1')
+          | _, Some s2' -> List.map (Vector.get t2.lr1_of) prefix2.:(IndexSet.choose s2')
           | _ -> assert false
-          )
+        in
+        if l <> [] then
+          p l
       end;
       None
     in

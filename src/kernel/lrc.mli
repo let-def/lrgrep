@@ -29,8 +29,7 @@ type 'n entrypoints = {
 
 val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
 
-type 'g dlrc
-val make_deterministic : 'g grammar -> 'g Reachability.t -> ('g, 'g dlrc) t
+val check_deterministic : 'g grammar -> 'g Reachability.t -> unit
 
 type 'g mlrc
 val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t
