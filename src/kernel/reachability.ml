@@ -877,8 +877,7 @@ let make (type g) (g : g grammar) : g t = (module struct
       (* Store enough information with each node of the tree to compute
          which cells are affected if a cell of this node changes.
 
-         Because of sharing, a node can have multiple parents.
-      *)
+         Because of sharing, a node can have multiple parents. *)
       Vector.make Tree.n []
 
     let () =
@@ -1153,7 +1152,8 @@ let make (type g) (g : g grammar) : g t = (module struct
            (fun gtc -> incr count; min := Int.min (Analysis.cost (Cell.of_goto gtc)) !min);
          if !min = max_int then
            let tr = Transition.of_goto g gt in
-           Printf.eprintf "unreachable goto transition: %s -> %s (%dx%d=%d candidate paths)\n"
+           Printf.eprintf "unreachable goto transition (id:%d): %s -> %s (%dx%d=%d classes)\n"
+             (gt :> int)
              (Lr1.to_string g (Transition.source g tr))
              (Lr1.to_string g (Transition.target g tr))
              (Array.length (Classes.for_lr1 (Transition.source g tr)))
@@ -1174,19 +1174,42 @@ let make (type g) (g : g grammar) : g t = (module struct
            List.iteri begin fun j (red, n) ->
              let pre_classes = Array.length (Tree.pre_classes n) in
              let post_classes = Array.length (Tree.post_classes n) in
-             Printf.eprintf "- reduction %d: %s with candidates"
+             Printf.eprintf "- reduction %d: %s"
                (j + 1) (production_to_string g red.production);
              let encode = Cell.encode n in
-             for pre = 0 to pre_classes - 1 do
-               for post = 0 to post_classes - 1 do
-                 let c = Analysis.cost (encode ~pre ~post) in
-                 if c = max_int then
-                   Printf.eprintf " _"
-                 else
-                   Printf.eprintf " %d" c
+             let candidates = ref [] in
+             for pre = pre_classes - 1 downto 0 do
+               for post = post_classes - 1 downto 0 do
+                 if Analysis.cost (encode ~pre ~post) <> max_int then
+                   push candidates (pre, post)
                done
              done;
-             Printf.eprintf "\n"
+             match !candidates with
+             | [] ->
+               Printf.eprintf " without candidates\n";
+             | candidates ->
+               Printf.eprintf " with candidates";
+               List.iter (fun (pre, post) ->
+                   Printf.eprintf " (%d,%d, cell:%d)" pre post (encode ~pre ~post :> int)
+                 ) candidates;
+               Printf.eprintf "\n";
+               List.iter begin function
+                 | Reverse_dependencies.Leaf (gt', pre, post) ->
+                   if gt = gt' then
+                     Printf.eprintf "  found a reverse dependency with pre classes %s and post classes %s\n"
+                       (match pre with
+                        | Pre_identity ->
+                          string_concat_map ~wrap:("[","]") ","
+                            (fun (x,_) -> string_of_int x) candidates
+                        | Pre_singleton i -> "=" ^ string_of_int i)
+                       (string_concat_map ", "
+                          (fun (_, post_index) ->
+                             string_concat_map ~wrap:("[","]") "," string_of_int
+                               (Array.to_list post.(post_index))
+                          ) candidates)
+                 | Reverse_dependencies.Inner (_parent, _infix) ->
+                   ()
+               end Reverse_dependencies.occurrences.:(n);
            end non_nullable
       )
 end)
