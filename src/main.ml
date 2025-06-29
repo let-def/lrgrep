@@ -267,7 +267,11 @@ let () = stopwatch 1 "Loaded file %s" grammar_filename
 open Kernel.Info
 include Lift(Grammar)
 
-let () = stopwatch 1 "Imported grammar"
+let () = stopwatch 1 "Imported grammar (%d terminals, %d non-terminals, %d lr0 states, %d lr1 states)"
+    Grammar.Terminal.count
+    Grammar.Nonterminal.count
+    Grammar.Lr0.count
+    Grammar.Lr1.count
 
 (* Load and parse specification, if any *)
 
