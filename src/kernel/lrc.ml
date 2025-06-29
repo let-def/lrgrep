@@ -321,16 +321,35 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
       push todo index;
       index
   in
-  let propagate index =
-    let (lr1, classes) = Gen.get states index in
+  let propagate source =
+    let (lr1, post_class_indexes) = Gen.get states source in
     let post_classes = Reachability.Classes.for_lr1 lr1 in
     IndexSet.iter (fun tr ->
         let pre_classes = Reachability.Classes.pre_transition tr in
-        let mid_classes = Reachability.Classes.post_transition tr in
         let node = Reachability.Tree.leaf tr in
         let encode = Reachability.Cell.encode node in
-        let classes' =
-          IntSet.bind classes (fun post_index ->
+        let mid_classes = Reachability.Classes.post_transition tr in
+        let pre_class_indexes =
+          match Transition.split g tr with
+          | R shift ->
+            (* Shift transition *)
+            assert (Array.length mid_classes = 1);
+            assert (mid_classes.(0) == Terminal.all g);
+            let term = Transition.shift_symbol g shift in
+            begin match
+                Utils.Misc.array_findi
+                  (fun _ cb -> IndexSet.mem term cb) 0 pre_classes
+              with
+              | exception Not_found -> IntSet.empty
+              | pre ->
+                if Reachability.Analysis.cost (encode ~pre ~post:0) < max_int then
+                  IntSet.singleton pre
+                else
+                  IntSet.empty
+            end
+          | L _ ->
+            (* Goto transition *)
+            IntSet.bind post_class_indexes begin fun post_index ->
               let ca = post_classes.(post_index) in
               match
                 Utils.Misc.array_findi
@@ -340,10 +359,11 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
               | post ->
                 IntSet.init_subset 0 (Array.length pre_classes - 1)
                   (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
-            )
+            end
         in
-        if not (IntSet.is_empty classes') then
-          ignore (Gen.add transitions (index, visit (Transition.source g tr) classes'))
+        if not (IntSet.is_empty pre_class_indexes) then
+          let target = visit (Transition.source g tr) pre_class_indexes in
+          ignore (Gen.add transitions (source, target))
       ) (Transition.predecessors g lr1)
   in
   let fast_map s f =

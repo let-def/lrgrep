@@ -390,9 +390,9 @@ let make (type g) (g : g grammar) : g t = (module struct
        [pre_transition tr] indexes the rows of cost matrix for [tr].
     *)
     let pre_transition tr =
-      match Symbol.desc g (Transition.symbol g tr) with
-      | T t -> t_singletons.:(t)
-      | N _ -> for_lr1 (Transition.source g tr)
+      match Transition.split g tr with
+      | L _goto -> for_lr1 (Transition.source g tr)
+      | R shift -> t_singletons.:(Transition.shift_symbol g shift)
 
     (* Just after taking a transition [tr], the lookahead has to belong to
        one of the classes in [post_transition tr].
