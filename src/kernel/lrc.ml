@@ -247,6 +247,23 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
 (* Alternative formulation with minimization *)
 
 let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
+  let prefix = Vector.make (Lr1.cardinal g) [] in
+  let rec loop next = function
+    | [] -> if not (List.is_empty next) then loop [] next
+    | xs :: xxs ->
+      let x = List.hd xs in
+      let next =
+        if List.is_empty prefix.:(x)
+        then (
+          prefix.:(x) <- xs;
+          IndexSet.fold
+            (fun tr next -> (Transition.target g tr :: xs) :: next)
+            (Transition.successors g x) next
+        ) else next
+      in
+      loop next xxs
+  in
+  loop [] (List.map (fun x -> [x]) (IndexSet.elements (Lr1.entrypoints g)));
   let todo = ref [] in
   let table = Hashtbl.create 7 in
   let visit path lr1 classes =
