@@ -267,46 +267,76 @@ let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reac
   let todo = ref [] in
   let table = Hashtbl.create 7 in
   let visit path lr1 classes =
-    assert (not (IntSet.is_empty classes));
     let key = (lr1, classes) in
     let path = key :: path in
-    if not (Hashtbl.mem table key) then (
-      Hashtbl.add table key ();
-      push todo path
-    )
+    let print_class cl =
+      if cl == Terminal.all g then
+        "T"
+      else
+        string_concat_map ~wrap:("{","}") ","
+          (Terminal.to_string g)
+          (List.rev (IndexSet.elements cl))
+    in
+    let print (lr1, classes) =
+      let all_classes = Reachability.Classes.for_lr1 lr1 in
+      Printf.sprintf "%s@{%s}"
+        (Lr1.to_string g lr1)
+        (string_concat_map ", "
+           (fun i -> print_class all_classes.(i))
+           (IntSet.elements classes))
+    in
+    if IntSet.is_empty classes then
+      Printf.eprintf "Found dead-end: %s\n prefix: %s\n starting classes: %s\n"
+        (string_concat_map " -> " print path)
+        (Lr1.list_to_string g (List.rev (List.tl prefix.:(lr1))))
+        (let top, _ = List.hd (List.rev path) in
+         string_concat_map ~wrap:("{","}") ","
+           print_class
+           (Array.to_list (Reachability.Classes.for_lr1 top))
+        )
+    else
+      if not (Hashtbl.mem table key) then (
+        Hashtbl.add table key ();
+        push todo path
+      )
   in
   let propagate path =
-    let (lr1, classes) = List.hd path in
-    let post_classes = Reachability.Classes.for_lr1 lr1 in
-    IndexSet.iter (fun tr ->
-        let pre_classes = Reachability.Classes.pre_transition tr in
-        let mid_classes = Reachability.Classes.post_transition tr in
-        let node = Reachability.Tree.leaf tr in
-        let encode = Reachability.Cell.encode node in
-        let classes' =
-          IntSet.bind classes @@ fun post_index ->
-          let ca = post_classes.(post_index) in
-          match
+    let (target, post_class_indices) = List.hd path in
+    IndexSet.iter begin fun tr ->
+      let source = Transition.source g tr in
+      let node = Reachability.Tree.leaf tr in
+      let encode = Reachability.Cell.encode node in
+      let pre_classes = Reachability.Classes.for_lr1 source in
+      let pre_class_indices =
+        match Transition.split g tr with
+        | R sh ->
+          let term = Transition.shift_symbol g sh in
+          let pre =
             Utils.Misc.array_findi
-              (fun _ cb -> IndexSet.subset ca cb) 0 mid_classes
-          with
-          | exception Not_found -> IntSet.empty
-          | post ->
-            IntSet.init_subset 0 (Array.length pre_classes - 1)
-              (fun pre -> Reachability.Analysis.cost (encode ~pre ~post) < max_int)
-        in
-        if IntSet.is_empty classes' then
-          Printf.eprintf "Found dead-end: %s@{%d/%d} -> %s\n"
-            (Lr1.to_string g (Transition.source g tr))
-            0 (Array.length (Reachability.Classes.for_lr1 (Transition.source g tr)))
-            (string_concat_map " -> "
-               (fun (lr1,classes) ->
-                  Lr1.to_string g lr1 ^
-                  "@{" ^ string_of_int (IntSet.cardinal classes) ^ "}")
-               path)
-        else
-          visit path (Transition.source g tr) classes'
-      ) (Transition.predecessors g lr1)
+              (fun _ cb -> IndexSet.mem term cb)
+              0 pre_classes
+          in
+          if Reachability.Analysis.cost (encode ~pre ~post:0) < max_int then
+            IntSet.singleton pre
+          else
+            IntSet.empty
+        | L gt ->
+          let post_classes = Reachability.Classes.for_lr1 target in
+          let mid_classes = Reachability.Classes.for_edge gt in
+          IntSet.bind post_class_indices begin fun post_index ->
+            let ca = post_classes.(post_index) in
+            match
+              Utils.Misc.array_findi
+                (fun _ cb -> IndexSet.quick_subset ca cb) 0 mid_classes
+            with
+            | exception Not_found -> IntSet.empty
+            | mid_index ->
+              IntSet.init_subset 0 (Array.length pre_classes - 1)
+                (fun pre -> Reachability.Analysis.cost (encode ~pre ~post:mid_index) < max_int)
+          end
+      in
+      visit path source pre_class_indices
+    end (Transition.predecessors g target)
   in
   Index.iter (Lr1.cardinal g) (fun lr1 ->
       let len = Array.length (Reachability.Classes.for_lr1 lr1) in
