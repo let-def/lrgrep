@@ -1143,4 +1143,50 @@ let make (type g) (g : g grammar) : g t = (module struct
     let cost = Vector.get Solver.costs
     let finite = Solver.Finite.get
   end
+
+  let () =
+    Index.iter (Transition.goto g)
+      (fun gt ->
+         let min = ref max_int in
+         let count = ref 0 in
+         Cell.iter_goto gt
+           (fun gtc -> incr count; min := Int.min (Analysis.cost (Cell.of_goto gtc)) !min);
+         if !min = max_int then
+           let tr = Transition.of_goto g gt in
+           Printf.eprintf "unreachable goto transition: %s -> %s (%dx%d=%d candidate paths)\n"
+             (Lr1.to_string g (Transition.source g tr))
+             (Lr1.to_string g (Transition.target g tr))
+             (Array.length (Classes.for_lr1 (Transition.source g tr)))
+             (Array.length (Classes.for_edge gt))
+             !count;
+           let terminals set =
+             string_concat_map ~wrap:("{","}") ", "
+               (Terminal.to_string g)
+               (List.rev (IndexSet.elements set))
+           in
+           let production_to_string g p =
+             Nonterminal.to_string g (Production.lhs g p) ^ ": " ^
+             string_concat_map " " (Symbol.name g)
+               (Array.to_list (Production.rhs g p))
+           in
+           let {Tree. nullable_lookaheads; nullable=_; non_nullable} = Tree.goto_equations gt in
+           Printf.eprintf "- nullable for %s\n" (terminals nullable_lookaheads);
+           List.iteri begin fun j (red, n) ->
+             let pre_classes = Array.length (Tree.pre_classes n) in
+             let post_classes = Array.length (Tree.post_classes n) in
+             Printf.eprintf "- reduction %d: %s with candidates"
+               (j + 1) (production_to_string g red.production);
+             let encode = Cell.encode n in
+             for pre = 0 to pre_classes - 1 do
+               for post = 0 to post_classes - 1 do
+                 let c = Analysis.cost (encode ~pre ~post) in
+                 if c = max_int then
+                   Printf.eprintf " _"
+                 else
+                   Printf.eprintf " %d" c
+               done
+             done;
+             Printf.eprintf "\n"
+           end non_nullable
+      )
 end)
