@@ -84,6 +84,78 @@ let reduce_closures (type g) (g : g grammar) : g reduce_closures =
   let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
   {reductions = group_reductions g items; stacks}
 
+module Inner = Unsafe_cardinal()
+type 'g inner = 'g Inner.t
+
+type ('g, 'n) states = ('g lr1, 'g inner) Sum.n
+
+type 'g state =
+  | Lr1 of 'g lr1 index
+  | Goto of 'g goto_transition index * 'g terminal indexset
+
+let viable2 (type g) (g : g grammar) rc =
+  let table = Hashtbl.create 7 in
+  let todo = ref [] in
+  let get_state state =
+    match Hashtbl.find_opt table state with
+    | Some index -> index
+    | None ->
+      let index = Hashtbl.length table in
+      Hashtbl.add table state index;
+      push todo state;
+      index
+  in
+  let rec restrict_lookaheads la = function
+    | [] -> []
+    | xs :: xxs ->
+      let xs' = List.filter_map (fun (x, la') ->
+          let la = IndexSet.inter la la' in
+          if IndexSet.is_empty la
+          then None
+          else Some (x, la)
+        ) xs
+      in
+      match xs', restrict_lookaheads la xxs with
+      | [], [] -> []
+      | xs', xxs' -> xs' :: xxs'
+  in
+  let reduce lr1 (prod, la) =
+    let gt = Transition.find_goto g lr1 (Production.lhs g prod) in
+    get_state (Goto (gt, la))
+  in
+  let set _ = () in
+  let rec explore_stack lr1s = function
+    | [] -> []
+    | reductions :: rest ->
+      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
+      explore_reductions lr1s reductions rest
+  and explore_reductions lr1s reductions rest =
+      let expand lr1 = List.map (reduce lr1) reductions in
+      let reductions = IndexMap.inflate expand lr1s in
+      reductions :: explore_stack lr1s rest
+  in
+  let propagate = function
+    | Goto (gt, la) ->
+      let tr = Transition.of_goto g gt in
+      let reductions = rc.:(Transition.target g tr).reductions in
+      let reductions = match restrict_lookaheads la reductions with
+        | [] -> []
+        | r :: rs ->
+          let lr1s = IndexSet.singleton (Transition.source g tr) in
+          explore_stack lr1s rs
+      in
+      begin match reductions with
+        | [] -> ()
+        | epsilon :: rest ->
+          set (epsilon :: rest)
+      end
+    | Lr1 lr1 ->
+      set (explore_stack (IndexSet.singleton lr1) rc.:(lr1).reductions)
+  in
+  Index.iter (Lr1.cardinal g) (fun lr1 -> propagate (Lr1 lr1));
+  fixpoint ~propagate todo;
+  stopwatch 1 "viable2: %d states\n" (Hashtbl.length table)
+
 (* Step 2: explore viable reductions *)
 
 module Viable = Unsafe_cardinal()
