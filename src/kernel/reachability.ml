@@ -1136,6 +1136,7 @@ let make (type g) (g : g grammar) : g t = (module struct
                 if Finite.get left then f parent true)
     end
     include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(BoolMap())
+    let () = stopwatch 2 "solved minimal costs"
   end
 
   module Analysis = struct

@@ -328,8 +328,11 @@ module T = struct
     | Some _ -> Lazy.from_fun compute_reachability
 
   let viable = Kernel.Viable_reductions.make grammar
+  let () = stopwatch 1 "Done with viable reductions"
   let indices = Kernel.Transl.Indices.make grammar
+  let () = stopwatch 1 "Indexed items and symbols for translation"
   let trie = Kernel.Transl.Reductum_trie.make viable
+  let () = stopwatch 1 "Indexed reductions for translation"
   let reachability, lrc = Lazy.force d
 end
 
@@ -403,6 +406,7 @@ let do_compile spec (cp : Code_printer.t option) =
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
             (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
+    stopwatch 1 "constructed NFA\n";
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
     if !dump_dot then
@@ -414,19 +418,22 @@ let do_compile spec (cp : Code_printer.t option) =
       Vector.iter (fun (Kernel.Automata.DFA.Packed st) ->
           branches := !branches + Vector.length_as_int st.branches
         ) dfa.states;
-      Printf.eprintf "Determinization: %d states, %d branches (average %.02f branch/state)\n"
+      stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)\n"
         states !branches (float !branches /. float states);
     end;
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
+    stopwatch 1 "dataflow analysis\n";
     if !dump_dot then
       with_output_file "%s_%s_dataflow.dot" parser_name rule.name
         (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
+    stopwatch 1 "machine minimization\n";
     if !dump_dot then
       with_output_file "%s_%s_machine.dot" parser_name rule.name
         (Kernel.Automata.Machine.dump grammar machine);
-    Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp
+    Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp;
+    stopwatch 1 "table & code generation\n"
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer grammar spec cp
 
