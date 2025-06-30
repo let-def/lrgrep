@@ -606,6 +606,9 @@ module Item = struct
       invalid_arg "Info.Item.make: pos out of bounds";
     Index.of_int (cardinal g) (g.item_offsets.:(prod) + pos)
 
+  let last g prod =
+    make g prod (Production.length g prod)
+
   let production g i = g.item_productions.:(i)
 
   let position g i =

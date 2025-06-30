@@ -131,6 +131,7 @@ end
 module Item : sig
   include INDEXED with type 'g n = 'g item
   val make : 'g grammar -> 'g production index -> int -> 'g n index
+  val last : 'g grammar -> 'g production index -> 'g n index
   val prev : 'g grammar -> 'g n index -> 'g n index option
   val desc : 'g grammar -> 'g n index -> 'g production index * int
   val position : 'g grammar -> 'g n index -> int
