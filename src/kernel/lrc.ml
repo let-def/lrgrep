@@ -426,36 +426,6 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let all_leaf = fast_map (Lr1.all g) visit_state in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
-  if false then
-  begin
-    let predecessors = Vector.make State.n IndexSet.empty in
-    Index.rev_iter Transitions.n
-      (fun tr ->
-         let src, tgt = Gen.get transitions tr in
-         predecessors.@(src) <- IndexSet.add tgt);
-    let print_st st =
-      let lr1 = fst (Gen.get states st) in
-      "LRC" ^ string_of_index st ^ " (" ^ Lr1.to_string g lr1 ^ ")"
-    in
-    let rec find_path next = function
-      | (st, path) :: rest ->
-        let lr1 = fst (Gen.get states st) in
-        let path = st :: path in
-        if IndexSet.mem lr1 (Lr1.entrypoints g) then
-          Printf.eprintf "Path from 165: %s\n" (string_concat_map " -> " print_st (List.rev path));
-        let next =
-          IndexSet.fold (fun st' next -> (st', path) :: next)
-            predecessors.:(st) next
-        in
-        predecessors.:(st) <- IndexSet.empty;
-        find_path next rest
-      | [] ->
-        match next with
-        | [] -> ()
-        | curr -> find_path [] curr
-    in
-    find_path [] [Index.of_int State.n 165, []]
-  end;
   (*IndexSet.iter (fun st ->
       Printf.eprintf "lrc%d has label %s\n" (Index.to_int st) (Lr1.to_string g (fst (Gen.get states st)))
     ) all_wait;*)

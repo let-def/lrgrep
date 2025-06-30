@@ -1143,7 +1143,7 @@ let make (type g) (g : g grammar) : g t = (module struct
     let finite = Solver.Finite.get
   end
 
-  let () =
+  (*let () =
     let string_of_cost i = if i = max_int then "∞" else string_of_int i in
     Index.iter (Transition.goto g)
       (fun gt ->
@@ -1224,5 +1224,5 @@ let make (type g) (g : g grammar) : g t = (module struct
                end Reverse_dependencies.occurrences.:(n);
              end paths
          )
-      )
+      )*)
 end)
