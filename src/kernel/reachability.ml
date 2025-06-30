@@ -1144,72 +1144,85 @@ let make (type g) (g : g grammar) : g t = (module struct
   end
 
   let () =
+    let string_of_cost i = if i = max_int then "∞" else string_of_int i in
     Index.iter (Transition.goto g)
       (fun gt ->
          let min = ref max_int in
          let count = ref 0 in
          Cell.iter_goto gt
            (fun gtc -> incr count; min := Int.min (Analysis.cost (Cell.of_goto gtc)) !min);
-         if !min = max_int then
+         if !min = max_int then (
            let tr = Transition.of_goto g gt in
-           Printf.eprintf "unreachable goto transition (id:%d): %s -> %s (%dx%d=%d classes)\n"
-             (gt :> int)
-             (Lr1.to_string g (Transition.source g tr))
-             (Lr1.to_string g (Transition.target g tr))
-             (Array.length (Classes.for_lr1 (Transition.source g tr)))
-             (Array.length (Classes.for_edge gt))
-             !count;
-           let terminals set =
-             string_concat_map ~wrap:("{","}") ", "
-               (Terminal.to_string g)
-               (List.rev (IndexSet.elements set))
-           in
-           let production_to_string g p =
-             Nonterminal.to_string g (Production.lhs g p) ^ ": " ^
-             string_concat_map " " (Symbol.name g)
-               (Array.to_list (Production.rhs g p))
-           in
-           let {Tree. nullable_lookaheads; nullable=_; non_nullable} = Tree.goto_equations gt in
-           Printf.eprintf "- nullable for %s\n" (terminals nullable_lookaheads);
-           List.iteri begin fun j (red, n) ->
-             let pre_classes = Array.length (Tree.pre_classes n) in
-             let post_classes = Array.length (Tree.post_classes n) in
-             Printf.eprintf "- reduction %d: %s"
-               (j + 1) (production_to_string g red.production);
-             let encode = Cell.encode n in
-             let candidates = ref [] in
-             for pre = pre_classes - 1 downto 0 do
-               for post = post_classes - 1 downto 0 do
-                 if Analysis.cost (encode ~pre ~post) <> max_int then
-                   push candidates (pre, post)
-               done
-             done;
-             match !candidates with
-             | [] ->
-               Printf.eprintf " without candidates\n";
-             | candidates ->
+           match
+             List.filter_map begin fun (red, n) ->
+               let pre_classes = Array.length (Tree.pre_classes n) in
+               let post_classes = Array.length (Tree.post_classes n) in
+               let encode = Cell.encode n in
+               let candidates = ref [] in
+               for pre = pre_classes - 1 downto 0 do
+                 for post = post_classes - 1 downto 0 do
+                   if Analysis.cost (encode ~pre ~post) <> max_int then
+                     push candidates (pre, post)
+                 done
+               done;
+               match !candidates with
+               | candidates when
+                   List.exists begin function
+                     | Reverse_dependencies.Inner _ -> false
+                     | Reverse_dependencies.Leaf (gt', _pre, post) ->
+                       gt = gt' &&
+                       List.exists (fun (_, post_index) -> Array.length post.(post_index) > 0) candidates
+                   end Reverse_dependencies.occurrences.:(n) ->
+                 Some (red, n, candidates)
+               | _ -> None
+             end (Tree.goto_equations gt).non_nullable
+           with
+           | [] -> ()
+           | paths ->
+             Printf.eprintf "unreachable goto transition (id:%d): %s -> %s (%dx%d=%d classes)\n"
+               (gt :> int)
+               (Lr1.to_string g (Transition.source g tr))
+               (Lr1.to_string g (Transition.target g tr))
+               (Array.length (Classes.for_lr1 (Transition.source g tr)))
+               (Array.length (Classes.for_edge gt))
+               !count;
+             (*let terminals set =
+                 string_concat_map ~wrap:("{","}") ", "
+                   (Terminal.to_string g)
+                   (List.rev (IndexSet.elements set))
+               in*)
+             let production_to_string g p =
+               Nonterminal.to_string g (Production.lhs g p) ^ ": " ^
+               string_concat_map " " (Symbol.name g)
+                 (Array.to_list (Production.rhs g p))
+             in
+             List.iter begin fun (red, n, candidates) ->
+               (*let pre_classes = Array.length (Tree.pre_classes n) in
+                 let post_classes = Array.length (Tree.post_classes n) in*)
+               Printf.eprintf "- reduction: %s" (production_to_string g red.production);
+               let encode = Cell.encode n in
                Printf.eprintf " with candidates";
-               List.iter (fun (pre, post) ->
-                   Printf.eprintf " (%d,%d, cell:%d)" pre post (encode ~pre ~post :> int)
-                 ) candidates;
+               List.iter begin fun (pre, post) ->
+                 Printf.eprintf " (%d,%d, cell:%d)" pre post (encode ~pre ~post :> int)
+               end candidates;
                Printf.eprintf "\n";
                List.iter begin function
-                 | Reverse_dependencies.Leaf (gt', pre, post) ->
-                   if gt = gt' then
-                     Printf.eprintf "  found a reverse dependency with pre classes %s and post classes %s\n"
-                       (match pre with
-                        | Pre_identity ->
-                          string_concat_map ~wrap:("[","]") ","
-                            (fun (x,_) -> string_of_int x) candidates
-                        | Pre_singleton i -> "=" ^ string_of_int i)
-                       (string_concat_map ", "
-                          (fun (_, post_index) ->
-                             string_concat_map ~wrap:("[","]") "," string_of_int
-                               (Array.to_list post.(post_index))
-                          ) candidates)
-                 | Reverse_dependencies.Inner (_parent, _infix) ->
-                   ()
+                 | Reverse_dependencies.Leaf (gt', pre, post) when gt = gt' ->
+                   let pre = match pre with
+                     | Pre_identity -> Fun.id
+                     | Pre_singleton i -> Fun.const i
+                   in
+                   Printf.eprintf "  found a reverse dependency with classes %s\n"
+                     (string_concat_map ", "
+                        (fun (pre_index, post_index) ->
+                           Printf.sprintf "(%d,%s)"
+                             (pre pre_index)
+                             (string_concat_map ~wrap:("[","]") "," string_of_cost
+                                (Array.to_list post.(post_index)))
+                        ) candidates)
+                 | _ -> ()
                end Reverse_dependencies.occurrences.:(n);
-           end non_nullable
+             end paths
+         )
       )
 end)
