@@ -52,14 +52,15 @@ let style = "\
 
 type 'g source = ('g Viable_reductions.viable, 'g lr1) Sum.n
 
-type 'g config = {
+type ('g, 'lrc) config = {
   source: 'g source index;
-  lrcs: 'g Lrc.n indexset;
+  lrcs: 'lrc indexset;
 }
 
 (* Signature of reachable reductions modules *)
 module type S = sig
   type g
+  type lrc
 
   include CARDINAL
 
@@ -68,11 +69,11 @@ module type S = sig
   type transitions = target list list
 
   type desc = {
-    config: g config;
+    config: (g, lrc) config;
     transitions: transitions;
   }
 
-  val initial : (g Lrc.n, n index) indexmap
+  val initial : (lrc, n index) indexmap
   val states : (n, desc) vector
 
   val reject : n index -> g terminal indexset
@@ -93,16 +94,18 @@ end
 module Make
     (X: sig
        type g
+       type lrc
        val g : g grammar
        val viable : g Viable_reductions.t
-       val lrc_graph : (g, g Lrc.n) Lrc.t
-       val entrypoints : g Lrc.n Lrc.entrypoints
+       val lrc_graph : (g, lrc) Lrc.t
+       val entrypoints : lrc Lrc.entrypoints
      end)
     () : S with type g = X.g
 =
 struct
   open X
   type g = X.g
+  type lrc = X.lrc
 
   include IndexBuffer.Gen.Make()
 
@@ -118,7 +121,7 @@ struct
   type transitions = target list list
 
   type desc = {
-    config: g config;
+    config: (g, lrc) config;
     transitions: transitions;
   }
 
@@ -437,6 +440,7 @@ end
 
 module type FAILURE_NFA = sig
   type g
+  type lrc
   include CARDINAL
   val initial : (n, g terminal indexset) indexmap
   (*val reject : n index -> terminal indexset*)
@@ -445,7 +449,7 @@ module type FAILURE_NFA = sig
   val goto : n index -> g lr1 index list
   val is_bottom : n index -> bool
   val incoming : n index -> g lr1 indexset
-  val incoming_lrc : n index -> g Lrc.n indexset
+  val incoming_lrc : n index -> lrc indexset
   val transitions : n index -> (n, g terminal indexset) indexmap
   val to_string : n index -> string
 end
@@ -453,17 +457,19 @@ end
 module FailureNFA
     (Reductions: sig
        type g
+       type lrc
        val g : g grammar
        val viable : g Viable_reductions.t
-       val lrc_graph : (g, g Lrc.n) Lrc.t
-       val entrypoints : g Lrc.n Lrc.entrypoints
+       val lrc_graph : (g, lrc) Lrc.t
+       val entrypoints : lrc Lrc.entrypoints
      end)
-    (Reach : S with type g = Reductions.g)
+    (Reach : S with type g = Reductions.g and type lrc = Reductions.lrc)
     ()
   : FAILURE_NFA with type g = Reductions.g
 =
 struct
   type g = Reductions.g
+  type lrc = Reductions.lrc
   open Reductions
 
   let () =
@@ -481,9 +487,9 @@ struct
             List.iter (fun (reach', _) ->
                 let lrcs' = (Vector.get Reach.states reach').config.lrcs in
                 if not (IndexSet.subset lrcs' lrcs) then (
-                  Printf.eprintf "%s not included in %s\n"
+                  (*Printf.eprintf "%s not included in %s\n"
                     (Lrc.set_to_string g lrc_graph lrcs')
-                    (Lrc.set_to_string g lrc_graph lrcs);
+                    (Lrc.set_to_string g lrc_graph lrcs);*)
                   assert false
                 )
               ) x;
@@ -498,7 +504,7 @@ struct
     module Suffix = IndexBuffer.Gen.Make()
     module Reach_or_suffix = Sum.Make(Reach)(Suffix)
     include Sum.Make(struct
-        type n = g Lrc.n
+        type n = lrc
         let n = Vector.length lrc_graph.reachable_from
       end)(Reach_or_suffix)
 
@@ -507,7 +513,7 @@ struct
     let reach i = inj_r (Reach_or_suffix.inj_l i)
 
     type t =
-      | Prefix of g Lrc.n index
+      | Prefix of lrc index
       | Suffix of Suffix.n index
       | Reach  of Reach.n index
 
@@ -576,9 +582,9 @@ struct
         in
         (*FIXME: Find out why it is not always a subset*)
         if not (IndexSet.subset lrcs1 lrcs) then (
-          Printf.eprintf "expected: %s in %s\n"
+          (*(Printf.eprintf "expected: %s in %s\n"
             (Lrc.set_to_string g lrc_graph lrcs1)
-            (Lrc.set_to_string g lrc_graph lrcs);
+            (Lrc.set_to_string g lrc_graph lrcs);*)
           assert false
         );
         match next with
@@ -693,10 +699,11 @@ struct
       match States.prj i with
       | States.Prefix i -> Printf.sprintf "prefix(%d)" (Index.to_int i)
       | States.Reach  i ->
-        let desc = Vector.get Reach.states i in
-        Printf.sprintf "reach(%d, %s)"
+        let _desc = Vector.get Reach.states i in
+        "FIXME"
+        (*Printf.sprintf "reach(%d, %s)"
           (Index.to_int i)
-          (Lrc.set_to_string g lrc_graph desc.config.lrcs)
+          (Lrc.set_to_string g lrc_graph desc.config.lrcs)*)
       | States.Suffix i -> Printf.sprintf "suffix(%d)" (Index.to_int i)
 
   let () =
