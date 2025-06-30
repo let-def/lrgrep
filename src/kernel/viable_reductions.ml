@@ -33,6 +33,59 @@ open Utils
 open Misc
 open Info
 
+(* Step 1: pre-compute closure of reductions of ϵ-rules *)
+
+type ('g, 'a) with_lookahead = 'a * 'g terminal indexset
+
+(* Group items being reduced by their depth (reductions with one producer, two producers, etc). *)
+let group_reductions g = function
+  | [] -> []
+  | items ->
+    let rec group depth acc = function
+      | [] -> [acc]
+      | (it, la) :: rest when depth = Item.position g it ->
+        group depth ((Item.production g it, la) :: acc) rest
+      | otherwise ->
+        acc :: group (depth + 1) [] otherwise
+    in
+    let compare_items (it1, _) (it2, _) =
+      Int.compare (Item.position g it1) (Item.position g it2)
+    in
+    group 0 [] (List.sort compare_items items)
+
+type 'g reduce_closure = {
+  reductions: ('g, 'g production index) with_lookahead list list;
+  stacks: ('g, 'g lr1 index list) with_lookahead list;
+}
+
+type 'g reduce_closures = ('g lr1, 'g reduce_closure) vector
+
+let reduce_closures (type g) (g : g grammar) : g reduce_closures =
+  Vector.init (Lr1.cardinal g) @@ fun lr1 ->
+  let rec pop lookahead acc (item : g item index) = function
+    | [] -> let items, stacks = acc in ((item, lookahead) :: items, stacks)
+    | hd :: tl as stack ->
+      match Item.prev g item with
+      | Some item' -> pop lookahead acc item' tl
+      | None ->
+        let lhs = Production.lhs g (Item.production g item) in
+        let stack = Transition.find_goto_target g hd lhs :: stack in
+        let items, stacks = acc in
+        let acc = (items, (stack, lookahead) :: stacks) in
+        reduce lookahead acc stack
+  and reduce lookahead acc stack =
+    IndexSet.fold (fun red acc ->
+        let lookahead = Terminal.intersect g (Reduction.lookaheads g red) lookahead in
+        if IndexSet.is_empty lookahead
+        then acc
+        else pop lookahead acc (Item.last g (Reduction.production g red)) stack
+      ) (Reduction.from_lr1 g (List.hd stack)) acc
+  in
+  let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
+  {reductions = group_reductions g items; stacks}
+
+(* Step 2: explore viable reductions *)
+
 module Viable = Unsafe_cardinal()
 type 'g viable = 'g Viable.t
 
