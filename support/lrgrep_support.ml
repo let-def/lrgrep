@@ -136,18 +136,23 @@ end = struct
     let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
     set_int repr ~offset:0 ~value:k_size 1;
     set_int repr ~offset:1 ~value:v_size 1;
+    let unused = ref 0 in
     Array.iteri begin fun i cell ->
       let offset = 2 + i * (k_size + v_size) in
       match cell with
-      | Unused -> set_int repr ~offset ~value:0 k_size
+      | Unused ->
+        incr unused;
+        set_int repr ~offset ~value:0 k_size
       | Used (k, v) ->
         set_int repr ~offset ~value:(k + 1) k_size;
         set_int repr ~offset:(offset + k_size) ~value:v v_size;
     end table;
     Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
     Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
-    Printf.eprintf "table size: %d\nrepr size: %d\n"
-      (Array.length table) (Bytes.length repr);
+    Printf.eprintf "table size: %d (%.02f%% filled)\nrepr size: %d\n"
+      (Array.length table)
+      (float !unused /. float (Array.length table) *. 100.0)
+      (Bytes.length repr);
     Bytes.unsafe_to_string repr
 end
 
