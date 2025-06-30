@@ -796,9 +796,9 @@ let make (type g) (g : g grammar) : g t = (module struct
 
     let decode ix =
       let i = mapping.:(ix) in
-      let post = i land (post_bits - 1) in
+      let post = i land (1 lsl post_bits - 1) in
       let i = i lsr post_bits in
-      let pre = i land (pre_bits - 1) in
+      let pre = i land (1 lsl pre_bits - 1) in
       (Index.of_int Tree.n (i lsr pre_bits), pre, post)
 
     let encode i =
