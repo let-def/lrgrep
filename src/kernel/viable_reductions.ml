@@ -128,27 +128,33 @@ let viable2 (type g) (g : g grammar) rc =
     | [] -> []
     | reductions :: rest ->
       let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      explore_reductions lr1s reductions rest
-  and explore_reductions lr1s reductions rest =
       let expand lr1 = List.map (reduce lr1) reductions in
       let reductions = IndexMap.inflate expand lr1s in
       reductions :: explore_stack lr1s rest
+  in
+  let rec merge_tails = function
+    | x, [] | [], x -> x
+    | (x :: xs), (y :: ys) -> (x @ y) :: merge_tails (xs, ys)
+  in
+  let rec close_goto lr1 = function
+    | [] -> []
+    | [] :: rest -> rest
+    | ((p, la) :: rs) :: rest ->
+      let rest = close_goto lr1 (rs :: rest) in
+      let target = Transition.find_goto_target g lr1 (Production.lhs g p) in
+      let reductions = rc.:(target).reductions in
+      match restrict_lookaheads la reductions with
+      | [] -> rest
+      | rs' :: rest' ->
+        close_goto lr1 ((rs' @ rs) :: merge_tails (rest, rest'))
   in
   let propagate = function
     | Goto (gt, la) ->
       let tr = Transition.of_goto g gt in
       let reductions = rc.:(Transition.target g tr).reductions in
-      let reductions = match restrict_lookaheads la reductions with
-        | [] -> []
-        | r :: rs ->
-          let lr1s = IndexSet.singleton (Transition.source g tr) in
-          explore_stack lr1s rs
-      in
-      begin match reductions with
-        | [] -> ()
-        | epsilon :: rest ->
-          set (epsilon :: rest)
-      end
+      let lr1 = Transition.source g tr in
+      set (explore_stack (IndexSet.singleton lr1)
+             (close_goto lr1 (restrict_lookaheads la reductions)))
     | Lr1 lr1 ->
       set (explore_stack (IndexSet.singleton lr1) rc.:(lr1).reductions)
   in
@@ -204,34 +210,17 @@ type 'g t = {
   transitions: ('g viable, 'g transitions) vector;
 }
 
-(* Group reductions by their depth (visit epsilon reductions first, then reductions with one producer, two producers, etc). *)
-let group_reductions (type g) (g : g grammar) =
-  let rec group depth : g reduction index list -> g reduction index list list =
-    function
-    | [] -> []
-    | red :: rest when depth = Production.length g (Reduction.production g red) ->
-      begin match group depth rest with
-        | [] -> [[red]]
-        | reds :: tail ->
-          (red :: reds) :: tail
-      end
-    | otherwise ->
-      [] :: group (depth + 1) otherwise
-  in
-  Vector.init (Lr1.cardinal g)
-    (fun lr1 -> group 0 (IndexSet.elements (Reduction.from_lr1 g lr1)))
-
-let make (type g) (g : g grammar) : g t =
+let make (type g) (g : g grammar) (_rc : g reduce_closures) : g t =
   stopwatch 2 "constructing viable reduction graph";
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
-  let module VEq = Viable.Eq(struct type t = g include States end) in
-  let Refl : (States.n, g viable) eq = Obj.magic () in
+  let open Viable.Eq(struct type t = g include States end) in
+  let Refl : (g viable, States.n) eq = eq in
   (* Get the generator for state indices. *)
   let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
   let nodes = Hashtbl.create 7 in
-  let reductions = group_reductions g in
+  let _reductions = group_reductions g in
   (* Create states by visiting configurations and their outgoing transitions. *)
   let rec visit_config config =
     match Hashtbl.find_opt nodes config with
@@ -244,7 +233,7 @@ let make (type g) (g : g grammar) : g t =
       index
   (* Visit all outgoing transitions of a given configuration. *)
   and visit_transitions config =
-    visit_inner config reductions.:(config.top)
+    visit_inner config (failwith "TODO") (*reductions.:(config.top)*)
   (* Follow inner transitions for a given configuration and list of reductions. *)
   and visit_inner config = function
     | [] -> ([], [])
@@ -305,7 +294,7 @@ let make (type g) (g : g grammar) : g t =
   in
   (* Compute the initial set of transitions for each LR(1) state. *)
   let initial = Vector.init (Lr1.cardinal g) (fun lr1 ->
-      match reductions.:(lr1) with
+      match failwith "TODO" (*reductions.:(lr1)*) with
       | [] -> []
       | gotos :: next ->
         visit_outer (Terminal.regular g) (IndexSet.singleton lr1) gotos next
