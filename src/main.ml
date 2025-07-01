@@ -327,13 +327,18 @@ module T = struct
       lazy (Domain.join d)
     | Some _ -> Lazy.from_fun compute_reachability
 
-  let viable = Kernel.Viable_reductions.make grammar
+  let rc = Kernel.Viable_reductions.reduce_closures grammar
+  let () = stopwatch 1 "Done with closure of epsilon reductions"
+  let _viable = Kernel.Viable_reductions.viable2 grammar rc
+
+  let viable = Kernel.Viable_reductions.make grammar rc
   let () = stopwatch 1 "Done with viable reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
   let trie = Kernel.Transl.Reductum_trie.make viable
   let () = stopwatch 1 "Indexed reductions for translation"
   let reachability, lrc = Lazy.force d
+  let () = stopwatch 1 "Reachability information available"
 end
 
 let lrc_from_entrypoints =
