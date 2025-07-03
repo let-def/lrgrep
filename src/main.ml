@@ -1,7 +1,10 @@
 open Utils
-(*open Misc*)
+open Misc
+open Fix.Indexing
+open Kernel
 
-(*let usage = "\
+(*
+let usage = "
 Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.mlyl] <commands>...
 
 Global options:
@@ -27,24 +30,91 @@ Commands:
   cover      Analyses to cover all errors.
     -o <-|file>          Output file for the invalid sentences.
 
-Examples:
-  lrgrep -v -g grammar.cmly -s error.mlyl compile -o error.ml
-  lrgrep -g grammar.cmly -s error.mlyl interpret -i \"invalid sentence\"
-  "*)
-
-(*
-
   recover    Generate an error-resilient parser.
     -o <file.ml>            Output file for the total parser source code.
 
   complete   Generate code for completing an input prefix.
     -o <file.ml>            Output file for the completion source code.
-
+"
 *)
 
-let opt_spec_name = ref None
-let opt_output_name = ref None
+let usage_prompt =
+  "Usage: lrgrep <global-options> [ command <command-options> ]..."
+
+let usage_examples = "\
+Examples:
+  lrgrep -v -g grammar.cmly -s error.mlyl compile -o error.ml
+  lrgrep -g grammar.cmly -s error.mlyl interpret -i \"invalid sentence\"
+  "
+
+
+let badf fmt =
+  Printf.ksprintf (fun msg -> raise (Arg.Bad msg)) fmt
+
+let usage_error_fun = ref failwith
+
+let usage_error fmt =
+  Printf.ksprintf !usage_error_fun fmt
+
+let fatal_error ?exn fmt =
+  Printf.ksprintf (fun msg ->
+      prerr_string "Fatal error: ";
+      prerr_string msg;
+      begin match exn with
+        | None -> ()
+        | Some exn ->
+          prerr_string " (";
+          prerr_string (Printexc.to_string exn);
+          prerr_string ")";
+      end;
+      prerr_newline ();
+      exit 1
+    ) fmt
+
+let with_output_file fmt =
+  Printf.ksprintf (fun str k ->
+      let oc = open_out_bin str in
+      k oc;
+      close_out oc;
+    ) fmt
+
+let opt_spec_file = ref None
+
+let set_spec_file name =
+  match !opt_spec_file with
+  | Some name' ->
+    badf "unexpected argument %S: the specification is already set to %S"
+      name name'
+  | None ->
+    opt_spec_file := Some name
+
+let get_spec_file () =
+  match !opt_spec_file with
+  | None ->
+    usage_error "no specification file has been set (pass -s <spec.mlyl>)";
+    exit 1
+  | Some fname -> fname
+
 let opt_grammar_file = ref None
+
+let set_grammar_file name =
+  match !opt_grammar_file with
+  | Some name' ->
+    let message = Printf.sprintf
+        "unexpected argument %S: the grammar is already set to %S"
+        name name'
+    in
+    raise (Arg.Bad message)
+  | None ->
+    opt_grammar_file := Some name
+
+let get_grammar_file () =
+  match !opt_grammar_file with
+  | None ->
+    usage_error "grammar file has not been set (pass -g <parser.cmly>)";
+    exit 1
+  | Some fname -> fname
+
 let opt_dump_dot = ref false
 
 let print_version_num () =
@@ -56,10 +126,10 @@ let print_version_string () =
   print_version_num ()
 
 let global_specs = [
-  "-g", Arg.String (fun x -> opt_grammar_file := Some x),
-  " <file.cmly>  Path to the compiled Menhir grammar to analyse (*.cmly)";
-  "-s", Arg.String (fun x -> opt_spec_name := Some x),
-  " <file.mlyl>  Path to the error specification to process (*.mlyl)";
+  "-g", Arg.String set_grammar_file,
+  " <file.cmly>  Path to the compiled Menhir grammar to analyse";
+  "-s", Arg.String set_spec_file,
+  " <file.mlyl>  Path to the error specification to process";
   "-v", Arg.Unit (fun () -> incr Misc.verbosity_level),
   " Increase output verbosity (for debugging/profiling)";
   "-version", Arg.Unit print_version_string,
@@ -70,198 +140,97 @@ let global_specs = [
   " debug: Dump internal automata to Graphviz .dot files";
 ]
 
-let commands =
-  let not_implemented command () =
-    prerr_endline (command ^ " not implemented.");
-    exit 1
-  in
-  Subarg.[
-    command "compile" "Translate a specification to an OCaml module" [
-      "-o", Arg.String (fun x -> opt_output_name := Some x),
-      " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
-    ];
-    command "interpret" "Parse a sentence and suggest patterns that can match it" []
-      ~commit:(not_implemented "interpret");
-    command "cover" "Generate sentences to cover possible failures" []
-      ~commit:(not_implemented "cover");
-    command "recover" "Generate an error-resilient parser for the grammar" []
-      ~commit:(not_implemented "recover");
-    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
-      ~commit:(not_implemented "complete");
-]
+(* Lazily load grammar and specification *)
 
-let () = Subarg.parse global_specs commands
-    ~default:"compile"
-    ~warn_default:(fun () ->
-        prerr_endline "running LRgrep without a sub-command is deprecated, \
-                       add `compile' to the command-line")
-    (fun arg -> prerr_endline ("unknown arg " ^ arg); exit 1)
-    "lrgrep <global options> [ command <command options ]..."
+include Info.Lift()
 
-(*let rec parse_commands acc command args =
-  let command, args = match command with
-    | Compile   opts -> parse_compile opts args
-    | Interpret opts -> parse_interpret opts args
-    | Cover     opts -> parse_cover opts args
-    | Recover   opts -> parse_recover opts args
-    | Complete  opts -> parse_complete opts args
-  in
-  let acc = command :: acc in
-  match args with
-  | [] -> List.rev acc
-  | arg :: rest ->
-    match arg_is_command arg with
-    | None ->
-      usage_error "unexpected argument %S\n\
-                   Expecting a command (compile, interpret, enumerate, recover, complete).\n"
-        (arg_to_text arg)
-    | Some command ->
-      parse_commands acc command rest
+let grammar : g Info.grammar lazy_t = lazy (
+  let path = get_grammar_file () in
+  try
+    let module G = MenhirSdk.Cmly_read.Read(struct let filename = path end) in
+    stopwatch 1 "Loaded grammar from disk (%d terminals, %d non-terminals, %d lr0 states, %d lr1 states)"
+      G.Terminal.count G.Nonterminal.count
+      G.Lr0.count G.Lr1.count;
+    let module I = Load_grammar(G) in
+    stopwatch 1 "Pre-processed grammar definition";
+    I.grammar
+  with exn ->
+    fatal_error ~exn "cannot load grammar file %S" path
+)
 
-let anon_arguments = ref []
-let rec parse_global_options args =
-  match parse_common_option args with
-  | Some rest -> parse_global_options rest
-  | None ->
-    match args with
-    | (Short 'v' | Long "verbose") :: rest ->
-      incr Misc.verbosity_level;
-      parse_global_options rest
+let parser_name = lazy (
+  String.capitalize_ascii
+    (Filename.remove_extension
+       (Filename.basename (get_grammar_file ())))
+)
 
-    | (Short 'h' | Long "help") :: _ ->
-      print_string usage;
-      exit 2
-
-    | (Short 'V' | Long "version") :: _ ->
-      print_string version;
-      exit 0
-
-    | Short o :: _ ->
-      usage_error "invalid option -- %C.\n" o
-
-    | Long f :: _ ->
-      usage_error "unrecognized option -- %S.\n" f
-
-    | Text text :: rest ->
-      begin match is_command text with
-        | None ->
-          push anon_arguments text;
-          (*begin ;*)
-          parse_global_options rest
-
-        | Some command ->
-          parse_commands [] command rest
-      end
-
-    | [] ->
-      usage_error
-        "Expecting a command \
-         (compile, interpret, enumerate, recover, complete).\n"
-
-let commands = parse_global_options
-    (List.concat_map parse_arg (List.tl (Array.to_list Sys.argv)))
-
-let () = List.iter (fun text ->
-    match !conf_grammar_file, !conf_spec_file with
-    | None, _ ->
-      conf_grammar_file := Some text
-    | Some _, None ->
-      conf_spec_file := Some text
-    | Some grammar, Some spec ->
-      usage_error
-        "unexpected argument %S\n\
-         Grammar: %S.\n\
-         Specification: %S.\n\
-         Expecting a command \
-         (compile, interpret, enumerate, recover, complete).\n"
-        text grammar spec
-  ) (List.rev !anon_arguments)
-*)
-
-(* Load and pre-process grammar *)
-
-(*let grammar_filename = match !opt_grammar_file with
-  | Some file -> file
-  | None ->
-    usage_error "No parser has been specified.\
-                 Expecting an argument of the form <parser.cmly>.\n"
-
-(*module Grammar =
-  MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)*)
-
-let () = stopwatch 1 "Loaded file %s" grammar_filename
-
-open Kernel.Info
-include Lift(Grammar)
-
-let () = stopwatch 1 "Imported grammar (%d terminals, %d non-terminals, %d lr0 states, %d lr1 states)"
-    Grammar.Terminal.count
-    Grammar.Nonterminal.count
-    Grammar.Lr0.count
-    Grammar.Lr1.count
-
-(* Load and parse specification, if any *)
-
-(*let spec =
+let spec = lazy (
   let print_parse_error_and_exit lexbuf exn =
     let bt = Printexc.get_raw_backtrace () in
     match exn with
     | Front.Parser.Error ->
       let pos = Lexing.lexeme_start_p lexbuf in
-      Kernel.Syntax.error pos "syntax error."
+      Syntax.error pos "syntax error."
     | Front.Lexer.Lexical_error {msg; pos} ->
-      Kernel.Syntax.error pos "%s." msg
+      Syntax.error pos "%s." msg
     | _ -> Printexc.raise_with_backtrace exn bt
   in
-  let parse_spec source_file =
-    let ic = open_in_bin source_file in
-    Front.Lexer.ic := Some ic;
-    let lexbuf = Lexing.from_channel ~with_positions:true ic in
-    Lexing.set_filename lexbuf source_file;
-    let result =
-      try Front.Parser.lexer_definition Front.Lexer.main lexbuf
-      with exn -> print_parse_error_and_exit lexbuf exn
-    in
-    Front.Lexer.ic := None;
-    result
+  let parse_spec path =
+    match open_in_bin path with
+    | exception exn ->
+      fatal_error ~exn "cannot load specification file %s" path
+    | ic ->
+      Front.Lexer.ic := Some ic;
+      let lexbuf = Lexing.from_channel ~with_positions:true ic in
+      Lexing.set_filename lexbuf path;
+      let result =
+        try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+        with exn -> print_parse_error_and_exit lexbuf exn
+      in
+      Front.Lexer.ic := None;
+      result
   in
-  match !conf_spec_file with
-  | None -> None
-  | Some file ->
-    let result = parse_spec file in
-    stopwatch 1 "Loaded specification %s" file;
-    Some (file, result)
+  let file = get_spec_file () in
+  let result = parse_spec file in
+  stopwatch 1 "Loaded specification %s" file;
+  result
+)
 
-let parser_name =
-  String.capitalize_ascii
-    (Filename.remove_extension
-       (Filename.basename grammar_filename))
+(* Various analyses on the automaton *)
 
-module T = struct
-  let compute_reachability () =
-    let reachability = Kernel.Reachability.make grammar in
-    stopwatch 1 "Done with reachability";
-    (*Kernel.Lrc.check_deterministic grammar reachability;*)
-    (*let lrc = Kernel.Lrc.make grammar reachability in*)
-    (*let lrc' = Kernel.Lrc.make_deterministic grammar reachability in*)
-    let lrc = Kernel.Lrc.make_minimal grammar reachability in
-    (*Kernel.Lrc.check_equivalence grammar lrc lrc' lrc.all_leaf lrc'.all_leaf;*)
-    (reachability, lrc)
+let (!!) = Lazy.force
 
-  let d = match Sys.getenv_opt "SINGLE" with
-    | None ->
-      let d = Domain.spawn compute_reachability in
-      lazy (Domain.join d)
-    | Some _ -> Lazy.from_fun compute_reachability
+let reachability = lazy (
+  let result = Reachability.make !!grammar in
+  stopwatch 1 "Solved reachability on the LR(1) automaton";
+  result
+)
 
-  let viable = Kernel.Viable_reductions.make grammar
-  let () = stopwatch 1 "Done with viable reductions"
-  let indices = Kernel.Transl.Indices.make grammar
-  let () = stopwatch 1 "Indexed items and symbols for translation"
-  let trie = Kernel.Transl.Reductum_trie.make viable
-  let () = stopwatch 1 "Indexed reductions for translation"
-  let reachability, lrc = Lazy.force d
-end
+let lrc = lazy (
+  let result = Lrc.make_minimal !!grammar !!reachability in
+  stopwatch 1 "Computed minimal LRC on the LR(1) automaton";
+  result
+)
+
+let viable = lazy (
+  let result = Viable_reductions.make !!grammar in
+  stopwatch 1 "Computed viable reductions";
+  result
+)
+
+let indices = lazy (
+  let result = Transl.Indices.make !!grammar in
+  stopwatch 1 "Indexed items and symbols for translation";
+  result
+)
+
+let trie = lazy (
+  let result = Transl.Reductum_trie.make !!viable in
+  stopwatch 1 "Indexed reductions for translation";
+  result
+)
+
+open Info
 
 let lrc_from_entrypoints =
   let cache = Hashtbl.create 7 in
@@ -271,25 +240,23 @@ let lrc_from_entrypoints =
     | None ->
       let lr1s =
         if IndexSet.is_empty from_entrypoints
-        then Lr1.entrypoints grammar
+        then Lr1.entrypoints !!grammar
         else from_entrypoints
       in
-      let lrcs = IndexSet.bind lr1s (Vector.get T.lrc.lrcs_of) in
-      let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
+      let lrcs = IndexSet.bind lr1s (Fix.Indexing.Vector.get !!lrc.lrcs_of) in
+      let ep = Lrc.from_entrypoints !!grammar !!lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
 
-let with_output_file fmt =
-  Printf.ksprintf (fun str k ->
-      let oc = open_out_bin str in
-      k oc;
-      close_out oc;
-    ) fmt
+(* Compile command *)
+
+let opt_output_name = ref None
 
 let do_compile spec (cp : Code_printer.t option) =
-  Kernel.Codegen.output_header grammar spec cp;
-  List.iter begin fun (rule : Kernel.Syntax.rule) ->
+  let grammar = !!grammar in
+  Codegen.output_header grammar spec cp;
+  List.iter begin fun (rule : Syntax.rule) ->
     let unknown = ref [] in
     let initial_states =
       List.filter_map (fun (sym, pos) ->
@@ -307,7 +274,7 @@ let do_compile spec (cp : Code_printer.t option) =
         let candidates =
           String.concat ", " (List.of_seq (Hashtbl.to_seq_keys (Lr1.entrypoint_table grammar)))
         in
-        Kernel.Syntax.error pos
+        Syntax.error pos
           "unknown start symbols %s.\n\
            Start symbols of this grammar are:\n\
            %s\n"
@@ -315,70 +282,106 @@ let do_compile spec (cp : Code_printer.t option) =
     end;
     let subset = lrc_from_entrypoints initial_states in
     let stacks = {
-      Kernel.Automata.
+      Automata.
       tops =
         if fst rule.error
         then subset.wait
         else subset.reachable;
       prev = Vector.get subset.predecessors;
-      label = Vector.get T.lrc.lr1_of;
+      label = Vector.get !!lrc.lr1_of;
     } in
-    let Kernel.Spec.Rule (clauses, branches) =
-      Kernel.Spec.import_rule grammar T.viable T.indices T.trie rule
+    let Spec.Rule (clauses, branches) =
+      Spec.import_rule grammar !!viable !!indices !!trie rule
     in
-    let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
+    let nfa = Automata.NFA.from_branches grammar !!viable branches in
     Vector.iteri (fun br nfa ->
-        if !dump_dot then
-          with_output_file "%s_%s_br_%d_line_%d.dot" parser_name rule.name
+        if !opt_dump_dot then
+          with_output_file "%s_%s_br_%d_line_%d.dot" !!parser_name rule.name
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
-            (Kernel.Automata.NFA.dump grammar nfa);
+            (Automata.NFA.dump grammar nfa);
       ) nfa;
     stopwatch 1 "constructed NFA\n";
-    let Kernel.Automata.DFA.T dfa =
-      Kernel.Automata.DFA.determinize branches stacks nfa in
-    if !dump_dot then
-      with_output_file "%s_%s_dfa.dot" parser_name rule.name
-        (Kernel.Automata.DFA.dump grammar dfa);
+    let Automata.DFA.T dfa =
+      Automata.DFA.determinize branches stacks nfa in
+    if !opt_dump_dot then
+      with_output_file "%s_%s_dfa.dot" !!parser_name rule.name
+        (Automata.DFA.dump grammar dfa);
     begin
       let states = Vector.length_as_int dfa.states in
       let branches = ref 0 in
-      Vector.iter (fun (Kernel.Automata.DFA.Packed st) ->
+      Vector.iter (fun (Automata.DFA.Packed st) ->
           branches := !branches + Vector.length_as_int st.branches
         ) dfa.states;
       stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)\n"
         states !branches (float !branches /. float states);
     end;
-    let dataflow = Kernel.Automata.Dataflow.make branches dfa in
+    let dataflow = Automata.Dataflow.make branches dfa in
     stopwatch 1 "dataflow analysis\n";
-    if !dump_dot then
-      with_output_file "%s_%s_dataflow.dot" parser_name rule.name
-        (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
-    let Kernel.Automata.Machine.T machine =
-      Kernel.Automata.Machine.minimize branches dfa dataflow in
+    if !opt_dump_dot then
+      with_output_file "%s_%s_dataflow.dot" !!parser_name rule.name
+        (Automata.Dataflow.dump grammar dfa dataflow);
+    let Automata.Machine.T machine =
+      Automata.Machine.minimize branches dfa dataflow in
     stopwatch 1 "machine minimization\n";
-    if !dump_dot then
-      with_output_file "%s_%s_machine.dot" parser_name rule.name
-        (Kernel.Automata.Machine.dump grammar machine);
-    Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp;
+    if !opt_dump_dot then
+      with_output_file "%s_%s_machine.dot" !!parser_name rule.name
+        (Automata.Machine.dump grammar machine);
+    Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation\n"
   end spec.lexer_definition.rules;
-  Kernel.Codegen.output_trailer grammar spec cp
+  Codegen.output_trailer grammar spec cp
 
-let process_command = function
-  | Compile options ->
-    let (input_file, lexer_definition) = match spec with
-      | Some i -> i
-      | None ->
-        usage_error "compile: expecting a specification (-s <spec.mlyl>)"
-    in
-    Printf.eprintf "# Processing %s\n" (try Unix.realpath input_file with _ -> input_file);
-    let output_file = match options.compile_output with
-      | Some o -> o
-      | None -> Filename.remove_extension input_file ^ ".ml"
-    in
-    let oc = open_out_bin output_file in
+let compile_command () =
+  let output_file = match !opt_output_name with
+    | Some o -> o
+    | None -> Filename.remove_extension (get_spec_file ()) ^ ".ml"
+  in
+  match open_out_bin output_file with
+  | exception exn ->
+    fatal_error ~exn "cannot open output file %S" output_file
+  | oc ->
     let cp = Code_printer.create ~filename:output_file (output_string oc) in
-    do_compile {parser_name; lexer_definition} (Some cp);
+    do_compile {parser_name = !!parser_name; lexer_definition= !!spec} (Some cp);
     close_out oc
-  | _ -> failwith "TODO"*)
-*)
+
+(* Argument parser *)
+let commands =
+  let not_implemented command () =
+    prerr_endline (command ^ " not implemented.");
+    exit 1
+  in
+  Subarg.[
+    command "compile" "Translate a specification to an OCaml module" [
+      "-o", Arg.String (fun x -> opt_output_name := Some x),
+      " <file.ml>  Set output file name to <file> (defaults to <spec>.ml)";
+    ] ~commit:compile_command;
+    command "interpret" "Parse a sentence and suggest patterns that can match it" []
+      ~commit:(not_implemented "interpret");
+    command "cover" "Generate sentences to cover possible failures" []
+      ~commit:(not_implemented "cover");
+    command "recover" "Generate an error-resilient parser for the grammar" []
+      ~commit:(not_implemented "recover");
+    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
+      ~commit:(not_implemented "complete");
+]
+
+let () =
+  usage_error_fun := (fun msg ->
+      Subarg.usage global_specs commands
+        ("lrgrep: " ^ msg ^ "\n\n" ^ usage_prompt)
+    );
+  Subarg.parse global_specs commands
+    ~default:"compile"
+    ~warn_default:(fun () ->
+        prerr_endline "running LRgrep without a sub-command is deprecated, \
+                       add `compile' to the command-line")
+    (fun arg ->
+       if Sys.file_exists arg then (
+         set_spec_file arg;
+         Printf.eprintf "warning: directly passing %S is deprecated, use -s %S\n"
+           arg arg
+       )
+    )
+    usage_prompt
+    ~no_subcommand:(fun () -> usage_error "expecting at least one command")
+(* Load and pre-process grammar *)

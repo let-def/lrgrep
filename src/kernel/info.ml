@@ -19,14 +19,14 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *)
+*)
 
 (** This module defines data structures and operations for handling grammar
-  information in a structured way. It includes representations for terminals,
-  non-terminals, productions, and LR states, along with their transitions and
-  reductions. The module is designed to work with Menhir's grammar
-  representation and extends it with additional functionality for
-  convenience. *)
+    information in a structured way. It includes representations for terminals,
+    non-terminals, productions, and LR states, along with their transitions and
+    reductions. The module is designed to work with Menhir's grammar
+    representation and extends it with additional functionality for
+    convenience. *)
 
 open Utils
 open Misc
@@ -109,364 +109,375 @@ type 'g grammar = {
 
 let raw g = g.raw
 
-module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
+module Lift() = struct
+
   type g
 
-  module Import
-      (UC : UNSAFE_CARDINAL)
-      (M : sig type t  val count : int val of_int : int -> t val to_int : t -> int end) =
-  struct
-    include UC.Const(struct type t = g let cardinal = M.count end)
-    let of_g i = Index.of_int n (M.to_int i)
-    let to_g i = M.of_int (Index.to_int i)
-    let all = IndexSet.all n
-  end
+  let loaded = ref false
 
-
-  module Terminal = struct
-    include Import(UC_terminal)(G.Terminal)
-    let regular = IndexSet.init_from_set n (fun t ->
-        match G.Terminal.kind (G.Terminal.of_int (t : _ index :> int)) with
-        | `EOF | `REGULAR -> true
-        | `PSEUDO | `ERROR -> false
-      )
-  end
-
-  module Nonterminal = Import(UC_nonterminal)(G.Nonterminal)
-
-  module Symbol = struct
-    let n = Sum.cardinal Terminal.n Nonterminal.n
-    let all = IndexSet.all n
-
-    let of_g = function
-      | G.T t -> Sum.inj_l (Terminal.of_g t)
-      | G.N n -> Sum.inj_r Terminal.n (Nonterminal.of_g n)
-
-    (*let to_g t = match Sum.prj Terminal.n t with
-      | L t -> G.T (Terminal.to_g t)
-      | R n -> G.N (Nonterminal.to_g n)*)
-  end
-
-  module Production = struct
-    include Import(UC_production)(G.Production)
-
-    let lhs = Vector.init n (fun p -> Nonterminal.of_g (G.Production.lhs (to_g p)))
-
-    let rhs =
-      Vector.init n @@ fun p ->
-      Array.map
-        (fun (sym,_,_) -> Symbol.of_g sym)
-        (G.Production.rhs (to_g p))
-  end
-
-  module Item = struct
-    let count = ref 0
-
-    let offsets =
-      Vector.init Production.n (fun prod ->
-          let position = !count in
-          count := !count + Array.length Production.rhs.:(prod) + 1;
-          position
-        )
-
-    include UC_item.Const(struct type t = g let cardinal = !count end)
-
-    let productions =
-      Vector.make' n (fun () -> Index.of_int Production.n 0)
+  module Load_grammar(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
 
     let () =
-      let enum = Index.enumerate n in
-      Index.iter Production.n @@ fun prod ->
-      for _ = 0 to Array.length Production.rhs.:(prod) do
-        productions.:(enum ()) <- prod
-      done
-  end
+      if !loaded then
+        invalid_arg "Info.Lift.Load: grammar can be loaded only once"
+      else loaded := true
 
-  module Lr0 = struct
-    include Import(UC_lr0)(G.Lr0)
+    module Import
+        (UC : UNSAFE_CARDINAL)
+        (M : sig type t  val count : int val of_int : int -> t val to_int : t -> int end) =
+    struct
+      include UC.Const(struct type t = g let cardinal = M.count end)
+      let of_g i = Index.of_int n (M.to_int i)
+      let to_g i = M.of_int (Index.to_int i)
+      let all = IndexSet.all n
+    end
 
-    let items = Vector.init n @@ fun lr0 ->
-      to_g lr0
-      |> G.Lr0.items
-      |> List.map (fun (p,pos) -> Index.of_int Item.n (Item.offsets.:(Production.of_g p) + pos))
-      |> IndexSet.of_list
 
-    let incoming = Vector.init n @@ fun lr0 ->
-      to_g lr0
-      |> G.Lr0.incoming
-      |> Option.map Symbol.of_g
+    module Terminal = struct
+      include Import(UC_terminal)(G.Terminal)
+      let regular = IndexSet.init_from_set n (fun t ->
+          match G.Terminal.kind (G.Terminal.of_int (t : _ index :> int)) with
+          | `EOF | `REGULAR -> true
+          | `PSEUDO | `ERROR -> false
+        )
+    end
 
-    let is_entrypoint =
-      Vector.map (fun items ->
-          if not (IndexSet.is_singleton items) then
-            None
-          else
-            let item = IndexSet.choose items in
-            let prod = Item.productions.:(item) in
-            if Index.to_int item = Item.offsets.:(prod) then
-              Some prod
-            else
+    module Nonterminal = Import(UC_nonterminal)(G.Nonterminal)
+
+    module Symbol = struct
+      let n = Sum.cardinal Terminal.n Nonterminal.n
+      let all = IndexSet.all n
+
+      let of_g = function
+        | G.T t -> Sum.inj_l (Terminal.of_g t)
+        | G.N n -> Sum.inj_r Terminal.n (Nonterminal.of_g n)
+
+      (*let to_g t = match Sum.prj Terminal.n t with
+        | L t -> G.T (Terminal.to_g t)
+        | R n -> G.N (Nonterminal.to_g n)*)
+    end
+
+    module Production = struct
+      include Import(UC_production)(G.Production)
+
+      let lhs = Vector.init n (fun p -> Nonterminal.of_g (G.Production.lhs (to_g p)))
+
+      let rhs =
+        Vector.init n @@ fun p ->
+        Array.map
+          (fun (sym,_,_) -> Symbol.of_g sym)
+          (G.Production.rhs (to_g p))
+    end
+
+    module Item = struct
+      let count = ref 0
+
+      let offsets =
+        Vector.init Production.n (fun prod ->
+            let position = !count in
+            count := !count + Array.length Production.rhs.:(prod) + 1;
+            position
+          )
+
+      include UC_item.Const(struct type t = g let cardinal = !count end)
+
+      let productions =
+        Vector.make' n (fun () -> Index.of_int Production.n 0)
+
+      let () =
+        let enum = Index.enumerate n in
+        Index.iter Production.n @@ fun prod ->
+        for _ = 0 to Array.length Production.rhs.:(prod) do
+          productions.:(enum ()) <- prod
+        done
+    end
+
+    module Lr0 = struct
+      include Import(UC_lr0)(G.Lr0)
+
+      let items = Vector.init n @@ fun lr0 ->
+        to_g lr0
+        |> G.Lr0.items
+        |> List.map (fun (p,pos) -> Index.of_int Item.n (Item.offsets.:(Production.of_g p) + pos))
+        |> IndexSet.of_list
+
+      let incoming = Vector.init n @@ fun lr0 ->
+        to_g lr0
+        |> G.Lr0.incoming
+        |> Option.map Symbol.of_g
+
+      let is_entrypoint =
+        Vector.map (fun items ->
+            if not (IndexSet.is_singleton items) then
               None
-        ) items
+            else
+              let item = IndexSet.choose items in
+              let prod = Item.productions.:(item) in
+              if Index.to_int item = Item.offsets.:(prod) then
+                Some prod
+              else
+                None
+          ) items
+    end
+
+    module Lr1 = struct
+      include Import(UC_lr1)(G.Lr1)
+
+      let lr0 = Vector.init n @@ fun lr1 ->
+        Lr0.of_g (G.Lr1.lr0 (to_g lr1))
+    end
+
+    module Transition =
+    struct
+      let shift_count, goto_count =
+        let shift_count = ref 0 in
+        let goto_count = ref 0 in
+        (* Count goto and shift transitions by iterating on all states and
+           transitions *)
+        G.Lr1.iter begin fun lr1 ->
+          List.iter begin fun (sym, _) ->
+            match sym with
+            | G.T _ -> incr shift_count
+            | G.N _ -> incr goto_count
+          end (G.Lr1.transitions lr1)
+        end;
+        (!shift_count, !goto_count)
+
+      module Goto = UC_goto_transition.Const(struct type t = g let cardinal = goto_count end)
+      module Shift = UC_shift_transition.Const(struct type t = g let cardinal = shift_count end)
+
+      let any = Sum.cardinal Goto.n Shift.n
+
+      let of_goto = Sum.inj_l
+      let of_shift = Sum.inj_r Goto.n
+
+      (* Vectors to store information on states and transitions.
+
+         We allocate a bunch of data structures (sources, targets, t_symbols,
+         nt_symbols and predecessors vectors, t_table and nt_table hash tables),
+         and then populate them by iterating over all transitions.
+      *)
+
+      let sources = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
+      let targets = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
+
+      let shift_sym = Vector.make' Shift.n (fun () -> Index.of_int Terminal.n 0)
+      let goto_sym = Vector.make' Goto.n (fun () -> Index.of_int Nonterminal.n 0)
+
+      (* Hash tables to associate information to the pair of
+         a transition and a symbol.
+      *)
+
+      let goto_table = Hashtbl.create 7
+
+      let nt_count = cardinal Nonterminal.n
+
+      let shift_table = Hashtbl.create 7
+
+      let t_count = cardinal Terminal.n
+
+      (* A vector to store the predecessors of an lr1 state.
+         We cannot compute them directly, we discover them by exploring the
+         successor relation below. *)
+      let predecessors = Vector.make Lr1.n IndexSet.empty
+
+      let successors =
+        (* We populate all the data structures allocated above, i.e.
+           the vectors t_sources, t_symbols, t_targets, nt_sources, nt_symbols,
+           nt_targets and predecessors, as well as the tables t_table and
+           nt_table, by iterating over all successors. *)
+        let next_goto = Index.enumerate Goto.n in
+        let next_shift = Index.enumerate Shift.n in
+        Vector.init Lr1.n begin fun source ->
+          List.fold_right begin fun (sym, target) acc ->
+            let target = Lr1.of_g target in
+            let index = match sym with
+              | G.T t ->
+                let t = Terminal.of_g t in
+                let index = next_shift () in
+                shift_sym.:(index) <- t;
+                Hashtbl.add shift_table (t_pack t_count source t) index;
+                of_shift index
+              | G.N nt ->
+                let nt = Nonterminal.of_g nt in
+                let index = next_goto () in
+                goto_sym.:(index) <- nt;
+                Hashtbl.add goto_table (nt_pack nt_count source nt) index;
+                of_goto index
+            in
+            sources.:(index) <- source;
+            targets.:(index) <- target;
+            predecessors.@(target) <- IndexSet.add index;
+            IndexSet.add index acc
+          end (G.Lr1.transitions (Lr1.to_g source)) IndexSet.empty
+        end
+
+      let accepting =
+        let acc = ref IndexSet.empty in
+        Index.rev_iter Lr1.n begin fun lr1 ->
+          match Lr0.is_entrypoint.:(Lr1.lr0.:(lr1)) with
+          | None -> ()
+          | Some prod ->
+            let sym =
+              match Sum.prj Terminal.n Production.rhs.:(prod).(0) with
+              | L _ -> assert false
+              | R nt -> nt
+            in
+            acc := IndexSet.fold_right (fun acc tr ->
+                match Sum.prj Goto.n tr with
+                | L gt when goto_sym.:(gt) = sym -> IndexSet.add gt acc
+                | _ -> acc
+              ) !acc successors.:(lr1)
+        end;
+        !acc
+    end
+
+    module Lr1_extra = struct
+      open Lr1
+
+      let accepting = ref IndexSet.empty
+
+      (** The set of terminals that will trigger a reduction *)
+      let reduce_on = Vector.init n @@ fun lr1 ->
+        List.fold_left
+          (fun acc (t, _) ->
+             if G.Terminal.kind t = `PSEUDO then
+               accepting := IndexSet.add lr1 !accepting;
+             IndexSet.add (Terminal.of_g t) acc)
+          IndexSet.empty (G.Lr1.get_reductions (to_g lr1))
+
+      let accepting = !accepting
+
+      (** The set of terminals that will trigger a shift transition *)
+      let shift_on = Vector.init n @@ fun lr1 ->
+        List.fold_left
+          (fun acc (sym, _raw) ->
+             match sym with
+             | G.T t -> IndexSet.add (Terminal.of_g t) acc
+             | G.N _ -> acc)
+          IndexSet.empty (G.Lr1.transitions (to_g lr1))
+
+      (** The set of terminals the state has no transition for *)
+      let reject = Vector.init n @@ fun lr1 ->
+        let result = Terminal.all in
+        let result = IndexSet.diff result reduce_on.:(lr1) in
+        let result = IndexSet.diff result shift_on.:(lr1) in
+        result
+
+      let wait = IndexSet.init_from_set n (fun lr1 ->
+          match G.Lr0.incoming (Lr0.to_g lr0.:(lr1)) with
+          | Some (G.N _) -> false
+          | Some (G.T t) -> G.Terminal.kind t = `REGULAR && not (IndexSet.mem lr1 accepting)
+          | None -> true
+        )
+
+      let predecessors = Vector.init n @@ fun lr1 ->
+        IndexSet.map (fun tr -> Transition.sources.:(tr)) Transition.predecessors.:(lr1)
+
+      let entrypoint_table =
+        let table = Hashtbl.create 7 in
+        Index.iter n (fun lr1 ->
+            match Lr0.is_entrypoint.:(lr0.:(lr1)) with
+            | None -> ()
+            | Some prod ->
+              let sym, _, _ = (G.Production.rhs (Production.to_g prod)).(0) in
+              Hashtbl.add table (G.Symbol.name sym) lr1
+          );
+        table
+
+      let entrypoints =
+        Hashtbl.fold
+          (fun _ lr1 acc -> IndexSet.add lr1 acc)
+          entrypoint_table IndexSet.empty
+    end
+
+    module Reduction = struct
+      let n = ref 0
+      let raw =
+        let import_red reds =
+          reds
+          |> List.filter_map (fun (t, p) ->
+              match G.Production.kind p with
+              | `START -> None
+              | `REGULAR -> Some (Production.of_g p, Terminal.of_g t)
+            )
+          |> Misc.group_by
+            ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
+            ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
+          |> List.sort (fun (p1,_) (p2,_) ->
+              let l1 = Array.length Production.rhs.:(p1) in
+              let l2 = Array.length Production.rhs.:(p2) in
+              let c = Int.compare l1 l2 in
+              if c <> 0 then c else
+                compare_index Production.lhs.:(p1) Production.lhs.:(p2)
+            )
+        in
+        let import_lr1 lr1 =
+          let reds = import_red (G.Lr1.get_reductions (Lr1.to_g lr1)) in
+          n := !n + List.length reds;
+          reds
+        in
+        Vector.init Lr1.n import_lr1
+
+      include UC_reduction.Const(struct type t = g let cardinal = !n end)
+
+      let state = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
+      let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
+      let lookaheads = Vector.make n IndexSet.empty
+      let from_lr1 =
+        let enum = Index.enumerate n in
+        Vector.mapi (fun lr1 reds ->
+            List.fold_left (fun set (prod, la) ->
+                let i = enum () in
+                state.:(i) <- lr1;
+                production.:(i) <- prod;
+                lookaheads.:(i) <- la;
+                IndexSet.add i set
+              ) IndexSet.empty reds
+          ) raw
+    end
+
+    let grammar = {
+      raw = (module G);
+      terminal_n              = Terminal.n;
+      terminal_all            = Terminal.all;
+      terminal_regular        = Terminal.regular;
+      nonterminal_n           = Nonterminal.n;
+      nonterminal_all         = Nonterminal.all;
+      symbol_all              = Symbol.all;
+      production_lhs          = Production.lhs;
+      production_rhs          = Production.rhs;
+      production_all          = Production.all;
+      item_productions        = Item.productions;
+      item_offsets            = Item.offsets;
+      lr0_items               = Lr0.items;
+      lr0_incoming            = Lr0.incoming;
+      lr0_is_entrypoint       = Lr0.is_entrypoint;
+      transition_source       = Transition.sources;
+      transition_target       = Transition.targets;
+      transition_shift_sym    = Transition.shift_sym;
+      transition_shift_table  = Transition.shift_table;
+      transition_goto_sym     = Transition.goto_sym;
+      transition_goto_table   = Transition.goto_table;
+      transition_predecessors = Transition.predecessors;
+      transition_successors   = Transition.successors;
+      transition_accepting    = Transition.accepting;
+      lr1_all                 = Lr1.all;
+      lr1_lr0                 = Lr1.lr0;
+      lr1_wait                = Lr1_extra.wait;
+      lr1_accepting           = Lr1_extra.accepting;
+      lr1_reduce_on           = Lr1_extra.reduce_on;
+      lr1_shift_on            = Lr1_extra.shift_on;
+      lr1_reject              = Lr1_extra.reject;
+      lr1_entrypoints         = Lr1_extra.entrypoints;
+      lr1_entrypoint_table    = Lr1_extra.entrypoint_table;
+      lr1_predecessors        = Lr1_extra.predecessors;
+      reduction_state         = Reduction.state;
+      reduction_production    = Reduction.production;
+      reduction_lookaheads    = Reduction.lookaheads;
+      reduction_from_lr1      = Reduction.from_lr1;
+    }
   end
-
-  module Lr1 = struct
-    include Import(UC_lr1)(G.Lr1)
-
-    let lr0 = Vector.init n @@ fun lr1 ->
-      Lr0.of_g (G.Lr1.lr0 (to_g lr1))
-  end
-
-  module Transition =
-  struct
-    let shift_count, goto_count =
-      let shift_count = ref 0 in
-      let goto_count = ref 0 in
-      (* Count goto and shift transitions by iterating on all states and
-         transitions *)
-      G.Lr1.iter begin fun lr1 ->
-        List.iter begin fun (sym, _) ->
-          match sym with
-          | G.T _ -> incr shift_count
-          | G.N _ -> incr goto_count
-        end (G.Lr1.transitions lr1)
-      end;
-      (!shift_count, !goto_count)
-
-    module Goto = UC_goto_transition.Const(struct type t = g let cardinal = goto_count end)
-    module Shift = UC_shift_transition.Const(struct type t = g let cardinal = shift_count end)
-
-    let any = Sum.cardinal Goto.n Shift.n
-
-    let of_goto = Sum.inj_l
-    let of_shift = Sum.inj_r Goto.n
-
-    (* Vectors to store information on states and transitions.
-
-       We allocate a bunch of data structures (sources, targets, t_symbols,
-       nt_symbols and predecessors vectors, t_table and nt_table hash tables),
-       and then populate them by iterating over all transitions.
-    *)
-
-    let sources = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
-    let targets = Vector.make' any (fun () -> Index.of_int Lr1.n 0)
-
-    let shift_sym = Vector.make' Shift.n (fun () -> Index.of_int Terminal.n 0)
-    let goto_sym = Vector.make' Goto.n (fun () -> Index.of_int Nonterminal.n 0)
-
-    (* Hash tables to associate information to the pair of
-       a transition and a symbol.
-    *)
-
-    let goto_table = Hashtbl.create 7
-
-    let nt_count = cardinal Nonterminal.n
-
-    let shift_table = Hashtbl.create 7
-
-    let t_count = cardinal Terminal.n
-
-    (* A vector to store the predecessors of an lr1 state.
-       We cannot compute them directly, we discover them by exploring the
-       successor relation below. *)
-    let predecessors = Vector.make Lr1.n IndexSet.empty
-
-    let successors =
-      (* We populate all the data structures allocated above, i.e.
-         the vectors t_sources, t_symbols, t_targets, nt_sources, nt_symbols,
-         nt_targets and predecessors, as well as the tables t_table and
-         nt_table, by iterating over all successors. *)
-      let next_goto = Index.enumerate Goto.n in
-      let next_shift = Index.enumerate Shift.n in
-      Vector.init Lr1.n begin fun source ->
-        List.fold_right begin fun (sym, target) acc ->
-          let target = Lr1.of_g target in
-          let index = match sym with
-            | G.T t ->
-              let t = Terminal.of_g t in
-              let index = next_shift () in
-              shift_sym.:(index) <- t;
-              Hashtbl.add shift_table (t_pack t_count source t) index;
-              of_shift index
-            | G.N nt ->
-              let nt = Nonterminal.of_g nt in
-              let index = next_goto () in
-              goto_sym.:(index) <- nt;
-              Hashtbl.add goto_table (nt_pack nt_count source nt) index;
-              of_goto index
-          in
-          sources.:(index) <- source;
-          targets.:(index) <- target;
-          predecessors.@(target) <- IndexSet.add index;
-          IndexSet.add index acc
-        end (G.Lr1.transitions (Lr1.to_g source)) IndexSet.empty
-      end
-
-    let accepting =
-      let acc = ref IndexSet.empty in
-      Index.rev_iter Lr1.n begin fun lr1 ->
-        match Lr0.is_entrypoint.:(Lr1.lr0.:(lr1)) with
-        | None -> ()
-        | Some prod ->
-          let sym =
-            match Sum.prj Terminal.n Production.rhs.:(prod).(0) with
-            | L _ -> assert false
-            | R nt -> nt
-          in
-          acc := IndexSet.fold_right (fun acc tr ->
-              match Sum.prj Goto.n tr with
-              | L gt when goto_sym.:(gt) = sym -> IndexSet.add gt acc
-              | _ -> acc
-            ) !acc successors.:(lr1)
-      end;
-      !acc
-  end
-
-  module Lr1_extra = struct
-    open Lr1
-
-    let accepting = ref IndexSet.empty
-
-    (** The set of terminals that will trigger a reduction *)
-    let reduce_on = Vector.init n @@ fun lr1 ->
-      List.fold_left
-        (fun acc (t, _) ->
-           if G.Terminal.kind t = `PSEUDO then
-             accepting := IndexSet.add lr1 !accepting;
-           IndexSet.add (Terminal.of_g t) acc)
-        IndexSet.empty (G.Lr1.get_reductions (to_g lr1))
-
-    let accepting = !accepting
-
-    (** The set of terminals that will trigger a shift transition *)
-    let shift_on = Vector.init n @@ fun lr1 ->
-      List.fold_left
-        (fun acc (sym, _raw) ->
-           match sym with
-           | G.T t -> IndexSet.add (Terminal.of_g t) acc
-           | G.N _ -> acc)
-        IndexSet.empty (G.Lr1.transitions (to_g lr1))
-
-    (** The set of terminals the state has no transition for *)
-    let reject = Vector.init n @@ fun lr1 ->
-      let result = Terminal.all in
-      let result = IndexSet.diff result reduce_on.:(lr1) in
-      let result = IndexSet.diff result shift_on.:(lr1) in
-      result
-
-    let wait = IndexSet.init_from_set n (fun lr1 ->
-        match G.Lr0.incoming (Lr0.to_g lr0.:(lr1)) with
-        | Some (G.N _) -> false
-        | Some (G.T t) -> G.Terminal.kind t = `REGULAR && not (IndexSet.mem lr1 accepting)
-        | None -> true
-      )
-
-    let predecessors = Vector.init n @@ fun lr1 ->
-      IndexSet.map (fun tr -> Transition.sources.:(tr)) Transition.predecessors.:(lr1)
-
-    let entrypoint_table =
-      let table = Hashtbl.create 7 in
-      Index.iter n (fun lr1 ->
-        match Lr0.is_entrypoint.:(lr0.:(lr1)) with
-        | None -> ()
-        | Some prod ->
-          let sym, _, _ = (G.Production.rhs (Production.to_g prod)).(0) in
-          Hashtbl.add table (G.Symbol.name sym) lr1
-      );
-      table
-
-    let entrypoints =
-      Hashtbl.fold
-        (fun _ lr1 acc -> IndexSet.add lr1 acc)
-        entrypoint_table IndexSet.empty
-  end
-
-  module Reduction = struct
-    let n = ref 0
-    let raw =
-      let import_red reds =
-        reds
-        |> List.filter_map (fun (t, p) ->
-            match G.Production.kind p with
-            | `START -> None
-            | `REGULAR -> Some (Production.of_g p, Terminal.of_g t)
-          )
-        |> Misc.group_by
-          ~compare:(fun (p1,_) (p2,_) -> compare_index p1 p2)
-          ~group:(fun (p,t) ps -> p, IndexSet.of_list (t :: List.map snd ps))
-        |> List.sort (fun (p1,_) (p2,_) ->
-            let l1 = Array.length Production.rhs.:(p1) in
-            let l2 = Array.length Production.rhs.:(p2) in
-            let c = Int.compare l1 l2 in
-            if c <> 0 then c else
-              compare_index Production.lhs.:(p1) Production.lhs.:(p2)
-          )
-      in
-      let import_lr1 lr1 =
-        let reds = import_red (G.Lr1.get_reductions (Lr1.to_g lr1)) in
-        n := !n + List.length reds;
-        reds
-      in
-      Vector.init Lr1.n import_lr1
-
-    include UC_reduction.Const(struct type t = g let cardinal = !n end)
-
-    let state = Vector.make' n (fun () -> Index.of_int Lr1.n 0)
-    let production = Vector.make' n (fun () -> Index.of_int Production.n 0)
-    let lookaheads = Vector.make n IndexSet.empty
-    let from_lr1 =
-      let enum = Index.enumerate n in
-      Vector.mapi (fun lr1 reds ->
-          List.fold_left (fun set (prod, la) ->
-              let i = enum () in
-              state.:(i) <- lr1;
-              production.:(i) <- prod;
-              lookaheads.:(i) <- la;
-              IndexSet.add i set
-            ) IndexSet.empty reds
-        ) raw
-  end
-
-  let grammar = {
-    raw = (module G);
-    terminal_n              = Terminal.n;
-    terminal_all            = Terminal.all;
-    terminal_regular        = Terminal.regular;
-    nonterminal_n           = Nonterminal.n;
-    nonterminal_all         = Nonterminal.all;
-    symbol_all              = Symbol.all;
-    production_lhs          = Production.lhs;
-    production_rhs          = Production.rhs;
-    production_all          = Production.all;
-    item_productions        = Item.productions;
-    item_offsets            = Item.offsets;
-    lr0_items               = Lr0.items;
-    lr0_incoming            = Lr0.incoming;
-    lr0_is_entrypoint       = Lr0.is_entrypoint;
-    transition_source       = Transition.sources;
-    transition_target       = Transition.targets;
-    transition_shift_sym    = Transition.shift_sym;
-    transition_shift_table  = Transition.shift_table;
-    transition_goto_sym     = Transition.goto_sym;
-    transition_goto_table   = Transition.goto_table;
-    transition_predecessors = Transition.predecessors;
-    transition_successors   = Transition.successors;
-    transition_accepting    = Transition.accepting;
-    lr1_all                 = Lr1.all;
-    lr1_lr0                 = Lr1.lr0;
-    lr1_wait                = Lr1_extra.wait;
-    lr1_accepting           = Lr1_extra.accepting;
-    lr1_reduce_on           = Lr1_extra.reduce_on;
-    lr1_shift_on            = Lr1_extra.shift_on;
-    lr1_reject              = Lr1_extra.reject;
-    lr1_entrypoints         = Lr1_extra.entrypoints;
-    lr1_entrypoint_table    = Lr1_extra.entrypoint_table;
-    lr1_predecessors        = Lr1_extra.predecessors;
-    reduction_state         = Reduction.state;
-    reduction_production    = Reduction.production;
-    reduction_lookaheads    = Reduction.lookaheads;
-    reduction_from_lr1      = Reduction.from_lr1;
-  }
 end
 
 module type INDEXED = sig

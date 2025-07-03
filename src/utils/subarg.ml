@@ -16,13 +16,14 @@ type command = {
 
 let usage_subcommands ?(current="") commands =
   let remove_help msg =
-    String.split_on_char '\n' msg
-    |> List.filter (function
-        | "  -help  Display this list of options"
-        | "  --help  Display this list of options" -> false
-        | _ -> true
-      )
-    |> String.concat "\n"
+      String.split_on_char '\n' msg
+      |> List.filter (function
+          | "  -help  Display this list of options"
+          | "  --help  Display this list of options" -> false
+          | _ -> true
+        )
+      |> (fun x -> x @ [""])
+      |> String.concat "\n"
   in
   ignore current;
   String.concat "\n" (
@@ -54,7 +55,9 @@ let usage speclist commands errmsg =
 let command name help ?(enter=ignore) ?anon ?(commit=ignore) ?(abort=ignore) specs =
   {name; help; specs; enter; anon; commit; abort}
 
-let parse_argv ?(current=Arg.current) argv specs0 commands ?default ?(warn_default=ignore) anon0 msg =
+let parse_argv ?(current=Arg.current) argv specs0 commands
+    ?default ?(warn_default=ignore) ?(no_subcommand=ignore)
+    anon0 msg =
   let command_with_name name cmd = cmd.name = name in
   let default = Option.map (fun name ->
       try List.find (command_with_name name) commands
@@ -83,22 +86,26 @@ let parse_argv ?(current=Arg.current) argv specs0 commands ?default ?(warn_defau
         | None -> !anon arg
         | Some command -> set_command command
       end msg;
-      !commit ()
   in
   try
-    try run ()
-    with Bad _ as exn when !current > 0 && !current < Array.length argv &&
-                           !current_name = "" &&
-                           String.starts_with ~prefix:"-" argv.(!current) ->
-      match default with
-      | Some command when
-          List.exists (fun (name, _, _) -> name = argv.(!current))
-            command.specs ->
-        set_command command;
-        warn_default ();
-        decr current;
-        run ()
-      | _ -> raise exn
+    begin
+      try run ()
+      with Bad _ as exn when !current > 0 && !current < Array.length argv &&
+                             !current_name = "" &&
+                             String.starts_with ~prefix:"-" argv.(!current) ->
+        match default with
+        | Some command when
+            List.exists (fun (name, _, _) -> name = argv.(!current))
+              command.specs ->
+          set_command command;
+          warn_default ();
+          decr current;
+          run ()
+        | _ -> raise exn
+    end;
+    !commit ();
+    if !current_name = "" then
+      no_subcommand ()
   with
   | Bad msg ->
     !abort ();
@@ -107,9 +114,13 @@ let parse_argv ?(current=Arg.current) argv specs0 commands ?default ?(warn_defau
     !abort ();
     raise (Help (append_subcommands ~current:!current_name msg commands))
 
-let parse specs commands ?default ?warn_default anon usage =
+let parse specs commands
+    ?default ?warn_default ?no_subcommand
+    anon usage =
   try
-    parse_argv Sys.argv specs commands ?default ?warn_default anon usage
+    parse_argv Sys.argv specs commands
+      ?default ?warn_default ?no_subcommand
+      anon usage
   with
   | Bad msg -> Printf.eprintf "%s" msg; exit 2
   | Help msg -> Printf.printf "%s" msg; exit 0
