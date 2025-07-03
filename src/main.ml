@@ -1,11 +1,7 @@
-open Fix.Indexing
 open Utils
-open Misc
+(*open Misc*)
 
-let name_string = "The Menhir parser lexer generator :-]"
-let version_string = "0.1"
-
-let usage = "\
+(*let usage = "\
 Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.mlyl] <commands>...
 
 Global options:
@@ -34,7 +30,7 @@ Commands:
 Examples:
   lrgrep -v -g grammar.cmly -s error.mlyl compile -o error.ml
   lrgrep -g grammar.cmly -s error.mlyl interpret -i \"invalid sentence\"
-"
+  "*)
 
 (*
 
@@ -46,133 +42,63 @@ Examples:
 
 *)
 
-let version = "LRgrep 1.0\n"
+let opt_spec_name = ref None
+let opt_output_name = ref None
+let opt_grammar_file = ref None
+let opt_dump_dot = ref false
 
-let usage_error fmt =
-  prerr_string "lrgrep: ";
-  Printf.kfprintf (fun oc -> Printf.fprintf oc "\n%s" usage; exit 2) stderr fmt
+let print_version_num () =
+  print_endline "0.2";
+  exit 0
 
-(* Quick'n'dirty argument parsing *)
+let print_version_string () =
+  print_string "LRGrep: toolkit for Menhir parsers, version ";
+  print_version_num ()
 
-type compile_options = {
-  compile_output: string option;
-  compile_dummy: unit;
-}
+let global_specs = [
+  "-g", Arg.String (fun x -> opt_grammar_file := Some x),
+  " <file.cmly>  Path to the compiled Menhir grammar to analyse (*.cmly)";
+  "-s", Arg.String (fun x -> opt_spec_name := Some x),
+  " <file.mlyl>  Path to the error specification to process (*.mlyl)";
+  "-v", Arg.Unit (fun () -> incr Misc.verbosity_level),
+  " Increase output verbosity (for debugging/profiling)";
+  "-version", Arg.Unit print_version_string,
+  " Print version and exit";
+  "-vnum", Arg.Unit print_version_num,
+  " Print version number and exit";
+  "-dump-dot", Arg.Set opt_dump_dot,
+  " debug: Dump internal automata to Graphviz .dot files";
+]
 
-type command =
-  | Compile of compile_options
-  | Interpret of unit
-  | Cover of unit
-  | Recover of unit
-  | Complete of unit
+let commands =
+  let not_implemented command () =
+    prerr_endline (command ^ " not implemented.");
+    exit 1
+  in
+  Subarg.[
+    command "compile" "Translate a specification to an OCaml module" [
+      "-o", Arg.String (fun x -> opt_output_name := Some x),
+      " <file.ml>  Set output file name to <file> (defaults to <source>.ml)";
+    ];
+    command "interpret" "Parse a sentence and suggest patterns that can match it" []
+      ~commit:(not_implemented "interpret");
+    command "cover" "Generate sentences to cover possible failures" []
+      ~commit:(not_implemented "cover");
+    command "recover" "Generate an error-resilient parser for the grammar" []
+      ~commit:(not_implemented "recover");
+    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
+      ~commit:(not_implemented "complete");
+]
 
-type arg =
-  | Short of char
-  | Long  of string
-  | Text  of string
+let () = Subarg.parse global_specs commands
+    ~default:(fun () ->
+        prerr_endline "running LRgrep without a sub-command is deprecated, add `compile' to the command-line";
+        "compile"
+      )
+    (fun _ -> failwith "FIXME")
+    "lrgrep <global options> [ command <command options ]..."
 
-let default_compile_options = {
-  compile_output = None;
-  compile_dummy = ();
-}
-
-let is_command = function
-  | "compile"   -> Some (Compile default_compile_options)
-  | "interpret" -> Some (Interpret ())
-  | "cover"     -> Some (Cover ())
-  | "recover"   -> Some (Recover ())
-  | "complete"  -> Some (Complete ())
-  | _ -> None
-
-let arg_is_command = function
-  | Text cmd -> is_command cmd
-  | _ -> None
-
-let parse_arg x =
-  let l = String.length x in
-  if l >= 2 && x.[0] = '-' then (
-    if x.[1] <> '-' then (
-      let acc = ref [] in
-      for j = l - 1 downto 1 do
-        acc := Short x.[j] :: !acc
-      done;
-      !acc
-    ) else
-      [Long (String.sub x 2 (l - 2))]
-  ) else
-    [Text x]
-
-let arg_to_text = function
-  | Short s -> "-" ^ String.make 1 s
-  | Long l -> "--" ^ l
-  | Text t -> t
-
-let conf_grammar_file = ref None
-
-let set_grammar_file text =
-  match !conf_grammar_file with
-  | None -> conf_grammar_file := Some text
-  | Some text' ->
-    usage_error "-g %S: grammar has already been set to %S" text text'
-
-let conf_spec_file = ref None
-
-let set_spec_file text =
-  match !conf_spec_file with
-  | None -> conf_spec_file := Some text
-  | Some text' ->
-    usage_error "-s %S: spec has already been set to %S" text text'
-
-(* Dump automata as ".dot" graphviz files *)
-let dump_dot = ref false
-
-let parse_common_option = function
-  | (Short 'g' | Long "grammar") :: Text file :: rest ->
-    set_grammar_file file;
-    Some rest
-
-  | (Short 's' | Long "spec") :: Text file :: rest ->
-    set_spec_file file;
-    Some rest
-
-  | Long "dump-dot" :: rest ->
-    dump_dot := true;
-    Some rest
-
-  | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
-    usage_error "expecting filename after %s" (arg_to_text arg)
-
-  | _ -> None
-
-let rec parse_common_options args =
-  match parse_common_option args with
-  | Some args' -> parse_common_options args'
-  | None -> args
-
-let rec parse_compile acc args =
-  match parse_common_options args with
-  | (Short 'o' | Long "output" as arg) :: rest ->
-    begin match acc.compile_output with
-      | None -> ()
-      | Some path ->
-        usage_error
-          "compile: redundant -o, output has already been set to %S" path
-    end;
-    begin match rest with
-      | Text path :: rest ->
-        parse_compile {acc with compile_output = Some path} rest
-      | _ ->
-        usage_error "compile: expecting a filename after %s"
-          (arg_to_text arg)
-    end;
-  | rest -> Compile acc, rest
-
-let parse_interpret () _ = failwith "interpret: TODO"
-let parse_cover () _ = failwith "cover: TODO"
-let parse_recover () _ = failwith "recover: TODO"
-let parse_complete () _ = failwith "complete: TODO"
-
-let rec parse_commands acc command args =
+(*let rec parse_commands acc command args =
   let command, args = match command with
     | Compile   opts -> parse_compile opts args
     | Interpret opts -> parse_interpret opts args
@@ -250,17 +176,18 @@ let () = List.iter (fun text ->
          (compile, interpret, enumerate, recover, complete).\n"
         text grammar spec
   ) (List.rev !anon_arguments)
+*)
 
 (* Load and pre-process grammar *)
 
-let grammar_filename = match !conf_grammar_file with
+(*let grammar_filename = match !opt_grammar_file with
   | Some file -> file
   | None ->
     usage_error "No parser has been specified.\
                  Expecting an argument of the form <parser.cmly>.\n"
 
-module Grammar =
-  MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)
+(*module Grammar =
+  MenhirSdk.Cmly_read.Read(struct let filename = grammar_filename end)*)
 
 let () = stopwatch 1 "Loaded file %s" grammar_filename
 
@@ -275,7 +202,7 @@ let () = stopwatch 1 "Imported grammar (%d terminals, %d non-terminals, %d lr0 s
 
 (* Load and parse specification, if any *)
 
-let spec =
+(*let spec =
   let print_parse_error_and_exit lexbuf exn =
     let bt = Printexc.get_raw_backtrace () in
     match exn with
@@ -453,6 +380,5 @@ let process_command = function
     let cp = Code_printer.create ~filename:output_file (output_string oc) in
     do_compile {parser_name; lexer_definition} (Some cp);
     close_out oc
-  | _ -> failwith "TODO"
-
-let () = List.iter process_command commands
+  | _ -> failwith "TODO"*)
+*)
