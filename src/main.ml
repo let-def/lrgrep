@@ -91,11 +91,11 @@ let commands =
 ]
 
 let () = Subarg.parse global_specs commands
-    ~default:(fun () ->
-        prerr_endline "running LRgrep without a sub-command is deprecated, add `compile' to the command-line";
-        "compile"
-      )
-    (fun _ -> failwith "FIXME")
+    ~default:"compile"
+    ~warn_default:(fun () ->
+        prerr_endline "running LRgrep without a sub-command is deprecated, \
+                       add `compile' to the command-line")
+    (fun arg -> prerr_endline ("unknown arg " ^ arg); exit 1)
     "lrgrep <global options> [ command <command options ]..."
 
 (*let rec parse_commands acc command args =

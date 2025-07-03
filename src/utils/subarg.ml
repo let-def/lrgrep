@@ -54,10 +54,17 @@ let usage speclist commands errmsg =
 let command name help ?(enter=ignore) ?anon ?(commit=ignore) ?(abort=ignore) specs =
   {name; help; specs; enter; anon; commit; abort}
 
-let parse_argv ?(current=Arg.current) argv specs0 commands ?default anon0 msg =
+let parse_argv ?(current=Arg.current) argv specs0 commands ?default ?(warn_default=ignore) anon0 msg =
+  let command_with_name name cmd = cmd.name = name in
+  let default = Option.map (fun name ->
+      try List.find (command_with_name name) commands
+      with Not_found ->
+        invalid_arg ("Subarg.parse_argv: default command (" ^ name ^
+                     ") is not part of command list")
+    ) default
+  in
   let abort = ref ignore in
   let current_name = ref "" in
-  let command_with_name name cmd = cmd.name = name in
   let specs = ref specs0 in
   let commit = ref ignore in
   let anon = ref anon0 in
@@ -84,17 +91,14 @@ let parse_argv ?(current=Arg.current) argv specs0 commands ?default anon0 msg =
                            !current_name = "" &&
                            String.starts_with ~prefix:"-" argv.(!current) ->
       match default with
-      | None -> raise exn
-      | Some fn ->
-        let cmd = fn () in
-        match List.find_opt (command_with_name cmd) commands with
-        | None ->
-          invalid_arg ("Subarg.parse_argv: default command (" ^
-                       cmd ^ ") is not part of command list")
-        | Some command ->
-          set_command command;
-          decr current;
-          run ()
+      | Some command when
+          List.exists (fun (name, _, _) -> name = argv.(!current))
+            command.specs ->
+        set_command command;
+        warn_default ();
+        decr current;
+        run ()
+      | _ -> raise exn
   with
   | Bad msg ->
     !abort ();
@@ -103,9 +107,9 @@ let parse_argv ?(current=Arg.current) argv specs0 commands ?default anon0 msg =
     !abort ();
     raise (Help (append_subcommands ~current:!current_name msg commands))
 
-let parse specs commands ?default anon usage =
+let parse specs commands ?default ?warn_default anon usage =
   try
-    parse_argv Sys.argv specs commands ?default anon usage
+    parse_argv Sys.argv specs commands ?default ?warn_default anon usage
   with
   | Bad msg -> Printf.eprintf "%s" msg; exit 2
   | Help msg -> Printf.printf "%s" msg; exit 0

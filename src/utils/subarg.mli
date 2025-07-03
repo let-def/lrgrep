@@ -25,9 +25,11 @@ val usage : spec list -> command list -> Arg.usage_msg -> unit
 
 val parse_argv :
   ?current:int ref -> string array ->
-  spec list -> command list -> ?default:(unit -> string) ->
+  spec list -> command list ->
+  ?default:string -> ?warn_default:(unit -> unit) ->
   Arg.anon_fun -> Arg.usage_msg -> unit
 
 val parse :
-  spec list -> command list -> ?default:(unit -> string) ->
+  spec list -> command list ->
+  ?default:string -> ?warn_default:(unit -> unit) ->
   Arg.anon_fun -> Arg.usage_msg -> unit
