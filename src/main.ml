@@ -328,7 +328,9 @@ module T = struct
     | Some _ -> Lazy.from_fun compute_reachability
 
   let rc = Kernel.Viable_reductions.reduce_closures grammar
-  let () = stopwatch 1 "Done with closure of epsilon reductions"
+  let () = stopwatch 1 "Done with closure of lr1 epsilon reductions"
+  let _grc = Kernel.Viable_reductions.goto_reduce_closures grammar rc
+  let () = stopwatch 1 "Done with closure of goto epsilon reductions"
   let _viable = Kernel.Viable_reductions.viable2 grammar rc
 
   let viable = Kernel.Viable_reductions.make grammar rc
@@ -355,7 +357,17 @@ let lrc_from_entrypoints =
       let lrcs = IndexSet.bind lr1s (Vector.get T.lrc.lrcs_of) in
       let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
-      stopwatch 2 "Computed LRC subset reachable from entrypoints";
+      stopwatch 1 "Computed LRC subset reachable from entrypoints";
+      let module RR = Kernel.Reachable_reductions.Make (struct
+          type nonrec g = g
+          type lrc = g Kernel.Lrc.mlrc
+          let g = grammar
+          let viable = T.viable
+          let lrc_graph = T.lrc
+          let entrypoints = ep
+        end)()
+      in
+      stopwatch 1 "Computed reductions reachable from entrypoints";
       ep
 
 let with_output_file fmt =
