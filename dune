@@ -1,1 +1,2 @@
 (dirs ("src" "support" "examples" "test"))
+(vendored_dirs vendor)

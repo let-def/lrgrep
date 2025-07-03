@@ -1,0 +1,4 @@
+(executable
+ (public_name perfctl)
+ (name main)
+ (libraries unix))
