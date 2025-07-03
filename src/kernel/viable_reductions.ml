@@ -44,23 +44,22 @@ let group_reductions g = function
     let rec group depth acc = function
       | [] -> [acc]
       | (it, la) :: rest when depth = Item.position g it ->
-        group depth ((Item.production g it, la) :: acc) rest
+        let lhs = Production.lhs g (Item.production g it) in
+        group depth (IndexMap.update lhs (union_update la) acc) rest
       | otherwise ->
-        acc :: group (depth + 1) [] otherwise
+        acc :: group (depth + 1) IndexMap.empty otherwise
     in
     let compare_items (it1, _) (it2, _) =
       Int.compare (Item.position g it1) (Item.position g it2)
     in
-    group 0 [] (List.sort compare_items items)
+    group 0 IndexMap.empty (List.sort compare_items items)
 
 type 'g reduce_closure = {
-  reductions: ('g, 'g production index) with_lookahead list list;
+  reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: ('g, 'g lr1 index list) with_lookahead list;
 }
 
-type 'g reduce_closures = ('g lr1, 'g reduce_closure) vector
-
-let reduce_closures (type g) (g : g grammar) : g reduce_closures =
+let reduce_closures (type g) (g : g grammar) : (g lr1, g reduce_closure) vector =
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
   let rec pop lookahead acc (item : g item index) = function
     | [] -> let items, stacks = acc in ((item, lookahead) :: items, stacks)
@@ -84,6 +83,59 @@ let reduce_closures (type g) (g : g grammar) : g reduce_closures =
   let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
   {reductions = group_reductions g items; stacks}
 
+let rec filter_reductions g la = function
+  | [] -> []
+  | r :: rs as rrs ->
+    let filtered = ref false in
+    let r' =
+      IndexMap.filter_map (fun _ la' ->
+          let la'' = Terminal.intersect g la la' in
+          if la' != la'' then filtered := true;
+          if IndexSet.is_empty la'' then None else Some la''
+        ) r
+    in
+    let rs' = filter_reductions g la rs in
+    if rs == rs' && not !filtered
+    then rrs
+    else r' :: rs'
+
+let rec filter_stacks g la acc = function
+  | [] -> acc
+  | (x, la') :: xs ->
+    let la' = Terminal.intersect g la la' in
+    let acc =
+      if IndexSet.is_empty la'
+      then acc
+      else (x, la') :: acc
+    in
+    filter_stacks g la' acc xs
+
+let goto_reduce_closures (type g) (g : g grammar) rcs
+  : (g goto_transition, g reduce_closure) vector
+  =
+  Vector.init (Transition.goto g) @@ fun gt ->
+  let tr = Transition.of_goto g gt in
+  let src = Transition.source g tr in
+  let tgt = Transition.target g tr in
+  let stacks = ref [] in
+  let reductions = ref [] in
+  let rec visit tgt la =
+    let rc = rcs.:(tgt) in
+    stacks := filter_stacks g la !stacks rc.stacks;
+    match filter_reductions g la rc.reductions with
+    | [] -> ()
+    | r :: rs ->
+      reductions := rs @ !reductions;
+      IndexMap.iter (fun nt la' ->
+          let la' = Terminal.intersect g la la' in
+          if not (IndexSet.is_empty la') then
+            let tgt' = Transition.find_goto_target g src nt in
+            visit tgt' la'
+        ) r
+  in
+  visit tgt (Terminal.all g);
+  {reductions = !reductions; stacks = !stacks}
+
 module Inner = Unsafe_cardinal()
 type 'g inner = 'g Inner.t
 
@@ -91,10 +143,13 @@ type ('g, 'n) states = ('g lr1, 'g inner) Sum.n
 
 type 'g state =
   | Lr1 of 'g lr1 index
-  | Goto of 'g goto_transition index * 'g terminal indexset
+  | Goto of 'g lr1 indexset * 'g lr1 index * 'g terminal indexset
 
 let viable2 (type g) (g : g grammar) rc =
-  let table = Hashtbl.create 7 in
+  ignore g;
+  ignore rc;
+  failwith "TODO"
+  (*let table = Hashtbl.create 7 in
   let todo = ref [] in
   let get_state state =
     match Hashtbl.find_opt table state with
@@ -105,36 +160,31 @@ let viable2 (type g) (g : g grammar) rc =
       push todo state;
       index
   in
-  let rec restrict_lookaheads la = function
-    | [] -> []
-    | xs :: xxs ->
-      let xs' = List.filter_map (fun (x, la') ->
-          let la = IndexSet.inter la la' in
-          if IndexSet.is_empty la
-          then None
-          else Some (x, la)
-        ) xs
-      in
-      match xs', restrict_lookaheads la xxs with
-      | [], [] -> []
-      | xs', xxs' -> xs' :: xxs'
-  in
-  let reduce lr1 (prod, la) =
-    let gt = Transition.find_goto g lr1 (Production.lhs g prod) in
-    get_state (Goto (gt, la))
-  in
   let set _ = () in
   let rec explore_stack lr1s = function
     | [] -> []
     | reductions :: rest ->
       let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      let expand lr1 = List.map (reduce lr1) reductions in
-      let reductions = IndexMap.inflate expand lr1s in
-      reductions :: explore_stack lr1s rest
+      let transitions = IndexMap.fold (fun nt la transitions ->
+          let targets =
+            IndexSet.fold (fun source reductions ->
+                let target = Transition.find_goto_target g source nt in
+                IndexMap.update target (add_update source) reductions
+              ) lr1s IndexMap.empty
+          in
+          IndexMap.fold
+            (fun target sources acc -> get_state (Goto (sources, target, la)) :: acc)
+            targets transitions
+        ) reductions []
+      in
+      transitions :: explore_stack lr1s rest
+  in
+  let merge_maps a b =
+    IndexMap.union (fun _ a b -> Some (IndexSet.union a b)) a b
   in
   let rec merge_tails = function
     | x, [] | [], x -> x
-    | (x :: xs), (y :: ys) -> (x @ y) :: merge_tails (xs, ys)
+    | (x :: xs), (y :: ys) -> merge_maps x y :: merge_tails (xs, ys)
   in
   let rec close_goto lr1 = function
     | [] -> []
@@ -143,24 +193,22 @@ let viable2 (type g) (g : g grammar) rc =
       let rest = close_goto lr1 (rs :: rest) in
       let target = Transition.find_goto_target g lr1 (Production.lhs g p) in
       let reductions = rc.:(target).reductions in
-      match restrict_lookaheads la reductions with
+      match filter_reductions g la reductions with
       | [] -> rest
       | rs' :: rest' ->
-        close_goto lr1 ((rs' @ rs) :: merge_tails (rest, rest'))
+        close_goto lr1 (merge_maps rs' rs :: merge_tails (rest, rest'))
   in
   let propagate = function
-    | Goto (gt, la) ->
-      let tr = Transition.of_goto g gt in
-      let reductions = rc.:(Transition.target g tr).reductions in
-      let lr1 = Transition.source g tr in
-      set (explore_stack (IndexSet.singleton lr1)
-             (close_goto lr1 (restrict_lookaheads la reductions)))
+    | Goto (sources, target, la) ->
+      let reductions = rc.:(target).reductions in
+      set (explore_stack sources
+             (close_goto sources (restrict_lookaheads la reductions)))
     | Lr1 lr1 ->
       set (explore_stack (IndexSet.singleton lr1) rc.:(lr1).reductions)
   in
   Index.iter (Lr1.cardinal g) (fun lr1 -> propagate (Lr1 lr1));
   fixpoint ~propagate todo;
-  stopwatch 1 "viable2: %d states\n" (Hashtbl.length table)
+  stopwatch 1 "viable2: %d states\n" (Hashtbl.length table)*)
 
 (* Step 2: explore viable reductions *)
 
@@ -210,7 +258,7 @@ type 'g t = {
   transitions: ('g viable, 'g transitions) vector;
 }
 
-let make (type g) (g : g grammar) (_rc : g reduce_closures) : g t =
+let make (type g) (g : g grammar) (_rc : (g lr1, g reduce_closure) vector) : g t =
   stopwatch 2 "constructing viable reduction graph";
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
