@@ -120,13 +120,13 @@ let index_fold n a f =
   Index.iter n (fun i -> a := f i !a);
   !a
 
-(* Vector get *)
+(** Vector get *)
 let (.:()) = Vector.get
 
-(* Vector set *)
+(** Vector set *)
 let (.:()<-) = Vector.set
 
-(* Vector update cell *)
+(** Vector update *)
 let (.@()<-) v i f = v.:(i) <- f v.:(i)
 
 (** [tabulate_finset n f] tabulates function [f] over all indices in the

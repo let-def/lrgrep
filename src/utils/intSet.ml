@@ -471,7 +471,7 @@ let init_subset i j f =
 
 let rec filter f = function
   | N -> N
-  | C (addr, word0, ss) ->
+  | C (addr, word0, ss) as ss0 ->
     let word = ref 0 in
     for i = 0 to word_size - 1 do
       if word0 land (1 lsl i) <> 0 && f (addr + i) then
@@ -480,7 +480,35 @@ let rec filter f = function
     if !word = 0 then
       filter f ss
     else
-      C (addr, !word, filter f ss)
+      let ss' = filter f ss in
+      if !word = word0 && ss == ss' then
+        ss0
+      else
+        C (addr, !word, ss')
+
+let rec find f = function
+  | N -> raise Not_found
+  | C (a, w, ss) ->
+    find_addr f a w ss 0
+
+and find_addr f a w ss i =
+  if w land (1 lsl i) <> 0 && f (a + i) then
+    (a + i)
+  else if i = word_size - 1 then
+    find f ss
+  else
+    find_addr f a w ss (i + 1)
+
+let rec find_map f = function
+  | N -> None
+  | C (a, w, ss) ->
+    find_map_addr f a w ss 0
+
+and find_map_addr f a w ss i =
+  match if w land (1 lsl i) = 0 then None else f (a + i) with
+  | Some _ as result -> result
+  | None when i = word_size - 1 -> find_map f ss
+  | None -> find_map_addr f a w ss (i + 1)
 
 let rec allocate result = function
   | N ->
