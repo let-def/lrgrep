@@ -504,14 +504,13 @@ let ast = match spec_file with
           "cannot open specification file (%S).\n" (Printexc.to_string exn)
     in
     (* Create a lexer buffer from the file *)
-    let lexbuf =
-      Front.Lexer.ic := Some ic;
-      Lexing.from_channel ~with_positions:true ic
-    in
+    let state = Front.Lexer.fresh_state () in
+    let lexbuf = Lexing.from_channel ~with_positions:true ic in
+    let lexbuf = Front.Lexer.prepare_lexbuf state lexbuf in
     (* Parse the specification file into an abstract syntax tree (AST) *)
     let ast =
       Lexing.set_filename lexbuf spec_file;
-      try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+      try Front.Parser.lexer_definition (Front.Lexer.main state) lexbuf
       with
       | Front.Lexer.Lexical_error {msg; pos} ->
         Syntax.error pos "%s" msg
@@ -519,10 +518,7 @@ let ast = match spec_file with
         Syntax.error lexbuf.lex_start_p "syntax error"
     in
     (* Close the input channel *)
-    let () =
-      Front.Lexer.ic := None;
-      close_in_noerr ic
-    in
+    close_in_noerr ic;
     Some ast
 
 (** Translate parsed specifications into subsets of suffixes.

@@ -180,14 +180,14 @@ let spec = lazy (
     | exception exn ->
       fatal_error ~exn "cannot load specification file %s" path
     | ic ->
-      Front.Lexer.ic := Some ic;
+      let state = Front.Lexer.fresh_state () in
       let lexbuf = Lexing.from_channel ~with_positions:true ic in
+      let lexbuf = Front.Lexer.prepare_lexbuf state lexbuf in
       Lexing.set_filename lexbuf path;
       let result =
-        try Front.Parser.lexer_definition Front.Lexer.main lexbuf
+        try Front.Parser.lexer_definition (Front.Lexer.main state) lexbuf
         with exn -> print_parse_error_and_exit lexbuf exn
       in
-      Front.Lexer.ic := None;
       result
   in
   let file = get_spec_file () in
