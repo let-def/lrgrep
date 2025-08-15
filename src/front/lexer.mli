@@ -15,7 +15,10 @@
 
 type lexer_state
 
-val fresh_state : unit -> lexer_state
+val fresh_state :
+  warn:(Lexing.position -> string -> unit) ->
+  lexer_state
+
 val prepare_lexbuf : lexer_state -> Lexing.lexbuf -> Lexing.lexbuf
 
 val main : lexer_state -> Lexing.lexbuf -> Parser.token
