@@ -16,12 +16,12 @@
 (* The grammar for lexer definitions *)
 
 %{
-open Kernel.Syntax
+open Syntax
 let mk_re desc position = {desc; position}
 %}
 
 %token <string> IDENT
-%token <Kernel.Syntax.ocaml_code> ACTION
+%token <Syntax.ocaml_code> ACTION
 %token UNREACHABLE
 %token RULE        "rule"
        PARSE       "parse"
@@ -44,14 +44,19 @@ let mk_re desc position = {desc; position}
        AT          "@"
        EOF
 
-%start <Kernel.Syntax.lexer_definition> lexer_definition
-%start <Kernel.Syntax.filter> filter
+%start <Syntax.lexer_definition> parse_lexer_definition
+%start <Syntax.filter> parse_filter
 
 %%
 
-lexer_definition:
+parse_lexer_definition:
 | header rule+ header EOF
   { {header=$1; rules=$2; trailer=$3} }
+;
+
+parse_filter:
+| filter_body EOF
+  { $1 }
 ;
 
 ident:
@@ -142,13 +147,13 @@ filter_symbol:
 | wild_symbol { Find $1 }
 ;
 
-filter:
+%inline filter_body:
 | ioption(terminated(symbol, ":")) positioned(filter_symbol)+
   { {lhs = $1; rhs = $2} }
 ;
 
-%inline regfilter:
-| "/" filter
+regfilter:
+| "/" filter_body
   { mk_re (Filter $2) $startpos }
 ;
 

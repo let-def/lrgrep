@@ -2,14 +2,9 @@
  (name main)
  (public_name lrgrep)
  (modules main)
- ;(modules main
- ;         sentences
- ;         compile_command
- ;         enum_command enum
- ;         interpret_command)
- (libraries front fix cmon utils menhirSdk valmari support perfctl))
+ (libraries cmon fix front kernel menhirSdk support utils valmari perfctl))
 
 (executable
  (name minilrgrep)
  (modules minilrgrep)
- (libraries unix front fix cmon utils menhirSdk valmari support))
+ (libraries cmon fix front kernel menhirSdk support utils valmari))

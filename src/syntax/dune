@@ -1,0 +1,4 @@
+(library
+ (name syntax)
+ (public_name lrgrep.internal.syntax)
+ (libraries utils))

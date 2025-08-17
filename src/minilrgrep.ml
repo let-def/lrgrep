@@ -5,7 +5,6 @@
 open Utils
 open Fix.Indexing
 open Misc
-module Syntax = Kernel.Syntax
 
 (** Print usage information for the program *)
 let usage () =
@@ -497,10 +496,10 @@ let ast = match spec_file with
       try open_in_bin spec_file
       with
       | Sys_error msg ->
-        Kernel.Syntax.error invalid_position
+        Syntax.error invalid_position
           "cannot open specification file (%S).\n" msg
       | exn ->
-        Kernel.Syntax.error invalid_position
+        Syntax.error invalid_position
           "cannot open specification file (%S).\n" (Printexc.to_string exn)
     in
     (* Create a lexer buffer from the file *)
@@ -512,7 +511,7 @@ let ast = match spec_file with
     (* Parse the specification file into an abstract syntax tree (AST) *)
     let ast =
       Lexing.set_filename lexbuf spec_file;
-      try Front.Parser.lexer_definition (Front.Lexer.main state) lexbuf
+      try Front.Parser.parse_lexer_definition (Front.Lexer.main state) lexbuf
       with
       | Front.Lexer.Lexical_error {msg; pos} ->
         Syntax.error pos "%s" msg
@@ -528,7 +527,7 @@ let ast = match spec_file with
     MiniLRGrep only supports a subset of the DSL; unsupported constructions are
     rejected during this step. *)
 module Transl = struct
-  open Kernel.Syntax
+  open Syntax
 
   (** A more "semantic" representation of a filter.
 

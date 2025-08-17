@@ -187,7 +187,7 @@ let spec = lazy (
       let lexbuf = Front.Lexer.prepare_lexbuf state lexbuf in
       Lexing.set_filename lexbuf path;
       let result =
-        try Front.Parser.lexer_definition (Front.Lexer.main state) lexbuf
+        try Front.Parser.parse_lexer_definition (Front.Lexer.main state) lexbuf
         with exn -> print_parse_error_and_exit lexbuf exn
       in
       result
