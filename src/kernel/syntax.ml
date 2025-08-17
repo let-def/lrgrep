@@ -64,6 +64,7 @@ type filter_symbol =
 
 type regular_desc =
   | Atom of string option * wild_symbol * Usage.mark
+  (** [Atom (capture, sym,_)] represents the base cases ([symbol] and [_]). *)
   | Alternative of regular_expr list
   (** A disjunction of multiple expressions.
       [e1 | e2 | e3] is represented as [Alternative [e1; e2; e3]] *)
@@ -71,23 +72,29 @@ type regular_desc =
       expr: regular_expr;
       policy: quantifier_kind;
     }
-  (** [Repetition e] represents [e*] *)
+  (** [Repetition e] represents [e*] and [e**] *)
   | Reduce of {
       capture: string option;
       mark: Usage.mark;
       expr: regular_expr;
       policy: quantifier_kind;
     }
-  (** [Reduce] represents the [!] operator *)
+  (** [Reduce {expr; _}] represents [[expr]] and [[[expr]]]. *)
   | Concat of regular_expr list
   (** [Concat [e1; e2; ..]] is [e1; e2; ...] *)
-  | Filter of {lhs: wild_symbol; rhs: (filter_symbol * position) list}
+  | Filter of filter
+  (** [Filter f] represents [/foo: bar...] *)
 
 (** [regular_expr] adds position information to [regular_desc] for error
     reporting purposes. *)
 and regular_expr = {
   desc: regular_desc;
   position: position; (** the position where this term ends *)
+}
+
+and filter = {
+  lhs: wild_symbol;
+  rhs: (filter_symbol * position) list;
 }
 
 (** The semantic action associated to a pattern *)

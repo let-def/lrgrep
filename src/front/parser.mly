@@ -45,6 +45,7 @@ let mk_re desc position = {desc; position}
        EOF
 
 %start <Kernel.Syntax.lexer_definition> lexer_definition
+%start <Kernel.Syntax.filter> filter
 
 %%
 
@@ -142,14 +143,19 @@ filter_symbol:
 ;
 
 filter:
-| "/" ioption(terminated(symbol, ":")) positioned(filter_symbol)+
-  { mk_re (Filter {lhs = $2; rhs = $3}) $startpos }
+| ioption(terminated(symbol, ":")) positioned(filter_symbol)+
+  { {lhs = $1; rhs = $2} }
+;
+
+%inline regfilter:
+| "/" filter
+  { mk_re (Filter $2) $startpos }
 ;
 
 regseq_loop:
-| regseq_loop filter      { $2 :: $1 }
+| regseq_loop regfilter   { $2 :: $1 }
 | regterm                 { [$1] }
-| filter                  { [$1] }
+| regfilter               { [$1] }
 | regseq_loop ";" regterm { $3 :: $1 }
 ;
 
