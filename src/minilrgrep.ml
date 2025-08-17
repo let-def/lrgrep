@@ -503,9 +503,7 @@ let ast = match spec_file with
           "cannot open specification file (%S).\n" (Printexc.to_string exn)
     in
     (* Create a lexer buffer from the file *)
-    let state = Front.Lexer.fresh_state
-        ~warn:(fun pos msg -> Syntax.warn pos "%s" msg)
-    in
+    let state = Front.Lexer.fresh_state () in
     let lexbuf = Lexing.from_channel ~with_positions:true ic in
     let lexbuf = Front.Lexer.prepare_lexbuf state lexbuf in
     (* Parse the specification file into an abstract syntax tree (AST) *)

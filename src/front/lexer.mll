@@ -25,15 +25,13 @@ type lexer_state = {
   mutable comment_depth: int;
   mutable track_from: int;
   mutable refills: Buffer.t;
-  warn: Lexing.position -> string -> unit;
 }
 
-let fresh_state ~warn = {
+let fresh_state () = {
   brace_depth = 0;
   comment_depth = 0;
   track_from = -1;
   refills = Buffer.create 0;
-  warn;
 }
 
 let prepare_lexbuf st (lexbuf : Lexing.lexbuf) =
@@ -77,8 +75,8 @@ let raise_lexical_error lexbuf fmt =
   Printf.ksprintf (fun msg -> raise (Lexical_error {msg; pos}))
     fmt
 
-let warning st lexbuf msg =
-  st.warn (Lexing.lexeme_start_p lexbuf) msg
+let warning lexbuf fmt =
+  Syntax.warn (Lexing.lexeme_start_p lexbuf) fmt
 
 let hex_digit_value d =
   let d = Char.code d in
@@ -301,14 +299,14 @@ and string st = parse
       string st lexbuf }
   | '\\' (_ as c)
     { if in_pattern st then
-       warning st lexbuf
-        (Printf.sprintf "illegal backslash escape in string: '\\%c'" c);
+       warning lexbuf
+        "illegal backslash escape in string: '\\%c'" c;
       string st lexbuf }
   | eof
     { raise_lexical_error lexbuf "unterminated string" }
   | '\r'* '\n'
     { if st.comment_depth = 0 then
-        warning st lexbuf "unescaped newline in string";
+        warning lexbuf "unescaped newline in string";
       incr_loc lexbuf 0;
       string st lexbuf }
   | _
