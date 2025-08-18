@@ -148,7 +148,7 @@ filter_symbol:
 ;
 
 %inline filter_body:
-| ioption(terminated(symbol, ":")) positioned(filter_symbol)+
+| ioption(terminated(wild_symbol, ":")) positioned(filter_symbol)+
   { {lhs = $1; rhs = $2} }
 ;
 

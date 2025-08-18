@@ -93,7 +93,7 @@ and regular_expr = {
 }
 
 and filter = {
-  lhs: wild_symbol;
+  lhs: wild_symbol option;
   rhs: (filter_symbol * position) list;
 }
 
@@ -220,7 +220,7 @@ let rec cmon_regular_term = function
     ]
   | Filter {lhs; rhs} ->
     Cmon.crecord "Filter" [
-      "lhs", cmon_wild_symbol lhs;
+      "lhs", cmon_option cmon_wild_symbol lhs;
       "rhs", Cmon.list_map (cmon_positioned cmon_filter_symbol) rhs;
     ]
 

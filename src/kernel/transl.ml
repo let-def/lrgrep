@@ -316,7 +316,7 @@ end
 
 let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
   let transl_sym = Option.map (Indices.get_symbol indices position) in
-  let lhs = transl_sym lhs in
+  let lhs = transl_sym (Option.join lhs) in
   let prods = match lhs with
     | None -> Production.all g
     | Some lhs ->

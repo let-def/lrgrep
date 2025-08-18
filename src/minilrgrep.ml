@@ -715,8 +715,8 @@ module Transl = struct
       Consume (filter, process_atom expr.position sym, expr.position)
     | Filter {lhs; rhs} ->
       let lhs = match lhs with
-        | None -> None
-        | Some sym ->
+        | None | Some None -> None
+        | Some (Some sym) ->
           match Symbol.desc grammar (parse_symbol expr.position sym) with
           | T _ -> error expr.position "expecting a non-terminal"
           | N n -> Some n
