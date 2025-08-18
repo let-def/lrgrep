@@ -24,7 +24,7 @@ type lexer_state = {
   mutable brace_depth: int;
   mutable comment_depth: int;
   mutable track_from: int;
-  mutable refills: Buffer.t;
+  refills: Buffer.t;
 }
 
 let fresh_state () = {
