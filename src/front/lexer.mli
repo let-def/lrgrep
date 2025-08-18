@@ -21,4 +21,4 @@ val prepare_lexbuf : lexer_state -> Lexing.lexbuf -> Lexing.lexbuf
 
 val main : lexer_state -> Lexing.lexbuf -> Parser.token
 
-exception Lexical_error of {msg: string; pos: Lexing.position}
+exception Error of {msg: string; pos: Lexing.position}

@@ -171,7 +171,7 @@ let spec = lazy (
     | Front.Parser.Error ->
       let pos = Lexing.lexeme_start_p lexbuf in
       Syntax.error pos "syntax error."
-    | Front.Lexer.Lexical_error {msg; pos} ->
+    | Front.Lexer.Error {msg; pos} ->
       Syntax.error pos "%s." msg
     | _ -> Printexc.raise_with_backtrace exn bt
   in

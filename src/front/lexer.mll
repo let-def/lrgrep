@@ -68,12 +68,11 @@ let end_tracking st (lexbuf : Lexing.lexbuf) =
 
 let in_pattern st = st.brace_depth = 0 && st.comment_depth = 0
 
-exception Lexical_error of {msg: string; pos: Lexing.position}
+exception Error of {msg: string; pos: Lexing.position}
 
-let raise_lexical_error lexbuf fmt =
+let raise_error lexbuf fmt =
   let pos = Lexing.lexeme_start_p lexbuf in
-  Printf.ksprintf (fun msg -> raise (Lexical_error {msg; pos}))
-    fmt
+  Printf.ksprintf (fun msg -> raise (Error {msg; pos})) fmt
 
 let warning lexbuf fmt =
   Syntax.warn (Lexing.lexeme_start_p lexbuf) fmt
@@ -194,7 +193,7 @@ rule main st = parse
 | '.' { DOT }
 | eof { EOF }
 | _
-  { raise_lexical_error lexbuf
+  { raise_error lexbuf
       "illegal character %s"
       (String.escaped (Lexing.lexeme lexbuf))
   }
@@ -225,7 +224,7 @@ and comment st = parse
       comment st lexbuf
     }
   | eof
-    { raise_lexical_error lexbuf "unterminated comment" }
+    { raise_error lexbuf "unterminated comment" }
   | '\n'
     { incr_loc lexbuf 0;
       comment st lexbuf }
@@ -259,7 +258,7 @@ and action st = parse
       comment st lexbuf;
       action st lexbuf }
   | eof
-    { raise_lexical_error lexbuf "unterminated action" }
+    { raise_error lexbuf "unterminated action" }
   | '\n'
     { incr_loc lexbuf 0;
       action st lexbuf }
@@ -281,7 +280,7 @@ and string st = parse
     { let v = decimal_code c d u in
       if in_pattern st then (
         if v > 255 then
-          raise_lexical_error lexbuf
+          raise_error lexbuf
             "illegal backslash escape in string: '\\%c%c%c'" c d u
       );
       string st lexbuf }
@@ -293,7 +292,7 @@ and string st = parse
     { let v = hexadecimal_code s in
       if in_pattern st then (
         if not (Uchar.is_valid v) then
-          raise_lexical_error lexbuf
+          raise_error lexbuf
             "illegal uchar escape in string: '\\u{%s}'" s
       );
       string st lexbuf }
@@ -303,7 +302,7 @@ and string st = parse
         "illegal backslash escape in string: '\\%c'" c;
       string st lexbuf }
   | eof
-    { raise_lexical_error lexbuf "unterminated string" }
+    { raise_error lexbuf "unterminated string" }
   | '\r'* '\n'
     { if st.comment_depth = 0 then
         warning lexbuf "unescaped newline in string";
@@ -317,7 +316,7 @@ and quoted_string delim = parse
     { incr_loc lexbuf 0;
       quoted_string delim lexbuf }
   | eof
-    { raise_lexical_error lexbuf "unterminated string" }
+    { raise_error lexbuf "unterminated string" }
   | '|' (lowercase* as delim') '}'
     { if delim <> delim' then
         quoted_string delim lexbuf }

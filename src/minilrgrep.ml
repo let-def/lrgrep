@@ -511,7 +511,7 @@ let ast = match spec_file with
       Lexing.set_filename lexbuf spec_file;
       try Front.Parser.parse_lexer_definition (Front.Lexer.main state) lexbuf
       with
-      | Front.Lexer.Lexical_error {msg; pos} ->
+      | Front.Lexer.Error {msg; pos} ->
         Syntax.error pos "%s" msg
       | Front.Parser.Error ->
         Syntax.error lexbuf.lex_start_p "syntax error"
