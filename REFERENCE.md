@@ -158,7 +158,7 @@ A pattern matches if the regular expression matches a _suffix_ of the stack and,
 <lookahead-specs> ::= "@" <lookahead-spec> ("," <lookahead-spec>)*
 
 <lookahead-spec> ::= <terminal>
-              | "first" "(" <non-terminal> ")"
+                   | "first" "(" <non-terminal> ")"
 ```
 
 The lookahead specifications denote a list of terminals, introduced by a "@" followed by a comma separated list of single lookahead specification:
