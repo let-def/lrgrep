@@ -148,14 +148,14 @@ The last case `{.}` signals an "unreachable clause": all cases covered by this c
 ### Patterns
 
 ```
-<pattern> ::= <expr> <lookahead-spec>?
+<pattern> ::= <expr> <lookahead-specs>?
 ```
 
 A pattern is a regular expression together with an optional constraint on the lookahead symbols which allow it to match.
 A pattern matches if the regular expression matches a _suffix_ of the stack and, if a lookahead constraint has been given, the symbol that caused the parser to fail belongs to it.
 
 ```
-<lookahead-specs> ::= "@" <lookahead-specs> ("," <lookahead-specs>)*
+<lookahead-specs> ::= "@" <lookahead-spec> ("," <lookahead-spec>)*
 
 <lookahead-spec> ::= <terminal>
               | "first" "(" <non-terminal> ")"
