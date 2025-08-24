@@ -13,29 +13,6 @@ end
 
 module RT = Lrgrep_runtime
 
-(* Pack a sparse list of transition using the sparse vector representation
-   described in the Dragon Book. *)
-module Sparse_packer : sig
-
-  (** A packer for sparse vector with elements of type ['a] *)
-  type 'a t
-
-  (** Create a new packer *)
-  val make : unit -> 'a t
-
-  (** A sparse vector indexed by lr1 states, with elements of type ['a] *)
-  type 'a vector = (RT.lr1 * 'a) list
-
-  (** Add a new sparse vector to a packer.
-     The index returned will be used at runtime to lookup cells of the vector
-     by [Lrgrep_runtime.sparse_lookup]. *)
-  val add_vector : 'a t -> 'a vector -> RT.sparse_index
-
-  (** [pack t f] Produces a sparse table from the content of packer [t].
-      Each element as to be mapped to instructions by [f]. *)
-  val pack : 'a t -> ('a -> RT.program_counter) -> RT.sparse_table
-end
-
 (** Emit and link bytecode program *)
 module Code_emitter : sig
 
@@ -55,9 +32,13 @@ module Code_emitter : sig
       The reference will be read during linking. *)
   val emit_yield_reloc : t -> RT.program_counter ref -> unit
 
+  (** Emit a match instruction to a vector that (may) not yet be known.
+      The promise will be resolved during linking. *)
+  val emit_match_reloc : t -> Lrgrep_support_packer.promise -> unit
+
   (** Produce a final program, with all emitted instructions at the
       correct positions and reading all pending relocations references. *)
-  val link : t -> RT.program_code
+  val link : t -> Lrgrep_support_packer.row_mapping -> RT.program_code
 end
 
 (** The action of a transition is pair of:
@@ -95,7 +76,7 @@ type ('state, 'clause, 'lr1) state = {
 (** The result of compaction is a program, a sparse table, and an array
     mapping each DFA state to the PC of the instructions that implement this
     state. *)
-type compact_dfa = RT.program_code * RT.sparse_table * RT.program_counter array
+type compact_dfa = RT.program_code * Lrgrep_support_packer.table * RT.program_counter array
 
 (** Run the compaction algorithm on a dfa *)
 val compact : 'state cardinal -> ('state index -> ('state, _, _) state) -> compact_dfa

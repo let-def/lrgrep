@@ -32,13 +32,25 @@ type priority = int
     In the current implementation, keys are lr1 states and values are program
     counters.
 *)
-type sparse_table = string
+module Sparse_table : sig
+  type row = int
+  type col = int
+  type value = int
 
-(** A sparse index identifies a cell in a sparse table.
-    Indexing starts after the first two bytes that determine the size of a
-    cell. The cell with index [i] starts at 2 + (size_k + size_v) * i
-*)
-type sparse_index = int
+  val get1 : string -> int -> int
+  val get2 : string -> int -> int
+  val get3 : string -> int -> int
+  val get4 : string -> int -> int
+
+  type t = {
+    displacement: int -> int;
+    offset: int;
+    keys: int -> int;
+    values: int -> int;
+  }
+
+  val lookup : t -> row -> col -> value option
+end
 
 (** The code of a program is a sequence of serialized [program_instruction] *)
 type program_code = string
@@ -72,7 +84,7 @@ type program_instruction =
         [None] if it is unbound, [Some reg] if it is bound to the value stored
         in register [reg].
     *)
-  | Match of sparse_index
+  | Match of Sparse_table.row
     (** [Match sidx] lookup the sparse table for a cell matching the state
         at the top of the parser stack at index [sidx].
         If the lookup is successful, it returns the [pc] should jump to.
@@ -100,11 +112,6 @@ type 'a register_value =
 
 type 'a register_values = 'a register_value array
 
-(** [sparse_lookup table sidx state] searches for in [table] from index [sidx]
-    for a cell mapping state [lr1].
-    This realizes the lookup part of a [Match] instruction. *)
-val sparse_lookup : sparse_table -> sparse_index -> lr1 -> program_counter option
-
 (** [program_step program pc] decodes the instruction at address [!pc] and
     increases [pc]. *)
 val program_step : program_code -> program_counter ref -> program_instruction
@@ -113,7 +120,7 @@ val program_step : program_code -> program_counter ref -> program_instruction
 type program = {
   registers : int;
   initial : program_counter;
-  table : sparse_table;
+  table : Sparse_table.t;
   code : program_code;
 }
 

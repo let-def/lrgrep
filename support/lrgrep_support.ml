@@ -1,3 +1,5 @@
+[@@@ocaml.warning "-32-37"]
+
 open Utils
 open Misc
 open Fix.Indexing
@@ -17,143 +19,140 @@ let add_uint24_be b i =
   Buffer.add_uint16_be b (i land 0xFFFF);
   Buffer.add_uint8 b (i lsr 16)
 
-module Sparse_packer : sig
-  type 'a t
-  val make : unit -> 'a t
-  type 'a vector = (RT.lr1 * 'a) list
-  val add_vector : 'a t -> (RT.lr1 * 'a) list -> RT.sparse_index
-  val pack : 'a t -> ('a -> RT.program_counter) -> RT.sparse_table
+module Bit_packer : sig
+  type row
+  val import : (int * _) list -> row
+
+  type table
+  val new_table : unit -> table
+  val add_row : table -> row -> int
+
+  val length : table -> int
 end = struct
-  let set_int table ~offset ~value = function
-    | 1 -> Bytes.set_uint8 table offset value
-    | 2 ->
-      Bytes.set_uint16_be table offset value
-    | 3 ->
-      Bytes.set_uint16_be table offset (value land 0xFFFF);
-      Bytes.set_uint8 table (offset + 2) (value lsr 16)
-    | 4 -> Bytes.set_int32_be table offset (Int32.of_int value)
-    | _ -> assert false
+  let bits = Sys.word_size - 1
 
-  type 'a cell =
-    | Unused
-    | Used of RT.lr1 * 'a
+  type cell_list =
+    | N
+    | C of int * int * cell_list
 
-  type 'a t = {
-    mutable table: 'a cell array;
-    mutable free: int list;
+  let prepend xs x =
+    let iaddr = x / bits in
+    let imask = 1 lsl (x mod bits) in
+    match xs with
+    | N -> C (iaddr, imask, N)
+    | C (iaddr', imask', xs') ->
+      if iaddr = iaddr' then
+        C (iaddr, imask lor imask', xs')
+      else (
+        assert (iaddr < iaddr');
+        C (iaddr, imask, xs)
+      )
+
+  type row = {
+    first: int;
+    set: cell_list;
+    width: int;
   }
 
-  type 'a vector = (RT.lr1 * 'a) list
+  let import = function
+    | [] -> {first = 0; set = N; width = 0}
+    | (last, _) :: rest as cells ->
+      let first = List.fold_left (fun _ (i, _) -> i) last rest in
+      let add set (index, _) = prepend set (index - first) in
+      let set = List.fold_left add N cells in
+      {first; set; width = (last - first + 1)}
 
-  let make () = { table = Array.make 16 Unused; free = [1] }
+  let shift_mask mask shift =
+    let mask0 = mask lsl shift in
+    let mask1 = mask lsr (bits - shift) in
+    (mask0, mask1)
 
-  let cell_unused packer index =
-    assert (index >= 0);
-    index >= Array.length packer.table || (
-      match packer.table.(index) with
-      | Unused -> true
-      | _ -> false
-    )
+  let compatible cells0 cells1 mask shift =
+    let mask0, mask1 = shift_mask mask shift in
+    (cells0 land mask0) lor (cells1 land mask1) = 0
 
-  (*
-  let get_cell packer index =
-    assert (index >= 0);
-    if index < Array.length packer.table
-    then packer.table.(index)
-    else Unused
-  *)
+  type table = {
+    mutable cells: int array;
+    mutable length: int;
+  }
 
-  let set_cell packer index value =
-    assert (index >= 0);
-    let length = Array.length packer.table in
-    if index < length then
-      packer.table.(index) <- value
-    else (
-      let length' = max (index + 1) (length * 2) in
-      let table = Array.make length' Unused in
-      Array.blit packer.table 0 table 0 length;
-      packer.table <- table;
-      packer.table.(index) <- value
-    )
-
-  let add_vector packer cells =
-    let rec start rev_free free =
-      match free with
-      | [] -> assert false
-      | [i] -> loop rev_free [i + 1] i cells
-      | i :: is -> loop rev_free is i cells
-    and loop rev_free free index = function
-      | [] -> List.rev_append rev_free free, index
-      | (k, _) :: cells' ->
-        if cell_unused packer (index + k)
-        then loop rev_free free index cells'
-        else start (index :: rev_free) free
-    in
-    let free, index = start [] packer.free in
-    packer.free <- free;
-    List.iter (fun (k, v) ->
-        set_cell packer (index + k) (Used (k, v))) cells;
-    index
-
-  let int_size i =
-    assert (i >= 0);
-    if i <= 0xFF then
-      1
-    else if i <= 0xFFFF then
-      2
-    else if i <= 0xFF_FFFF then
-      3
-    else
-      (assert (i <= 0xFFFF_FFFF); 4)
-
-  let pack packer value_repr =
-    let max_k = ref 0 in
-    let max_v = ref 0 in
-    let table =
-      let length = ref (Array.length packer.table) in
-      while !length > 0 && (
-          match packer.table.(!length - 1) with
-          | Unused -> true
-          | _ -> false
+  let rec fit_cells table oaddr oshift = function
+    | N -> oshift
+    | C (base, mask, cells') ->
+      let addr = oaddr + base in
+      let len = Array.length table in
+      if addr >= len then
+        oshift
+      else
+        let cells0 = table.(addr) in
+        let cells1 =
+          if addr + 1 = len
+          then 0
+          else table.(addr + 1)
+        in
+        if compatible cells0 cells1 mask oshift then
+          fit_cells table oaddr oshift cells'
+        else (
+          let oshift = ref (oshift + 1) in
+          while !oshift < bits &&
+                not (compatible cells0 cells1 mask !oshift)
+          do incr oshift; done;
+          !oshift
         )
-      do
-        decr length;
+
+  let rec fit_row table oaddr oshift cells =
+    let oshift' = fit_cells table oaddr oshift cells in
+    if oshift' = oshift then
+      (oaddr, oshift)
+    else if oshift' < bits then
+      fit_row table oaddr oshift' cells
+    else
+      fit_row table (oaddr + 1) 0 cells
+
+  let grow_table table target =
+    let len = Array.length table in
+    if len > target then
+      table
+    else
+      let rlen = ref len in
+      while !rlen <= target do
+        rlen := !rlen * 2
       done;
-      Array.init !length begin fun i ->
-        match packer.table.(i) with
-        | Unused -> Unused
-        | Used (k, v) ->
-          let v = value_repr v in
-          assert (v >= 0);
-          if k > !max_k then max_k := k;
-          if v > !max_v then max_v := v;
-          Used (k, v)
-      end
-    in
-    incr max_k;
-    let k_size = int_size !max_k in
-    let v_size = int_size !max_v in
-    let repr = Bytes.make (2 + Array.length table * (k_size + v_size)) '\x00' in
-    set_int repr ~offset:0 ~value:k_size 1;
-    set_int repr ~offset:1 ~value:v_size 1;
-    let unused = ref 0 in
-    Array.iteri begin fun i cell ->
-      let offset = 2 + i * (k_size + v_size) in
-      match cell with
-      | Unused ->
-        incr unused;
-        set_int repr ~offset ~value:0 k_size
-      | Used (k, v) ->
-        set_int repr ~offset ~value:(k + 1) k_size;
-        set_int repr ~offset:(offset + k_size) ~value:v v_size;
-    end table;
-    Printf.eprintf "max key: %d\nmax value: %d\n\n" !max_k !max_v;
-    Printf.eprintf "key size: %d\nvalue size: %d\n" k_size v_size;
-    Printf.eprintf "table size: %d (%.02f%% filled)\nrepr size: %d\n"
-      (Array.length table)
-      (float !unused /. float (Array.length table) *. 100.0)
-      (Bytes.length repr);
-    Bytes.unsafe_to_string repr
+      let table' = Array.make !rlen 0 in
+      Array.blit table 0 table' 0 len;
+      table'
+
+  let rec write_cells table oaddr oshift = function
+    | N -> table
+    | C (base, mask, cells') ->
+      let addr = oaddr + base in
+      let table = grow_table table (addr + 1) in
+      let mask0, mask1 = shift_mask mask oshift in
+      let cells0 = table.(addr) in
+      let cells1 = table.(addr + 1) in
+      assert (cells0 land mask0 = 0);
+      assert (cells1 land mask1 = 0);
+      table.(addr + 0) <- cells0 lor mask0;
+      table.(addr + 1) <- cells1 lor mask1;
+      write_cells table oaddr oshift cells'
+
+  let add_row table row =
+    let addr, shift = fit_row table.cells 0 0 row.set in
+    let cells = write_cells table.cells addr shift row.set in
+    table.cells <- cells;
+    let offset = addr * bits + shift in
+    let length = offset + row.width in
+    if length > table.length then
+      table.length <- length;
+    (offset - row.first)
+
+  let new_table () = {
+    cells = [|0|];
+    length = 0;
+  }
+
+  let length table =
+    table.length
 end
 
 module Code_emitter : sig
@@ -162,15 +161,18 @@ module Code_emitter : sig
   val position : t -> int
   val emit : t -> RT.program_instruction -> unit
   val emit_yield_reloc : t -> RT.program_counter ref -> unit
-  val link : t -> RT.program_code
+  val emit_match_reloc : t -> Lrgrep_support_packer.promise -> unit
+  val link : t -> Lrgrep_support_packer.row_mapping -> RT.program_code
 end = struct
   type t = {
     mutable reloc: (int * int ref) list;
+    mutable promises: (int * Lrgrep_support_packer.promise) list;
     buffer: Buffer.t;
   }
 
   let make () = {
     reloc = [];
+    promises = [];
     buffer = Buffer.create 15;
   }
 
@@ -236,13 +238,24 @@ end = struct
     Buffer.add_string t.buffer "   ";
     t.reloc <- (pos, reloc) :: t.reloc
 
-  let link t =
+  let emit_match_reloc t promise =
+    Buffer.add_char t.buffer '\x06';
+    let pos = Buffer.length t.buffer in
+    add_uint24_be t.buffer 0;
+    t.promises <- (pos, promise) :: t.promises
+
+  let link t remap =
     let buf = Buffer.to_bytes t.buffer in
     List.iter (fun (pos, reloc) ->
         assert (0 <= !reloc && !reloc < 0xFFFFFF);
         Bytes.set_uint16_be buf pos (!reloc land 0xFFFF);
         Bytes.set_uint8 buf (pos + 2) (!reloc lsr 16);
       ) t.reloc;
+    List.iter (fun (pos, promise) ->
+        let p = Lrgrep_support_packer.resolve remap promise in
+        Bytes.set_uint16_be buf pos (p land 0xFFFF);
+        Bytes.set_uint8 buf (pos + 2) (p lsr 16);
+      ) t.promises;
     Printf.eprintf "bytecode size: %d\n" (Bytes.length buf);
     Bytes.unsafe_to_string buf
 end
@@ -271,7 +284,8 @@ type ('state, 'clause, 'lr1) state = {
   (** Transitions for this state, as a list of labels and actions. *)
 }
 
-type compact_dfa = RT.program_code * RT.sparse_table * RT.program_counter array
+type compact_dfa =
+  RT.program_code * Lrgrep_support_packer.table * RT.program_counter array
 
 let compare_priority (i1, s1, t1) (i2, s2, t2) =
   let c = compare_index i1 i2 in
@@ -335,7 +349,7 @@ let compact (type dfa clause lr1)
     (get_state : dfa index -> (dfa, clause, lr1) state)
   =
   let code = Code_emitter.make () in
-  let packer = Sparse_packer.make () in
+  let packer = Lrgrep_support_packer.make () in
   let halt_pc = ref (Code_emitter.position code) in
   Code_emitter.emit code Halt;
   let pcs = Vector.init dfa (fun _ -> ref (-1)) in
@@ -411,8 +425,8 @@ let compact (type dfa clause lr1)
       | cells ->
         cell_count := !cell_count + List.length cells;
         let cells = (cells : (lr1 index * _) list :> (RT.lr1 * _) list) in
-        let i = Sparse_packer.add_vector packer cells in
-        Code_emitter.emit code (Match i);
+        let i = Lrgrep_support_packer.add_row packer cells in
+        Code_emitter.emit_match_reloc code i;
     end;
     begin match default with
       | None -> Code_emitter.emit code Halt
@@ -425,7 +439,7 @@ let compact (type dfa clause lr1)
   Array.iter process_state preparation;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
-  let code = Code_emitter.link code in
-  let index = Sparse_packer.pack packer (!) in
+  let remap, table = Lrgrep_support_packer.pack packer (!) in
+  let code = Code_emitter.link code remap in
   let pcs = Vector.as_array (Vector.map (!) pcs) in
-  (code, index, pcs)
+  (code, table, pcs)

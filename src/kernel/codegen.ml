@@ -15,7 +15,8 @@ let print_literal_code cp (loc, txt) =
   if txt <> "" then
     Code_printer.print cp ~loc txt
 
-let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t) (program, table, remap) =
+let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t)
+    (program, table, remap) =
   let print fmt = Code_printer.fmt out fmt in
   print "let lrgrep_program_%s : Lrgrep_runtime.program = {\n"
     rule.Syntax.name;
@@ -25,7 +26,7 @@ let output_table (type g r) out rule (machine : (g, r, _, _) Automata.Machine.t)
     | None -> 0
     | Some i -> remap.((i : _ index :> int))
   );
-  print "  table = %S;\n" table;
+  print "  table = %s;\n" (fst (Lrgrep_support_packer.encode table));
   print "  code = %S;\n" program;
   print "}\n"
 

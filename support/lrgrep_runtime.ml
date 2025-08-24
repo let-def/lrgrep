@@ -4,8 +4,56 @@ type register = int
 
 (* Representation of automaton as sparse tables and bytecoded programs *)
 
-type sparse_table = string
-type sparse_index = int
+let get_uint24_be str i =
+  (String.get_uint16_be str i) lor (String.get_uint8 str (i + 2) lsl 16)
+
+module Sparse_table = struct
+  type row = int
+  type col = int
+  type value = int
+
+  let get1 str i =
+    if i < 0 || i + 1 > String.length str
+    then min_int
+    else String.get_uint8 str i
+
+  let get2 str i =
+    let i = i * 2 in
+    if i < 0 || i + 2 > String.length str
+    then min_int
+    else String.get_uint16_be str i
+
+  let get3 str i =
+    let i = i * 3 in
+    if i < 0 || i + 3 > String.length str
+    then min_int
+    else get_uint24_be str i
+
+  let get4 str i =
+    let i = i * 4 in
+    if i < 0 || i + 4 > String.length str
+    then min_int
+    else Int32.to_int (String.get_int32_be str i)
+
+  type t = {
+    displacement: int -> int;
+    offset: int;
+    keys: int -> int;
+    values: int -> int;
+  }
+
+  let lookup coded (row : row) (col : col) : value option =
+    assert (row >= 0 && col >= 0);
+    let displacement = coded.displacement col in
+    if displacement = min_int then
+      None
+    else
+      let offset = displacement - coded.offset + row in
+      if coded.keys offset = row + 1 then
+        Some (coded.values offset)
+      else
+        None
+end
 
 type program_code = string
 type program_counter = int
@@ -19,7 +67,7 @@ type program_instruction =
   | Clear of register
   | Yield of program_counter
   | Accept of clause * priority * register option array
-  | Match of sparse_index
+  | Match of Sparse_table.row
   | Priority of clause * priority * priority
   | Halt
 
@@ -37,22 +85,6 @@ let get_int table ~offset = function
          (String.get_uint8 table (offset + 2) lsl 16)
   | 4 -> Int32.to_int (String.get_int32_be table offset)
   | _ -> assert false
-
-let sparse_lookup (table : sparse_table) (index : sparse_index) (lr1 : lr1)
-  : program_counter option =
-  let ksize = String.get_uint8 table 0 in
-  let vsize = String.get_uint8 table 1 in
-  assert (index >= 0 && lr1 >= 0);
-  let offset = 2 + (index + lr1) * (ksize + vsize) in
-  if offset + (ksize + vsize) > String.length table then
-    None
-  else if get_int table ~offset ksize = lr1 + 1 then
-    Some (get_int table ~offset:(offset + ksize) vsize)
-  else
-    None
-
-let get_uint24_be str i =
-  (String.get_uint16_be str i) lor (String.get_uint8 str (i + 2) lsl 16)
 
 let program_step (t : program_code) (r : program_counter ref)
   : program_instruction =
@@ -99,7 +131,7 @@ let program_step (t : program_code) (r : program_counter ref)
 type program = {
   registers : int;
   initial : program_counter;
-  table : sparse_table;
+  table : Sparse_table.t;
   code : program_code;
 }
 
@@ -212,7 +244,7 @@ struct
         loop ()
       | Match index ->
         let state = P.current_state_number env in
-        let () = match sparse_lookup program.table index state with
+        let () = match Sparse_table.lookup program.table index state with
           | Some pc' ->
             if debug then eprintf "Match %d %d: success\n" index state;
             pc := pc'
