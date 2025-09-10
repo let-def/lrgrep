@@ -55,12 +55,17 @@ let group_reductions g = function
     group 0 IndexMap.empty (List.sort compare_items items)
 
 type 'g reduce_closure = {
+  failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: ('g, 'g lr1 index list) with_lookahead list;
 }
 
+let add_failing g r reject la =
+  r := IndexSet.union (Terminal.intersect g reject la) !r
+
 let reduce_closures (type g) (g : g grammar) : (g lr1, g reduce_closure) vector =
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
+  let failing = ref IndexSet.empty in
   let rec pop lookahead acc (item : g item index) = function
     | [] -> let items, stacks = acc in ((item, lookahead) :: items, stacks)
     | hd :: tl as stack ->
@@ -73,15 +78,19 @@ let reduce_closures (type g) (g : g grammar) : (g lr1, g reduce_closure) vector 
         let acc = (items, (stack, lookahead) :: stacks) in
         reduce lookahead acc stack
   and reduce lookahead acc stack =
-    IndexSet.fold (fun red acc ->
-        let lookahead = Terminal.intersect g (Reduction.lookaheads g red) lookahead in
-        if IndexSet.is_empty lookahead
-        then acc
-        else pop lookahead acc (Item.last g (Reduction.production g red)) stack
-      ) (Reduction.from_lr1 g (List.hd stack)) acc
+    let lr1 = List.hd stack in
+    add_failing g failing (Lr1.reject g lr1) lookahead;
+    IndexSet.fold begin fun red acc ->
+      let lookahead = Terminal.intersect g (Reduction.lookaheads g red) lookahead in
+      if IndexSet.is_empty lookahead
+      then acc
+      else pop lookahead acc (Item.last g (Reduction.production g red)) stack
+    end (Reduction.from_lr1 g lr1) acc
   in
   let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
-  {reductions = group_reductions g items; stacks}
+  let reductions = group_reductions g items in
+  let failing = !failing in
+  {failing; reductions; stacks}
 
 let rec filter_reductions g la = function
   | [] -> []
@@ -110,31 +119,65 @@ let rec filter_stacks g la acc = function
     in
     filter_stacks g la' acc xs
 
+let rec merge_reduction_step map acc = function
+  | [] -> (map, acc)
+  | [] :: _ -> assert false
+  | (r :: rs) :: rrs ->
+    let acc = if List.is_empty rs then acc else rs :: acc in
+    let augment _ a b = Some (IndexSet.union a b) in
+    let map = IndexMap.union augment r map in
+    merge_reduction_step map acc rrs
+
+let rec merge_reductions = function
+  | [] -> []
+  | rrs ->
+    let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
+    r :: merge_reductions rrs'
+
 let goto_reduce_closures (type g) (g : g grammar) rcs
   : (g goto_transition, g reduce_closure) vector
   =
-  Vector.init (Transition.goto g) @@ fun gt ->
-  let tr = Transition.of_goto g gt in
-  let src = Transition.source g tr in
-  let tgt = Transition.target g tr in
-  let stacks = ref [] in
-  let reductions = ref [] in
-  let rec visit tgt la =
-    let rc = rcs.:(tgt) in
-    stacks := filter_stacks g la !stacks rc.stacks;
-    match filter_reductions g la rc.reductions with
-    | [] -> ()
-    | r :: rs ->
-      reductions := rs @ !reductions;
-      IndexMap.iter (fun nt la' ->
+  let sentinel = {failing = IndexSet.empty; reductions = []; stacks = []} in
+  let table = Vector.make (Transition.goto g) sentinel in
+  Index.rev_iter (Transition.goto g) begin fun gt ->
+    let tr = Transition.of_goto g gt in
+    let src = Transition.source g tr in
+    let tgt = Transition.target g tr in
+    let stacks = ref [] in
+    let reductions = ref [] in
+    let failing = ref IndexSet.empty in
+    let rec visit_target tgt la =
+      let rc = rcs.:(tgt) in
+      add_failing g failing rc.failing la;
+      stacks := filter_stacks g la !stacks rc.stacks;
+      match filter_reductions g la rc.reductions with
+      | [] -> ()
+      | r :: rs ->
+        if not (List.is_empty rs) then
+          push reductions rs;
+        IndexMap.iter begin fun nt la' ->
           let la' = Terminal.intersect g la la' in
           if not (IndexSet.is_empty la') then
-            let tgt' = Transition.find_goto_target g src nt in
-            visit tgt' la'
-        ) r
-  in
-  visit tgt (Terminal.all g);
-  {reductions = !reductions; stacks = !stacks}
+            visit_goto (Transition.find_goto g src nt) la'
+        end r
+    and visit_goto gt' la =
+      if Index.compare gt' gt <= 0 then
+        visit_target (Transition.target g (Transition.of_goto g gt')) la
+      else
+        let rc = table.:(gt') in
+        add_failing g failing rc.failing la;
+        stacks := filter_stacks g la !stacks rc.stacks;
+        let rs = filter_reductions g la rc.reductions in
+        if not (List.is_empty rs) then
+          push reductions rs
+    in
+    visit_target tgt (Terminal.all g);
+    let failing = !failing in
+    let stacks = !stacks in
+    let reductions = merge_reductions !reductions in
+    table.:(gt) <- {failing; reductions; stacks}
+  end;
+  table
 
 module Inner = Unsafe_cardinal()
 type 'g inner = 'g Inner.t
@@ -145,11 +188,8 @@ type 'g state =
   | Lr1 of 'g lr1 index
   | Goto of 'g lr1 indexset * 'g lr1 index * 'g terminal indexset
 
-let viable2 (type g) (g : g grammar) rc =
-  ignore g;
-  ignore rc;
-  failwith "TODO"
-  (*let table = Hashtbl.create 7 in
+(*let viable2 (type g) (g : g grammar) rc =
+  let table = Hashtbl.create 7 in
   let todo = ref [] in
   let get_state state =
     match Hashtbl.find_opt table state with
@@ -179,7 +219,7 @@ let viable2 (type g) (g : g grammar) rc =
       in
       transitions :: explore_stack lr1s rest
   in
-  let merge_maps a b =
+  let merge_maps a b
     IndexMap.union (fun _ a b -> Some (IndexSet.union a b)) a b
   in
   let rec merge_tails = function
