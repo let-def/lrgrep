@@ -45,18 +45,18 @@ let group_reductions g = function
       | [] -> [acc]
       | (it, la) :: rest when depth = Item.position g it ->
         let lhs = Production.lhs g (Item.production g it) in
-        group depth (IndexMap.update lhs (union_update la) acc) rest
+        group depth ((lhs, la) :: acc) rest
       | otherwise ->
-        acc :: group (depth + 1) IndexMap.empty otherwise
+        acc :: group (depth + 1) [] otherwise
     in
     let compare_items (it1, _) (it2, _) =
       Int.compare (Item.position g it1) (Item.position g it2)
     in
-    group 0 IndexMap.empty (List.sort compare_items items)
+    group 0 [] (List.sort compare_items items)
 
 type 'g reduce_closure = {
   failing: 'g terminal indexset;
-  reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
+  reductions: ('g nonterminal index * 'g terminal indexset) list list;
   stacks: ('g, 'g lr1 index list) with_lookahead list;
 }
 
@@ -97,10 +97,10 @@ let rec filter_reductions g la = function
   | r :: rs as rrs ->
     let filtered = ref false in
     let r' =
-      IndexMap.filter_map (fun _ la' ->
+      List.filter_map (fun (nt, la') ->
           let la'' = Terminal.intersect g la la' in
           if la' != la'' then filtered := true;
-          if IndexSet.is_empty la'' then None else Some la''
+          if IndexSet.is_empty la'' then None else Some (nt, la'')
         ) r
     in
     let rs' = filter_reductions g la rs in
@@ -119,19 +119,18 @@ let rec filter_stacks g la acc = function
     in
     filter_stacks g la' acc xs
 
-let rec merge_reduction_step map acc = function
-  | [] -> (map, acc)
+let rec merge_reduction_step acc accs = function
+  | [] -> (acc, accs)
   | [] :: _ -> assert false
   | (r :: rs) :: rrs ->
-    let acc = if List.is_empty rs then acc else rs :: acc in
-    let augment _ a b = Some (IndexSet.union a b) in
-    let map = IndexMap.union augment r map in
-    merge_reduction_step map acc rrs
+    let accs = if List.is_empty rs then accs else rs :: accs in
+    let acc = r @ acc in
+    merge_reduction_step acc accs rrs
 
 let rec merge_reductions = function
   | [] -> []
   | rrs ->
-    let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
+    let r, rrs' = merge_reduction_step [] [] rrs in
     r :: merge_reductions rrs'
 
 let goto_reduce_closures (type g) (g : g grammar) rcs
@@ -155,7 +154,7 @@ let goto_reduce_closures (type g) (g : g grammar) rcs
       | r :: rs ->
         if not (List.is_empty rs) then
           push reductions rs;
-        IndexMap.iter begin fun nt la' ->
+        List.iter begin fun (nt, la') ->
           let la' = Terminal.intersect g la la' in
           if not (IndexSet.is_empty la') then
             visit_goto (Transition.find_goto g src nt) la'
@@ -196,7 +195,7 @@ let viable2 (type g) (g : g grammar) rc grc =
     | [] -> []
     | nts :: rest ->
       let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      let follow_nt nt la' =
+      let follow_nt (nt, la') =
         let la' = Terminal.intersect g la la' in
         if IndexSet.is_empty la' then
           None
@@ -204,11 +203,11 @@ let viable2 (type g) (g : g grammar) rc grc =
           let follow src = visit_goto (Transition.find_goto g src nt) la' in
           Some (IndexSet.map follow lr1s)
       in
-      let trs = IndexMap.filter_map follow_nt nts in
+      let trs = List.filter_map follow_nt nts in
       let rest = visit_reductions la lr1s rest in
-      if IndexMap.is_empty trs && List.is_empty rest
-      then []
-      else trs :: rest
+      match trs, rest with
+      | [], [] -> []
+      | _ -> trs :: rest
   and visit_goto gt la =
     let key = (gt, la) in
     match Hashtbl.find_opt table key with
@@ -216,9 +215,10 @@ let viable2 (type g) (g : g grammar) rc grc =
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       Hashtbl.add table key (IndexBuffer.Gen.index r);
+      let source = Transition.source g (Transition.of_goto g gt) in
       let transitions =
         visit_reductions la
-          (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
+          (IndexSet.singleton source)
           grc.:(gt).reductions
       in
       IndexBuffer.Gen.commit nodes r (gt, la, transitions);
