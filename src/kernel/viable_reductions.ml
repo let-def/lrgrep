@@ -188,67 +188,49 @@ type 'g state =
   | Lr1 of 'g lr1 index
   | Goto of 'g lr1 indexset * 'g lr1 index * 'g terminal indexset
 
-(*let viable2 (type g) (g : g grammar) rc =
+let viable2 (type g) (g : g grammar) rc grc =
+  let module Nodes = IndexBuffer.Gen.Make() in
+  let nodes = Nodes.get_generator () in
   let table = Hashtbl.create 7 in
-  let todo = ref [] in
-  let get_state state =
-    match Hashtbl.find_opt table state with
+  let rec visit_reductions la lr1s = function
+    | [] -> []
+    | nts :: rest ->
+      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
+      let follow_nt nt la' =
+        let la' = Terminal.intersect g la la' in
+        if IndexSet.is_empty la' then
+          None
+        else
+          let follow src = visit_goto (Transition.find_goto g src nt) la' in
+          Some (IndexSet.map follow lr1s)
+      in
+      let trs = IndexMap.filter_map follow_nt nts in
+      let rest = visit_reductions la lr1s rest in
+      if IndexMap.is_empty trs && List.is_empty rest
+      then []
+      else trs :: rest
+  and visit_goto gt la =
+    let key = (gt, la) in
+    match Hashtbl.find_opt table key with
     | Some index -> index
     | None ->
-      let index = Hashtbl.length table in
-      Hashtbl.add table state index;
-      push todo state;
-      index
-  in
-  let set _ = () in
-  let rec explore_stack lr1s = function
-    | [] -> []
-    | reductions :: rest ->
-      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      let transitions = IndexMap.fold (fun nt la transitions ->
-          let targets =
-            IndexSet.fold (fun source reductions ->
-                let target = Transition.find_goto_target g source nt in
-                IndexMap.update target (add_update source) reductions
-              ) lr1s IndexMap.empty
-          in
-          IndexMap.fold
-            (fun target sources acc -> get_state (Goto (sources, target, la)) :: acc)
-            targets transitions
-        ) reductions []
+      let r = IndexBuffer.Gen.reserve nodes in
+      Hashtbl.add table key (IndexBuffer.Gen.index r);
+      let transitions =
+        visit_reductions la
+          (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
+          grc.:(gt).reductions
       in
-      transitions :: explore_stack lr1s rest
+      IndexBuffer.Gen.commit nodes r (gt, la, transitions);
+      IndexBuffer.Gen.index r
   in
-  let merge_maps a b
-    IndexMap.union (fun _ a b -> Some (IndexSet.union a b)) a b
+  let _ = Vector.init (Lr1.cardinal g) (fun lr1 ->
+      visit_reductions (Terminal.all g)
+        (IndexSet.singleton lr1)
+        rc.:(lr1).reductions
+    )
   in
-  let rec merge_tails = function
-    | x, [] | [], x -> x
-    | (x :: xs), (y :: ys) -> merge_maps x y :: merge_tails (xs, ys)
-  in
-  let rec close_goto lr1 = function
-    | [] -> []
-    | [] :: rest -> rest
-    | ((p, la) :: rs) :: rest ->
-      let rest = close_goto lr1 (rs :: rest) in
-      let target = Transition.find_goto_target g lr1 (Production.lhs g p) in
-      let reductions = rc.:(target).reductions in
-      match filter_reductions g la reductions with
-      | [] -> rest
-      | rs' :: rest' ->
-        close_goto lr1 (merge_maps rs' rs :: merge_tails (rest, rest'))
-  in
-  let propagate = function
-    | Goto (sources, target, la) ->
-      let reductions = rc.:(target).reductions in
-      set (explore_stack sources
-             (close_goto sources (restrict_lookaheads la reductions)))
-    | Lr1 lr1 ->
-      set (explore_stack (IndexSet.singleton lr1) rc.:(lr1).reductions)
-  in
-  Index.iter (Lr1.cardinal g) (fun lr1 -> propagate (Lr1 lr1));
-  fixpoint ~propagate todo;
-  stopwatch 1 "viable2: %d states\n" (Hashtbl.length table)*)
+  stopwatch 2 "viable2: %d nodes\n" (Hashtbl.length table)
 
 (* Step 2: explore viable reductions *)
 

@@ -780,7 +780,13 @@ module Transition = struct
   (* [find_goto s nt] finds the goto transition originating from [s] and
      labelled by [nt], or raise [Not_found].  *)
   let find_goto g lr1 nt =
-    Hashtbl.find g.transition_goto_table (nt_pack (cardinal g.nonterminal_n) lr1 nt)
+    let key = nt_pack (cardinal g.nonterminal_n) lr1 nt in
+    match Hashtbl.find_opt g.transition_goto_table key with
+    | Some gt -> gt
+    | None ->
+      Printf.ksprintf invalid_arg "find_goto(%s, %s)"
+        (Lr1.to_string g lr1) (Nonterminal.to_string g lr1)
+
 
   let find_goto_target g lr1 nt =
     g.transition_target.:(of_goto g (find_goto g lr1 nt))
