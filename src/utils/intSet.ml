@@ -523,4 +523,28 @@ and c addr q' = function
     let i = Bit_lib.lsb_index mask in
     fun () -> Seq.Cons (addr + i, c addr q' (mask lxor (1 lsl i)))
 
-let bind m f = fold (fun elt acc -> union (f elt) acc) m empty
+module H = Heap.Make(struct
+    type _ t = int
+    let compare = Int.compare
+  end)
+
+let insert_h h = function
+  | N -> h
+  | C (a, m, t) -> H.insert a (m, t) h
+
+let bind m f =
+  let h = fold (fun elt acc -> insert_h acc (f elt)) m H.empty in
+  let rec loop a m h =
+    match H.pop h with
+    | None -> C (a, m, N)
+    | Some (a', (m', t'), h') ->
+      let h' = insert_h h' t' in
+      if a = a' then
+        loop a (m lor m') h'
+      else
+        C (a, m, loop a' m' h')
+  in
+  match H.pop h with
+  | None -> N
+  | Some (a, (m, t'), h') ->
+    loop a m (insert_h h' t')
