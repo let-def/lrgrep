@@ -1,0 +1,4 @@
+(library
+ (name bit_lib)
+ (public_name lrgrep.internal.bit_lib)
+ (foreign_stubs (language c) (names bit_lib_stub)))
