@@ -124,16 +124,14 @@ let rec fold f s accu =
   | N ->
     accu
   | C (base, ss, qs) ->
-    loop1 f qs base ss accu
-
-and loop1 f qs i ss accu =
-  if ss = 0 then
-    fold f qs accu
-  else
-    (* One could in principle check whether [ss land 0x3] is zero and if
-       so move to [i + 2] and [ss lsr 2], and similarly for various sizes.
-       In practice, this does not seem to make a measurable difference. *)
-    loop1 f qs (i + 1) (ss lsr 1) (if ss land 1 = 1 then f i accu else accu)
+    let ss' = ref ss in
+    let accu = ref accu in
+    for _ = 0 to Bit_lib.pop_count ss - 1 do
+      let bit = Bit_lib.lsb_index !ss' in
+      accu := f (base + bit) !accu;
+      ss' := !ss' lxor (1 lsl bit);
+    done;
+    fold f qs !accu
 
 let map f t =
   fold (fun x xs -> add (f x) xs) t empty
