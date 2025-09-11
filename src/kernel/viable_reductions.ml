@@ -231,7 +231,33 @@ let viable2 (type g) (g : g grammar) rc grc =
     )
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
-  stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes)
+  stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
+  (* Compute the set reachable states (closure of successors). *)
+  let reachable_from =
+    Vector.map
+      (fun (_, _, transitions) ->
+         List.fold_right (IndexMap.fold (fun _ -> IndexSet.union))
+           transitions IndexSet.empty
+      ) nodes
+  in
+  stopwatch 2 "prepared big-step successors";
+  Tarjan.close_relation reachable_from;
+  stopwatch 2 "closed the big-step successors";
+  (* Compute reachability for all steps of a reduction *)
+  let rec add_reachables = function
+    | [] -> []
+    | gotos :: rest ->
+      let rest = add_reachables rest in
+      let acc = match rest with
+        | [] -> IndexSet.empty
+        | (acc, _) :: _ -> acc
+      in
+      let acc = IndexMap.fold (fun _ -> IndexSet.union) gotos acc in
+      ((acc, gotos) :: rest)
+  in
+  let add_reachables (gt, la, tr) = (gt, la, add_reachables tr) in
+  let _transitions = Vector.map add_reachables nodes in
+  stopwatch 2 "closed the small-step successors"
 
 (* Step 2: explore viable reductions *)
 
