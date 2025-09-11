@@ -191,7 +191,7 @@ type 'g state =
 let viable2 (type g) (g : g grammar) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Hashtbl.create 7 in
+  let table = Vector.make (Transition.goto g) IndexSet.Map.empty in
   let rec visit_reductions la lr1s = function
     | [] -> []
     | nts :: rest ->
@@ -210,12 +210,12 @@ let viable2 (type g) (g : g grammar) rc grc =
       then []
       else trs :: rest
   and visit_goto gt la =
-    let key = (gt, la) in
-    match Hashtbl.find_opt table key with
+    let map = table.:(gt) in
+    match IndexSet.Map.find_opt la map with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
-      Hashtbl.add table key (IndexBuffer.Gen.index r);
+      table.:(gt) <- IndexSet.Map.add la (IndexBuffer.Gen.index r) map;
       let transitions =
         visit_reductions la
           (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
@@ -230,7 +230,8 @@ let viable2 (type g) (g : g grammar) rc grc =
         rc.:(lr1).reductions
     )
   in
-  stopwatch 2 "viable2: %d nodes\n" (Hashtbl.length table)
+  let nodes = IndexBuffer.Gen.freeze nodes in
+  stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes)
 
 (* Step 2: explore viable reductions *)
 
