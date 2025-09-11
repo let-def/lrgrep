@@ -208,7 +208,7 @@ module DFA = struct
         index: n index;
         kernel: ('n, (g, r) NFA.t) vector;
         accept: (g, r) branch index option;
-        mutable raw_transitions: (g lr1 indexset * 'n fwd_mapping lazy_t) list;
+        mutable raw_transitions: (g lr1 indexset * s indexset * 'n fwd_mapping lazy_t) list;
       }
 
       and 'src fwd_mapping =
@@ -264,7 +264,8 @@ module DFA = struct
                 nfa, (index, captures)
               in
               let process_class label rev_targets =
-                label, lazy (
+                let stacks = IndexSet.bind label stacks.by_label in
+                let target_state = lazy (
                   let Packed result =
                     rev_targets
                     |> List.rev_map prepare_target_kernel
@@ -273,7 +274,8 @@ module DFA = struct
                   in
                   Fwd_mapping ((Vector.map snd result),
                                determinize_kernel (Vector.map fst result))
-                )
+                ) in
+                (label, stacks, target_state)
               in
               let raw_transitions = ref [] in
               IndexRefine.iter_merged_decomposition rev_transitions
@@ -329,19 +331,11 @@ module DFA = struct
           visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
           scheduled.*(t.index) <- IndexSet.empty;
           if false then Printf.printf "todo: %d entries\n" (IndexSet.cardinal todo);
-          List.iter begin fun (label, target) ->
-            let really_empty = ref true in
-            let expand_stack lr1 =
-              let stack = IndexSet.inter todo (stacks.by_label lr1) in
-              if not (IndexSet.is_empty stack) then
-                really_empty := false;
-              IndexSet.bind stack stacks.prev
-            in
-            let stacks = IndexSet.bind label expand_stack in
-            if not !really_empty then
+          List.iter begin fun (_, label, target) ->
+            let label' = IndexSet.inter todo label in
+            if not (IndexSet.is_empty label') then
               let lazy (Fwd_mapping (_, t')) = target in
-              if not (IndexSet.is_empty stacks) then
-                schedule bound t'.index stacks
+                schedule bound t'.index (IndexSet.bind label' stacks.prev)
           end t.raw_transitions
         in
         let next_bound = Index.rev_enumerate (branch_count branches) in
@@ -385,7 +379,7 @@ module DFA = struct
         let t = from_prestate p in
         let domain = Construction.domain.:(i) in
         t.transitions <-
-          List.filter_map (fun (label, target) ->
+          List.filter_map (fun (label, _, target) ->
               if Lazy.is_val target then
                 let label = IndexSet.inter label domain  in
                 if not (IndexSet.is_empty label) then
