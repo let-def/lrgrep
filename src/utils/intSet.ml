@@ -523,4 +523,6 @@ and c addr q' = function
     let i = Bit_lib.lsb_index mask in
     fun () -> Seq.Cons (addr + i, c addr q' (mask lxor (1 lsl i)))
 
-let bind m f = fold (fun elt acc -> union (f elt) acc) m empty
+let bind m f =
+  let todo = fold (fun elt acc -> f elt :: acc) m [] in
+  List.fold_left union empty todo
