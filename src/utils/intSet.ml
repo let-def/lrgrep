@@ -148,18 +148,22 @@ let rec rev_iter f = function
   | N -> ()
   | C (base, ss, qs) ->
     rev_iter f qs;
-    for i = word_size downto 0 do
-      if ss land (1 lsl i) <> 0 then
-        f (base + i)
+    let ss' = ref ss in
+    for _ = 0 to Bit_lib.pop_count ss - 1 do
+      let bit = Bit_lib.msb_index !ss' in
+      f (base + bit);
+      ss' := !ss' lxor (1 lsl bit);
     done
 
 let rec fold_right f acc = function
   | N -> acc
   | C (base, ss, qs) ->
     let acc = ref (fold_right f acc qs) in
-    for i = word_size downto 0 do
-      if ss land (1 lsl i) <> 0 then
-        acc := f !acc (base + i)
+    let ss' = ref ss in
+    for _ = 0 to Bit_lib.pop_count ss - 1 do
+      let bit = Bit_lib.msb_index !ss' in
+      acc := f !acc (base + bit);
+      ss' := !ss' lxor (1 lsl bit);
     done;
     !acc
 
@@ -471,9 +475,12 @@ let rec filter f = function
   | N -> N
   | C (addr, word0, ss) as ss0 ->
     let word = ref 0 in
-    for i = 0 to word_size - 1 do
-      if word0 land (1 lsl i) <> 0 && f (addr + i) then
-        word := !word lor (1 lsl i)
+    let word' = ref word0 in
+    for _ = 0 to Bit_lib.pop_count word0 - 1 do
+      let bit = Bit_lib.lsb_index !word' in
+      if f (addr + bit) then
+        word := !word lor (1 lsl bit);
+      word' := !word' lxor (1 lsl bit);
     done;
     if !word = 0 then
       filter f ss
@@ -522,11 +529,9 @@ let rec allocate result = function
     C (addr, -1, allocate result qs)
 
   | C (addr, word, qs) ->
-    let i = ref 0 in
-    while word land (1 lsl !i) <> 0
-    do incr i done;
-    result := addr + !i;
-    C (addr, word lor (1 lsl !i), qs)
+    let i = Bit_lib.lsb_index (lnot word) in
+    result := addr + i;
+    C (addr, word lor (1 lsl i), qs)
 
 let allocate qs =
   let result = ref 0 in
@@ -538,14 +543,12 @@ let rec to_seq q =
   match q with
   | N -> Seq.empty
   | C (addr, mask, q') ->
-    c addr mask q' 0
+    c addr q' mask
 
-and c addr mask q' i =
-  if i > word_size then
-    to_seq q'
-  else if mask land (1 lsl i) = 0 then
-    c addr mask q' (i + 1)
-  else
-    fun () -> Seq.Cons (addr + i, c addr mask q' (i + 1))
+and c addr q' = function
+  | 0 -> to_seq q'
+  | mask ->
+    let i = Bit_lib.lsb_index mask in
+    fun () -> Seq.Cons (addr + i, c addr q' (mask lxor (1 lsl i)))
 
 let bind m f = fold (fun elt acc -> union (f elt) acc) m empty
