@@ -289,6 +289,7 @@ let do_compile spec (cp : Code_printer.t option) =
         else subset.reachable;
       prev = Vector.get subset.predecessors;
       label = Vector.get !!lrc.lr1_of;
+      by_label = Vector.get !!lrc.lrcs_of;
     } in
     let Spec.Rule (clauses, branches) =
       Spec.import_rule grammar !!viable !!indices !!trie rule

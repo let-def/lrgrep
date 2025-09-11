@@ -45,6 +45,7 @@ type ('g, 'n) stacks = {
   tops: 'n indexset;
   prev: 'n index -> 'n indexset;
   label: 'n index -> 'g lr1 index;
+  by_label: 'g lr1 index -> 'n indexset;
 }
 
 type priority = int
@@ -327,20 +328,14 @@ module DFA = struct
           let todo = scheduled.*(t.index) in
           visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
           scheduled.*(t.index) <- IndexSet.empty;
-          let by_label =
-            IndexSet.fold (fun stack map ->
-                IndexMap.update
-                  (stacks.label stack)
-                  (union_update (stacks.prev stack))
-                  map
-              ) todo IndexMap.empty
-          in
+          if false then Printf.printf "todo: %d entries\n" (IndexSet.cardinal todo);
           List.iter begin fun (label, target) ->
             let really_empty = ref true in
             let expand_stack lr1 =
-              match IndexMap.find_opt lr1 by_label with
-              | None -> IndexSet.empty
-              | Some stacks -> really_empty := false; stacks
+              let stack = IndexSet.inter todo (stacks.by_label lr1) in
+              if not (IndexSet.is_empty stack) then
+                really_empty := false;
+              IndexSet.bind stack stacks.prev
             in
             let stacks = IndexSet.bind label expand_stack in
             if not !really_empty then
