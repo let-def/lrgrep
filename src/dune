@@ -13,3 +13,8 @@
  (name minilrgrep)
  (modules minilrgrep)
  (libraries unix front fix cmon utils menhirSdk valmari support))
+
+
+(executable
+ (name test)
+ (libraries bit_lib))

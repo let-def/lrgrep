@@ -1,6 +1,9 @@
 external pop_count : int -> (int [@untagged]) =
   "bit_lib_pop_count_tagged" "bit_lib_pop_count" [@@noalloc]
 
+external pop_count_slow : int -> int =
+  "bit_lib_pop_count_tagged" [@@noalloc]
+
 external msb_index : int -> (int [@untagged]) =
   "bit_lib_msb_index_tagged" "bit_lib_msb_index" [@@noalloc]
 
