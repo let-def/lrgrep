@@ -248,33 +248,36 @@ let viable2 (type g) (g : g grammar) rc grc =
   stopwatch 2 "prepared big-step successors";
   Tarjan.close_relation reachable_from;
   stopwatch 2 "closed the big-step successors";
-  let step_count =
-    (* Initial steps *)
-    Vector.fold_left (fun acc trs -> acc + List.length trs) 0 initials +
-    (* Node steps *)
-    Vector.fold_left (fun acc (_, _, trs) -> acc + List.length trs) 0 nodes
-  in
-  stopwatch 2 "%d small steps" step_count;
-  let module Steps = Fix.Indexing.Const(struct let cardinal = step_count + 1 end) in
-  let next_step = Index.enumerate Steps.n in
-  let zero = next_step () in
-  let steps = Vector.make Steps.n {
+  (* Implement small steps with sharing *)
+  let open IndexBuffer in
+  let module Steps = Gen.Make() in
+  let steps = Steps.get_generator () in
+  let zero = Gen.add steps IndexSet.Map.empty in
+  let index = Dyn.make {
       next = zero;
       goto = IndexSet.empty;
       reachable = IndexSet.empty;
-    } in
-  (* Compute reachability for all steps of a reduction *)
-  let add_reachables goto next =
-      let reachable = IndexSet.bind goto (Vector.get reachable_from) in
-      let reachable = IndexSet.union reachable steps.:(next).reachable in
-      let step = {next; goto; reachable} in
-      let index = next_step () in
-      steps.:(index) <- step;
-      index
+    }
   in
-  let add_reachables (gt, la, tr) = (gt, la, List.fold_right add_reachables tr zero) in
+  let get goto next =
+    let map = Gen.get steps next in
+    match IndexSet.Map.find_opt goto map with
+    | Some step -> step
+    | None ->
+      let step = Gen.add steps IndexSet.Map.empty in
+      Gen.set steps next (IndexSet.Map.add goto step map);
+      (* Compute reachability for all steps of a reduction *)
+      let reachable = IndexSet.bind goto (Vector.get reachable_from) in
+      let reachable = IndexSet.union reachable (Dyn.get index next).reachable in
+      Dyn.set index step {next; goto; reachable};
+      step
+  in
+  let pack_transitions trs = List.fold_right get trs zero in
+  let add_reachables (gt, la, trs) = (gt, la, pack_transitions trs) in
   let _transitions = Vector.map add_reachables nodes in
-  stopwatch 2 "closed the small-step successors"
+  let _initials = Vector.map pack_transitions initials in
+  stopwatch 2 "closed the small-step successors (%d elements)"
+    (Vector.length_as_int (Gen.freeze steps))
 
 (* Step 2: explore viable reductions *)
 
