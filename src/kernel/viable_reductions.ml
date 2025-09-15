@@ -194,6 +194,8 @@ type ('g, 'node, 'step) step = {
   goto: 'node indexset;
 }
 
+(* TODO determinize: the deterministic viable reductions might be much smaller?! *)
+
 let viable2 (type g) (g : g grammar) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in

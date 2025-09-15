@@ -327,7 +327,7 @@ module T = struct
       lazy (Domain.join d)
     | Some _ -> Lazy.from_fun compute_reachability
 
-  let reachability, lrc = Lazy.force d
+  let reachability, (lrc, lrc_gt) = Lazy.force d
   let () = stopwatch 1 "Reachability information available"
 
   let rc = Kernel.Viable_reductions.reduce_closures grammar

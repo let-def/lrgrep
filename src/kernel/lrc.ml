@@ -349,7 +349,20 @@ let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reac
 module Mlrc = Unsafe_cardinal()
 type 'g mlrc = 'g Mlrc.t
 
-let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachability.t) : (g, g mlrc) t =
+module Mlrc_gt = Unsafe_cardinal()
+type 'g mlrc_gt = 'g Mlrc_gt.t
+
+type 'g mlrc_transitions = {
+  goto: 'g mlrc_gt cardinal;
+  source: 'g mlrc_gt index -> 'g mlrc index;
+  target: 'g mlrc_gt index -> 'g mlrc index;
+  find: 'g mlrc index -> 'g nonterminal index -> 'g mlrc_gt index option;
+}
+
+let make_minimal
+    (type g) (g : g grammar)
+    ((module Reachability) : g Reachability.t)
+  : (g, g mlrc) t * g mlrc_transitions =
   let open IndexBuffer in
   let module State = Gen.Make() in
   let module Transitions = Gen.Make() in
@@ -498,25 +511,38 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   Tarjan.close_relation reachable_from;
   stopwatch 2 "Minimal Lrc ready";
   (* Check: goto transitions are functional (only one target per lrc/nt) *)
-  let source = Vector.make Min.states IndexMap.empty in
-  let goto = ref 0 in
+  let module Goto = Gen.Make() in
+  let gotos = Goto.get_generator () in
+  let goto_index = Vector.make Min.states IndexMap.empty in
   Index.iter Min.transitions (fun tr ->
       match Lr1.incoming g (Min.label tr) with
       | Some sym when Symbol.is_nonterminal g sym ->
         begin match Symbol.desc g sym with
           | T _ -> ()
-          | N nt -> source.@(Min.target tr) <- IndexMap.update nt (function
-              | None -> incr goto; Some tr
+          | N nt -> goto_index.@(Min.target tr) <- IndexMap.update nt (function
               | Some _ -> assert false
+              | None -> Some (Gen.add gotos (Min.target tr, Min.source tr))
             )
         end
       | _ -> ()
     );
-  Printf.eprintf "MLrc goto is functional; %d transitions\n" !goto;
+  let gotos = Gen.freeze gotos in
+  Printf.eprintf "MLrc goto is functional; %d transitions\n" (Vector.length_as_int gotos);
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
-  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
+  let open Mlrc_gt.Eq(struct type t = g type n = Goto.n let n = Goto.n end) in
+  let Refl = eq in
+  let lrc = {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from} in
+  let gotos = {
+    goto = Goto.n;
+    source = (fun i -> fst gotos.:(i));
+    target = (fun i -> snd gotos.:(i));
+    find = (fun i nt -> IndexMap.find_opt nt goto_index.:(i));
+  } in
+  (lrc, gotos)
+
+
 
 let transitions_of_states t ss =
   IndexSet.fold
