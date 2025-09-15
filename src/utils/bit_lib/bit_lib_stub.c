@@ -1,10 +1,9 @@
 #include <assert.h>
+#include <stdint.h>
 #include <caml/mlvalues.h>
 
-uintptr_t bit_lib_pop_count(value v)
+static inline uintptr_t pop_count(uintptr_t x)
 {
-  uintptr_t x = v;
-  x >>= 1;
   if (sizeof(x) == 8)
     return __builtin_popcountll(x);
   else if (sizeof(x) == 4)
@@ -13,32 +12,38 @@ uintptr_t bit_lib_pop_count(value v)
     assert(0);
 }
 
-value bit_lib_pop_count_tagged(value x)
+uintptr_t bit_lib_pop_count(uintptr_t v)
 {
-  return Val_long(bit_lib_pop_count(x));
+  return pop_count(v << 1);
 }
 
-uintptr_t bit_lib_msb_index(value v)
+value bit_lib_pop_count_tagged(uintptr_t x)
 {
-  uintptr_t x = v;
-  x >>= 1;
+  return Val_long(pop_count(x >> 1));
+}
+
+static inline uintptr_t msb_index(uintptr_t x)
+{
   if (sizeof(x) == 8)
-    return 63 - __builtin_clzll(x);
+    return 62 - __builtin_clzll(x);
   else if (sizeof(x) == 4)
-    return 31 - __builtin_clz(x);
+    return 30 - __builtin_clz(x);
   else
     assert(0);
 }
 
-value bit_lib_msb_index_tagged(value x)
+uintptr_t bit_lib_msb_index(uintptr_t v)
 {
-  return Val_long(bit_lib_msb_index(x));
+  return msb_index(v << 1);
 }
 
-uintptr_t bit_lib_lsb_index(value v)
+value bit_lib_msb_index_tagged(value x)
 {
-  uintptr_t x = v;
-  x >>= 1;
+  return Val_long(msb_index(x));
+}
+
+static inline uintptr_t lsb_index(uintptr_t x)
+{
   if (sizeof(x) == 8)
     return __builtin_ctzll(x);
   else if (sizeof(x) == 4)
@@ -47,19 +52,27 @@ uintptr_t bit_lib_lsb_index(value v)
     assert(0);
 }
 
-value bit_lib_lsb_index_tagged(value x)
+uintptr_t bit_lib_lsb_index(uintptr_t v)
 {
-  return Val_long(bit_lib_lsb_index(x));
+  return lsb_index(v);
 }
 
-uintptr_t bit_lib_extract_msb(value v)
+value bit_lib_lsb_index_tagged(value x)
 {
-  uintptr_t x = v;
-  x >>= 1;
+  return Val_long(lsb_index((uintptr_t)x >> 1));
+}
+
+static inline uintptr_t extract_msb(uintptr_t x)
+{
   return __builtin_stdc_bit_floor(x);
 }
 
-value bit_lib_extract_msb_tagged(value x)
+uintptr_t bit_lib_extract_msb(uintptr_t x)
 {
-  return Val_long(bit_lib_extract_msb(x));
+  return extract_msb((x << 1) >> 1);
+}
+
+value bit_lib_extract_msb_tagged(uintptr_t x)
+{
+  return Val_long(bit_lib_extract_msb(x >> 1));
 }
