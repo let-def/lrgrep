@@ -188,6 +188,12 @@ type 'g state =
   | Lr1 of 'g lr1 index
   | Goto of 'g lr1 indexset * 'g lr1 index * 'g terminal indexset
 
+type ('g, 'node, 'step) step = {
+  next: 'step index;
+  reachable: 'node indexset;
+  goto: 'node indexset;
+}
+
 let viable2 (type g) (g : g grammar) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
@@ -196,19 +202,19 @@ let viable2 (type g) (g : g grammar) rc grc =
     | [] -> []
     | nts :: rest ->
       let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      let follow_nt nt la' =
+      let follow_nt nt la' acc =
         let la' = Terminal.intersect g la la' in
         if IndexSet.is_empty la' then
-          None
+          acc
         else
           let follow src = visit_goto (Transition.find_goto g src nt) la' in
-          Some (IndexSet.map follow lr1s)
+          IndexSet.map follow lr1s :: acc
       in
-      let trs = IndexMap.filter_map follow_nt nts in
+      let trs = IndexMap.fold follow_nt nts [] in
       let rest = visit_reductions la lr1s rest in
-      if IndexMap.is_empty trs && List.is_empty rest
+      if List.is_empty trs && List.is_empty rest
       then []
-      else trs :: rest
+      else List.fold_right IndexSet.union trs IndexSet.empty :: rest
   and visit_goto gt la =
     let map = table.:(gt) in
     match IndexSet.Map.find_opt la map with
@@ -224,7 +230,7 @@ let viable2 (type g) (g : g grammar) rc grc =
       IndexBuffer.Gen.commit nodes r (gt, la, transitions);
       IndexBuffer.Gen.index r
   in
-  let _ = Vector.init (Lr1.cardinal g) (fun lr1 ->
+  let initials = Vector.init (Lr1.cardinal g) (fun lr1 ->
       visit_reductions (Terminal.all g)
         (IndexSet.singleton lr1)
         rc.:(lr1).reductions
@@ -236,26 +242,37 @@ let viable2 (type g) (g : g grammar) rc grc =
   let reachable_from =
     Vector.map
       (fun (_, _, transitions) ->
-         List.fold_right (IndexMap.fold (fun _ -> IndexSet.union))
-           transitions IndexSet.empty
+         List.fold_right IndexSet.union transitions IndexSet.empty
       ) nodes
   in
   stopwatch 2 "prepared big-step successors";
   Tarjan.close_relation reachable_from;
   stopwatch 2 "closed the big-step successors";
-  (* Compute reachability for all steps of a reduction *)
-  let rec add_reachables = function
-    | [] -> []
-    | gotos :: rest ->
-      let rest = add_reachables rest in
-      let acc = match rest with
-        | [] -> IndexSet.empty
-        | (acc, _) :: _ -> acc
-      in
-      let acc = IndexMap.fold (fun _ -> IndexSet.union) gotos acc in
-      ((acc, gotos) :: rest)
+  let step_count =
+    (* Initial steps *)
+    Vector.fold_left (fun acc trs -> acc + List.length trs) 0 initials +
+    (* Node steps *)
+    Vector.fold_left (fun acc (_, _, trs) -> acc + List.length trs) 0 nodes
   in
-  let add_reachables (gt, la, tr) = (gt, la, add_reachables tr) in
+  stopwatch 2 "%d small steps" step_count;
+  let module Steps = Fix.Indexing.Const(struct let cardinal = step_count + 1 end) in
+  let next_step = Index.enumerate Steps.n in
+  let zero = next_step () in
+  let steps = Vector.make Steps.n {
+      next = zero;
+      goto = IndexSet.empty;
+      reachable = IndexSet.empty;
+    } in
+  (* Compute reachability for all steps of a reduction *)
+  let add_reachables goto next =
+      let reachable = IndexSet.bind goto (Vector.get reachable_from) in
+      let reachable = IndexSet.union reachable steps.:(next).reachable in
+      let step = {next; goto; reachable} in
+      let index = next_step () in
+      steps.:(index) <- step;
+      index
+  in
+  let add_reachables (gt, la, tr) = (gt, la, List.fold_right add_reachables tr zero) in
   let _transitions = Vector.map add_reachables nodes in
   stopwatch 2 "closed the small-step successors"
 
