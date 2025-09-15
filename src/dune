@@ -7,4 +7,8 @@
 (executable
  (name minilrgrep)
  (modules minilrgrep)
- (libraries cmon fix front kernel menhirSdk support utils valmari))
+ (libraries cmon fix front kernel menhirSdk support unix utils valmari))
+
+(executable
+ (name test)
+ (libraries bit_lib))
