@@ -497,6 +497,22 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let reachable_from = Vector.copy all_successors in
   Tarjan.close_relation reachable_from;
   stopwatch 2 "Minimal Lrc ready";
+  (* Check: goto transitions are functional (only one target per lrc/nt) *)
+  let source = Vector.make Min.states IndexMap.empty in
+  let goto = ref 0 in
+  Index.iter Min.transitions (fun tr ->
+      match Lr1.incoming g (Min.label tr) with
+      | Some sym when Symbol.is_nonterminal g sym ->
+        begin match Symbol.desc g sym with
+          | T _ -> ()
+          | N nt -> source.@(Min.target tr) <- IndexMap.update nt (function
+              | None -> incr goto; Some tr
+              | Some _ -> assert false
+            )
+        end
+      | _ -> ()
+    );
+  Printf.eprintf "MLrc goto is functional; %d transitions\n" !goto;
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
