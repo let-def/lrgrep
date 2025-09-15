@@ -75,7 +75,7 @@ type 'g grammar = {
   transition_source : ('g transition, 'g lr1 index) vector;
   transition_target : ('g transition, 'g lr1 index) vector;
   transition_shift_sym : ('g shift_transition, 'g terminal index) vector;
-  transition_shift_table: ('g lr1, ('g terminal, 'g shift_transition index) indexmap) vector;
+  (*transition_shift_table: ('g lr1, ('g terminal, 'g shift_transition index) indexmap) vector;*)
   transition_goto_sym : ('g goto_transition, 'g nonterminal index) vector;
   transition_goto_table: ('g lr1, ('g nonterminal, 'g goto_transition index) indexmap) vector;
   transition_predecessors: ('g lr1, 'g transition indexset) vector;
@@ -248,7 +248,7 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
 
     let goto_table = Vector.make Lr1.n IndexMap.empty
 
-    let shift_table = Vector.make Lr1.n IndexMap.empty
+    (*let shift_table = Vector.make Lr1.n IndexMap.empty*)
 
     (* A vector to store the predecessors of an lr1 state.
        We cannot compute them directly, we discover them by exploring the
@@ -270,7 +270,7 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
               let t = Terminal.of_g t in
               let index = next_shift () in
               shift_sym.:(index) <- t;
-              shift_table.@(source) <- IndexMap.add t index;
+              (*shift_table.@(source) <- IndexMap.add t index;*)
               of_shift index
             | G.N nt ->
               let nt = Nonterminal.of_g nt in
@@ -430,7 +430,7 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
     transition_source       = Transition.sources;
     transition_target       = Transition.targets;
     transition_shift_sym    = Transition.shift_sym;
-    transition_shift_table  = Transition.shift_table;
+    (*transition_shift_table  = Transition.shift_table;*)
     transition_goto_sym     = Transition.goto_sym;
     transition_goto_table   = Transition.goto_table;
     transition_predecessors = Transition.predecessors;
