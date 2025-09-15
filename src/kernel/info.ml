@@ -56,16 +56,6 @@ type 'g shift_transition = 'g UC_shift_transition.t
 type 'g transition = ('g goto_transition, 'g shift_transition) Sum.n
 type 'g reduction = 'g UC_reduction.t
 
-let nt_pack nt_count lr1 goto =
-  (* Custom function to key into nt_table: compute a unique integer from
-     an lr1 state and a non-terminal. *)
-  Index.to_int lr1 * nt_count + Index.to_int goto
-
-let t_pack t_count lr1 t =
-  (* Custom function to key into t_table: compute a unique integer from
-     an lr1 state and a terminal. *)
-  Index.to_int lr1 * t_count + Index.to_int t
-
 type 'g grammar = {
   raw: (module MenhirSdk.Cmly_api.GRAMMAR);
   terminal_n : 'g terminal cardinal;
@@ -85,9 +75,9 @@ type 'g grammar = {
   transition_source : ('g transition, 'g lr1 index) vector;
   transition_target : ('g transition, 'g lr1 index) vector;
   transition_shift_sym : ('g shift_transition, 'g terminal index) vector;
-  transition_shift_table: (int, 'g shift_transition index) Hashtbl.t;
+  transition_shift_table: ('g lr1, ('g terminal, 'g shift_transition index) indexmap) vector;
   transition_goto_sym : ('g goto_transition, 'g nonterminal index) vector;
-  transition_goto_table: (int, 'g goto_transition index) Hashtbl.t;
+  transition_goto_table: ('g lr1, ('g nonterminal, 'g goto_transition index) indexmap) vector;
   transition_predecessors: ('g lr1, 'g transition indexset) vector;
   transition_successors: ('g lr1, 'g transition indexset) vector;
   transition_accepting : 'g goto_transition indexset;
@@ -254,17 +244,11 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
     let shift_sym = Vector.make' Shift.n (fun () -> Index.of_int Terminal.n 0)
     let goto_sym = Vector.make' Goto.n (fun () -> Index.of_int Nonterminal.n 0)
 
-    (* Hash tables to associate information to the pair of
-       a transition and a symbol.
-    *)
+    (* Tables to associate a pair of a state and a symbol to a transition. *)
 
-    let goto_table = Hashtbl.create 7
+    let goto_table = Vector.make Lr1.n IndexMap.empty
 
-    let nt_count = cardinal Nonterminal.n
-
-    let shift_table = Hashtbl.create 7
-
-    let t_count = cardinal Terminal.n
+    let shift_table = Vector.make Lr1.n IndexMap.empty
 
     (* A vector to store the predecessors of an lr1 state.
        We cannot compute them directly, we discover them by exploring the
@@ -286,13 +270,13 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
               let t = Terminal.of_g t in
               let index = next_shift () in
               shift_sym.:(index) <- t;
-              Hashtbl.add shift_table (t_pack t_count source t) index;
+              shift_table.@(source) <- IndexMap.add t index;
               of_shift index
             | G.N nt ->
               let nt = Nonterminal.of_g nt in
               let index = next_goto () in
               goto_sym.:(index) <- nt;
-              Hashtbl.add goto_table (nt_pack nt_count source nt) index;
+              goto_table.@(source) <- IndexMap.add nt index;
               of_goto index
           in
           sources.:(index) <- source;
@@ -780,13 +764,11 @@ module Transition = struct
   (* [find_goto s nt] finds the goto transition originating from [s] and
      labelled by [nt], or raise [Not_found].  *)
   let find_goto g lr1 nt =
-    let key = nt_pack (cardinal g.nonterminal_n) lr1 nt in
-    match Hashtbl.find_opt g.transition_goto_table key with
+    match IndexMap.find_opt nt g.transition_goto_table.:(lr1) with
     | Some gt -> gt
     | None ->
       Printf.ksprintf invalid_arg "find_goto(%s, %s)"
         (Lr1.to_string g lr1) (Nonterminal.to_string g lr1)
-
 
   let find_goto_target g lr1 nt =
     g.transition_target.:(of_goto g (find_goto g lr1 nt))
