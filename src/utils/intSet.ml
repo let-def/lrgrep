@@ -183,11 +183,15 @@ let is_singleton s =
   | N ->
     false
 
-let cardinal s =
-  fold (fun _ m -> m + 1) s 0
+let rec cardinal acc = function
+  | N -> acc
+  | C (_, mask, qs) ->
+    cardinal (acc + Bit_lib.pop_count mask) qs
+
+let cardinal qs = cardinal 0 qs
 
 let elements s =
-  List.rev (fold (fun tl hd -> tl :: hd) s [])
+  fold_right (fun tl hd -> hd :: tl) [] s
 
 let rec subset s1 s2 =
   match s1, s2 with
