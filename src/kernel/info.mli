@@ -198,7 +198,7 @@ module Lr1 : sig
 
   (** [predecessors t] is the set of LR(1) states that have transition going
       to [t]. *)
-  val predecessors : 'g grammar -> 'g n index -> 'g n indexset
+  val predecessors : 'g grammar -> 'g n index -> 'g n indexset lazy_stream
 
   (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
   val intersect : 'g grammar -> 'g n indexset -> 'g n indexset -> 'g n indexset

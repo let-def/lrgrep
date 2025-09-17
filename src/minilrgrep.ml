@@ -181,7 +181,7 @@ module Reduction_NFA = struct
     (* Reducing an empty suffix: consume one more symbol of the stack *)
     | Reduce ([current], lookaheads, lhs, n) ->
       (* Look at possible predecessors *)
-      list_from_set (Lr1.predecessors grammar current)
+      list_from_set (Lazy.force (Lr1.predecessors grammar current).lnext).lvalue
         (fun lr1 ->
            Some (Some lr1, Reduce ([lr1], lookaheads, lhs, n - 1)))
     (* Reducing from the current suffix *)

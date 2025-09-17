@@ -206,6 +206,9 @@ let viable2 (type g) (g : g grammar)
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
   let table = Vector.make (Vector.length dlrc.lr1_of) IndexSet.Map.empty in
+  let predecessors = Vector.map (fun p -> iterate p
+                                    (fun x -> IndexSet.bind x (Vector.get dlrc_ep.predecessors))
+                                ) dlrc_ep.predecessors in
   let get_memoize lrc nts la ~f =
     let map0 = table.:(lrc) in
     let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
@@ -221,7 +224,6 @@ let viable2 (type g) (g : g grammar)
   let rec visit_reductions la lrcs = function
     | [] -> []
     | nts :: next ->
-      let lrcs = IndexSet.bind lrcs (Vector.get dlrc_ep.predecessors) in
       let curr =
         let by_la =
           IndexMap.fold (fun nt la' acc ->
@@ -234,10 +236,13 @@ let viable2 (type g) (g : g grammar)
         in
         List.fold_left (fun acc (la, nts) ->
             let nts = IndexSet.of_list nts in
-            IndexSet.fold (fun lrc acc -> visit_gotos lrc nts la :: acc) lrcs acc
+            IndexSet.fold (fun lrc acc -> visit_gotos lrc nts la :: acc) lrcs.lvalue acc
           ) [] by_la
       in
-      let next = visit_reductions la lrcs next in
+      let next =
+        let lazy lrcs = lrcs.lnext in
+        visit_reductions la lrcs next
+      in
       match curr, next with
       | [], [] -> []
       | _ -> IndexSet.of_list curr :: next
@@ -250,13 +255,12 @@ let viable2 (type g) (g : g grammar)
             | x -> x :: acc
           ) nts []
       in
-      let transitions = visit_reductions la (IndexSet.singleton lrc) (merge_reductions reductions) in
+      let transitions = visit_reductions la predecessors.:(lrc) (merge_reductions reductions) in
       (lrc, nts, la, transitions)
     end
   in
   let initials = Vector.mapi (fun lrc lr1 ->
-      visit_reductions (Terminal.all g)
-        (IndexSet.singleton lrc) rc.:(lr1).reductions
+      visit_reductions (Terminal.all g) predecessors.:(lrc) rc.:(lr1).reductions
     ) dlrc.lr1_of
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
@@ -382,7 +386,7 @@ let make (type g) (g : g grammar) (_rc : (g lr1, g reduce_closure) vector) : g t
         | top :: rest ->
           visit_inner {config with top; rest} next
         | [] ->
-          ([], visit_outers config.lookahead (IndexSet.singleton config.top) next)
+          ([], visit_outers config.lookahead (Lr1.predecessors g config.top) next)
       in
       let process_goto red =
         let prod = Reduction.production g red in
@@ -401,7 +405,7 @@ let make (type g) (g : g grammar) (_rc : (g lr1, g reduce_closure) vector) : g t
   and visit_outers lookahead lr1_states = function
     | [] -> []
     | gotos :: next ->
-      let lr1_states = IndexSet.bind lr1_states (Lr1.predecessors g) in
+      let lazy lr1_states = lr1_states.lnext in
       visit_outer lookahead lr1_states gotos next
   (* Helper function for visiting a single outer transition. *)
   and visit_outer lookahead lr1_states gotos next =
@@ -416,7 +420,7 @@ let make (type g) (g : g grammar) (_rc : (g lr1, g reduce_closure) vector) : g t
         let process_target source acc =
           (source, Transition.find_goto_target g source lhs) :: acc
         in
-        IndexSet.fold process_target lr1_states []
+        IndexSet.fold process_target lr1_states.lvalue []
         |> List.sort (fun (s1,t1) (s2,t2) ->
              let c = Index.compare t1 t2 in
              if c <> 0 then c else Index.compare s1 s2)
@@ -437,7 +441,7 @@ let make (type g) (g : g grammar) (_rc : (g lr1, g reduce_closure) vector) : g t
       match failwith "TODO" (*reductions.:(lr1)*) with
       | [] -> []
       | gotos :: next ->
-        visit_outer (Terminal.regular g) (IndexSet.singleton lr1) gotos next
+        visit_outer (Terminal.regular g) (Lr1.predecessors g lr1) gotos next
     )
   in
   let states = IndexBuffer.Gen.freeze states in
