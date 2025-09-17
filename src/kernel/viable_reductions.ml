@@ -57,6 +57,9 @@ let group_reductions g = function
 type 'g reduce_closure = {
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
+  (* ^^^^^^^^^^^^^^^^^^^ NEXT STEP
+     Pre-compute goto transitions (and lr1 predecessors)
+  *)
   stacks: ('g, 'g lr1 index list) with_lookahead list;
 }
 
