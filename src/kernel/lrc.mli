@@ -11,7 +11,7 @@ type ('g, 'n) t = {
   all_wait: 'n indexset;
   all_leaf: 'n indexset;
   all_successors: ('n, 'n indexset) vector;
-  all_predecessors: ('n, 'n indexset lazy_stream) vector;
+  all_predecessors: ('n, 'n indexset) vector;
   reachable_from: ('n, 'n indexset) vector;
 }
 

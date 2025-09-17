@@ -42,7 +42,7 @@ type ('g, 'n) t = {
   all_wait: 'n indexset;
   all_leaf: 'n indexset;
   all_successors: ('n, 'n indexset) vector;
-  all_predecessors: ('n, 'n indexset lazy_stream) vector;
+  all_predecessors: ('n, 'n indexset) vector;
   reachable_from: ('n, 'n indexset) vector;
 }
 
@@ -160,8 +160,9 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   Tarjan.close_relation reachable_from;
   stopwatch 2 "Closed LRC successors";
   let all_leaf = IndexSet.all n in
-  let all_predecessors = iterate_vector predecessors in
-  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from; all_predecessors}
+  let all_predecessors = predecessors in
+  {lr1_of; lrcs_of; reachable_from;
+   all_wait; all_leaf; all_successors; all_predecessors}
 
 (* Convert an LRC state to a string representation *)
 let to_string g t lrc =
@@ -485,11 +486,11 @@ let make_minimal
   let all_wait = IndexSet.filter_map Min.transport_state all_wait in
   let all_leaf = IndexSet.filter_map Min.transport_state all_leaf in
   let all_successors = Vector.make Min.states IndexSet.empty in
-  let predecessors = Vector.make Min.states IndexSet.empty in
+  let all_predecessors = Vector.make Min.states IndexSet.empty in
   Index.rev_iter Min.transitions
     (fun tr ->
        all_successors.@(Min.target tr) <- IndexSet.add (Min.source tr);
-       predecessors.@(Min.source tr) <- IndexSet.add (Min.target tr)
+       all_predecessors.@(Min.source tr) <- IndexSet.add (Min.target tr)
     );
   (* Reachable *)
   let reachable_from = Vector.copy all_successors in
@@ -498,8 +499,8 @@ let make_minimal
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
-  let all_predecessors = iterate_vector predecessors in
-  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; all_predecessors; reachable_from}
+  {lr1_of; lrcs_of; reachable_from;
+   all_wait; all_leaf; all_successors; all_predecessors}
 
 let some_prefix g t =
   let prefix = Vector.make (count t) [] in
@@ -521,9 +522,6 @@ let some_prefix g t =
            |> IndexSet.to_seq |> Seq.map (fun x -> [x])
            |> List.of_seq);
   prefix
-
-let predecessors t =
-  relation_reverse (Vector.length t.all_successors) t.all_successors
 
 let check_prefix g t1 p1 t2 p2 =
   let l1 = Vector.make (Lr1.cardinal g) [] in
@@ -564,8 +562,6 @@ let check_equivalence g t1 t2 s1 s2 =
   let prefix1 = some_prefix g t1 in
   let prefix2 = some_prefix g t2 in
   check_prefix g t1 prefix1 t2 prefix2;
-  let pred1 = predecessors t1 in
-  let pred2 = predecessors t2 in
   schedule [] s1 s2;
   let propagate (path, s1, s2) =
     let m1 = transitions_of_states t1 s1 in
@@ -575,8 +571,8 @@ let check_equivalence g t1 t2 s1 s2 =
       | Some s1', Some s2' ->
         incr successes;
         schedule (lr1 :: path)
-          (IndexSet.bind s1' (Vector.get pred1))
-          (IndexSet.bind s2' (Vector.get pred2))
+          (IndexSet.bind s1' (Vector.get t1.all_predecessors))
+          (IndexSet.bind s2' (Vector.get t2.all_predecessors))
       | _ ->
         incr failures;
         let p l =
