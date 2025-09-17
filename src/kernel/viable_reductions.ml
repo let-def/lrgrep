@@ -203,21 +203,17 @@ let viable2 (type g stack) (g : g grammar)
     (stack, g viable_nodes indexset list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
-  let module KeyMap = Map.Make(struct
-      type t = (g nonterminal, g terminal indexset) indexmap
-      let compare = IndexMap.compare IndexSet.compare
-    end)
-  in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Vector.length lr1_of) KeyMap.empty in
-  let get_memoize lrc key ~f =
+  let table = Vector.make (Vector.length lr1_of) IndexSet.Map.empty in
+  let get_memoize lrc nts la ~f =
     let map0 = table.:(lrc) in
-    match KeyMap.find_opt key map0 with
+    let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
+    match IndexSet.Map.find_opt la map1 with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       let i = IndexBuffer.Gen.index r in
-      table.:(lrc) <- KeyMap.add key i map0;
+      table.:(lrc) <- IndexSet.Map.add nts (IndexSet.Map.add la i map1) map0;
       IndexBuffer.Gen.commit nodes r (f ());
       i
   in
@@ -245,7 +241,7 @@ let viable2 (type g stack) (g : g grammar)
       | [], [] -> []
       | _ -> IndexSet.of_list curr :: next
   and visit_gotos lrc nts la : Nodes.n index =
-    get_memoize lrc (IndexMap.inflate (fun _ -> la) nts) ~f:begin fun () ->
+    get_memoize lrc nts la ~f:begin fun () ->
       let reductions =
         IndexSet.fold (fun nt acc ->
             match grc.:(Transition.find_goto g lr1_of.:(lrc) nt).reductions with
