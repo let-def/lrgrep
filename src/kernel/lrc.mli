@@ -11,6 +11,7 @@ type ('g, 'n) t = {
   all_wait: 'n indexset;
   all_leaf: 'n indexset;
   all_successors: ('n, 'n indexset) vector;
+  all_predecessors: ('n, 'n indexset lazy_stream) vector;
   reachable_from: ('n, 'n indexset) vector;
 }
 
@@ -32,15 +33,7 @@ val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
 val check_deterministic : 'g grammar -> 'g Reachability.t -> unit
 
 type 'g mlrc
-type 'g mlrc_gt
 
-type 'g mlrc_transitions = {
-  goto: 'g mlrc_gt cardinal;
-  source: 'g mlrc_gt index -> 'g mlrc index;
-  target: 'g mlrc_gt index -> 'g mlrc index;
-  find: 'g mlrc index -> 'g nonterminal index -> 'g mlrc_gt index option;
-}
-
-val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t * 'g mlrc_transitions
+val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t
 
 val check_equivalence : 'g grammar -> ('g, 'n1) t -> ('g, 'n2) t -> 'n1 indexset -> 'n2 indexset -> unit

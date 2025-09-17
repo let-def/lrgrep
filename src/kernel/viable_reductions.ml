@@ -57,9 +57,6 @@ let group_reductions g = function
 type 'g reduce_closure = {
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
-  (* ^^^^^^^^^^^^^^^^^^^ NEXT STEP
-     Pre-compute goto transitions (and lr1 predecessors)
-  *)
   stacks: ('g, 'g lr1 index list) with_lookahead list;
 }
 
@@ -197,18 +194,13 @@ type ('g, 'node, 'step) step = {
   goto: 'node indexset;
 }
 
-(* TODO determinize: the deterministic viable reductions might be much smaller?! *)
-
-let viable2 (type g) (g : g grammar)
-    (dlrc: (g, g Lrc.mlrc) Lrc.t)
-    (dlrc_ep: g Lrc.mlrc Lrc.entrypoints)
+let viable2 (type g stack) (g : g grammar)
+    (lr1_of: (stack, g lr1 index) vector)
+    (predecessors: (stack, stack indexset lazy_stream) vector)
      rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Vector.length dlrc.lr1_of) IndexSet.Map.empty in
-  let predecessors = Vector.map (fun p -> iterate p
-                                    (fun x -> IndexSet.bind x (Vector.get dlrc_ep.predecessors))
-                                ) dlrc_ep.predecessors in
+  let table = Vector.make (Vector.length lr1_of) IndexSet.Map.empty in
   let get_memoize lrc nts la ~f =
     let map0 = table.:(lrc) in
     let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
@@ -224,6 +216,7 @@ let viable2 (type g) (g : g grammar)
   let rec visit_reductions la lrcs = function
     | [] -> []
     | nts :: next ->
+      let lazy lrcs = lrcs.lnext in
       let curr =
         let by_la =
           IndexMap.fold (fun nt la' acc ->
@@ -239,10 +232,7 @@ let viable2 (type g) (g : g grammar)
             IndexSet.fold (fun lrc acc -> visit_gotos lrc nts la :: acc) lrcs.lvalue acc
           ) [] by_la
       in
-      let next =
-        let lazy lrcs = lrcs.lnext in
-        visit_reductions la lrcs next
-      in
+      let next = visit_reductions la lrcs next in
       match curr, next with
       | [], [] -> []
       | _ -> IndexSet.of_list curr :: next
@@ -250,7 +240,7 @@ let viable2 (type g) (g : g grammar)
     get_memoize lrc nts la ~f:begin fun () ->
       let reductions =
         IndexSet.fold (fun nt acc ->
-            match grc.:(Transition.find_goto g dlrc.lr1_of.:(lrc) nt).reductions with
+            match grc.:(Transition.find_goto g lr1_of.:(lrc) nt).reductions with
             | [] -> acc
             | x -> x :: acc
           ) nts []
@@ -261,7 +251,7 @@ let viable2 (type g) (g : g grammar)
   in
   let initials = Vector.mapi (fun lrc lr1 ->
       visit_reductions (Terminal.all g) predecessors.:(lrc) rc.:(lr1).reductions
-    ) dlrc.lr1_of
+    ) lr1_of
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);

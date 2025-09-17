@@ -42,6 +42,7 @@ type ('g, 'n) t = {
   all_wait: 'n indexset;
   all_leaf: 'n indexset;
   all_successors: ('n, 'n indexset) vector;
+  all_predecessors: ('n, 'n indexset lazy_stream) vector;
   reachable_from: ('n, 'n indexset) vector;
 }
 
@@ -159,7 +160,8 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   Tarjan.close_relation reachable_from;
   stopwatch 2 "Closed LRC successors";
   let all_leaf = IndexSet.all n in
-  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
+  let all_predecessors = iterate_vector predecessors in
+  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from; all_predecessors}
 
 (* Convert an LRC state to a string representation *)
 let to_string g t lrc =
@@ -349,20 +351,10 @@ let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reac
 module Mlrc = Unsafe_cardinal()
 type 'g mlrc = 'g Mlrc.t
 
-module Mlrc_gt = Unsafe_cardinal()
-type 'g mlrc_gt = 'g Mlrc_gt.t
-
-type 'g mlrc_transitions = {
-  goto: 'g mlrc_gt cardinal;
-  source: 'g mlrc_gt index -> 'g mlrc index;
-  target: 'g mlrc_gt index -> 'g mlrc index;
-  find: 'g mlrc index -> 'g nonterminal index -> 'g mlrc_gt index option;
-}
-
 let make_minimal
     (type g) (g : g grammar)
     ((module Reachability) : g Reachability.t)
-  : (g, g mlrc) t * g mlrc_transitions =
+  : (g, g mlrc) t =
   let open IndexBuffer in
   let module State = Gen.Make() in
   let module Transitions = Gen.Make() in
@@ -439,19 +431,6 @@ let make_minimal
   let all_leaf = fast_map (Lr1.all g) visit_state in
   fixpoint ~propagate todo;
   stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
-  (*IndexSet.iter (fun st ->
-      Printf.eprintf "lrc%d has label %s\n" (Index.to_int st) (Lr1.to_string g (fst (Gen.get states st)))
-    ) all_wait;*)
-  (*Hashtbl.iter (fun (lr1, classes) state ->
-      if IndexSet.mem lr1 (Lr1.entrypoints g) then (
-        Printf.eprintf
-          "LRC%d represent entrypoint %s with classes %s (lr1 has %d classes)\n"
-          (Index.to_int state)
-          (Lr1.to_string g lr1)
-          (string_concat_map ~wrap:("{","}") "," string_of_int (IntSet.elements classes))
-          (Array.length (Reachability.Classes.for_lr1 lr1))
-      )
-    ) table;*)
   let module Min =
     Valmari.Minimize(struct
         type t = g lr1 index
@@ -504,43 +483,21 @@ let make_minimal
   let all_wait = IndexSet.filter_map Min.transport_state all_wait in
   let all_leaf = IndexSet.filter_map Min.transport_state all_leaf in
   let all_successors = Vector.make Min.states IndexSet.empty in
+  let predecessors = Vector.make Min.states IndexSet.empty in
   Index.rev_iter Min.transitions
-    (fun tr -> all_successors.@(Min.target tr) <- IndexSet.add (Min.source tr));
+    (fun tr ->
+       all_successors.@(Min.target tr) <- IndexSet.add (Min.source tr);
+       predecessors.@(Min.source tr) <- IndexSet.add (Min.target tr)
+    );
   (* Reachable *)
   let reachable_from = Vector.copy all_successors in
   Tarjan.close_relation reachable_from;
   stopwatch 2 "Minimal Lrc ready";
-  (* Check: goto transitions are functional (only one target per lrc/nt) *)
-  let module Goto = Gen.Make() in
-  let gotos = Goto.get_generator () in
-  let goto_index = Vector.make Min.states IndexMap.empty in
-  Index.iter Min.transitions (fun tr ->
-      match Lr1.incoming g (Min.label tr) with
-      | Some sym when Symbol.is_nonterminal g sym ->
-        begin match Symbol.desc g sym with
-          | T _ -> ()
-          | N nt -> goto_index.@(Min.target tr) <- IndexMap.update nt (function
-              | Some _ -> assert false
-              | None -> Some (Gen.add gotos (Min.target tr, Min.source tr))
-            )
-        end
-      | _ -> ()
-    );
-  let gotos = Gen.freeze gotos in
-  Printf.eprintf "MLrc goto is functional; %d transitions\n" (Vector.length_as_int gotos);
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
-  let open Mlrc_gt.Eq(struct type t = g type n = Goto.n let n = Goto.n end) in
-  let Refl = eq in
-  let lrc = {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from} in
-  let gotos = {
-    goto = Goto.n;
-    source = (fun i -> fst gotos.:(i));
-    target = (fun i -> snd gotos.:(i));
-    find = (fun i nt -> IndexMap.find_opt nt goto_index.:(i));
-  } in
-  (lrc, gotos)
+  let all_predecessors = iterate_vector predecessors in
+  {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; all_predecessors; reachable_from}
 
 
 

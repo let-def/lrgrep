@@ -481,3 +481,9 @@ let rec iterate x f = {
   lvalue = x;
   lnext = lazy (iterate (f x) f);
 }
+
+let iterate_vector v =
+  Vector.init (Vector.length v) @@ fun x ->
+  iterate
+    (IndexSet.singleton x)
+    (fun xs -> IndexSet.bind xs (Vector.get v))

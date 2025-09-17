@@ -445,8 +445,7 @@ module Lift(G : MenhirSdk.Cmly_api.GRAMMAR) = struct
     lr1_reject              = Lr1_extra.reject;
     lr1_entrypoints         = Lr1_extra.entrypoints;
     lr1_entrypoint_table    = Lr1_extra.entrypoint_table;
-    lr1_predecessors        = Vector.init Lr1.n (fun x -> iterate (IndexSet.singleton x)
-                                                    (fun x -> IndexSet.bind x (Vector.get Lr1_extra.predecessors)) );
+    lr1_predecessors        = iterate_vector Lr1_extra.predecessors;
     reduction_state         = Reduction.state;
     reduction_production    = Reduction.production;
     reduction_lookaheads    = Reduction.lookaheads;
