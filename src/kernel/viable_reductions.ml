@@ -199,50 +199,53 @@ type ('g, 'node, 'step) step = {
 let viable2 (type g) (g : g grammar) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Transition.goto g) IndexSet.Map.empty in
-  let get_memoize gt la ~f =
-    let map = table.:(gt) in
-    match IndexSet.Map.find_opt la map with
+  let table = Vector.make (Lr1.cardinal g) IndexSet.Map.empty in
+  let get_memoize lr1 nts la ~f =
+    let map0 = table.:(lr1) in
+    let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
+    match IndexSet.Map.find_opt la map1 with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
-      table.:(gt) <- IndexSet.Map.add la (IndexBuffer.Gen.index r) map;
+      let i = IndexBuffer.Gen.index r in
+      table.:(lr1) <- IndexSet.Map.add nts (IndexSet.Map.add la i map1) map0;
       IndexBuffer.Gen.commit nodes r (f ());
       IndexBuffer.Gen.index r
   in
   let rec visit_reductions la lr1s = function
     | [] -> []
-    | nts :: rest ->
+    | nts :: next ->
       let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
       let curr =
-        let follow_nt nt la' acc =
-          let la' = Terminal.intersect g la la' in
-          if IndexSet.is_empty la' then
-            acc
-          else
-            let follow src = visit_goto (Transition.find_goto g src nt) la' in
-            IndexSet.map follow lr1s :: acc
+        let by_la =
+          IndexMap.fold (fun nt la acc -> (la, nt) :: acc) nts []
+          |> IndexRefine.annotated_partition
         in
-        IndexMap.fold follow_nt nts []
+        List.fold_left (fun acc (la, nts) ->
+            let nts = IndexSet.of_list nts in
+            IndexSet.fold (fun lr1 acc -> visit_gotos lr1 nts la :: acc) lr1s acc
+          ) [] by_la
       in
-      let next = visit_reductions la lr1s rest in
+      let next = visit_reductions la lr1s next in
       match curr, next with
       | [], [] -> []
-      | _ -> List.fold_right IndexSet.union curr IndexSet.empty :: next
-  and visit_goto gt la =
-    get_memoize gt la ~f:begin fun () ->
-      let transitions =
-        visit_reductions la
-          (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
-          grc.:(gt).reductions
+      | _ -> IndexSet.of_list curr :: next
+  and visit_gotos lr1 nts la : Nodes.n index =
+    get_memoize lr1 nts la ~f:begin fun () ->
+      let reductions =
+        IndexSet.fold (fun nt acc ->
+            match grc.:(Transition.find_goto g lr1 nt).reductions with
+            | [] -> acc
+            | x -> x :: acc
+          ) nts []
       in
-      (gt, la, transitions)
+      let transitions = visit_reductions la (IndexSet.singleton lr1) (merge_reductions reductions) in
+      (lr1, nts, la, transitions)
     end
   in
   let initials = Vector.init (Lr1.cardinal g) (fun lr1 ->
       visit_reductions (Terminal.all g)
-        (IndexSet.singleton lr1)
-        rc.:(lr1).reductions
+        (IndexSet.singleton lr1) rc.:(lr1).reductions
     )
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
@@ -250,7 +253,7 @@ let viable2 (type g) (g : g grammar) rc grc =
   (* Compute the set reachable states (closure of successors). *)
   let reachable_from =
     Vector.map
-      (fun (_, _, transitions) ->
+      (fun (_, _, _, transitions) ->
          List.fold_right IndexSet.union transitions IndexSet.empty
       ) nodes
   in
@@ -282,7 +285,7 @@ let viable2 (type g) (g : g grammar) rc grc =
       step
   in
   let pack_transitions trs = List.fold_right get trs zero in
-  let add_reachables (gt, la, trs) = (gt, la, pack_transitions trs) in
+  let add_reachables (lr1, nts, la, trs) = (lr1, nts, la, pack_transitions trs) in
   let _transitions = Vector.map add_reachables nodes in
   let _initials = Vector.map pack_transitions initials in
   stopwatch 2 "closed the small-step successors (%d elements)"
