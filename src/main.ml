@@ -335,10 +335,12 @@ module T = struct
   let grc = Kernel.Viable_reductions.goto_reduce_closures grammar rc
   let () = stopwatch 1 "Done with closure of goto epsilon reductions"
 
-  let () = Kernel.Viable_reductions.viable2 grammar
-      lrc.lr1_of
-      (iterate_vector lrc.all_predecessors)
-      rc grc
+  let viable_big, viable_big_initials =
+    Kernel.Viable_reductions.viable2 grammar
+      lrc.lr1_of (iterate_vector lrc.all_predecessors) rc grc
+
+  let _ =
+    Kernel.Viable_reductions.small_steps viable_big viable_big_initials
 
   let () = stopwatch 1 "Done with viable2 reductions"
 

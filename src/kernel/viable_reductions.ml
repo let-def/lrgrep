@@ -179,11 +179,6 @@ let goto_reduce_closures (type g) (g : g grammar) rcs
   end;
   table
 
-module Inner = Unsafe_cardinal()
-type 'g inner = 'g Inner.t
-
-type ('g, 'n) states = ('g lr1, 'g inner) Sum.n
-
 type 'g state =
   | Lr1 of 'g lr1 index
   | Goto of 'g lr1 indexset * 'g lr1 index * 'g terminal indexset
@@ -194,24 +189,37 @@ type ('g, 'node, 'step) step = {
   goto: 'node indexset;
 }
 
+module Viable_nodes = Unsafe_cardinal()
+type 'g viable_nodes = 'g Viable_nodes.t
+
 let viable2 (type g stack) (g : g grammar)
     (lr1_of: (stack, g lr1 index) vector)
     (predecessors: (stack, stack indexset lazy_stream) vector)
-     rc grc =
+     rc grc
+  : (g viable_nodes,
+     stack index * g nonterminal indexset *
+     g terminal indexset * g viable_nodes indexset list)
+      vector *
+    (stack, g viable_nodes indexset list) vector
+  =
   let module Nodes = IndexBuffer.Gen.Make() in
+  let module KeyMap = Map.Make(struct
+      type t = (g nonterminal, g terminal indexset) indexmap
+      let compare = IndexMap.compare IndexSet.compare
+    end)
+  in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Vector.length lr1_of) IndexSet.Map.empty in
-  let get_memoize lrc nts la ~f =
+  let table = Vector.make (Vector.length lr1_of) KeyMap.empty in
+  let get_memoize lrc key ~f =
     let map0 = table.:(lrc) in
-    let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
-    match IndexSet.Map.find_opt la map1 with
+    match KeyMap.find_opt key map0 with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       let i = IndexBuffer.Gen.index r in
-      table.:(lrc) <- IndexSet.Map.add nts (IndexSet.Map.add la i map1) map0;
+      table.:(lrc) <- KeyMap.add key i map0;
       IndexBuffer.Gen.commit nodes r (f ());
-      IndexBuffer.Gen.index r
+      i
   in
   let rec visit_reductions la lrcs = function
     | [] -> []
@@ -237,7 +245,7 @@ let viable2 (type g stack) (g : g grammar)
       | [], [] -> []
       | _ -> IndexSet.of_list curr :: next
   and visit_gotos lrc nts la : Nodes.n index =
-    get_memoize lrc nts la ~f:begin fun () ->
+    get_memoize lrc (IndexMap.inflate (fun _ -> la) nts) ~f:begin fun () ->
       let reductions =
         IndexSet.fold (fun nt acc ->
             match grc.:(Transition.find_goto g lr1_of.:(lrc) nt).reductions with
@@ -255,6 +263,25 @@ let viable2 (type g stack) (g : g grammar)
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
+  let open Viable_nodes.Eq(struct
+      type t = g
+      include Nodes
+    end ) in
+  let Refl = eq in
+  (nodes, initials)
+
+module Viable_steps = Unsafe_cardinal()
+type 'g viable_steps = 'g Viable_steps.t
+
+let small_steps (type g stack)
+    (nodes : (g viable_nodes, stack index * g nonterminal indexset *
+                              g terminal indexset * g viable_nodes indexset list) vector)
+    (initials : (stack, g viable_nodes indexset list) vector)
+  : (g viable_nodes, stack index * g nonterminal indexset *
+                     g terminal indexset * g viable_steps index) vector *
+    (stack, g viable_steps index) vector *
+    (g viable_steps, (g viable_nodes, g viable_steps index) IndexSet.Map.t) vector
+  =
   (* Compute the set reachable states (closure of successors). *)
   let reachable_from =
     Vector.map
@@ -291,10 +318,17 @@ let viable2 (type g stack) (g : g grammar)
   in
   let pack_transitions trs = List.fold_right get trs zero in
   let add_reachables (lr1, nts, la, trs) = (lr1, nts, la, pack_transitions trs) in
-  let _transitions = Vector.map add_reachables nodes in
-  let _initials = Vector.map pack_transitions initials in
+  let transitions = Vector.map add_reachables nodes in
+  let initials = Vector.map pack_transitions initials in
+  let steps = Gen.freeze steps in
   stopwatch 2 "closed the small-step successors (%d elements)"
-    (Vector.length_as_int (Gen.freeze steps))
+    (Vector.length_as_int steps);
+  let open Viable_steps.Eq(struct
+      type t = g
+      include Steps
+    end) in
+  let Refl = eq in
+  (transitions, initials, steps)
 
 (* Step 2: explore viable reductions *)
 
