@@ -196,21 +196,28 @@ type ('g, 'node, 'step) step = {
 
 (* TODO determinize: the deterministic viable reductions might be much smaller?! *)
 
-let viable2 (type g) (g : g grammar) rc grc =
+let viable2 (type g) (g : g grammar)
+    (lrc: (g, g Lrc.mlrc) Lrc.t)
+    (lrc_ep: g Lrc.mlrc Lrc.entrypoints)
+    (lrc_gt : g Lrc.mlrc_transitions) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Transition.goto g) IndexSet.Map.empty in
+  let table = Vector.make lrc_gt.goto IndexSet.Map.empty in
   let rec visit_reductions la lr1s = function
     | [] -> []
     | nts :: rest ->
-      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
+      let lr1s = IndexSet.bind lr1s (Vector.get lrc_ep.predecessors) in
       let follow_nt nt la' acc =
         let la' = Terminal.intersect g la la' in
         if IndexSet.is_empty la' then
           acc
         else
-          let follow src = visit_goto (Transition.find_goto g src nt) la' in
-          IndexSet.map follow lr1s :: acc
+          let follow src =
+            match lrc_gt.find src nt with
+            | None -> None
+            | Some gt -> Some (visit_goto gt la')
+          in
+          IndexSet.filter_map follow lr1s :: acc
       in
       let trs = IndexMap.fold follow_nt nts [] in
       let rest = visit_reductions la lr1s rest in
@@ -224,19 +231,27 @@ let viable2 (type g) (g : g grammar) rc grc =
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       table.:(gt) <- IndexSet.Map.add la (IndexBuffer.Gen.index r) map;
+      let src = lrc.lr1_of.:(lrc_gt.source gt) in
+      let tgt = lrc.lr1_of.:(lrc_gt.target gt) in
+      let gt1 = Transition.find_goto g src (match Lr1.incoming g tgt with
+          | None -> assert false
+          | Some sym -> match Symbol.desc g sym with
+            | N nt -> nt
+            | T _ -> assert false
+        ) in
       let transitions =
         visit_reductions la
-          (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
-          grc.:(gt).reductions
+          (IndexSet.singleton (lrc_gt.source gt))
+          grc.:(gt1).reductions
       in
       IndexBuffer.Gen.commit nodes r (gt, la, transitions);
       IndexBuffer.Gen.index r
   in
-  let initials = Vector.init (Lr1.cardinal g) (fun lr1 ->
+  let initials = Vector.mapi (fun lrc lr1 ->
       visit_reductions (Terminal.all g)
-        (IndexSet.singleton lr1)
+        (IndexSet.singleton lrc)
         rc.:(lr1).reductions
-    )
+    ) lrc.lr1_of
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
