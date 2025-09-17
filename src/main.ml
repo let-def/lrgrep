@@ -337,7 +337,10 @@ module T = struct
 
   let viable_big, viable_big_initials =
     Kernel.Viable_reductions.viable2 grammar
-      lrc.lr1_of (iterate_vector lrc.all_predecessors) rc grc
+      (Vector.length lrc.lr1_of)
+      (Vector.get lrc.lr1_of)
+      (Vector.get (iterate_vector lrc.all_predecessors))
+      rc grc
 
   let _ =
     Kernel.Viable_reductions.small_steps viable_big viable_big_initials

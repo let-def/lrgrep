@@ -193,8 +193,9 @@ module Viable_nodes = Unsafe_cardinal()
 type 'g viable_nodes = 'g Viable_nodes.t
 
 let viable2 (type g stack) (g : g grammar)
-    (lr1_of: (stack, g lr1 index) vector)
-    (predecessors: (stack, stack indexset lazy_stream) vector)
+    (stacks: stack cardinal)
+    (lr1_of: stack index -> g lr1 index)
+    (predecessors: stack index -> stack indexset lazy_stream)
      rc grc
   : (g viable_nodes,
      stack index * g nonterminal indexset *
@@ -204,7 +205,7 @@ let viable2 (type g stack) (g : g grammar)
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make (Vector.length lr1_of) IndexSet.Map.empty in
+  let table = Vector.make stacks IndexSet.Map.empty in
   let get_memoize lrc nts la ~f =
     let map0 = table.:(lrc) in
     let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
@@ -244,18 +245,18 @@ let viable2 (type g stack) (g : g grammar)
     get_memoize lrc nts la ~f:begin fun () ->
       let reductions =
         IndexSet.fold (fun nt acc ->
-            match grc.:(Transition.find_goto g lr1_of.:(lrc) nt).reductions with
+            match grc.:(Transition.find_goto g (lr1_of lrc) nt).reductions with
             | [] -> acc
             | x -> x :: acc
           ) nts []
       in
-      let transitions = visit_reductions la predecessors.:(lrc) (merge_reductions reductions) in
+      let transitions = visit_reductions la (predecessors lrc) (merge_reductions reductions) in
       (lrc, nts, la, transitions)
     end
   in
-  let initials = Vector.mapi (fun lrc lr1 ->
-      visit_reductions (Terminal.all g) predecessors.:(lrc) rc.:(lr1).reductions
-    ) lr1_of
+  let initials = Vector.init stacks @@ fun lrc ->
+    let lr1 = lr1_of lrc in
+    visit_reductions (Terminal.all g) (predecessors lrc) rc.:(lr1).reductions
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
