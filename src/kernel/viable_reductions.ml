@@ -221,7 +221,12 @@ let viable2 (type g) (g : g grammar)
       let lrcs = IndexSet.bind lrcs (Vector.get dlrc_ep.predecessors) in
       let curr =
         let by_la =
-          IndexMap.fold (fun nt la acc -> (la, nt) :: acc) nts []
+          IndexMap.fold (fun nt la' acc ->
+              let la' = IndexSet.inter la la' in
+              cons_if
+                (not (IndexSet.is_empty la'))
+                (la', nt) acc
+            ) nts []
           |> IndexRefine.annotated_partition
         in
         List.fold_left (fun acc (la, nts) ->
