@@ -128,7 +128,7 @@ let make (type g) (g : g grammar) : g t =
         | top :: rest ->
           visit_inner {config with top; rest} next
         | [] ->
-          ([], visit_outers config.lookahead (IndexSet.singleton config.top) next)
+          ([], visit_outers config.lookahead (Lr1.predecessors g config.top) next)
       in
       let process_goto red =
         let prod = Reduction.production g red in
@@ -147,10 +147,9 @@ let make (type g) (g : g grammar) : g t =
   and visit_outers lookahead lr1_states = function
     | [] -> []
     | gotos :: next ->
-      let lr1_states = IndexSet.bind lr1_states (Lr1.predecessors g) in
-      visit_outer lookahead lr1_states gotos next
+      visit_outer lookahead lr1_states.lnext gotos next
   (* Helper function for visiting a single outer transition. *)
-  and visit_outer lookahead lr1_states gotos next =
+  and visit_outer lookahead (lazy lr1_states) gotos next =
     let next = visit_outers lookahead lr1_states next in
     let process_goto acc red =
       let lookahead =
@@ -162,7 +161,7 @@ let make (type g) (g : g grammar) : g t =
         let process_target source acc =
           (source, Transition.find_goto_target g source lhs) :: acc
         in
-        IndexSet.fold process_target lr1_states []
+        IndexSet.fold process_target lr1_states.lvalue []
         |> List.sort (fun (s1,t1) (s2,t2) ->
              let c = Index.compare t1 t2 in
              if c <> 0 then c else Index.compare s1 s2)
@@ -183,7 +182,7 @@ let make (type g) (g : g grammar) : g t =
       match reductions.:(lr1) with
       | [] -> []
       | gotos :: next ->
-        visit_outer (Terminal.regular g) (IndexSet.singleton lr1) gotos next
+        visit_outer (Terminal.regular g) (Lazy.from_val (Lr1.predecessors g lr1)) gotos next
     )
   in
   let states = IndexBuffer.Gen.freeze states in

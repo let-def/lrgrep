@@ -195,6 +195,16 @@ let make (type g) (g : g grammar) : g t = (module struct
 
   (* [unreduce tr] lists all the reductions that ends up following [tr]. *)
   let unreduce : g goto_transition index -> reduction list =
+    let predecessors =
+      Vector.init (Lr1.cardinal g) @@ fun lr1 ->
+      iterate [lr1, []] @@ fun states ->
+      let expand acc (state, steps) =
+        IndexSet.fold (fun tr acc ->
+            (Transition.source g tr, tr :: steps) :: acc
+          ) (Transition.predecessors g state) acc
+      in
+      List.fold_left expand [] states
+    in
     let table = Vector.make (Transition.goto g) [] in
     (* [add_reduction lr1 (production, lookahead)] populates [table] by
        simulating the reduction [production], starting from [lr1] when
@@ -204,19 +214,15 @@ let make (type g) (g : g grammar) : g t = (module struct
         let lhs = Production.lhs g production in
         let rhs = Production.rhs g production in
         let states =
-          Array.fold_right (fun _ states ->
-              let expand acc (state, steps) =
-                IndexSet.fold (fun tr acc ->
-                    (Transition.source g tr, tr :: steps) :: acc
-                  ) (Transition.predecessors g state) acc
-              in
-              List.fold_left expand [] states
-            ) rhs [lr1, []]
+          Array.fold_right
+            (fun _ pred -> Lazy.force pred.lnext)
+            rhs
+            predecessors.:(lr1)
         in
         List.iter (fun (source, steps) ->
             table.@(Transition.find_goto g source lhs) <-
               List.cons { production; lookahead; steps; state=lr1 }
-          ) states
+          ) states.lvalue
       end
     in
     (* [get_reductions lr1] returns the list of productions and the lookahead

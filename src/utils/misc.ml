@@ -471,3 +471,19 @@ let rewrite_keywords f (pos : Lexing.position) str =
     | _ -> incr i
   done;
   Bytes.to_string b
+
+type 'a lazy_stream = {
+  lvalue: 'a;
+  lnext: 'a lazy_stream lazy_t;
+}
+
+let rec iterate x f = {
+  lvalue = x;
+  lnext = lazy (iterate (f x) f);
+}
+
+let iterate_vector v =
+  Vector.init (Vector.length v) @@ fun x ->
+  iterate
+    (IndexSet.singleton x)
+    (fun xs -> IndexSet.bind xs (Vector.get v))

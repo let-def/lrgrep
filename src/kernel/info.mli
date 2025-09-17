@@ -87,6 +87,8 @@ module Terminal : sig
 
   (** Is it the special `error` symbol *)
   val is_error : 'g grammar -> 'g n index -> bool
+
+  val lookaheads_to_string : 'g grammar -> 'g n indexset -> string
 end
 
 module Nonterminal : sig
@@ -200,7 +202,7 @@ module Lr1 : sig
 
   (** [predecessors t] is the set of LR(1) states that have transition going
       to [t]. *)
-  val predecessors : 'g grammar -> 'g n index -> 'g n indexset
+  val predecessors : 'g grammar -> 'g n index -> 'g n indexset lazy_stream
 
   (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
   val intersect : 'g grammar -> 'g n indexset -> 'g n indexset -> 'g n indexset
@@ -265,6 +267,8 @@ module Transition : sig
   (* Accepting transitions are goto transitions from an initial state to an
      accepting state, recognizing one of the grammar entrypoint. *)
   val accepting : 'g grammar -> 'g goto_transition indexset
+
+  val to_string : 'g grammar -> 'g transition index -> string
 end
 
 module Reduction : sig

@@ -469,9 +469,9 @@ struct
   let () =
     if build_with_expensive_assertions then (
       Vector.iteri (fun lrc lr1 ->
-          let lr1s' = Lr1.predecessors g lr1 in
+          let lazy lr1s' = (Lr1.predecessors g lr1).lnext in
           IndexSet.iter (fun lrc' ->
-              assert (IndexSet.mem lrc_graph.lr1_of.:(lrc') lr1s')
+              assert (IndexSet.mem lrc_graph.lr1_of.:(lrc') lr1s'.lvalue)
             ) entrypoints.predecessors.:(lrc)
         ) lrc_graph.lr1_of;
       let validate {Reach. config; transitions} =
