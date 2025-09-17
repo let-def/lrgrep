@@ -200,37 +200,44 @@ let viable2 (type g) (g : g grammar) rc grc =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
   let table = Vector.make (Transition.goto g) IndexSet.Map.empty in
-  let rec visit_reductions la lr1s = function
-    | [] -> []
-    | nts :: rest ->
-      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
-      let follow_nt nt la' acc =
-        let la' = Terminal.intersect g la la' in
-        if IndexSet.is_empty la' then
-          acc
-        else
-          let follow src = visit_goto (Transition.find_goto g src nt) la' in
-          IndexSet.map follow lr1s :: acc
-      in
-      let trs = IndexMap.fold follow_nt nts [] in
-      let rest = visit_reductions la lr1s rest in
-      if List.is_empty trs && List.is_empty rest
-      then []
-      else List.fold_right IndexSet.union trs IndexSet.empty :: rest
-  and visit_goto gt la =
+  let get_memoize gt la ~f =
     let map = table.:(gt) in
     match IndexSet.Map.find_opt la map with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       table.:(gt) <- IndexSet.Map.add la (IndexBuffer.Gen.index r) map;
+      IndexBuffer.Gen.commit nodes r (f ());
+      IndexBuffer.Gen.index r
+  in
+  let rec visit_reductions la lr1s = function
+    | [] -> []
+    | nts :: rest ->
+      let lr1s = IndexSet.bind lr1s (Lr1.predecessors g) in
+      let curr =
+        let follow_nt nt la' acc =
+          let la' = Terminal.intersect g la la' in
+          if IndexSet.is_empty la' then
+            acc
+          else
+            let follow src = visit_goto (Transition.find_goto g src nt) la' in
+            IndexSet.map follow lr1s :: acc
+        in
+        IndexMap.fold follow_nt nts []
+      in
+      let next = visit_reductions la lr1s rest in
+      match curr, next with
+      | [], [] -> []
+      | _ -> List.fold_right IndexSet.union curr IndexSet.empty :: next
+  and visit_goto gt la =
+    get_memoize gt la ~f:begin fun () ->
       let transitions =
         visit_reductions la
           (IndexSet.singleton (Transition.source g (Transition.of_goto g gt)))
           grc.:(gt).reductions
       in
-      IndexBuffer.Gen.commit nodes r (gt, la, transitions);
-      IndexBuffer.Gen.index r
+      (gt, la, transitions)
+    end
   in
   let initials = Vector.init (Lr1.cardinal g) (fun lr1 ->
       visit_reductions (Terminal.all g)
