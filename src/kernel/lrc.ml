@@ -360,17 +360,19 @@ let make_minimal
   let module Transitions = Gen.Make() in
   let states = State.get_generator () in
   let transitions = Transitions.get_generator () in
-  let table = Hashtbl.create 7 in
+  let table = Vector.make (Lr1.cardinal g) IntSetMap.empty in
+  let count = ref 0 in
   let todo = ref [] in
   let visit lr1 classes =
     assert (not (IntSet.is_empty classes));
-    let key = (lr1, classes) in
-    match Hashtbl.find_opt table key with
+    let map = table.:(lr1) in
+    match IntSetMap.find_opt classes map with
     | Some index -> index
     | None ->
-      let index = Gen.add states key in
-      Hashtbl.add table key index;
+      let index = Gen.add states (lr1, classes) in
+      table.:(lr1) <- IntSetMap.add classes index map;
       push todo index;
+      incr count;
       index
   in
   let propagate index =
@@ -427,10 +429,10 @@ let make_minimal
   in
   let all_wait = fast_map (Lr1.wait g) visit_state in
   fixpoint ~propagate todo;
-  stopwatch 2 "Determinized Lrc wait: %d states" (Hashtbl.length table);
+  stopwatch 2 "Determinized Lrc wait: %d states" !count;
   let all_leaf = fast_map (Lr1.all g) visit_state in
   fixpoint ~propagate todo;
-  stopwatch 2 "Determinized Lrc all: %d states" (Hashtbl.length table);
+  stopwatch 2 "Determinized Lrc all: %d states" !count;
   let module Min =
     Valmari.Minimize(struct
         type t = g lr1 index
@@ -442,16 +444,16 @@ let make_minimal
 
         let initials f = IndexSet.iter f all_leaf
 
+        let zero = IntSet.singleton 0
+
         let finals f =
-          IndexSet.iter (fun lr1 ->
-              let state = (Hashtbl.find table (lr1, IntSet.singleton 0)) in
-              (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
-              f state
-            ) (Lr1.entrypoints g)
+          IndexSet.iter
+            (fun lr1 -> f (IntSetMap.find zero table.:(lr1)))
+            (Lr1.entrypoints g)
 
         let refinements f =
           IndexSet.iter (fun lr1 ->
-              match Hashtbl.find_opt table (lr1, IntSet.singleton 0) with
+              match IntSetMap.find_opt zero table.:(lr1) with
               | None -> ()
               | Some index -> f (fun ~add -> add index)
             ) (Lr1.entrypoints g)
@@ -499,13 +501,6 @@ let make_minimal
   let all_predecessors = iterate_vector predecessors in
   {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; all_predecessors; reachable_from}
 
-
-
-let transitions_of_states t ss =
-  IndexSet.fold
-    (fun s acc -> IndexMap.update t.lr1_of.:(s) (add_update s) acc)
-    ss IndexMap.empty
-
 let some_prefix g t =
   let prefix = Vector.make (count t) [] in
   let rec loop next = function
@@ -550,6 +545,11 @@ let check_prefix g t1 p1 t2 p2 =
     )
 
 let check_equivalence g t1 t2 s1 s2 =
+  let transitions_of_states t ss =
+    IndexSet.fold
+      (fun s acc -> IndexMap.update t.lr1_of.:(s) (add_update s) acc)
+      ss IndexMap.empty
+  in
   let table = Hashtbl.create 7 in
   let successes = ref 0 in
   let failures = ref 0 in
