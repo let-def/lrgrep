@@ -186,20 +186,16 @@ type ('g, 'stack, 'transitions) node = {
   stack: 'stack index;
   gotos: 'g goto_transition indexset;
   lookaheads: 'g terminal indexset;
-  transitions: 'transitions; (*'g viable_nodes indexset list*)
+  transitions: 'transitions;
 }
 
-type ('g, 'stack, 'transitions) graph = {
-  nodes: ('g viable_nodes, ('g, 'stack, 'transitions) node) vector;
-  initials: ('stack, 'transitions) vector;
-}
-
-let viable2 (type g stack) (g : g grammar)
+let prepare (type g stack) (g : g grammar)
     (stacks: stack cardinal)
     (lr1_of: stack index -> g lr1 index)
     (predecessors: stack index -> stack indexset lazy_stream)
      rc grc
-  : (g, stack, g viable_nodes indexset list) graph
+  : (g viable_nodes, (g, stack, g viable_nodes indexset list) node) vector *
+    (stack, g viable_nodes indexset list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
@@ -267,26 +263,34 @@ let viable2 (type g stack) (g : g grammar)
       include Nodes
     end ) in
   let Refl = eq in
-  {nodes; initials}
+  (nodes, initials)
 
-type ('g, 'node, 'step) step = {
+type ('node, 'step) step = {
   next: 'step index;
-  reachable: 'g goto_transition indexset;
+  reachable: 'node indexset;
   goto: 'node indexset;
 }
 
+type ('g, 'stack) graph = {
+  nodes: ('g viable_nodes, ('g, 'stack, 'g viable_steps index) node) vector;
+  initials: ('stack, 'g viable_steps index) vector;
+  steps: ('g viable_steps, ('g viable_nodes, 'g viable_steps) step) vector;
+  targets: ('g goto_transition, 'g viable_nodes indexset) vector;
+}
+
 let small_steps (type g stack)
-    (gr : (g, stack, g viable_nodes indexset list) graph)
-  : (g, stack, g viable_steps index) graph *
-    (g viable_steps, (g viable_nodes, g viable_steps index) IndexSet.Map.t) vector
+    (g : g grammar)
+    (gr_nodes : (g viable_nodes, (g, stack, g viable_nodes indexset list) node) vector)
+    (gr_initials : (stack, g viable_nodes indexset list) vector)
+  : (g, stack) graph
   =
   (* Compute the set reachable states (closure of successors). *)
   let successors =
     Vector.map
       (fun node -> List.fold_right IndexSet.union node.transitions IndexSet.empty)
-      gr.nodes
+      gr_nodes
   in
-  let reachable_from = Vector.map (fun node -> node.gotos) gr.nodes in
+  let reachable_from = Vector.copy successors in
   stopwatch 2 "prepared big-step successors";
   Tarjan.close_relation (Vector.get successors) reachable_from;
   stopwatch 2 "closed the big-step successors";
@@ -316,9 +320,9 @@ let small_steps (type g stack)
   in
   let pack_transitions trs = List.fold_right get trs zero in
   let add_reachables node = {node with transitions = pack_transitions node.transitions} in
-  let nodes = Vector.map add_reachables gr.nodes in
-  let initials = Vector.map pack_transitions gr.initials in
-  let steps = Gen.freeze steps in
+  let nodes = Vector.map add_reachables gr_nodes in
+  let initials = Vector.map pack_transitions gr_initials in
+  let steps = Dyn.contents index Steps.n in
   stopwatch 2 "closed the small-step successors (%d elements)"
     (Vector.length_as_int steps);
   let open Viable_steps.Eq(struct
@@ -326,4 +330,13 @@ let small_steps (type g stack)
       include Steps
     end) in
   let Refl = eq in
-  ({nodes; initials}, steps)
+  let targets = Vector.make (Transition.goto g) IndexSet.empty in
+  Vector.rev_iteri (fun n def ->
+      IndexSet.iter (fun gt -> targets.@(gt) <- IndexSet.add n)
+      def.gotos
+    ) nodes;
+  {nodes; initials; steps; targets}
+
+let viable2 g stacks lr1_of predecessors rc grc =
+  let nodes, initials = prepare g stacks lr1_of predecessors rc grc in
+  small_steps g nodes initials

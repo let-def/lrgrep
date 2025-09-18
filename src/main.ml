@@ -343,8 +343,6 @@ module T = struct
       (Vector.get (iterate_vector lrc.all_predecessors))
       rc grc
 
-  let vgraph = Kernel.Redgraph.small_steps vgraph
-
   let () = stopwatch 1 "Done with viable2 reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
