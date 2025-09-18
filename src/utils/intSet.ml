@@ -244,31 +244,62 @@ let mem i s =
   in
   loop4 s
 
+let older a b =
+  Int.compare (Obj.magic a) (Obj.magic b) < 0
+
+let share s1 s2 =
+  let s2, s1 = if older s1 s2 then s1, s2 else s2, s1 in
+  begin match s1, s2 with
+    | C c1, C c2 when c1.next != c2.next ->
+      c2.next <- c1.next
+    | _ -> ()
+  end;
+  s1
+
+let union_equal = ref false
+
 let rec union s1 s2 =
   match s1, s2 with
+  | s1, s2 when s1 == s2 -> s1
   | N, s
   | s, N ->
+    union_equal := false;
     s
   | C {addr=addr1; mask=ss1; next=qs1},
     C {addr=addr2; mask=ss2; next=qs2} ->
-    if addr1 < addr2 then
+    if addr1 < addr2 then (
       let qs = union qs1 s2 in
+      union_equal := false;
       if qs == qs1
       then s1
       else c (addr1, ss1, qs)
-    else if addr1 > addr2 then
+    ) else if addr1 > addr2 then (
       let qs = union s1 qs2 in
+      union_equal := false;
       if qs == qs2
       then s2
       else c (addr2, ss2, qs)
-    else
+    ) else (
       let ss = ss1 lor ss2 in
       let qs = union qs1 qs2 in
       if ss = ss2 && qs == qs2
-      then s2
-      else if ss = ss1 && qs == qs1
-      then s1
-      else c (addr1, ss, qs)
+      then (
+        if !union_equal then
+          (union_equal := ss1 = ss2; share s1 s2)
+        else
+          s2
+      )
+      else (
+        union_equal := false;
+        if ss = ss1 && qs == qs1
+        then s1
+        else c (addr1, ss, qs)
+      )
+    )
+
+let union s1 s2 =
+  union_equal := true;
+  union s1 s2
 
 let rec inter s1 s2 =
   match s1, s2 with
