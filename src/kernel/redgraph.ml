@@ -52,7 +52,7 @@ let group_reductions g = function
     in
     group 0 IndexMap.empty (List.sort compare_items items)
 
-type 'g closure = {
+type 'g reduction_closure = {
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: ('g lr1 index list * 'g terminal indexset) list;
@@ -62,7 +62,7 @@ let add_failing g r reject la =
   r := IndexSet.union (Terminal.intersect g reject la) !r
 
 (* Close ϵ-reductions of each LR(1) states *)
-let reduce_closures (type g) (g : g grammar) : (g lr1, g closure) vector =
+let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure) vector =
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
   let failing = ref IndexSet.empty in
   let rec pop lookahead acc (item : g item index) = function
@@ -134,8 +134,8 @@ let rec merge_reductions = function
     r :: merge_reductions rrs'
 
 (* Close reductions of goto transitions *)
-let goto_reduce_closures (type g) (g : g grammar) rcs
-  : (g goto_transition, g closure) vector
+let close_goto_reductions (type g) (g : g grammar) rcs
+  : (g goto_transition, g reduction_closure) vector
   =
   let sentinel = {failing = IndexSet.empty; reductions = []; stacks = []} in
   let table = Vector.make (Transition.goto g) sentinel in
@@ -176,17 +176,16 @@ let goto_reduce_closures (type g) (g : g grammar) rcs
   end;
   table
 
-module Viable_nodes = Unsafe_cardinal()
-type 'g viable_nodes = 'g Viable_nodes.t
+module Node = Unsafe_cardinal()
+type ('g, 's) node = ('g * 's) Node.t
 
-module Viable_steps = Unsafe_cardinal()
-type 'g viable_steps = 'g Viable_steps.t
+module Step = Unsafe_cardinal()
+type ('g, 's) step = ('g * 's) Step.t
 
-type ('g, 'stack, 'transitions) node = {
-  stack: 'stack index;
+type ('g, 's) node_desc = {
+  stack: 's index;
   gotos: 'g goto_transition indexset;
   lookaheads: 'g terminal indexset;
-  transitions: 'transitions;
 }
 
 let prepare (type g stack) (g : g grammar)
@@ -194,8 +193,8 @@ let prepare (type g stack) (g : g grammar)
     (lr1_of: stack index -> g lr1 index)
     (predecessors: stack index -> stack indexset lazy_stream)
      rc grc
-  : (g viable_nodes, (g, stack, g viable_nodes indexset list) node) vector *
-    (stack, g viable_nodes indexset list) vector
+  : ((g, stack) node, (g, stack) node_desc * (g, stack) node indexset list) vector *
+    (stack, (g, stack) node indexset list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
@@ -249,7 +248,7 @@ let prepare (type g stack) (g : g grammar)
       let transitions =
         visit_reductions la (predecessors lrc) (merge_reductions reductions)
       in
-      {stack = lrc; gotos; lookaheads = la; transitions}
+      ({stack = lrc; gotos; lookaheads = la}, transitions)
     end
   in
   let initials = Vector.init stacks @@ fun lrc ->
@@ -258,36 +257,36 @@ let prepare (type g stack) (g : g grammar)
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
-  let open Viable_nodes.Eq(struct
-      type t = g
+  let open Node.Eq(struct
+      type t = g * stack
       include Nodes
     end ) in
   let Refl = eq in
   (nodes, initials)
 
-type ('node, 'step) step = {
-  next: 'step index;
-  reachable: 'node indexset;
-  goto: 'node indexset;
+type ('g, 's) step_desc = {
+  next: ('g, 's) step index;
+  reachable: ('g, 's) node indexset;
+  goto: ('g, 's) node indexset;
 }
 
-type ('g, 'stack) graph = {
-  nodes: ('g viable_nodes, ('g, 'stack, 'g viable_steps index) node) vector;
-  initials: ('stack, 'g viable_steps index) vector;
-  steps: ('g viable_steps, ('g viable_nodes, 'g viable_steps) step) vector;
-  targets: ('g goto_transition, 'g viable_nodes indexset) vector;
+type ('g, 's) graph = {
+  nodes: (('g,'s) node, ('g,'s) node_desc * ('g,'s) step index) vector;
+  initials: ('s, ('g,'s) step index) vector;
+  steps: (('g,'s) step, ('g, 's) step_desc) vector;
+  targets: ('g goto_transition, ('g, 's) node indexset) vector;
 }
 
-let small_steps (type g stack)
+let small_steps (type g s)
     (g : g grammar)
-    (gr_nodes : (g viable_nodes, (g, stack, g viable_nodes indexset list) node) vector)
-    (gr_initials : (stack, g viable_nodes indexset list) vector)
-  : (g, stack) graph
+    (gr_nodes : ((g, s) node, (g, s) node_desc * (g, s) node indexset list) vector)
+    (gr_initials : (s, (g, s) node indexset list) vector)
+  : (g, s) graph
   =
   (* Compute the set reachable states (closure of successors). *)
   let successors =
     Vector.map
-      (fun node -> List.fold_right IndexSet.union node.transitions IndexSet.empty)
+      (fun (_, transitions) -> List.fold_right IndexSet.union transitions IndexSet.empty)
       gr_nodes
   in
   let reachable_from = Vector.copy successors in
@@ -297,6 +296,11 @@ let small_steps (type g stack)
   (* Implement small steps with sharing *)
   let open IndexBuffer in
   let module Steps = Gen.Make() in
+  let open Step.Eq(struct
+      type t = g * s
+      include Steps
+    end) in
+  let Refl = eq in
   let steps = Steps.get_generator () in
   let zero = Gen.add steps IndexSet.Map.empty in
   let index = Dyn.make {
@@ -319,24 +323,19 @@ let small_steps (type g stack)
       step
   in
   let pack_transitions trs = List.fold_right get trs zero in
-  let add_reachables node = {node with transitions = pack_transitions node.transitions} in
+  let add_reachables (node, transitions) = (node, pack_transitions transitions) in
   let nodes = Vector.map add_reachables gr_nodes in
   let initials = Vector.map pack_transitions gr_initials in
   let steps = Dyn.contents index Steps.n in
   stopwatch 2 "closed the small-step successors (%d elements)"
     (Vector.length_as_int steps);
-  let open Viable_steps.Eq(struct
-      type t = g
-      include Steps
-    end) in
-  let Refl = eq in
   let targets = Vector.make (Transition.goto g) IndexSet.empty in
-  Vector.rev_iteri (fun n def ->
+  Vector.rev_iteri (fun n (def, _) ->
       IndexSet.iter (fun gt -> targets.@(gt) <- IndexSet.add n)
       def.gotos
     ) nodes;
   {nodes; initials; steps; targets}
 
-let viable2 g stacks lr1_of predecessors rc grc =
+let make g stacks lr1_of predecessors rc grc =
   let nodes, initials = prepare g stacks lr1_of predecessors rc grc in
   small_steps g nodes initials

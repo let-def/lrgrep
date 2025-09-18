@@ -331,22 +331,23 @@ module T = struct
   let reachability, lrc = Lazy.force d
   let () = stopwatch 1 "Reachability information available"
 
-  let rc = Kernel.Redgraph.reduce_closures grammar
+  let lr_closure = Kernel.Redgraph.close_lr1_reductions grammar
   let () = stopwatch 1 "Done with closure of lr1 epsilon reductions"
-  let grc = Kernel.Redgraph.goto_reduce_closures grammar rc
+  let gt_closure = Kernel.Redgraph.close_goto_reductions grammar lr_closure
   let () = stopwatch 1 "Done with closure of goto epsilon reductions"
 
   let vgraph =
-    Kernel.Redgraph.viable2 grammar
+    Kernel.Redgraph.make grammar
       (Vector.length lrc.lr1_of)
       (Vector.get lrc.lr1_of)
       (Vector.get (iterate_vector lrc.all_predecessors))
-      rc grc
+      lr_closure
+      gt_closure
 
   let () = stopwatch 1 "Done with viable2 reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
-  let trie = Kernel.Transl.Reductum_trie.make rc grc
+  let trie = Kernel.Transl.Reductum_trie.make lr_closure gt_closure
   let () = stopwatch 1 "Indexed reductions for translation"
 end
 

@@ -140,8 +140,8 @@ module Reductum_trie = struct
 
   let make
     (type g)
-    (rc : (g lr1, g Redgraph.closure) vector)
-    (grc : (g goto_transition, g Redgraph.closure) vector)
+    (rc : (g lr1, g Redgraph.reduction_closure) vector)
+    (grc : (g goto_transition, g Redgraph.reduction_closure) vector)
     =
     let empty () = {
       sub = IndexMap.empty;
