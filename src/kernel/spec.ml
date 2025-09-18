@@ -67,35 +67,35 @@ let import_rule (type g) (g : g grammar)
     Vector.map import Clauses.vector
   in
   let lookaheads =
-    Vector.map (fun pattern ->
-        match pattern.Syntax.lookaheads with
-        | [] -> None
-        | symbols ->
-          let lookahead_msg =
-            "Lookahead can either be a terminal or `first(nonterminal)'"
-          in
-          let sym_pattern (sym, pos) =
-            match sym with
-            | Syntax.Apply ("first", [sym]) ->
-              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
-                | T t ->
-                  let t = Terminal.to_string g t in
-                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                            t ^ " is a terminal")
-                | N n -> Nonterminal.first g n
-              end
-            | Syntax.Name _ ->
-              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
-                | N n ->
-                  failwith (lookahead_msg ^ "; " ^
-                            Nonterminal.to_string g n ^ " is a nonterminal")
-                | T t -> IndexSet.singleton t
-              end
-            | _ ->
-              failwith lookahead_msg
-          in
-          Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
-      ) pattern
+    Vector.map begin fun pattern ->
+      match pattern.Syntax.lookaheads with
+      | [] -> None
+      | symbols ->
+        let lookahead_msg =
+          "Lookahead can either be a terminal or `first(nonterminal)'"
+        in
+        let sym_pattern (sym, pos) =
+          match sym with
+          | Syntax.Apply ("first", [sym]) ->
+            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+              | T t ->
+                let t = Terminal.to_string g t in
+                failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                          t ^ " is a terminal")
+              | N n -> Nonterminal.first g n
+            end
+          | Syntax.Name _ ->
+            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+              | N n ->
+                failwith (lookahead_msg ^ "; " ^
+                          Nonterminal.to_string g n ^ " is a nonterminal")
+              | T t -> IndexSet.singleton t
+            end
+          | _ ->
+            failwith lookahead_msg
+        in
+        Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
+    end pattern
   in
   let is_total =
     Boolvector.init branch_count @@ fun br ->
