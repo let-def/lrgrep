@@ -66,10 +66,10 @@ let string_of_cap (i : Capture.t) =
 
 module NFA = struct
 
-  type ('g, 'r) t = {
+  type ('g, 's, 'r) t = {
     uid: int;
-    k: 'g K.t;
-    transitions: ('g Label.t * ('g, 'r) t lazy_t) list;
+    k: ('g, 's) K.t;
+    transitions: ('g Label.t * ('g, 's, 'r) t lazy_t) list;
     branch: ('g, 'r) branch index;
     mutable mark: unit ref;
   }
@@ -113,8 +113,12 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  let make (type g) (g : g grammar) viable branch =
-    let module KMap = Map.Make(struct type t = g Regexp.K.t let compare = Regexp.K.compare end) in
+  let make (type g s) (g : g grammar) viable branch =
+    let module KMap = Map.Make(struct
+        type t = (g, s) Regexp.K.t
+        let compare = Regexp.K.compare
+      end)
+    in
     let nfa = ref KMap.empty in
     let rec aux k =
       match KMap.find_opt k !nfa with
@@ -205,7 +209,7 @@ module DFA = struct
 
       type 'n prestate = {
         index: n index;
-        kernel: ('n, (g, r) NFA.t) vector;
+        kernel: ('n, (g, s, r) NFA.t) vector;
         accept: (g, r) branch index option;
         mutable raw_transitions: (g lr1 indexset * 'n fwd_mapping lazy_t) list;
       }
@@ -218,9 +222,12 @@ module DFA = struct
       let prestates = get_generator ()
 
       let compare_kernel g1 g2 = array_compare NFA.compare g1 g2
-      module KernelMap = Map.Make(struct type t = (g, r) NFA.t array let compare = compare_kernel end)
+      module KernelMap = Map.Make(struct
+          type t = (g, s, r) NFA.t array
+          let compare = compare_kernel
+        end)
 
-      let kernel_make (type a) (prj : a -> (g, r) NFA.t) (ts : a list) : a array =
+      let kernel_make (type a) (prj : a -> (g, s, r) NFA.t) (ts : a list) : a array =
         let mark = ref () in
         let ts = List.filter (fun a ->
             let th = prj a in
@@ -240,7 +247,7 @@ module DFA = struct
       let dfa = ref KernelMap.empty
 
       let initial =
-        let rec determinize_kernel : type n . (n, (g, r) NFA.t) vector -> n prestate =
+        let rec determinize_kernel : type n . (n, (g, s, r) NFA.t) vector -> n prestate =
           fun kernel ->
             match KernelMap.find_opt (Vector.as_array kernel) !dfa with
             | Some (Prepacked t') ->

@@ -336,7 +336,7 @@ module T = struct
   let gt_closure = Kernel.Redgraph.close_goto_reductions grammar lr_closure
   let () = stopwatch 1 "Done with closure of goto epsilon reductions"
 
-  let vgraph =
+  let redgraph =
     Kernel.Redgraph.make grammar
       (Vector.length lrc.lr1_of)
       (Vector.get lrc.lr1_of)
@@ -412,9 +412,9 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Vector.get T.lrc.lr1_of;
     } in
     let Kernel.Spec.Rule (clauses, branches) =
-      Kernel.Spec.import_rule grammar () (*T.viable*) T.indices T.trie rule
+      Kernel.Spec.import_rule grammar T.redgraph T.indices T.trie rule
     in
-    let nfa = Kernel.Automata.NFA.from_branches grammar () (*T.viable*) branches in
+    let nfa = Kernel.Automata.NFA.from_branches grammar T.redgraph branches in
     Vector.iteri (fun br nfa ->
         if !dump_dot then
           with_output_file "%s_%s_br_%d_line_%d.dot" parser_name rule.name

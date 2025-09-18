@@ -188,37 +188,15 @@ end
 
 module K = struct
 
-  type 'g t =
+  type ('g, 's) t =
     | Accept
     | Done
-    | More of 'g Expr.t * 'g t
+    | More of 'g Expr.t * ('g, 's) t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: unit; (*'g Viable_reductions.outer_transitions;*)
-        next: 'g t;
+        step: ('g, 's) Redgraph.step index;
+        next: ('g, 's) t;
       }
-
-  (*let rec list_compare f xxs yys =
-    if xxs == yys then 0 else
-      match xxs, yys with
-      | [], _  -> -1
-      | _ , [] -> +1
-      | (x :: xs), (y :: ys) ->
-        let c = f x y in
-        if c <> 0 then c else
-          list_compare f xs ys*)
-
-  (*let compare_outer_candidate c1 c2 =
-    let c = compare_index c1.target c2.target in
-    if c <> 0 then c else
-      let c = IndexSet.compare c1.source c2.source in
-      if c <> 0 then c else
-        IndexSet.compare c1.lookahead c2.lookahead
-
-  let compare_reduction_step r1 r2 =
-    let c = IndexSet.compare r1.reachable r2.reachable in
-    if c <> 0 then c else
-      list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
 
   let rec compare t1 t2 =
     if t1 == t2 then 0 else
@@ -232,7 +210,7 @@ module K = struct
       | Reducing r1, Reducing r2 ->
         let c = Reductions.compare r1.reduction r2.reduction in
         if c <> 0 then c else
-          let c = list_compare compare_reduction_step r1.transitions r2.transitions in
+          let c = Index.compare r1.step r1.step in
           if c <> 0 then c else
             compare r1.next r2.next
       | Accept, (More _ | Reducing _ | Done) -> -1
@@ -240,45 +218,32 @@ module K = struct
       | (More _ | Reducing _ | Done), Accept -> +1
       | (More _ | Reducing _), Done -> +1
       | More _, Reducing _ -> -1
-      | Reducing _, More _ -> +1*)
+      | Reducing _, More _ -> +1
 
-  let compare _ _ = failwith "TODO"
+  let intersecting s1 s2 =
+    not (IndexSet.disjoint s1 s2)
 
-  (*let intersecting s1 s2 =
-    not (IndexSet.disjoint s1 s2)*)
-
-  let derive _viable filter k =
+  let derive (type g s) (rg: (g, s) Redgraph.graph) filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
         r := (Label.union label' label, next) :: r'
       | r' ->
         r := (label, next) :: r'
     in
-    let reduce_outer _matching _ks _next _label _reduction _transitions : unit =
-      failwith "TODO"
-      (*let rec visit_transitions label reduction = function
-        | step :: transitions when live_redstep reduction step ->
-          List.iter (visit_candidate label) step.goto_transitions;
-          begin match transitions with
-            | step' :: _ when live_redstep reduction step' ->
-              let reducing = Reducing {reduction; transitions; next} in
-              push ks (label, reducing)
-            | _ -> ()
-          end
-        | _ -> ()
-      and visit_candidate label (candidate : _ (*Viable_reductions.goto_transition*)) =
-        match Label.filter label candidate.source with
-        | Some label
-          when reduce_target viable reduction candidate.target
-              ~on_outer:(visit_transitions label reduction) ->
-          matching := IndexSet.union label.filter !matching
-        | _ -> ()
-      in
-      visit_transitions
-        (Label.capture label reduction.capture Usage.empty)
-        reduction transitions *)
+    let is_live (reduction : _ Reductions.t) step =
+      (step : _ index :> int) > 0 &&
+      let reachable = rg.steps.:(step).reachable in
+      IndexSet.exists
+        (fun gt -> intersecting reachable rg.targets.:(gt))
+        reduction.pattern
     in
     let ks = ref [] in
+    let push_reduction_step label reduction next step =
+      if is_live reduction step then
+        continue ks
+          (Label.capture label reduction.capture Usage.empty)
+          (Reducing {reduction; step; next})
+    in
     let rec process_k label = function
       | Accept ->
         ()
@@ -289,19 +254,21 @@ module K = struct
       | More (re, next) as self ->
         process_re label self next re.desc
 
-      | Reducing {reduction; transitions; next} ->
-        let l' = ref IndexSet.empty in
-        let ks' : ('a Label.t * 'a t) list ref = ref [] in
-        reduce_outer l' ks' next label reduction transitions;
-        match Label.filter label !l', reduction.policy with
-        | None, _ ->
-          ks := !ks' @ !ks
-        | Some label, Longest ->
-          ks := !ks' @ !ks;
-          process_k (Label.capture label IndexSet.empty reduction.usage) next
-        | Some label, Shortest ->
-          process_k (Label.capture label IndexSet.empty reduction.usage) next;
-          ks := !ks' @ !ks
+      | Reducing {reduction; step; next} ->
+        process_reduction_step label reduction next step
+
+    and process_reduction_step label reduction next step =
+        let sdesc = rg.steps.:(step) in
+        push_reduction_step label reduction next sdesc.next;
+        IndexSet.iter begin fun node ->
+          let ndesc, nstep = rg.nodes.:(node) in
+          if IndexSet.mem ndesc.lr1 label.filter then (
+            let label = {label with filter = IndexSet.singleton ndesc.lr1} in
+            if intersecting ndesc.gotos reduction.pattern then
+              process_k (Label.capture label IndexSet.empty reduction.usage) next;
+            push_reduction_step label reduction next nstep;
+          )
+        end sdesc.goto
 
     and process_re label self next = function
       | Set (s, var, usage) ->
@@ -337,29 +304,12 @@ module K = struct
             (IndexSet.union cap reduction.capture)
             Usage.empty
         in
-        let ks' = ref [] in
-        let matching = ref IndexSet.empty in
-        IndexSet.iter (fun lr1 ->
-            reduce_outer matching ks'
-              next
-              {label with filter = IndexSet.singleton lr1}
-              reduction
-              (failwith "TODO")
-              (*viable.initial.:(lr1)*)
-          ) label.filter;
-        let label =
-          Label.filter
-            (Label.capture label IndexSet.empty reduction.usage)
-            !matching
-        in
-        begin match reduction.policy with
-          | Shortest ->
-            Option.iter (fun label -> process_k label next) label;
-            ks := !ks' @ !ks;
-          | Longest ->
-            ks := !ks' @ !ks;
-            Option.iter (fun label -> process_k label next) label;
-        end
+        IndexSet.iter begin fun lr1 ->
+          let label = {label with filter = IndexSet.singleton lr1} in
+          IndexSet.iter
+            (push_reduction_step label reduction next)
+            rg.initials.:(lr1)
+        end label.filter
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
     process_k label k;

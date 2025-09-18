@@ -119,30 +119,19 @@ module Label : sig
 end
 
 module K : sig
-  type 'g t =
+  type ('g, 's) t =
     | Accept
     | Done
-    | More of 'g Expr.t * 'g t
+    | More of 'g Expr.t * ('g, 's) t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: unit; (*'g Viable_reductions.outer_transitions;*)
-        next: 'g t;
+        step: ('g, 's) Redgraph.step index;
+        next: ('g, 's) t;
       }
 
-  val compare : 'g t -> 'g t -> int
+  val compare : ('g, 's) t -> ('g, 's) t -> int
 
-  (*val cmon : ?lr1:('g lr1 index -> string) -> 'g t -> Cmon.t*)
+  (*val cmon : ?lr1:('g lr1 index -> string) -> ('g, 's) t -> Cmon.t*)
 
-  (* TODO
-     There is no way to detect immediate match (empty (sub-)regex leading
-     immediately to Done).
-     The case is handled by looking for [(empty_label, Done)] in the result
-     list, where [empty_label] is a label capturing and filtering nothing
-     (vars and ordering are empty, filter = Lr1.all).
-
-     However, this does not allow to distinguish between the regular
-     expressions ϵ and _ which will both lead to "Done" while matching no
-     transitions.
-  *)
-  val derive : unit (*'g Viable_reductions.t*) -> 'g lr1 indexset -> 'g t -> ('g Label.t * 'g t) list
+  val derive : ('g, 's) Redgraph.graph -> 'g lr1 indexset -> ('g, 's) t -> ('g Label.t * ('g, 's) t) list
 end

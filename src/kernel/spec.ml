@@ -27,8 +27,8 @@ type ('g, 'r) branches = {
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 
-let import_rule (type g) (g : g grammar)
-    (viable : _(*g Viable_reductions.t*))
+let import_rule (type g s) (g : g grammar)
+    (rg : (g, s) Redgraph.graph)
     (indices : g Transl.Indices.t)
     (trie : g Transl.Reductum_trie.t)
     (rule : Syntax.rule) : g _rule
@@ -125,7 +125,7 @@ let import_rule (type g) (g : g grammar)
         index
     in
     let translate_branch (br : Branches.n index) =
-      let cap, exp = Transl.transl g viable indices trie ~capture pattern.:(br).expr in
+      let cap, exp = Transl.transl g rg indices trie ~capture pattern.:(br).expr in
       br_captures.:(br) <- cap;
       expr.:(br) <- exp;
     in
