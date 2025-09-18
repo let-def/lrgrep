@@ -346,9 +346,6 @@ module T = struct
     Kernel.Viable_reductions.small_steps viable_big viable_big_initials
 
   let () = stopwatch 1 "Done with viable2 reductions"
-
-  let viable = Kernel.Viable_reductions.make grammar rc
-  let () = stopwatch 1 "Done with viable reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
   let trie = Kernel.Transl.Reductum_trie.make viable

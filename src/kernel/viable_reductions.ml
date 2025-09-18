@@ -244,13 +244,15 @@ let viable2 (type g stack) (g : g grammar)
   and visit_gotos lrc nts la : Nodes.n index =
     get_memoize lrc nts la ~f:begin fun () ->
       let reductions =
-        IndexSet.fold (fun nt acc ->
-            match grc.:(Transition.find_goto g (lr1_of lrc) nt).reductions with
-            | [] -> acc
-            | x -> x :: acc
-          ) nts []
+        IndexSet.fold begin fun nt acc ->
+          match grc.:(Transition.find_goto g (lr1_of lrc) nt).reductions with
+          | [] -> acc
+          | x -> x :: acc
+        end nts []
       in
-      let transitions = visit_reductions la (predecessors lrc) (merge_reductions reductions) in
+      let transitions =
+        visit_reductions la (predecessors lrc) (merge_reductions reductions)
+      in
       (lrc, nts, la, transitions)
     end
   in
