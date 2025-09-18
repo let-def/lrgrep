@@ -53,7 +53,7 @@ end
     expressions to a Cmon document. *)
 module Reductions : sig
   type 'g t = {
-    pattern: 'g Viable_reductions.viable indexset;
+    pattern: 'g goto_transition indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -125,13 +125,13 @@ module K : sig
     | More of 'g Expr.t * 'g t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: 'g Viable_reductions.outer_transitions;
+        transitions: unit; (*'g Viable_reductions.outer_transitions;*)
         next: 'g t;
       }
 
   val compare : 'g t -> 'g t -> int
 
-  val cmon : ?lr1:('g lr1 index -> string) -> 'g t -> Cmon.t
+  (*val cmon : ?lr1:('g lr1 index -> string) -> 'g t -> Cmon.t*)
 
   (* TODO
      There is no way to detect immediate match (empty (sub-)regex leading
@@ -144,5 +144,5 @@ module K : sig
      expressions ϵ and _ which will both lead to "Done" while matching no
      transitions.
   *)
-  val derive :  'g Viable_reductions.t -> 'g lr1 indexset -> 'g t -> ('g Label.t * 'g t) list
+  val derive : unit (*'g Viable_reductions.t*) -> 'g lr1 indexset -> 'g t -> ('g Label.t * 'g t) list
 end

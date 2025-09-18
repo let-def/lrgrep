@@ -331,25 +331,24 @@ module T = struct
   let reachability, lrc = Lazy.force d
   let () = stopwatch 1 "Reachability information available"
 
-  let rc = Kernel.Viable_reductions.reduce_closures grammar
+  let rc = Kernel.Redgraph.reduce_closures grammar
   let () = stopwatch 1 "Done with closure of lr1 epsilon reductions"
-  let grc = Kernel.Viable_reductions.goto_reduce_closures grammar rc
+  let grc = Kernel.Redgraph.goto_reduce_closures grammar rc
   let () = stopwatch 1 "Done with closure of goto epsilon reductions"
 
-  let viable_big, viable_big_initials =
-    Kernel.Viable_reductions.viable2 grammar
+  let vgraph =
+    Kernel.Redgraph.viable2 grammar
       (Vector.length lrc.lr1_of)
       (Vector.get lrc.lr1_of)
       (Vector.get (iterate_vector lrc.all_predecessors))
       rc grc
 
-  let _ =
-    Kernel.Viable_reductions.small_steps viable_big viable_big_initials
+  let vgraph = Kernel.Redgraph.small_steps vgraph
 
   let () = stopwatch 1 "Done with viable2 reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
-  let trie = Kernel.Transl.Reductum_trie.make viable
+  let trie = Kernel.Transl.Reductum_trie.make rc grc
   let () = stopwatch 1 "Indexed reductions for translation"
 end
 
@@ -368,16 +367,6 @@ let lrc_from_entrypoints =
       let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 1 "Computed LRC subset reachable from entrypoints";
-      let module RR = Kernel.Reachable_reductions.Make (struct
-          type nonrec g = g
-          type lrc = g Kernel.Lrc.mlrc
-          let g = grammar
-          let viable = T.viable
-          let lrc_graph = T.lrc
-          let entrypoints = ep
-        end)()
-      in
-      stopwatch 1 "Computed reductions reachable from entrypoints";
       ep
 
 let with_output_file fmt =
@@ -424,9 +413,9 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Vector.get T.lrc.lr1_of;
     } in
     let Kernel.Spec.Rule (clauses, branches) =
-      Kernel.Spec.import_rule grammar T.viable T.indices T.trie rule
+      Kernel.Spec.import_rule grammar () (*T.viable*) T.indices T.trie rule
     in
-    let nfa = Kernel.Automata.NFA.from_branches grammar T.viable branches in
+    let nfa = Kernel.Automata.NFA.from_branches grammar () (*T.viable*) branches in
     Vector.iteri (fun br nfa ->
         if !dump_dot then
           with_output_file "%s_%s_br_%d_line_%d.dot" parser_name rule.name

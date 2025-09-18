@@ -79,6 +79,8 @@ end) : sig
 
 end
 
+open Utils
+open Misc
 open Fix.Indexing
 
 module IndexedSCC (G : sig
@@ -90,8 +92,8 @@ sig
   type n
   val n : n cardinal
   (*val representatives : (n, G.n index) vector*)
-  val nodes : (n, G.n Utils.IndexSet.t) vector
+  val nodes : (n, G.n indexset) vector
   val component : (G.n, n index) vector
 end
 
-val close_relation : ('n, 'n Utils.IndexSet.t) vector -> unit
+val close_relation : ('n index -> 'n indexset) -> ('n, 'a indexset) vector -> unit

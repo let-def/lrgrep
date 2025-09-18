@@ -157,7 +157,7 @@ let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let all_successors = Misc.relation_reverse n predecessors in
   stopwatch 2 "Computed LRC successors";
   let reachable_from = Vector.copy all_successors in
-  Tarjan.close_relation reachable_from;
+  Tarjan.close_relation (Vector.get all_successors) reachable_from;
   stopwatch 2 "Closed LRC successors";
   let all_leaf = IndexSet.all n in
   let all_predecessors = predecessors in
@@ -494,7 +494,7 @@ let make_minimal
     );
   (* Reachable *)
   let reachable_from = Vector.copy all_successors in
-  Tarjan.close_relation reachable_from;
+  Tarjan.close_relation (Vector.get all_successors) reachable_from;
   stopwatch 2 "Minimal Lrc ready";
   (* Lift `Min.states` to type-level *)
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in

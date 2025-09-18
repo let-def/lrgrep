@@ -133,28 +133,46 @@ end
 
 module Reductum_trie = struct
   type 'g t = {
-    mutable sub : ('g Info.lr1, 'g t) indexmap;
-    mutable reached : 'g Viable_reductions.viable indexset;
+    mutable sub : ('g lr1, 'g t) indexmap;
+    mutable goto : 'g goto_transition indexset;
+    mutable lr1 : 'g lr1 indexset;
   }
 
-  let make (viable : _ Viable_reductions.t) =
-    let root = {sub = IndexMap.empty; reached = IndexSet.empty} in
+  let make
+    (type g)
+    (rc : (g lr1, g Redgraph.closure) vector)
+    (grc : (g goto_transition, g Redgraph.closure) vector)
+    =
+    let empty () = {
+      sub = IndexMap.empty;
+      goto = IndexSet.empty;
+      lr1 = IndexSet.empty;
+    } in
+    let root = empty () in
     let rec visit_trie node = function
       | [] -> node
       | x :: xs ->
         let node' = match IndexMap.find_opt x node.sub with
           | Some node' -> node'
           | None ->
-            let node' = {sub = IndexMap.empty; reached = IndexSet.empty} in
+            let node' = empty () in
             node.sub <- IndexMap.add x node' node.sub;
             node'
         in
         visit_trie node' xs
     in
-    Vector.iteri (fun state (config : _ Viable_reductions.config) ->
-        let node = visit_trie root (config.top :: config.rest) in
-        node.reached <- IndexSet.add state node.reached
-      ) viable.config;
+    Vector.iteri begin fun lr1 cl ->
+      List.iter begin fun (stack, _) ->
+        let node = visit_trie root stack in
+        node.lr1 <- IndexSet.add lr1 node.lr1
+      end cl.Redgraph.stacks;
+    end rc;
+    Vector.iteri begin fun gt cl ->
+      List.iter begin fun (stack, _) ->
+        let node = visit_trie root stack in
+        node.goto <- IndexSet.add gt node.goto
+      end cl.Redgraph.stacks;
+    end grc;
     root
 end
 
@@ -335,24 +353,35 @@ let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
 
 let compile_reduce_expr (type g) (g : g grammar) viable trie re =
   let open Info in
-  let reached = ref IndexSet.empty in
+  let goto = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
   let rec step (node : g Reductum_trie.t) k =
     let process_next : g Label.t * _ -> unit = function
       | (label, K.Accept) ->
         if node == trie then
           immediate := IndexSet.union !immediate label.filter
-        else
-          reached := (
+        else (
+          goto := (
             if IndexSet.equal (Lr1.all g) label.filter then
-              IndexSet.union node.reached !reached
+              IndexSet.union node.goto !goto
             else
               IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
                   if IndexSet.mem lr1 label.filter
-                  then IndexSet.union acc node'.reached
+                  then IndexSet.union acc node'.goto
                   else acc
-                ) node.sub !reached
-          )
+                ) node.sub !goto
+          );
+          immediate := (
+            if IndexSet.equal (Lr1.all g) label.filter then
+              IndexSet.union node.lr1 !immediate
+            else
+              IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
+                  if IndexSet.mem lr1 label.filter
+                  then IndexSet.union acc node'.lr1
+                  else acc
+                ) node.sub !immediate
+          );
+        )
       | (label, k') ->
         IndexMap.iter (fun lr1 node' ->
             if IndexSet.mem lr1 label.filter then
@@ -362,7 +391,7 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
     List.iter process_next (K.derive viable (Lr1.all g) k)
   in
   step trie (K.More (re, K.Done));
-  (!reached, !immediate)
+  (!goto, !immediate)
 
 let transl (type g) (g : g grammar) viable indices trie ~capture re =
   let all_cap = ref IndexSet.empty in
