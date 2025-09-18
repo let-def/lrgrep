@@ -7,7 +7,12 @@ module type S = SetSig.S0
 
 type t =
   | N
-  | C of int * int * t
+  | C of {
+      addr: int;
+      mask: int;
+      mutable next: t;
+    }
+
 
 type element =
   int
@@ -24,6 +29,8 @@ let is_empty = function
   | C _ ->
     false
 
+let c (addr, mask, next) = C {addr; mask; next}
+
 let add i s =
   let ioffset = i mod word_size in
   let iaddr = i - ioffset
@@ -31,25 +38,25 @@ let add i s =
   let rec add = function
     | N ->
       (* Insert at end. *)
-      C (iaddr, imask, N)
-    | C (addr, ss, qs) as s ->
+      c (iaddr, imask, N)
+    | C {addr; mask=ss; next= qs} as s ->
       if iaddr < addr then
         (* Insert in front. *)
-        C (iaddr, imask, s)
+        c (iaddr, imask, s)
       else if iaddr = addr then
         (* Found appropriate cell, update bit field. *)
         let ss' = ss lor imask in
         if ss' = ss then
           s
         else
-          C (addr, ss', qs)
+          c (addr, ss', qs)
       else
         (* Not there yet, continue. *)
         let qs' = add qs in
         if qs == qs' then
           s
         else
-          C (addr, ss, qs')
+          c (addr, ss, qs')
   in
   add s
 
@@ -60,7 +67,7 @@ let split i s =
   let rec split = function
     | N ->
       (N, false, N)
-    | C (addr, ss, qs) as s ->
+    | C {addr; mask=ss; next=qs} as s ->
       if iaddr < addr then
         (* Stop now. *)
         (N, false, s)
@@ -72,18 +79,18 @@ let split i s =
         let l =
           match ss land l_mask with
           | 0 -> N
-          | ss_l -> C (addr, ss_l, N)
+          | ss_l -> c (addr, ss_l, N)
         in
         let r =
           match ss land lnot (l_mask lor imask) with
           | 0 -> N
-          | ss_r -> C (addr, ss_r, qs)
+          | ss_r -> c (addr, ss_r, qs)
         in
         (l, found, r)
       else
         (* Not there yet, continue. *)
         let (l, f, r) = split qs in
-        (C (addr, ss, l), f, r)
+        (c (addr, ss, l), f, r)
   in
   split s
 
@@ -97,7 +104,7 @@ let remove i s =
   let rec remove = function
     | N ->
       N
-    | C (addr, ss, qs) as s ->
+    | C {addr; mask=ss; next=qs} as s ->
       if iaddr < addr then
         s
       else if iaddr = addr then
@@ -108,14 +115,14 @@ let remove i s =
         else if ss' = ss then
           s
         else
-          C (addr, ss', qs)
+          c (addr, ss', qs)
       else
         (* Not there yet, continue. *)
         let qs' = remove qs in
         if qs == qs' then
           s
         else
-          C (addr, ss, qs')
+          c (addr, ss, qs')
   in
   remove s
 
@@ -123,7 +130,7 @@ let rec fold f s accu =
   match s with
   | N ->
     accu
-  | C (base, ss, qs) ->
+  | C {addr=base; mask=ss; next=qs} ->
     let ss' = ref ss in
     let accu = ref accu in
     for _ = 0 to Bit_lib.pop_count ss - 1 do
@@ -146,7 +153,7 @@ let iter f s =
 
 let rec rev_iter f = function
   | N -> ()
-  | C (base, ss, qs) ->
+  | C {addr=base; mask=ss; next=qs} ->
     rev_iter f qs;
     let ss' = ref ss in
     for _ = 0 to Bit_lib.pop_count ss - 1 do
@@ -157,7 +164,7 @@ let rec rev_iter f = function
 
 let rec fold_right f acc = function
   | N -> acc
-  | C (base, ss, qs) ->
+  | C {addr=base; mask=ss; next=qs} ->
     let acc = ref (fold_right f acc qs) in
     let ss' = ref ss in
     for _ = 0 to Bit_lib.pop_count ss - 1 do
@@ -175,18 +182,18 @@ let exists f t =
 
 let is_singleton s =
   match s with
-  | C (_, ss, N) ->
+  | C {addr=_; mask=ss; next=N} ->
     (* Test whether only one bit is set in [ss]. We do this by turning
        off the rightmost bit, then comparing to zero. *)
     ss land (ss - 1) = 0
-  | C (_, _, C _)
+  | C {addr=_; mask=_; next=C _}
   | N ->
     false
 
 let rec cardinal acc = function
   | N -> acc
-  | C (_, mask, qs) ->
-    cardinal (acc + Bit_lib.pop_count mask) qs
+  | C {addr=_; mask; next} ->
+    cardinal (acc + Bit_lib.pop_count mask) next
 
 let cardinal qs = cardinal 0 qs
 
@@ -199,40 +206,40 @@ let rec subset s1 s2 =
     true
   | _, N ->
     false
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
-    if addr1 < addr2 then
+  | C c1, C c2 ->
+    if c1.addr < c2.addr then
       false
-    else if addr1 = addr2 then
-      if (ss1 land ss2) <> ss1 then
+    else if c1.addr = c2.addr then
+      if (c1.mask land c2.mask) <> c1.mask then
         false
       else
-        subset qs1 qs2
+        subset c1.next c2.next
     else
-      subset s1 qs2
+      subset s1 c2.next
 
 let rec quick_subset a1 ss1 = function
   | N -> false
-  | C (a2, ss2, qs2) ->
-    if a1 = a2 then
-      ss1 land ss2 <> 0
+  | C c ->
+    if a1 = c.addr then
+      ss1 land c.mask <> 0
     else
-      (a1 > a2 && quick_subset a1 ss1 qs2)
+      (a1 > c.addr && quick_subset a1 ss1 c.next)
 
 let quick_subset s1 s2 =
   match s1 with
   | N -> true
-  | C (a1, ss1, _) ->
+  | C c ->
     (* We know that, by construction, ss1 is not empty.
        It suffices to test s2 also has elements in common with ss1 at address
        a1 to determine the quick_subset relation. *)
-    quick_subset a1 ss1 s2
+    quick_subset c.addr c.mask s2
 
 let mem i s =
   let ioffset = i mod word_size in
   let iaddr = i - ioffset and imask = 1 lsl ioffset in
   let rec loop4 = function
-    | C (a, _, qs) when a < iaddr -> loop4 qs
-    | C (a, ss, _) when a = iaddr -> ss land imask != 0
+    | C c when c.addr < iaddr -> loop4 c.next
+    | C c when c.addr = iaddr -> c.mask land imask != 0
     | _ -> false
   in
   loop4 s
@@ -242,17 +249,18 @@ let rec union s1 s2 =
   | N, s
   | s, N ->
     s
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+  | C {addr=addr1; mask=ss1; next=qs1},
+    C {addr=addr2; mask=ss2; next=qs2} ->
     if addr1 < addr2 then
       let qs = union qs1 s2 in
       if qs == qs1
       then s1
-      else C (addr1, ss1, qs)
+      else c (addr1, ss1, qs)
     else if addr1 > addr2 then
       let qs = union s1 qs2 in
       if qs == qs2
       then s2
-      else C (addr2, ss2, qs)
+      else c (addr2, ss2, qs)
     else
       let ss = ss1 lor ss2 in
       let qs = union qs1 qs2 in
@@ -260,14 +268,15 @@ let rec union s1 s2 =
       then s2
       else if ss = ss1 && qs == qs1
       then s1
-      else C (addr1, ss, qs)
+      else c (addr1, ss, qs)
 
 let rec inter s1 s2 =
   match s1, s2 with
   | N, _
   | _, N ->
     N
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+  | C {addr=addr1; mask=ss1; next=qs1},
+    C {addr=addr2; mask=ss2; next=qs2} ->
     if addr1 < addr2 then
       inter qs1 s2
     else if addr1 > addr2 then
@@ -281,7 +290,7 @@ let rec inter s1 s2 =
       then s2
       else if ss = ss1 && qs == qs1
       then s1
-      else C (addr1, ss, qs)
+      else c (addr1, ss, qs)
 
 exception Found of int
 
@@ -305,16 +314,16 @@ let minimum s =
 
 let rec maximum = function
   | N -> None
-  | C (addr, ss, N) ->
+  | C {addr; mask; next=N} ->
     let i = ref 0 in
-    let ss = ref (ss lsr 1) in
+    let ss = ref (mask lsr 1) in
     while !ss > 0 do
       incr i;
       ss := !ss lsr 1
     done;
     Some (addr + !i)
-  | C (_, _, rest) ->
-    maximum rest
+  | C c ->
+    maximum c.next
 
 let rec compare s1 s2 =
   if s1 == s2 then 0 else
@@ -322,12 +331,12 @@ let rec compare s1 s2 =
       N, N ->  0
     | _, N ->  1
     | N, _ -> -1
-    | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
-      if addr1 < addr2 then -1
-      else if addr1 > addr2 then 1
-      else if ss1 < ss2 then -1
-      else if ss1 > ss2 then 1
-      else compare qs1 qs2
+    | C c1, C c2 ->
+      if c1.addr < c2.addr then -1
+      else if c1.addr > c2.addr then 1
+      else if c1.mask < c2.mask then -1
+      else if c1.mask > c2.mask then 1
+      else compare c1.next c2.next
 
 let equal s1 s2 =
   compare s1 s2 = 0
@@ -337,7 +346,8 @@ let rec disjoint s1 s2 =
   | N, _
   | _, N ->
     true
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+  | C {addr=addr1; mask=ss1; next=qs1},
+    C {addr=addr2; mask=ss2; next=qs2} ->
     if addr1 = addr2 then
       if (ss1 land ss2) = 0 then
         disjoint qs1 qs2
@@ -351,13 +361,14 @@ let rec disjoint s1 s2 =
 let rec diff s1 s2 =
   match s1, s2 with
   | N, _ | _, N -> s1
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+  | C {addr=addr1; mask=ss1; next=qs1},
+    C {addr=addr2; mask=ss2; next=qs2} ->
     if addr1 < addr2 then (
       let qs1' = diff qs1 s2 in
       if qs1' == qs1 then
         s1
       else
-        C (addr1, ss1, qs1')
+        c (addr1, ss1, qs1')
     )
     else if addr1 > addr2 then
       diff s1 qs2
@@ -370,7 +381,7 @@ let rec diff s1 s2 =
         if ss = ss1 && qs1' == qs1 then
           s1
         else
-          C (addr1, ss, qs1')
+          c (addr1, ss, qs1')
 
 let lsb x = (x land -x)
 
@@ -381,61 +392,60 @@ let compare_minimum s1 s2 =
   | N, N -> 0
   | N, _ -> -1
   | _, N -> 1
-  | C (addr1, ss1, _), C (addr2, ss2, _) ->
-    match Int.compare addr1 addr2 with
-    | 0 -> compare_lsb ss1 ss2
+  | C c1, C c2 ->
+    match Int.compare c1.addr c2.addr with
+    | 0 -> compare_lsb c1.mask c2.mask
     | n -> n
 
 let sorted_union xs = List.fold_right union xs empty
 
 let rec extract_unique_prefix addr2 ss2 = function
   | N -> N, N
-  | C (addr1, ss1, qs1) as self ->
-    if addr1 < addr2 then
-      let prefix, suffix = extract_unique_prefix addr2 ss2 qs1 in
-      C (addr1, ss1, prefix), suffix
-    else if addr1 > addr2 || ss1 = ss2 || compare_lsb ss1 ss2 >= 0 then
+  | C c1 as self ->
+    if c1.addr < addr2 then
+      let prefix, suffix = extract_unique_prefix addr2 ss2 c1.next in
+      C {c1 with next = prefix}, suffix
+    else if c1.addr > addr2 || c1.mask = ss2 || compare_lsb c1.mask ss2 >= 0 then
       N, self
     else
       (* l and r have the same address, and
          l has some prefix that is not part of r (lsb l < lsb r)*)
       let prefix_mask = (lsb ss2) - 1 in
-      let ss0 = ss1 land prefix_mask in
+      let ss0 = c1.mask land prefix_mask in
       assert (ss0 <> 0);
-      let ss1 = ss1 land lnot prefix_mask in
+      let ss1 = c1.mask land lnot prefix_mask in
       if ss1 = 0 then
-        (C (addr1, ss0, N), qs1)
+        (c (c1.addr, ss0, N), c1.next)
       else
-        (C (addr1, ss0, N), C (addr1, ss1, qs1))
+        (c (c1.addr, ss0, N), c (c1.addr, ss1, c1.next))
 
 let extract_unique_prefix l r =
   match l, r with
   | N, _ -> N, N
   | _, N -> invalid_arg "extract_unique_prefix: r < l"
-  | l, C (addr2, ss2, _) -> extract_unique_prefix addr2 ss2 l
+  | l, C c -> extract_unique_prefix c.addr c.mask l
 
 let rec extract_shared_prefix = function
-  | C (addr1, ss1, qs1), C (addr2, ss2, qs2)
-    when addr1 = addr2 ->
-    if ss1 = ss2 then
-      let common, rest = extract_shared_prefix (qs1, qs2) in
-      (C (addr1, ss1, common), rest)
+  | C c1, C c2 when c1.addr = c2.addr ->
+    if c1.mask = c2.mask then
+      let common, rest = extract_shared_prefix (c1.next, c2.next) in
+      (C {c1 with next = common}, rest)
     else
-      let ss1' = ss1 land lnot ss2 in
-      let ss2' = ss2 land lnot ss1 in
+      let ss1' = c1.mask land lnot c2.mask in
+      let ss2' = c2.mask land lnot c1.mask in
       let common_mask = (lsb ss1' - 1) land (lsb ss2' - 1) in
       let rest_mask = lnot common_mask in
-      let common = match ss1 land common_mask with
+      let common = match c1.mask land common_mask with
         | 0 -> N
-        | n -> C (addr1, n, N)
+        | n -> C {c1 with mask = n; next = N}
       in
-      let qs1' = match ss1 land rest_mask with
-        | 0 -> qs1
-        | ss1' -> C (addr1, ss1', qs1)
+      let qs1' = match c1.mask land rest_mask with
+        | 0 -> c1.next
+        | ss1' -> C {c1 with mask = ss1'}
       in
-      let qs2' = match ss2 land rest_mask with
-        | 0 -> qs2
-        | ss2' -> C (addr2, ss2', qs2)
+      let qs2' = match c2.mask land rest_mask with
+        | 0 -> c2.next
+        | ss2' -> C {c2 with mask = ss2'}
       in
       common, (qs1', qs2')
   | (l, r) -> N, (l, r)
@@ -449,14 +459,14 @@ let init_interval i j =
   let addr = j - j mod word_size in
   if addr <= i then
     let word = (1 lsl (j - i + 1) - 1) lsl (i - addr) in
-    C (addr, word, N)
+    c (addr, word, N)
   else
     let rec loop2 acc addr =
       if addr <= i
-      then C (addr, -1 lsl (i - addr), acc)
-      else loop2 (C (addr, -1, acc)) (addr - word_size)
+      then c (addr, -1 lsl (i - addr), acc)
+      else loop2 (c (addr, -1, acc)) (addr - word_size)
     in
-    loop2 (C (addr, (-1) lsr (word_size - (j - addr + 1)), N)) (addr - word_size)
+    loop2 (c (addr, (-1) lsr (word_size - (j - addr + 1)), N)) (addr - word_size)
 
 let init_subset i j f =
   let i, j = if i < j then i, j else j, i in
@@ -471,34 +481,33 @@ let init_subset i j f =
       let word = !word in
       if word = 0
       then loop3 addr' addr'
-      else C (addr, word, loop3 addr' addr')
+      else c (addr, word, loop3 addr' addr')
   in
   loop3 i (i - i mod word_size)
 
 let rec filter f = function
   | N -> N
-  | C (addr, word0, ss) as ss0 ->
+  | C {addr; mask; next} as ss0 ->
     let word = ref 0 in
-    let word' = ref word0 in
-    for _ = 0 to Bit_lib.pop_count word0 - 1 do
+    let word' = ref mask in
+    for _ = 0 to Bit_lib.pop_count mask - 1 do
       let bit = Bit_lib.lsb_index !word' in
       if f (addr + bit) then
         word := !word lor (1 lsl bit);
       word' := !word' lxor (1 lsl bit);
     done;
     if !word = 0 then
-      filter f ss
+      filter f next
     else
-      let ss' = filter f ss in
-      if !word = word0 && ss == ss' then
+      let ss' = filter f next in
+      if !word = mask && next == ss' then
         ss0
       else
-        C (addr, !word, ss')
+        c (addr, !word, ss')
 
 let rec find f = function
   | N -> raise Not_found
-  | C (a, w, ss) ->
-    find_addr f a w ss 0
+  | C c -> find_addr f c.addr c.mask c.next 0
 
 and find_addr f a w ss i =
   if w land (1 lsl i) <> 0 && f (a + i) then
@@ -510,8 +519,7 @@ and find_addr f a w ss i =
 
 let rec find_map f = function
   | N -> None
-  | C (a, w, ss) ->
-    find_map_addr f a w ss 0
+  | C c -> find_map_addr f c.addr c.mask c.next 0
 
 and find_map_addr f a w ss i =
   match if w land (1 lsl i) = 0 then None else f (a + i) with
@@ -522,20 +530,20 @@ and find_map_addr f a w ss i =
 let rec allocate result = function
   | N ->
     result := 0;
-    C (0, 1, N)
+    c (0, 1, N)
 
-  | C (addr, -1, N) ->
+  | C {addr; mask= -1; next=N} ->
     let next = addr + word_size in
     result := next;
-    C (addr, -1, C (next, 1, N))
+    c (addr, -1, c (next, 1, N))
 
-  | C (addr, -1, qs) ->
-    C (addr, -1, allocate result qs)
+  | C {addr; mask= -1; next=qs} ->
+    c (addr, -1, allocate result qs)
 
-  | C (addr, word, qs) ->
-    let i = Bit_lib.lsb_index (lnot word) in
+  | C {addr; mask; next} ->
+    let i = Bit_lib.lsb_index (lnot mask) in
     result := addr + i;
-    C (addr, word lor (1 lsl i), qs)
+    c (addr, mask lor (1 lsl i), next)
 
 let allocate qs =
   let result = ref 0 in
@@ -546,8 +554,8 @@ let allocate qs =
 let rec to_seq q =
   match q with
   | N -> Seq.empty
-  | C (addr, mask, q') ->
-    c addr q' mask
+  | C {addr; mask; next} ->
+    c addr next mask
 
 and c addr q' = function
   | 0 -> to_seq q'
