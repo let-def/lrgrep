@@ -321,11 +321,12 @@ module T = struct
     (*Kernel.Lrc.check_equivalence grammar lrc lrc' lrc.all_leaf lrc'.all_leaf;*)
     (reachability, lrc)
 
-  let d = match Sys.getenv_opt "SINGLE" with
+  let d = match Sys.getenv_opt "MULTICORE" with
     | None ->
+      Lazy.from_fun compute_reachability
+    | Some _ ->
       let d = Domain.spawn compute_reachability in
       lazy (Domain.join d)
-    | Some _ -> Lazy.from_fun compute_reachability
 
   let reachability, lrc = Lazy.force d
   let () = stopwatch 1 "Reachability information available"
