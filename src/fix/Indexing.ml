@@ -451,4 +451,11 @@ module Vector = struct
     type a = A.a
     let vector = Vector A.array
   end
+
+  let cat (type n m a)
+      (Vector n : (n, a) t)
+      (Vector m : (m, a) t)
+    : ((n, m) Sum.n, a) t
+    =
+    Vector (Array.concat [n; m])
 end

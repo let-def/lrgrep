@@ -277,6 +277,8 @@ module Vector : sig
   (**{!map} is analogous to [Array.map]. *)
   val map : ('a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
 
+  val cat : ('n, 'a) t -> ('m, 'a) t -> (('n, 'm) Sum.n, 'a) t
+
   val copy : ('n, 'a) t -> ('n, 'a) t
   val mapi : ('n index -> 'a -> 'b) -> ('n, 'a) t -> ('n, 'b) t
 
