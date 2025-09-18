@@ -351,7 +351,7 @@ let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
   in
   IndexSet.bind prods matching_states
 
-let compile_reduce_expr (type g) (g : g grammar) viable trie re =
+let compile_reduce_expr (type g) (g : g grammar) rg trie re =
   let open Info in
   let goto = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
@@ -388,12 +388,12 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
               step node' k'
           ) node.sub
     in
-    List.iter process_next (K.derive viable (Lr1.all g) k)
+    List.iter process_next (K.derive rg (Lr1.all g) k)
   in
   step trie (K.More (re, K.Done));
   (!goto, !immediate)
 
-let transl (type g) (g : g grammar) viable indices trie ~capture re =
+let transl (type g) (g : g grammar) rg indices trie ~capture re =
   let all_cap = ref IndexSet.empty in
   let mk_capture kind name =
     let index = capture kind name in
@@ -428,11 +428,11 @@ let transl (type g) (g : g grammar) viable indices trie ~capture re =
         error re.position "Reductions cannot be nested";
       (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
       let re = transl ~for_reduction:true expr in
-      let pattern, immediate = compile_reduce_expr g viable trie re in
       (*warn re.position
           "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
           (IndexSet.cardinal pattern) (cardinal Redgraph.state)
           (IndexSet.cardinal immediate);*)
+      let pattern, immediate = compile_reduce_expr g rg trie re in
       let capture, capture_end = match capture with
         | None -> IndexSet.empty, IndexSet.empty
         | Some name ->

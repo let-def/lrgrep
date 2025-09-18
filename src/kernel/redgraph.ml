@@ -66,7 +66,9 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
   let failing = ref IndexSet.empty in
   let rec pop lookahead acc (item : g item index) = function
-    | [] -> let items, stacks = acc in ((item, lookahead) :: items, stacks)
+    | [] ->
+      let items, stacks = acc in
+      ((item, lookahead) :: items, stacks)
     | hd :: tl as stack ->
       match Item.prev g item with
       | Some item' -> pop lookahead acc item' tl
