@@ -252,9 +252,13 @@ module K = struct
     let ks = ref [] in
     let push_reduction_step label reduction next step =
       if is_live reduction step then
-        continue ks
-          (Label.capture label reduction.capture Usage.empty)
-          (Reducing {reduction; step; next})
+        let label = Label.capture label reduction.capture Usage.empty in
+        match !ks with
+        | (label', (Reducing r as k)) :: ks'
+          when reduction == r.reduction &&
+               next == r.next && step = r.step ->
+          ks := (Label.union label' label, k) :: ks'
+        | ks' -> ks := (label, Reducing {reduction; step; next}) :: ks'
     in
     let rec process_k label = function
       | Accept ->
@@ -271,18 +275,20 @@ module K = struct
 
     and process_reduction_step label reduction k step =
       let {Redgraph. goto; next; _} = rg.steps.:(step) in
-      Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
-      push_reduction_step label reduction k next;
+      if false then
+        Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
       IndexSet.iter begin fun node ->
         let ndesc, nstep = rg.nodes.:(node) in
         if IndexSet.mem ndesc.lr1 label.filter then (
-          Printf.printf "node on state %s, next %d\n" (Lr1.to_string g ndesc.lr1) (nstep :> int);
+          if false then
+            Printf.printf "node on state %s, next %d\n" (Lr1.to_string g ndesc.lr1) (nstep :> int);
           let label = {label with filter = IndexSet.singleton ndesc.lr1} in
           if intersecting ndesc.gotos reduction.pattern then
             process_k (Label.capture label IndexSet.empty reduction.usage) k;
           push_reduction_step label reduction k nstep;
         )
-      end goto
+      end goto;
+      push_reduction_step label reduction k next;
 
     and process_re label self next = function
       | Set (s, var, usage) ->

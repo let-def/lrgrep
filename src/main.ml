@@ -359,7 +359,7 @@ module T = struct
       gt_closure
 
   let () =
-    if true then
+    if false then
       let oc = open_out_bin "redgraph.dot" in
       Kernel.Redgraph.dump_dot oc grammar gt_closure redgraph;
       close_out oc
@@ -437,6 +437,7 @@ let do_compile spec (cp : Code_printer.t option) =
     let Kernel.Spec.Rule (clauses, branches) =
       Kernel.Spec.import_rule grammar T.redgraph T.indices T.trie rule
     in
+    stopwatch 1 "constructing NFA\n";
     let nfa = Kernel.Automata.NFA.from_branches grammar T.redgraph branches in
     Vector.iteri (fun br nfa ->
         if !dump_dot then

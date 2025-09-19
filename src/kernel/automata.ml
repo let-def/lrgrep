@@ -124,16 +124,14 @@ module NFA = struct
       match KMap.find_opt k !nfa with
       | Some t -> t
       | None ->
-        (*let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
-          let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in*)
+        let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+        let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
         let transitions =
           K.derive g rg (Lr1.all g) k
           |> process_transitions
-          (*
-            |> List.map inj
-            |> IndexRefine.annotated_partition
-            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
-          *)
+          |> List.map inj
+          |> IndexRefine.annotated_partition
+          |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
         in
         let uid = uid () in
         let t = {uid; k; transitions; branch; mark=default_mark} in

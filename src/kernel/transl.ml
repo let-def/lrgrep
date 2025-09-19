@@ -401,7 +401,8 @@ let compile_reduce_expr (type g) (g : g grammar) rg trie re =
   let rec follow path (node : _ Reductum_trie.t) (label, k : _ Label.t * _ K.t) =
     match k with
     | K.Accept ->
-      print_endline (Lr1.list_to_string g (List.rev path));
+      if false then
+        print_endline (Lr1.list_to_string g (List.rev path));
       let immediate_filter = IndexSet.inter label.filter node.immediate in
       immediate := IndexSet.union immediate_filter !immediate;
       let goto_filter =
@@ -464,10 +465,11 @@ let transl (type g) (g : g grammar) rg indices trie ~capture re =
       (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
       let re = transl ~for_reduction:true expr in
       let pattern, immediate = compile_reduce_expr g rg trie re in
-      warn re.position
-        "Reduce pattern is matching %d cases (and matches immediately for %d states)"
-        (IndexSet.cardinal pattern)
-        (IndexSet.cardinal immediate);
+      if false then
+        warn re.position
+          "Reduce pattern is matching %d cases (and matches immediately for %d states)"
+          (IndexSet.cardinal pattern)
+          (IndexSet.cardinal immediate);
       let capture, capture_end = match capture with
         | None -> IndexSet.empty, IndexSet.empty
         | Some name ->
