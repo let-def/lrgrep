@@ -113,7 +113,7 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  let make (type g s) (g : g grammar) viable branch =
+  let make (type g s) (g : g grammar) rg branch =
     let module KMap = Map.Make(struct
         type t = (g, s) Regexp.K.t
         let compare = Regexp.K.compare
@@ -124,14 +124,16 @@ module NFA = struct
       match KMap.find_opt k !nfa with
       | Some t -> t
       | None ->
-        let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
-        let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
+        (*let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+          let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in*)
         let transitions =
-          K.derive viable (Lr1.all g) k
+          K.derive g rg (Lr1.all g) k
           |> process_transitions
-          |> List.map inj
-          |> IndexRefine.annotated_partition
-          |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
+          (*
+            |> List.map inj
+            |> IndexRefine.annotated_partition
+            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
+          *)
         in
         let uid = uid () in
         let t = {uid; k; transitions; branch; mark=default_mark} in
@@ -143,8 +145,8 @@ module NFA = struct
     in
     aux
 
-  let from_branches info viable branches =
-    Vector.mapi (fun br re -> make info viable br (Regexp.K.More (re, Regexp.K.Done)))
+  let from_branches info rg branches =
+    Vector.mapi (fun br re -> make info rg br (Regexp.K.More (re, Regexp.K.Done)))
       branches.expr
 end
 

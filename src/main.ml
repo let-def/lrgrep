@@ -59,6 +59,8 @@ type compile_options = {
   compile_dummy: unit;
 }
 
+let test_input = ref []
+
 type command =
   | Compile of compile_options
   | Interpret of unit
@@ -137,6 +139,10 @@ let parse_common_option = function
 
   | Long "dump-dot" :: rest ->
     dump_dot := true;
+    Some rest
+
+  | Long "test-input" :: Text input :: rest ->
+    test_input := (List.filter ((<>) "") (String.split_on_char ' ' input));
     Some rest
 
   | (Short ('s'|'g') | Long ("spec"|"grammar") as arg) :: _ ->
@@ -352,6 +358,12 @@ module T = struct
       lr_closure
       gt_closure
 
+  let () =
+    if true then
+      let oc = open_out_bin "redgraph.dot" in
+      Kernel.Redgraph.dump_dot oc grammar gt_closure redgraph;
+      close_out oc
+
   let () = stopwatch 1 "Done with viable2 reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
@@ -433,6 +445,121 @@ let do_compile spec (cp : Code_printer.t option) =
             (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
     stopwatch 1 "constructed NFA\n";
+    if !test_input <> [] then (
+      print_endline "Testing input vector";
+      let find_symbol =
+        let table = Hashtbl.create 7 in
+        Index.iter (Symbol.cardinal grammar) (fun t ->
+            Hashtbl.add table (Symbol.name grammar t) t;
+          );
+        fun name ->
+          match Hashtbl.find_opt table name with
+          | None ->
+            Printf.eprintf "Unknown symbol: %s\n" name;
+            exit 1
+          | Some t -> t
+      in
+      let get_action =
+        let table = Vector.make (Lr1.cardinal grammar) IndexMap.empty in
+        let index lr1 =
+          IndexMap.empty
+          |> IndexSet.fold (fun tr map ->
+              let target = Transition.target grammar tr in
+              let sym = Option.get (Lr1.incoming grammar target) in
+              IndexMap.add sym (`Shift target) map
+            ) (Transition.successors grammar lr1)
+          |> IndexSet.fold (fun red map ->
+              let action = `Reduce (Reduction.production grammar red) in
+              IndexSet.fold
+                (fun term map -> IndexMap.add (Symbol.inj_t grammar term) action map)
+                (Reduction.lookaheads grammar red)
+                map
+            ) (Reduction.from_lr1 grammar lr1)
+        in
+        let get_actions lr1 =
+          match table.:(lr1) with
+          | map when not (IndexMap.is_empty map) -> map
+          | _ ->
+            let map = index lr1 in
+            table.:(lr1) <- map;
+            map
+        in
+        fun lr1 sym ->
+          match IndexMap.find_opt sym (get_actions lr1) with
+          | None -> `Reject
+          | Some action -> action
+      in
+      let rec consume_symbol stack sym =
+        match stack with
+        | [] ->
+          prerr_endline "Empty stack"; exit 1
+        | top :: _ ->
+          match get_action top sym with
+          | `Reject ->
+            Printf.eprintf "No action from state %s on symbol %s\n"
+              (Lr1.to_string grammar top) (Symbol.name grammar sym);
+            exit 1
+          | `Shift state -> state :: stack
+          | `Reduce prod ->
+            let stack = List.drop (Production.length grammar prod) stack in
+            let goto_sym = Symbol.inj_n grammar (Production.lhs grammar prod) in
+            match get_action (List.hd stack) goto_sym with
+            | `Reject | `Reduce _ -> failwith "Invalid automaton"
+            | `Shift state ->
+              consume_symbol (state :: stack) sym
+      in
+      let stack = [Option.get (IndexSet.minimum (Lr1.entrypoints grammar))] in
+      let symbols = List.map find_symbol !test_input in
+      let stack = List.fold_left consume_symbol stack symbols in
+      Printf.printf "Input vector stack:\n  %s\n"
+        (Lr1.list_to_string grammar (List.rev stack));
+      let print_ks ks =
+        let lr1 lr1 = Cmon.constant (Lr1.to_string grammar lr1) in
+        let cmon = Cmon.list_map (Kernel.Regexp.K.cmon ~lr1) ks in
+        PPrint.ToChannel.pretty 0.8 80 stdout (Cmon.print cmon);
+        print_newline ();
+      in
+      begin
+        let follow ks lr1 =
+          print_ks ks;
+          Printf.printf "-> %s ->\n"
+            (Lr1.to_string grammar lr1);
+          List.concat_map (fun k ->
+              List.map snd (
+                Kernel.Regexp.K.derive grammar T.redgraph
+                  (IndexSet.singleton lr1)
+                  k
+              )
+            ) ks
+        in
+        let ks = Vector.to_list branches.expr |> List.map (fun e -> Kernel.Regexp.K.More (e, Done)) in
+        print_ks (List.fold_left follow ks stack)
+      end;
+      if false then
+      begin
+        let print_states nfas =
+          let lr1 lr1 = Cmon.constant (Lr1.to_string grammar lr1) in
+          let cmon = Cmon.list_map (fun n -> Kernel.Regexp.K.cmon ~lr1 n.Kernel.Automata.NFA.k) nfas in
+          PPrint.ToChannel.pretty 0.8 80 stdout (Cmon.print cmon);
+          print_newline ();
+        in
+        let follow nfas lr1 =
+          print_states nfas;
+          Printf.printf "-> %s ->\n"
+            (Lr1.to_string grammar lr1);
+          List.concat_map (fun nfa ->
+              List.filter_map (fun (label, target) ->
+                  if IndexSet.mem lr1 label.Kernel.Regexp.Label.filter then
+                    Some (Lazy.force target)
+                  else
+                    None
+                ) nfa.Kernel.Automata.NFA.transitions
+            ) nfas
+        in
+        let nfas = Vector.to_list nfa in
+        print_states (List.fold_left follow nfas stack)
+      end;
+    );
     let Kernel.Automata.DFA.T dfa =
       Kernel.Automata.DFA.determinize branches stacks nfa in
     if !dump_dot then

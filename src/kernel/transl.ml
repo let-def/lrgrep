@@ -5,6 +5,8 @@ open Fix.Indexing
 open Regexp
 open Info
 
+let printf_debug = false
+
 (* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
 module Indices = struct
   open Info
@@ -178,8 +180,8 @@ module Reductum_trie = struct
       let register node = node.goto <- IndexSet.add gt node.goto in
       List.iter
         (fun (stack, _) -> register (List.fold_left get_child root stack))
-        cl.Redgraph.stacks;
-      register (get_child root (Transition.target g (Transition.of_goto g gt)))
+        cl.Redgraph.stacks
+      (*register (get_child root (Transition.target g (Transition.of_goto g gt)))*)
     end grc;
     root
 
@@ -415,14 +417,15 @@ let compile_reduce_expr (type g) (g : g grammar) rg trie re =
           derive (lr1 :: path) node' k
       end node.sub
   and derive path node k =
-    List.iter (follow path node) (K.derive rg (Lr1.all g) k)
+    List.iter (follow path node) (K.derive g rg (Lr1.all g) k)
   in
   derive [] trie (K.More (re, K.Done));
-  Printf.printf "pattern:\n\
-                 - goto: %s\n\
-                 - immediate: %s\n"
-    (string_of_indexset ~index:(string_of_goto g) !goto)
-    (Lr1.set_to_string g !immediate);
+  if printf_debug then
+    Printf.printf "pattern:\n\
+                   - goto: %s\n\
+                   - immediate: %s\n"
+      (string_of_indexset ~index:(string_of_goto g) !goto)
+      (Lr1.set_to_string g !immediate);
   (!goto, !immediate)
 
 let transl (type g) (g : g grammar) rg indices trie ~capture re =

@@ -85,6 +85,8 @@ module Terminal : sig
 
   (** Is it the special `error` symbol *)
   val is_error : 'g grammar -> 'g n index -> bool
+
+  val lookaheads_to_string : 'g grammar -> 'g n indexset -> string
 end
 
 module Nonterminal : sig
@@ -263,6 +265,8 @@ module Transition : sig
   (* Accepting transitions are goto transitions from an initial state to an
      accepting state, recognizing one of the grammar entrypoint. *)
   val accepting : 'g grammar -> 'g goto_transition indexset
+
+  val to_string : 'g grammar -> 'g transition index -> string
 end
 
 module Reduction : sig

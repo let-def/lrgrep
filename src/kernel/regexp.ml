@@ -73,11 +73,11 @@ module Reductions = struct
       if c <> 0 then c else
         IndexSet.compare r1.capture r2.capture
 
-  let cmon {capture; pattern; usage; policy} =
+  let cmon {capture=_; pattern; usage=_; policy} =
     Cmon.record [
-      "capture", cmon_indexset capture;
+      (*"capture", cmon_indexset capture;*)
       "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
-      "usage", Usage.cmon_set usage;
+      (*"usage", Usage.cmon_set usage;*)
       "policy", Syntax.cmon_quantifier_kind policy;
     ]
 end
@@ -128,22 +128,22 @@ module Expr = struct
   let compare t1 t2 =
     Int.compare t1.uid t2.uid
 
-  let cmon t =
+  let cmon ?(lr1=cmon_index) t =
     let rec aux t =
       match t.desc with
-      | Set (lr1s, var, usage) ->
+      | Set (lr1s, _var, _usage) ->
         Cmon.construct "Set" [
-          cmon_set_cardinal lr1s;
-          cmon_indexset var;
-          Usage.cmon_set usage;
+          cmon_indexset ~index:lr1 lr1s;
+          (*cmon_indexset var;
+            Usage.cmon_set usage;*)
         ]
       | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
       | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
       | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
       | Filter lr1s ->
-        Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-      | Reduce (var, r) ->
-        Cmon.construct "Reduce" [cmon_indexset var; Reductions.cmon r]
+        Cmon.constructor "Filter" (cmon_indexset ~index:lr1 lr1s)
+      | Reduce (_var, r) ->
+        Cmon.construct "Reduce" [(*cmon_indexset var;*) Reductions.cmon r]
     in
     aux t
 end
@@ -154,10 +154,6 @@ module Label = struct
     captures: Capture.set;
     usage: Usage.set;
   }
-
-  (*let is_immediate {filter; captures; usage=_} =
-    IndexSet.equal filter Lr1.all &&
-    IndexSet.is_empty captures *)
 
   let compare l1 l2 =
     if l1 == l2 then 0 else
@@ -198,6 +194,21 @@ module K = struct
         next: ('g, 's) t;
       }
 
+  let cmon ?lr1 k =
+    let rec aux = function
+    | Accept -> Cmon.constant "Accept"
+    | Done -> Cmon.constant "Done"
+    | More (e, t) ->
+      Cmon.construct "More" [Expr.cmon ?lr1 e; aux t]
+    | Reducing {reduction=_; step; next} ->
+      Cmon.crecord "Reducing" [
+        "reduction", Cmon.constant "...";
+        "step", cmon_index step;
+        "next", aux next;
+      ]
+    in
+    aux k
+
   let rec compare t1 t2 =
     if t1 == t2 then 0 else
       match t1, t2 with
@@ -223,20 +234,20 @@ module K = struct
   let intersecting s1 s2 =
     not (IndexSet.disjoint s1 s2)
 
-  let derive (type g s) (rg: (g, s) Redgraph.graph) filter k =
+  let derive (type g s) (g : g grammar) (rg: (g, s) Redgraph.graph) filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
         r := (Label.union label' label, next) :: r'
       | r' ->
         r := (label, next) :: r'
     in
-    let is_live (_reduction : _ Reductions.t) _step =
-      true
-      (*(step : _ index :> int) > 0 &&
+    let is_live (reduction : _ Reductions.t) step =
+      (step : _ index :> int) > 0
+      &&
       let reachable = rg.steps.:(step).reachable in
       IndexSet.exists
         (fun gt -> intersecting reachable rg.targets.:(gt))
-        reduction.pattern*)
+        reduction.pattern
     in
     let ks = ref [] in
     let push_reduction_step label reduction next step =
@@ -258,18 +269,20 @@ module K = struct
       | Reducing {reduction; step; next} ->
         process_reduction_step label reduction next step
 
-    and process_reduction_step label reduction next step =
-        let sdesc = rg.steps.:(step) in
-        push_reduction_step label reduction next sdesc.next;
-        IndexSet.iter begin fun node ->
-          let ndesc, nstep = rg.nodes.:(node) in
-          if IndexSet.mem ndesc.lr1 label.filter then (
-            let label = {label with filter = IndexSet.singleton ndesc.lr1} in
-            if intersecting ndesc.gotos reduction.pattern then
-              process_k (Label.capture label IndexSet.empty reduction.usage) next;
-            push_reduction_step label reduction next nstep;
-          )
-        end sdesc.goto
+    and process_reduction_step label reduction k step =
+      let {Redgraph. goto; next; _} = rg.steps.:(step) in
+      Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
+      push_reduction_step label reduction k next;
+      IndexSet.iter begin fun node ->
+        let ndesc, nstep = rg.nodes.:(node) in
+        if IndexSet.mem ndesc.lr1 label.filter then (
+          Printf.printf "node on state %s, next %d\n" (Lr1.to_string g ndesc.lr1) (nstep :> int);
+          let label = {label with filter = IndexSet.singleton ndesc.lr1} in
+          if intersecting ndesc.gotos reduction.pattern then
+            process_k (Label.capture label IndexSet.empty reduction.usage) k;
+          push_reduction_step label reduction k nstep;
+        )
+      end goto
 
     and process_re label self next = function
       | Set (s, var, usage) ->

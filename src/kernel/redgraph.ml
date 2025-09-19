@@ -33,6 +33,8 @@ open Utils
 open Misc
 open Info
 
+let printf_debug = false
+
 (* Step 1: pre-compute closure of ϵ-reductions *)
 
 (* Group items being reduced by their depth (reductions with zero, one, two producers, ...). *)
@@ -142,34 +144,46 @@ let close_goto_reductions (type g) (g : g grammar) rcs
   let sentinel = {failing = IndexSet.empty; reductions = []; stacks = []} in
   let table = Vector.make (Transition.goto g) sentinel in
   Index.rev_iter (Transition.goto g) begin fun gt ->
+    if printf_debug then
+      Printf.printf "## Closing %s\n"
+        (Transition.to_string g (Transition.of_goto g gt));
     let tr = Transition.of_goto g gt in
     let src = Transition.source g tr in
     let tgt = Transition.target g tr in
     let stacks = ref [] in
     let reductions = ref [] in
+    let push_reductions = function
+      | [] -> ()
+      | rs -> push reductions rs
+    in
     let failing = ref IndexSet.empty in
     let rec visit_target tgt la =
       let rc = rcs.:(tgt) in
+      if printf_debug then
+        Printf.printf "- reaching target %s @ %s\n"
+          (Lr1.to_string g tgt)
+          (Terminal.lookaheads_to_string g la);
       add_failing g failing rc.failing la;
-      stacks := filter_stacks g la !stacks rc.stacks;
+      if printf_debug then
+        Printf.printf "importing %d stacks\n" (List.length rc.stacks);
+      stacks := ([tgt], la) :: filter_stacks g la !stacks rc.stacks;
       match filter_reductions g la rc.reductions with
       | [] -> ()
       | r :: rs ->
-        if not (List.is_empty rs) then
-          push reductions rs;
+        push_reductions rs;
+        if printf_debug then
+          Printf.printf "importing %d reductions\n" (List.length rs);
         IndexMap.iter visit_nt r
 
     and visit_nt nt la =
       let gt' = Transition.find_goto g src nt in
-      if Index.compare gt' gt <= 0 then
+      if true || Index.compare gt' gt <= 0 then
         visit_target (Transition.target g (Transition.of_goto g gt')) la
       else
         let rc = table.:(gt') in
         add_failing g failing rc.failing la;
         stacks := filter_stacks g la !stacks rc.stacks;
-        let rs = filter_reductions g la rc.reductions in
-        if not (List.is_empty rs) then
-          push reductions rs
+        push_reductions (filter_reductions g la rc.reductions)
     in
     visit_target tgt (Terminal.all g);
     let failing = !failing in
@@ -177,6 +191,7 @@ let close_goto_reductions (type g) (g : g grammar) rcs
     let reductions = merge_reductions !reductions in
     table.:(gt) <- {failing; reductions; stacks}
   end;
+  flush stdout;
   table
 
 let dump_closure ?(failing=false) g print_label vector =
@@ -198,18 +213,18 @@ let dump_closure ?(failing=false) g print_label vector =
                 (Printf.fprintf stdout "  - "; first := false)
               else
                 Printf.fprintf stdout "    ";
-              Printf.fprintf stdout "%s @ <%d lookaheads>\n"
+              Printf.fprintf stdout "%s @ %s\n"
                 (Nonterminal.to_string g nt)
-                (IndexSet.cardinal la);
+                (Terminal.lookaheads_to_string g la);
             ) map
         ) def.reductions
     );
     if has_stacks then (
       Printf.fprintf stdout "- stacks:\n";
       List.iter (fun (stack, la) ->
-          Printf.fprintf stdout "  - %s @ <%d lookaheads>\n"
+          Printf.fprintf stdout "  - %s @ %s\n"
             (Lr1.list_to_string g stack)
-            (IndexSet.cardinal la);
+            (Terminal.lookaheads_to_string g la)
         ) def.stacks
     );
   end vector
@@ -381,3 +396,46 @@ let small_steps (type g s)
 let make g stacks lr1_of predecessors rc grc =
   let nodes, initials = prepare g stacks lr1_of predecessors rc grc in
   small_steps g lr1_of nodes initials
+
+let dump_dot oc g grc graph =
+  let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+  p "digraph {";
+  p "  rankdir=LR;";
+  p "  node[shape=rect];";
+  let pnode i = Printf.sprintf "node%d" (i : _ index :> int) in
+  let rec follow_step from step =
+    if Index.to_int step > 0 then (
+      IndexSet.iter (fun node ->
+          p "  %s -> %s [label=%S];"
+            from
+            (pnode node)
+            (Lr1.to_string g (fst graph.nodes.:(node)).lr1)
+        ) graph.steps.:(step).goto;
+      let next = graph.steps.:(step).next in
+      if Index.to_int next > 0 then (
+        let pstep = Printf.sprintf "step%d" (Index.to_int next) in
+        p "  %s[shape=plain,label=\"<step-%d>\"];" pstep (Index.to_int next);
+        p "  %s -> %s [dir=none, label=\"_\"];" from pstep;
+        follow_step pstep next;
+      );
+    )
+  in
+  Vector.iteri (fun lr1 steps ->
+      if not (IndexSet.is_empty steps) then (
+        let node = Printf.sprintf "start%d" (lr1 : _ index :> int) in
+        p "  %s[label = %S];" node (Lr1.to_string g lr1);
+        IndexSet.iter (follow_step node) steps
+      )
+    ) graph.initials;
+  Vector.iteri (fun i (node, step) ->
+      let gotos = string_of_indexset ~index:(fun gt ->
+          Printf.sprintf "(%s) = [%s]"
+            (Transition.to_string g (Transition.of_goto g gt))
+            (string_concat_map "; "
+               (fun (lr1s, _) -> Lr1.list_to_string g lr1s)
+               grc.:(gt).stacks)
+        ) node.gotos in
+      p "  %s[label=%S];" (pnode i) gotos;
+      follow_step (pnode i) step
+    ) graph.nodes;
+  p "}"

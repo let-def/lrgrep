@@ -488,6 +488,12 @@ module Terminal = struct
     match Terminal.kind (Terminal.of_int (i : _ index :> int)) with
     | `ERROR -> true
     | _ -> false
+
+  let lookaheads_to_string g la =
+    match IndexSet.cardinal la with
+    | n when n > 10 -> Printf.sprintf "<%d lookaheads>" n
+    | _ -> string_concat_map ~wrap:("<",">") ","
+             (to_string g) (IndexSet.elements la)
 end
 
 module Nonterminal = struct
@@ -802,4 +808,9 @@ module Transition = struct
   (* Accepting transitions are goto transitions from an initial state to an
      accepting state, recognizing one of the grammar entrypoint. *)
   let accepting g = g.transition_accepting
+
+  let to_string g tr =
+    Printf.sprintf "%s -> %s"
+      (Lr1.to_string g (source g tr))
+      (Lr1.to_string g (target g tr))
 end

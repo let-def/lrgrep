@@ -106,7 +106,7 @@ module Expr : sig
 
   (** Print a term to a [Cmon] document. [var] arguments allow to customize
       printing of variables. *)
-  val cmon : _ t -> Cmon.t
+  val cmon : ?lr1:('g lr1 index -> Cmon.t) -> 'g t -> Cmon.t
 end
 
 module Label : sig
@@ -131,7 +131,7 @@ module K : sig
 
   val compare : ('g, 's) t -> ('g, 's) t -> int
 
-  (*val cmon : ?lr1:('g lr1 index -> string) -> ('g, 's) t -> Cmon.t*)
+  val cmon : ?lr1:('g lr1 index -> Cmon.t) -> ('g, 's) t -> Cmon.t
 
-  val derive : ('g, 's) Redgraph.graph -> 'g lr1 indexset -> ('g, 's) t -> ('g Label.t * ('g, 's) t) list
+  val derive : 'g grammar -> ('g, 's) Redgraph.graph -> 'g lr1 indexset -> ('g, 's) t -> ('g Label.t * ('g, 's) t) list
 end
