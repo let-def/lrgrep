@@ -173,6 +173,7 @@ module Reductum_trie = struct
       List.iter
         (fun (stack, _) -> register (List.fold_left get_child root stack))
         cl.Redgraph.stacks;
+      register (get_child root (Transition.target g (Transition.of_goto g gt)))
     end grc;
     root
 end
