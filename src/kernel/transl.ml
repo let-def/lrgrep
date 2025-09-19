@@ -135,43 +135,44 @@ module Reductum_trie = struct
   type 'g t = {
     mutable sub : ('g lr1, 'g t) indexmap;
     mutable goto : 'g goto_transition indexset;
-    mutable lr1 : 'g lr1 indexset;
+    mutable immediate: 'g lr1 indexset;
   }
 
   let make
     (type g)
+    (g : g grammar)
     (rc : (g lr1, g Redgraph.reduction_closure) vector)
     (grc : (g goto_transition, g Redgraph.reduction_closure) vector)
     =
     let empty () = {
       sub = IndexMap.empty;
       goto = IndexSet.empty;
-      lr1 = IndexSet.empty;
+      immediate = IndexSet.empty;
     } in
     let root = empty () in
-    let rec visit_trie node = function
-      | [] -> node
-      | x :: xs ->
-        let node' = match IndexMap.find_opt x node.sub with
-          | Some node' -> node'
-          | None ->
-            let node' = empty () in
-            node.sub <- IndexMap.add x node' node.sub;
-            node'
-        in
-        visit_trie node' xs
+    root.immediate <- Lr1.all g;
+    let get_child node lr1 =
+      match IndexMap.find_opt lr1 node.sub with
+      | Some node' -> node'
+      | None ->
+        let node' = empty () in
+        node.sub <- IndexMap.add lr1 node' node.sub;
+        node'
     in
-    Vector.iteri begin fun lr1 cl ->
-      List.iter begin fun (stack, _) ->
-        let node = visit_trie root stack in
-        node.lr1 <- IndexSet.add lr1 node.lr1
-      end cl.Redgraph.stacks;
+    let rec mark_immediate node = function
+      | [] -> assert false
+      | [lr1] -> node.immediate <- IndexSet.add lr1 node.immediate
+      | lr1 :: rest -> mark_immediate (get_child node lr1) rest
+    in
+    Vector.iteri begin fun _ cl ->
+      List.iter (fun (stack, _) -> mark_immediate root stack)
+        cl.Redgraph.stacks;
     end rc;
     Vector.iteri begin fun gt cl ->
-      List.iter begin fun (stack, _) ->
-        let node = visit_trie root stack in
-        node.goto <- IndexSet.add gt node.goto
-      end cl.Redgraph.stacks;
+      let register node = node.goto <- IndexSet.add gt node.goto in
+      List.iter
+        (fun (stack, _) -> register (List.fold_left get_child root stack))
+        cl.Redgraph.stacks;
     end grc;
     root
 end
@@ -355,42 +356,28 @@ let compile_reduce_expr (type g) (g : g grammar) rg trie re =
   let open Info in
   let goto = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
-  let rec step (node : g Reductum_trie.t) k =
-    let process_next : g Label.t * _ -> unit = function
-      | (label, K.Accept) ->
-        if node == trie then
-          immediate := IndexSet.union !immediate label.filter
-        else (
-          goto := (
-            if IndexSet.equal (Lr1.all g) label.filter then
-              IndexSet.union node.goto !goto
-            else
-              IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
-                  if IndexSet.mem lr1 label.filter
-                  then IndexSet.union acc node'.goto
-                  else acc
-                ) node.sub !goto
-          );
-          immediate := (
-            if IndexSet.equal (Lr1.all g) label.filter then
-              IndexSet.union node.lr1 !immediate
-            else
-              IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
-                  if IndexSet.mem lr1 label.filter
-                  then IndexSet.union acc node'.lr1
-                  else acc
-                ) node.sub !immediate
-          );
-        )
-      | (label, k') ->
-        IndexMap.iter (fun lr1 node' ->
-            if IndexSet.mem lr1 label.filter then
-              step node' k'
-          ) node.sub
-    in
-    List.iter process_next (K.derive rg (Lr1.all g) k)
+  let rec follow path (node : _ Reductum_trie.t) (label, k : _ Label.t * _ K.t) =
+    match k with
+    | K.Accept ->
+      print_endline (Lr1.list_to_string g (List.rev path));
+      let immediate_filter = IndexSet.inter label.filter node.immediate in
+      immediate := IndexSet.union immediate_filter !immediate;
+      let goto_filter =
+        IndexSet.filter (fun gt ->
+            let src = Transition.source g (Transition.of_goto g gt) in
+            IndexSet.mem src label.filter
+          ) node.goto
+      in
+      goto := IndexSet.union goto_filter !goto
+    | k ->
+      IndexMap.iter begin fun lr1 node' ->
+        if IndexSet.mem lr1 label.Label.filter then
+          derive (lr1 :: path) node' k
+      end node.sub
+  and derive path node k =
+    List.iter (follow path node) (K.derive rg (Lr1.all g) k)
   in
-  step trie (K.More (re, K.Done));
+  derive [] trie (K.More (re, K.Done));
   (!goto, !immediate)
 
 let transl (type g) (g : g grammar) rg indices trie ~capture re =

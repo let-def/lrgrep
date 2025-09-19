@@ -82,10 +82,10 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
     let lr1 = List.hd stack in
     add_failing g failing (Lr1.reject g lr1) lookahead;
     IndexSet.fold begin fun red acc ->
-      let lookahead = Terminal.intersect g (Reduction.lookaheads g red) lookahead in
-      if IndexSet.is_empty lookahead
-      then acc
-      else pop lookahead acc (Item.last g (Reduction.production g red)) stack
+      match Terminal.intersect g (Reduction.lookaheads g red) lookahead with
+      | la when IndexSet.is_empty la -> acc
+      | la ->
+        pop la acc (Item.last g (Reduction.production g red)) stack
     end (Reduction.from_lr1 g lr1) acc
   in
   let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
@@ -157,9 +157,10 @@ let close_goto_reductions (type g) (g : g grammar) rcs
       | r :: rs ->
         if not (List.is_empty rs) then
           push reductions rs;
-        let visit nt la = visit_goto (Transition.find_goto g src nt) la in
-        IndexMap.iter visit r
-    and visit_goto gt' la =
+        IndexMap.iter visit_nt r
+
+    and visit_nt nt la =
+      let gt' = Transition.find_goto g src nt in
       if Index.compare gt' gt <= 0 then
         visit_target (Transition.target g (Transition.of_goto g gt')) la
       else
