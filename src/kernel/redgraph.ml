@@ -179,6 +179,41 @@ let close_goto_reductions (type g) (g : g grammar) rcs
   end;
   table
 
+let dump_closure ?(failing=false) g print_label vector =
+  Vector.iteri begin fun st def ->
+    let has_failing = failing && not (IndexSet.is_empty def.failing) in
+    let has_reductions = not (List.is_empty def.reductions) in
+    let has_stacks = not (List.is_empty def.stacks) in
+    if has_failing || has_reductions || has_stacks then
+      Printf.fprintf stdout "%s:\n" (print_label st);
+    if has_failing then
+      Printf.fprintf stdout "- failing: %s\n"
+        (string_of_indexset ~index:(Terminal.to_string g) def.failing);
+    if has_reductions then (
+      Printf.fprintf stdout "- reductions:\n";
+      List.iter (fun map ->
+          let first = ref true in
+          IndexMap.iter (fun nt la ->
+              if !first then
+                (Printf.fprintf stdout "  - "; first := false)
+              else
+                Printf.fprintf stdout "    ";
+              Printf.fprintf stdout "%s @ <%d lookaheads>\n"
+                (Nonterminal.to_string g nt)
+                (IndexSet.cardinal la);
+            ) map
+        ) def.reductions
+    );
+    if has_stacks then (
+      Printf.fprintf stdout "- stacks:\n";
+      List.iter (fun (stack, la) ->
+          Printf.fprintf stdout "  - %s @ <%d lookaheads>\n"
+            (Lr1.list_to_string g stack)
+            (IndexSet.cardinal la);
+        ) def.stacks
+    );
+  end vector
+
 module Node = Unsafe_cardinal()
 type ('g, 's) node = ('g * 's) Node.t
 

@@ -230,12 +230,13 @@ module K = struct
       | r' ->
         r := (label, next) :: r'
     in
-    let is_live (reduction : _ Reductions.t) step =
-      (step : _ index :> int) > 0 &&
+    let is_live (_reduction : _ Reductions.t) _step =
+      true
+      (*(step : _ index :> int) > 0 &&
       let reachable = rg.steps.:(step).reachable in
       IndexSet.exists
         (fun gt -> intersecting reachable rg.targets.:(gt))
-        reduction.pattern
+        reduction.pattern*)
     in
     let ks = ref [] in
     let push_reduction_step label reduction next step =

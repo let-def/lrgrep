@@ -131,6 +131,12 @@ module Indices = struct
     | Some sym -> sym
 end
 
+let string_of_goto g gt =
+  let tr = Transition.of_goto g gt in
+  let src = Transition.source g tr in
+  let tgt = Transition.target g tr in
+  Printf.sprintf "%s -> %s" (Lr1.to_string g src) (Lr1.to_string g tgt)
+
 module Reductum_trie = struct
   type 'g t = {
     mutable sub : ('g lr1, 'g t) indexmap;
@@ -176,6 +182,39 @@ module Reductum_trie = struct
       register (get_child root (Transition.target g (Transition.of_goto g gt)))
     end grc;
     root
+
+  let output_spaces =
+    let buf = ref "" in
+    fun oc n ->
+      if n > String.length !buf then
+        buf := String.make n ' ';
+      output_substring oc !buf 0 n
+
+  let rec dump_trie g indent node =
+    let immediate =
+      if IndexSet.equal node.immediate (Lr1.all g) then
+        "<any>"
+      else
+        Lr1.set_to_string g node.immediate
+    in
+    let goto =
+      string_of_indexset ~index:(string_of_goto g) node.goto
+    in
+    Printf.fprintf stdout
+      "%a- immediate: %s\n\
+       %a- goto: %s\n"
+      output_spaces indent immediate
+      output_spaces indent goto;
+    IndexMap.iter (fun lr1 node' ->
+        Printf.fprintf stdout "%a-> %s\n" output_spaces indent (Lr1.to_string g lr1);
+        dump_trie g (indent + 2) node'
+      ) node.sub
+
+  let dump_trie g node =
+    Printf.fprintf stdout "root:\n";
+    dump_trie g 2 node;
+    flush stdout
+
 end
 
 module Globbing = struct
@@ -379,6 +418,11 @@ let compile_reduce_expr (type g) (g : g grammar) rg trie re =
     List.iter (follow path node) (K.derive rg (Lr1.all g) k)
   in
   derive [] trie (K.More (re, K.Done));
+  Printf.printf "pattern:\n\
+                 - goto: %s\n\
+                 - immediate: %s\n"
+    (string_of_indexset ~index:(string_of_goto g) !goto)
+    (Lr1.set_to_string g !immediate);
   (!goto, !immediate)
 
 let transl (type g) (g : g grammar) rg indices trie ~capture re =
@@ -416,11 +460,11 @@ let transl (type g) (g : g grammar) rg indices trie ~capture re =
         error re.position "Reductions cannot be nested";
       (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
       let re = transl ~for_reduction:true expr in
-      (*warn re.position
-          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
-          (IndexSet.cardinal immediate);*)
       let pattern, immediate = compile_reduce_expr g rg trie re in
+      warn re.position
+        "Reduce pattern is matching %d cases (and matches immediately for %d states)"
+        (IndexSet.cardinal pattern)
+        (IndexSet.cardinal immediate);
       let capture, capture_end = match capture with
         | None -> IndexSet.empty, IndexSet.empty
         | Some name ->
