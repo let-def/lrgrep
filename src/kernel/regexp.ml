@@ -221,7 +221,7 @@ module K = struct
       | Reducing r1, Reducing r2 ->
         let c = Reductions.compare r1.reduction r2.reduction in
         if c <> 0 then c else
-          let c = Index.compare r1.step r1.step in
+          let c = Index.compare r1.step r2.step in
           if c <> 0 then c else
             compare r1.next r2.next
       | Accept, (More _ | Reducing _ | Done) -> -1
