@@ -337,10 +337,12 @@ module T = struct
   let () = stopwatch 1 "Done with closure of goto epsilon reductions"
 
   let () =
-    Printf.printf "LR(1) reduction closure:\n";
-    Kernel.Redgraph.dump_closure grammar (Lr1.to_string grammar) lr_closure;
-    Printf.printf "Goto reduction closure:\n";
-    Kernel.Redgraph.dump_closure grammar (Kernel.Transl.string_of_goto grammar) gt_closure
+    if false then (
+      Printf.printf "LR(1) reduction closure:\n";
+      Kernel.Redgraph.dump_closure grammar (Lr1.to_string grammar) lr_closure;
+      Printf.printf "Goto reduction closure:\n";
+      Kernel.Redgraph.dump_closure grammar (Kernel.Transl.string_of_goto grammar) gt_closure
+    )
 
   let redgraph =
     Kernel.Redgraph.make grammar
@@ -354,7 +356,9 @@ module T = struct
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
   let trie = Kernel.Transl.Reductum_trie.make grammar lr_closure gt_closure
-  let () = Kernel.Transl.Reductum_trie.dump_trie grammar trie
+  let () =
+    if false then
+      Kernel.Transl.Reductum_trie.dump_trie grammar trie
   let () = stopwatch 1 "Indexed reductions for translation"
 end
 
