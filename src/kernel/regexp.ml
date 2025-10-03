@@ -61,7 +61,7 @@ end
     expressions to a Cmon document. *)
 module Reductions = struct
   type 'g t = {
-    pattern: 'g goto_transition indexset;
+    pattern: ('g, 'g lr1) Redgraph.node indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -234,7 +234,7 @@ module K = struct
   let intersecting s1 s2 =
     not (IndexSet.disjoint s1 s2)
 
-  let derive (type g s) (_g : g grammar) (rg: (g, s) Redgraph.graph) filter k =
+  let derive (type g) (_g : g grammar) (rg: (g, g lr1) Redgraph.graph) filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
         r := (Label.union label' label, next) :: r'
@@ -245,9 +245,7 @@ module K = struct
       (step : _ index :> int) > 0
       &&
       let reachable = rg.steps.:(step).reachable in
-      IndexSet.exists
-        (fun gt -> intersecting reachable rg.targets.:(gt))
-        reduction.pattern
+      intersecting reduction.pattern reachable
     in
     let ks = ref [] in
     let push_reduction_step label reduction next step =
@@ -274,21 +272,32 @@ module K = struct
         process_reduction_step label reduction next step
 
     and process_reduction_step label reduction k step =
-      let {Redgraph. (*goto;*) next; _} = rg.steps.:(step) in
+      let {Redgraph. goto; next; _} = rg.steps.:(step) in
       if false then
         Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
-      (*IndexMap.iter begin fun lr1 node ->
-        (*let ndesc, nstep = rg.nodes.:(node) in*)
+      IndexMap.iter begin fun lr1 nodes ->
         if IndexSet.mem lr1 label.filter then (
-          if false then
-            Printf.printf "node on state %s, next %d\n" (Lr1.to_string g ndesc.lr1) (nstep :> int);
-          let label = {label with filter = IndexSet.singleton ndesc.lr1} in
-          if intersecting ndesc.gotos reduction.pattern then
-            process_k (Label.capture label IndexSet.empty reduction.usage) k;
-          push_reduction_step label reduction k nstep;
+          let label = {label with filter = IndexSet.singleton lr1} in
+          process_reduction_nodes label lr1 reduction k nodes
         )
-        end goto;*)
+      end goto;
       push_reduction_step label reduction k next;
+
+    and process_reduction_nodes label lr1 reduction k nodes =
+      if intersecting nodes reduction.pattern then
+        process_k (Label.capture label IndexSet.empty reduction.usage) k;
+      IndexSet.iter begin fun node ->
+        let _, nstep = rg.nodes.:(node) in
+        let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
+        if intersecting reachable reduction.pattern then
+          begin
+            push_reduction_step label reduction k next;
+            match IndexMap.find_opt lr1 goto with
+            | None -> ()
+            | Some nodes ->
+              process_reduction_nodes label lr1 reduction k nodes
+          end;
+      end nodes
 
     and process_re label self next = function
       | Set (s, var, usage) ->

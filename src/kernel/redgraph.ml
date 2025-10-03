@@ -304,11 +304,11 @@ type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
   initials: ('g lr1, ('g,'s) node index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
-  targets: ('g goto_transition, ('g, 's) node indexset) vector;
+  goto_sources: (('g, 's) node, 'g lr1 indexset) vector;
 }
 
 let small_steps (type g)
-    (g : g grammar)
+    (_g : g grammar)
     (gr_nodes : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector)
     (gr_initials : (g lr1, (g, g lr1) node index) vector)
   : (g, g lr1) graph
@@ -364,12 +364,13 @@ let small_steps (type g)
   let steps = Dyn.contents index Steps.n in
   stopwatch 2 "closed the small-step successors (%d elements)"
     (Vector.length_as_int steps);
-  let targets = Vector.make (Transition.goto g) IndexSet.empty in
-  (*Vector.rev_iteri begin fun n (def, _) ->
-    IndexSet.iter (fun gt -> targets.@(gt) <- IndexSet.add n)
-      def.gotos
-    end nodes;*)
-  {nodes; initials = gr_initials; steps; targets}
+  let goto_sources = Vector.make (Vector.length nodes) IndexSet.empty in
+  Vector.rev_iteri begin fun _ step_desc ->
+    IndexMap.iter begin fun src nodes ->
+      IndexSet.iter (fun node -> goto_sources.@(node) <- IndexSet.add src) nodes
+    end step_desc.goto
+  end steps;
+  {nodes; initials = gr_initials; steps; goto_sources}
 
 let make g rc =
   let nodes, initials = prepare g rc in

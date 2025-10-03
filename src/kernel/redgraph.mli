@@ -37,7 +37,7 @@ type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
   initials: ('g lr1, ('g,'s) node index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
-  targets: ('g goto_transition, ('g, 's) node indexset) vector;
+  goto_sources: (('g, 's) node, 'g lr1 indexset) vector;
 }
 
 

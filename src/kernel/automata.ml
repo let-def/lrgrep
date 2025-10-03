@@ -113,9 +113,9 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  let make (type g s) (g : g grammar) rg branch =
+  let make (type g) (g : g grammar) rg branch =
     let module KMap = Map.Make(struct
-        type t = (g, s) Regexp.K.t
+        type t = (g, g lr1) Regexp.K.t
         let compare = Regexp.K.compare
       end)
     in

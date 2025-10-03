@@ -27,8 +27,8 @@ type ('g, 'r) branches = {
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 
-let import_rule (type g s) (g : g grammar)
-    (rg : (g, s) Redgraph.graph)
+let import_rule (type g) (g : g grammar)
+    (rg : (g, g lr1) Redgraph.graph)
     (indices : g Transl.Indices.t)
     (trie : g Transl.Reductum_trie.t)
     (rule : Syntax.rule) : g _rule

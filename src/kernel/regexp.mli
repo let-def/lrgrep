@@ -53,7 +53,7 @@ end
     expressions to a Cmon document. *)
 module Reductions : sig
   type 'g t = {
-    pattern: 'g goto_transition indexset;
+    pattern: ('g, 'g lr1) Redgraph.node indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -133,5 +133,5 @@ module K : sig
 
   val cmon : ?lr1:('g lr1 index -> Cmon.t) -> ('g, 's) t -> Cmon.t
 
-  val derive : 'g grammar -> ('g, 's) Redgraph.graph -> 'g lr1 indexset -> ('g, 's) t -> ('g Label.t * ('g, 's) t) list
+  val derive : 'g grammar -> ('g, 'g lr1) Redgraph.graph -> 'g lr1 indexset -> ('g, 'g lr1) t -> ('g Label.t * ('g, 'g lr1) t) list
 end
