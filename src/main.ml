@@ -350,18 +350,12 @@ module T = struct
       Kernel.Redgraph.dump_closure grammar (Kernel.Transl.string_of_goto grammar) gt_closure
     )
 
-  let redgraph =
-    Kernel.Redgraph.make grammar
-      (Vector.length lrc.lr1_of)
-      (Vector.get lrc.lr1_of)
-      (Vector.get (iterate_vector lrc.all_predecessors))
-      lr_closure
-      gt_closure
+  let redgraph = Kernel.Redgraph.make grammar lr_closure
 
   let () =
     if false then
       let oc = open_out_bin "redgraph.dot" in
-      Kernel.Redgraph.dump_dot oc grammar gt_closure redgraph;
+      (*Kernel.Redgraph.dump_dot oc grammar gt_closure redgraph;*)
       close_out oc
 
   let () = stopwatch 1 "Done with viable2 reductions"
@@ -402,7 +396,7 @@ let do_compile spec (cp : Code_printer.t option) =
   Kernel.Codegen.output_header grammar spec cp;
   List.iter begin fun (rule : Kernel.Syntax.rule) ->
     let unknown = ref [] in
-    let initial_states =
+    (*let initial_states =
       List.filter_map (fun (sym, pos) ->
           let result = Hashtbl.find_opt (Lr1.entrypoint_table grammar) sym in
           if Option.is_none result then
@@ -410,7 +404,7 @@ let do_compile spec (cp : Code_printer.t option) =
           result
         ) rule.startsymbols
       |> IndexSet.of_list
-    in
+      in*)
     begin match List.rev !unknown with
       | [] -> ()
       | (_, pos) :: _ as unknowns ->
@@ -424,15 +418,16 @@ let do_compile spec (cp : Code_printer.t option) =
            %s\n"
           names candidates
     end;
-    let subset = lrc_from_entrypoints initial_states in
+    (*let subset = lrc_from_entrypoints initial_states in*)
     let stacks = {
       Kernel.Automata.
       tops =
         if fst rule.error
-        then subset.wait
-        else subset.reachable;
-      prev = Vector.get subset.predecessors;
-      label = Vector.get T.lrc.lr1_of;
+        then Lr1.wait grammar (*subset.wait*)
+        else Lr1.all grammar (*subset.reachable*);
+      prev = (fun lr1 -> (Lazy.force (Lr1.predecessors grammar lr1).lnext).lvalue);
+      (*Vector.get subset.predecessors;*)
+      label = Fun.id (*Vector.get T.lrc.lr1_of;*)
     } in
     let Kernel.Spec.Rule (clauses, branches) =
       Kernel.Spec.import_rule grammar T.redgraph T.indices T.trie rule

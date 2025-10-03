@@ -234,7 +234,7 @@ module K = struct
   let intersecting s1 s2 =
     not (IndexSet.disjoint s1 s2)
 
-  let derive (type g s) (g : g grammar) (rg: (g, s) Redgraph.graph) filter k =
+  let derive (type g s) (_g : g grammar) (rg: (g, s) Redgraph.graph) filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
         r := (Label.union label' label, next) :: r'
@@ -274,12 +274,12 @@ module K = struct
         process_reduction_step label reduction next step
 
     and process_reduction_step label reduction k step =
-      let {Redgraph. goto; next; _} = rg.steps.:(step) in
+      let {Redgraph. (*goto;*) next; _} = rg.steps.:(step) in
       if false then
         Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
-      IndexSet.iter begin fun node ->
-        let ndesc, nstep = rg.nodes.:(node) in
-        if IndexSet.mem ndesc.lr1 label.filter then (
+      (*IndexMap.iter begin fun lr1 node ->
+        (*let ndesc, nstep = rg.nodes.:(node) in*)
+        if IndexSet.mem lr1 label.filter then (
           if false then
             Printf.printf "node on state %s, next %d\n" (Lr1.to_string g ndesc.lr1) (nstep :> int);
           let label = {label with filter = IndexSet.singleton ndesc.lr1} in
@@ -287,7 +287,7 @@ module K = struct
             process_k (Label.capture label IndexSet.empty reduction.usage) k;
           push_reduction_step label reduction k nstep;
         )
-      end goto;
+        end goto;*)
       push_reduction_step label reduction k next;
 
     and process_re label self next = function
@@ -326,9 +326,8 @@ module K = struct
         in
         IndexSet.iter begin fun lr1 ->
           let label = {label with filter = IndexSet.singleton lr1} in
-          IndexSet.iter
-            (push_reduction_step label reduction next)
-            rg.initials.:(lr1)
+          push_reduction_step label reduction next
+            (snd rg.nodes.:(rg.initials.:(lr1)))
         end label.filter
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in

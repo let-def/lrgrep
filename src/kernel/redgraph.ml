@@ -1,4 +1,4 @@
-(* MIT License
+(* MIT License:
 
    Copyright (c) 2025 Frédéric Bour
 
@@ -237,81 +237,58 @@ type ('g, 's) step = ('g * 's) Step.t
 
 type 'g node_desc = {
   lr1: 'g lr1 index;
-  gotos: 'g goto_transition indexset;
   lookaheads: 'g terminal indexset;
 }
 
-let prepare (type g stack) (g : g grammar)
-    (stacks: stack cardinal)
-    (lr1_of: stack index -> g lr1 index)
-    (predecessors: stack index -> stack indexset lazy_stream)
-     rc grc
-  : ((g, stack) node, g node_desc * (g, stack) node indexset list) vector *
-    (stack, (g, stack) node indexset list) vector
+let prepare (type g) (g : g grammar) rc
+  : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector *
+    (g lr1, (g, g lr1) node index) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
-  let table = Vector.make stacks IndexSet.Map.empty in
-  let get_memoize lrc nts la ~f =
-    let map0 = table.:(lrc) in
-    let map1 = Option.value (IndexSet.Map.find_opt nts map0) ~default:IndexSet.Map.empty in
-    match IndexSet.Map.find_opt la map1 with
+  let table = Vector.make (Lr1.cardinal g) IndexSet.Map.empty in
+  let get_memoize lr1 la ~f =
+    let map0 = table.:(lr1) in
+    match IndexSet.Map.find_opt la map0 with
     | Some index -> index
     | None ->
       let r = IndexBuffer.Gen.reserve nodes in
       let i = IndexBuffer.Gen.index r in
-      table.:(lrc) <- IndexSet.Map.add nts (IndexSet.Map.add la i map1) map0;
+      table.:(lr1) <- IndexSet.Map.add la i map0;
       IndexBuffer.Gen.commit nodes r (f ());
       i
   in
-  let rec visit_reductions la lrcs = function
+  let rec visit_reductions la lr1s = function
     | [] -> []
     | nts :: next ->
-      let lazy lrcs = lrcs.lnext in
-      let by_la =
-        IndexMap.fold begin fun nt la' acc ->
-          let la' = IndexSet.inter la la' in
-          cons_if
-            (not (IndexSet.is_empty la'))
-            (la', nt) acc
-        end nts []
-        |> IndexRefine.annotated_partition
-      in
+      let lazy lr1s = lr1s.lnext in
       let curr =
-        List.fold_left begin fun acc (la, nts) ->
-          let nts = IndexSet.of_list nts in
-          IndexSet.fold (fun lrc acc -> visit_gotos lrc nts la :: acc) lrcs.lvalue acc
-        end [] by_la
+        IndexMap.inflate begin fun lr1 ->
+          IndexMap.fold begin fun nt la acc ->
+            visit_state la (Transition.find_goto_target g lr1 nt) :: acc
+          end nts [] 
+          |> List.rev
+          |> IndexSet.of_list
+        end lr1s.lvalue
       in
-      let next = visit_reductions la lrcs next in
-      match curr, next with
-      | [], [] -> []
-      | _ -> IndexSet.of_list curr :: next
-  and visit_gotos lrc nts la : Nodes.n index =
-    get_memoize lrc nts la ~f:begin fun () ->
-      let lr1 = lr1_of lrc in
-      let gotos = IndexSet.map (Transition.find_goto g lr1) nts in
-      let reductions =
-        IndexSet.fold begin fun gt acc ->
-          match grc.:(gt).reductions with
-          | [] -> acc
-          | x -> x :: acc
-        end gotos []
-      in
+      let next = visit_reductions la lr1s next in
+      match next with
+      | [] when IndexMap.is_empty curr -> []
+      | _ -> curr :: next
+  and visit_state la lr1 : Nodes.n index =
+    get_memoize lr1 la ~f:begin fun () ->
+      let reductions = rc.:(lr1).reductions in
       let transitions =
-        visit_reductions la (predecessors lrc) (merge_reductions reductions)
+        visit_reductions la (Lr1.predecessors g lr1) reductions
       in
-      ({lr1; gotos; lookaheads = la}, transitions)
+      ({lr1; lookaheads = la}, transitions)
     end
   in
-  let initials = Vector.init stacks @@ fun lrc ->
-    let lr1 = lr1_of lrc in
-    visit_reductions (Terminal.all g) (predecessors lrc) rc.:(lr1).reductions
-  in
+  let initials = Vector.init (Lr1.cardinal g) (visit_state (Terminal.all g)) in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
   let open Node.Eq(struct
-      type t = g * stack
+      type t = g * g lr1
       include Nodes
     end ) in
   let Refl = eq in
@@ -320,27 +297,27 @@ let prepare (type g stack) (g : g grammar)
 type ('g, 's) step_desc = {
   next: ('g, 's) step index;
   reachable: ('g, 's) node indexset;
-  goto: ('g, 's) node indexset;
+  goto: ('g lr1, ('g, 's) node indexset) indexmap;
 }
 
 type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
-  initials: ('g lr1, ('g,'s) step indexset) vector;
+  initials: ('g lr1, ('g,'s) node index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
   targets: ('g goto_transition, ('g, 's) node indexset) vector;
 }
 
-let small_steps (type g s)
+let small_steps (type g)
     (g : g grammar)
-    (lr1_of: s index -> g lr1 index)
-    (gr_nodes : ((g, s) node, g node_desc * (g, s) node indexset list) vector)
-    (gr_initials : (s, (g, s) node indexset list) vector)
-  : (g, s) graph
+    (gr_nodes : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector)
+    (gr_initials : (g lr1, (g, g lr1) node index) vector)
+  : (g, g lr1) graph
   =
+  let flatten_map map acc =IndexMap.fold (fun _ -> IndexSet.union) map acc in
   (* Compute the set reachable states (closure of successors). *)
   let successors =
     Vector.map
-      (fun (_, transitions) -> List.fold_right IndexSet.union transitions IndexSet.empty)
+      (fun (_, transitions) -> List.fold_right flatten_map transitions IndexSet.empty)
       gr_nodes
   in
   let reachable_from = Vector.copy successors in
@@ -348,30 +325,35 @@ let small_steps (type g s)
   Tarjan.close_relation (Vector.get successors) reachable_from;
   stopwatch 2 "closed the big-step successors";
   (* Implement small steps with sharing *)
+  let module NMap = Map.Make(struct
+      type t = (g lr1, (g, g lr1) node indexset) indexmap
+      let compare a b = IndexMap.compare IndexSet.compare a b
+    end) in
   let open IndexBuffer in
   let module Steps = Gen.Make() in
   let open Step.Eq(struct
-      type t = g * s
+      type t = g * g lr1 
       include Steps
     end) in
   let Refl = eq in
   let steps = Steps.get_generator () in
-  let zero = Gen.add steps IndexSet.Map.empty in
+  let zero = Gen.add steps NMap.empty in
   let index = Dyn.make {
       next = zero;
-      goto = IndexSet.empty;
+      goto = IndexMap.empty;
       reachable = IndexSet.empty;
     }
   in
   let get goto next =
     let map = Gen.get steps next in
-    match IndexSet.Map.find_opt goto map with
+    match NMap.find_opt goto map with
     | Some step -> step
     | None ->
-      let step = Gen.add steps IndexSet.Map.empty in
-      Gen.set steps next (IndexSet.Map.add goto step map);
+      let step = Gen.add steps NMap.empty in
+      Gen.set steps next (NMap.add goto step map);
       (* Compute reachability for all steps of a reduction *)
-      let reachable = IndexSet.union goto (IndexSet.bind goto (Vector.get reachable_from)) in
+      let reachable = flatten_map goto IndexSet.empty in
+      let reachable = IndexSet.union reachable (IndexSet.bind reachable (Vector.get reachable_from)) in
       let reachable = IndexSet.union reachable (Dyn.get index next).reachable in
       Dyn.set index step {next; goto; reachable};
       step
@@ -379,25 +361,21 @@ let small_steps (type g s)
   let pack_transitions trs = List.fold_right get trs zero in
   let add_reachables (node, transitions) = (node, pack_transitions transitions) in
   let nodes = Vector.map add_reachables gr_nodes in
-  let initials = Vector.make (Lr1.cardinal g) IndexSet.empty in
-  Vector.iteri (fun stack trs ->
-      initials.@(lr1_of stack) <- IndexSet.add (pack_transitions trs)
-    ) gr_initials;
   let steps = Dyn.contents index Steps.n in
   stopwatch 2 "closed the small-step successors (%d elements)"
     (Vector.length_as_int steps);
   let targets = Vector.make (Transition.goto g) IndexSet.empty in
-  Vector.rev_iteri begin fun n (def, _) ->
+  (*Vector.rev_iteri begin fun n (def, _) ->
     IndexSet.iter (fun gt -> targets.@(gt) <- IndexSet.add n)
       def.gotos
-  end nodes;
-  {nodes; initials; steps; targets}
+    end nodes;*)
+  {nodes; initials = gr_initials; steps; targets}
 
-let make g stacks lr1_of predecessors rc grc =
-  let nodes, initials = prepare g stacks lr1_of predecessors rc grc in
-  small_steps g lr1_of nodes initials
+let make g rc =
+  let nodes, initials = prepare g rc in
+  small_steps g nodes initials
 
-let dump_dot oc g grc graph =
+let dump_dot oc g (*grc*) graph =
   let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
   p "digraph {";
   p "  rankdir=LR;";
@@ -405,11 +383,14 @@ let dump_dot oc g grc graph =
   let pnode i = Printf.sprintf "node%d" (i : _ index :> int) in
   let rec follow_step from step =
     if Index.to_int step > 0 then (
-      IndexSet.iter (fun node ->
-          p "  %s -> %s [label=%S];"
-            from
-            (pnode node)
-            (Lr1.to_string g (fst graph.nodes.:(node)).lr1)
+      IndexMap.iter (fun label nodes ->
+          let lr1 = Lr1.to_string g label in
+          IndexSet.iter (fun node ->
+              p "  %s -> %s [label=%S];"
+                from
+                (pnode node)
+                lr1)
+            nodes
         ) graph.steps.:(step).goto;
       let next = graph.steps.:(step).next in
       if Index.to_int next > 0 then (
@@ -420,22 +401,22 @@ let dump_dot oc g grc graph =
       );
     )
   in
-  Vector.iteri (fun lr1 steps ->
-      if not (IndexSet.is_empty steps) then (
-        let node = Printf.sprintf "start%d" (lr1 : _ index :> int) in
-        p "  %s[label = %S];" node (Lr1.to_string g lr1);
-        IndexSet.iter (follow_step node) steps
-      )
-    ) graph.initials;
-  Vector.iteri (fun i (node, step) ->
-      let gotos = string_of_indexset ~index:(fun gt ->
+  (* Vector.iteri (fun lr1 steps ->
+       if not (IndexSet.is_empty steps) then (
+         let node = Printf.sprintf "start%d" (lr1 : _ index :> int) in
+         p "  %s[label = %S];" node (Lr1.to_string g lr1);
+         IndexSet.iter (follow_step node) steps
+       )
+     ) graph.initials; *)
+  Vector.iteri (fun i (_node, step) ->
+      (*let gotos = string_of_indexset ~index:(fun gt ->
           Printf.sprintf "(%s) = [%s]"
             (Transition.to_string g (Transition.of_goto g gt))
             (string_concat_map "; "
                (fun (lr1s, _) -> Lr1.list_to_string g lr1s)
                grc.:(gt).stacks)
-        ) node.gotos in
-      p "  %s[label=%S];" (pnode i) gotos;
+        ) node.gotos in*)
+      p "  %s[label=%S];" (pnode i) "TODO"(*gotos*);
       follow_step (pnode i) step
     ) graph.nodes;
   p "}"
