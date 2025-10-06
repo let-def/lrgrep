@@ -334,7 +334,7 @@ module T = struct
       let d = Domain.spawn compute_reachability in
       lazy (Domain.join d)
 
-  let reachability, lrc = Lazy.force d
+  (*let reachability, lrc = Lazy.force d*)
   let () = stopwatch 1 "Reachability information available"
 
   let lr_closure = Kernel.Redgraph.close_lr1_reductions grammar
@@ -351,14 +351,16 @@ module T = struct
     )
 
   let redgraph = Kernel.Redgraph.make grammar lr_closure
+  let () = stopwatch 1 "Done with viable2 reductions"
 
   let () =
-    if false then
+    if true then (
       let oc = open_out_bin "redgraph.dot" in
-      (*Kernel.Redgraph.dump_dot oc grammar gt_closure redgraph;*)
-      close_out oc
+      Kernel.Redgraph.dump_dot oc grammar redgraph;
+      close_out oc;
+      stopwatch 1 "(dumped to redgraph.dot)"
+    )
 
-  let () = stopwatch 1 "Done with viable2 reductions"
   let indices = Kernel.Transl.Indices.make grammar
   let () = stopwatch 1 "Indexed items and symbols for translation"
   let trie = Kernel.Transl.Reductum_trie.make grammar lr_closure redgraph
@@ -368,7 +370,7 @@ module T = struct
   let () = stopwatch 1 "Indexed reductions for translation"
 end
 
-let lrc_from_entrypoints =
+(*let lrc_from_entrypoints =
   let cache = Hashtbl.create 7 in
   fun from_entrypoints ->
     match Hashtbl.find_opt cache from_entrypoints with
@@ -383,7 +385,7 @@ let lrc_from_entrypoints =
       let ep = Kernel.Lrc.from_entrypoints grammar T.lrc lrcs in
       Hashtbl.add cache from_entrypoints ep;
       stopwatch 1 "Computed LRC subset reachable from entrypoints";
-      ep
+      ep*)
 
 let with_output_file fmt =
   Printf.ksprintf (fun str k ->
@@ -432,7 +434,7 @@ let do_compile spec (cp : Code_printer.t option) =
     let Kernel.Spec.Rule (clauses, branches) =
       Kernel.Spec.import_rule grammar T.redgraph T.indices T.trie rule
     in
-    stopwatch 1 "constructing NFA\n";
+    stopwatch 1 "constructing NFA";
     let nfa = Kernel.Automata.NFA.from_branches grammar T.redgraph branches in
     Vector.iteri (fun br nfa ->
         if !dump_dot then
@@ -440,7 +442,7 @@ let do_compile spec (cp : Code_printer.t option) =
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
             (Kernel.Automata.NFA.dump grammar nfa);
       ) nfa;
-    stopwatch 1 "constructed NFA\n";
+    stopwatch 1 "constructed NFA";
     if !test_input <> [] then (
       print_endline "Testing input vector";
       let find_symbol =
@@ -567,22 +569,22 @@ let do_compile spec (cp : Code_printer.t option) =
       Vector.iter (fun (Kernel.Automata.DFA.Packed st) ->
           branches := !branches + Vector.length_as_int st.branches
         ) dfa.states;
-      stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)\n"
+      stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)"
         states !branches (float !branches /. float states);
     end;
     let dataflow = Kernel.Automata.Dataflow.make branches dfa in
-    stopwatch 1 "dataflow analysis\n";
+    stopwatch 1 "dataflow analysis";
     if !dump_dot then
       with_output_file "%s_%s_dataflow.dot" parser_name rule.name
         (Kernel.Automata.Dataflow.dump grammar dfa dataflow);
     let Kernel.Automata.Machine.T machine =
       Kernel.Automata.Machine.minimize branches dfa dataflow in
-    stopwatch 1 "machine minimization\n";
+    stopwatch 1 "machine minimization";
     if !dump_dot then
       with_output_file "%s_%s_machine.dot" parser_name rule.name
         (Kernel.Automata.Machine.dump grammar machine);
     Kernel.Codegen.output_rule grammar spec rule clauses branches machine cp;
-    stopwatch 1 "table & code generation\n"
+    stopwatch 1 "table & code generation"
   end spec.lexer_definition.rules;
   Kernel.Codegen.output_trailer grammar spec cp
 

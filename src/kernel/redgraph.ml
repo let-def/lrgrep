@@ -370,6 +370,7 @@ let small_steps (type g)
       IndexSet.iter (fun node -> goto_sources.@(node) <- IndexSet.add src) nodes
     end step_desc.goto
   end steps;
+  stopwatch 2 "indexed reduction patterns";
   {nodes; initials = gr_initials; steps; goto_sources}
 
 let make g rc =
@@ -409,15 +410,17 @@ let dump_dot oc g (*grc*) graph =
          IndexSet.iter (follow_step node) steps
        )
      ) graph.initials; *)
-  Vector.iteri (fun i (_node, step) ->
-      (*let gotos = string_of_indexset ~index:(fun gt ->
-          Printf.sprintf "(%s) = [%s]"
-            (Transition.to_string g (Transition.of_goto g gt))
-            (string_concat_map "; "
-               (fun (lr1s, _) -> Lr1.list_to_string g lr1s)
-               grc.:(gt).stacks)
-        ) node.gotos in*)
-      p "  %s[label=%S];" (pnode i) "TODO"(*gotos*);
-      follow_step (pnode i) step
-    ) graph.nodes;
+  Vector.iteri begin fun i (desc, step) ->
+    (*let gotos = string_of_indexset ~index:(fun gt ->
+        Printf.sprintf "(%s) = [%s]"
+          (Transition.to_string g (Transition.of_goto g gt))
+          (string_concat_map "; "
+             (fun (lr1s, _) -> Lr1.list_to_string g lr1s)
+             grc.:(gt).stacks)
+      ) node.gotos in*)
+    p "  %s[label=\"%s @ <%d lookaheads>\"];" (pnode i)
+      (Lr1.to_string g desc.lr1)
+      (IndexSet.cardinal desc.lookaheads);
+    follow_step (pnode i) step
+  end graph.nodes;
   p "}"
