@@ -176,16 +176,19 @@ module Reductum_trie = struct
       List.iter (fun (stack, _) -> mark_immediate root stack) cl.stacks;
     end rc;
     Vector.rev_iteri begin fun rnode sources ->
-      let {Redgraph. lr1; lookaheads}, _ = rg.nodes.:(rnode) in
-      let register_one trie = trie.goto <- IndexSet.add rnode trie.goto in
-      let register_all trie =
-        IndexSet.iter (fun lr1 -> register_one (get_child trie lr1)) sources
-      in
-      List.iter
-        (fun (stack, lookaheads') ->
-           if not (IndexSet.disjoint lookaheads lookaheads') then
-             register_all (List.fold_left get_child root stack))
-        rc.:(lr1).stacks
+      if not (IndexSet.is_empty sources) then (
+        let {Redgraph. lr1; lookaheads}, _ = rg.nodes.:(rnode) in
+        let register_one trie = trie.goto <- IndexSet.add rnode trie.goto in
+        let register_all trie =
+          IndexSet.iter (fun lr1 -> register_one (get_child trie lr1)) sources
+        in
+        List.iter
+          (fun (stack, lookaheads') ->
+             if not (IndexSet.disjoint lookaheads lookaheads') then
+               register_all (List.fold_left get_child root stack))
+          rc.:(lr1).stacks;
+        register_all (get_child root lr1)
+      )
     end rg.goto_sources;
     root
 
