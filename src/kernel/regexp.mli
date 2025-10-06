@@ -125,7 +125,7 @@ module K : sig
     | More of 'g Expr.t * ('g, 's) t
     | Reducing of {
         reduction: 'g Reductions.t;
-        step: ('g, 's) Redgraph.step index;
+        steps: ('g, 's) Redgraph.step indexset;
         next: ('g, 's) t;
       }
 
