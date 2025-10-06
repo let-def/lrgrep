@@ -254,27 +254,30 @@ module K = struct
       IndexSet.iter begin fun node ->
         let _, nstep = rg.nodes.:(node) in
         let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
-        if intersecting reachable reduction.pattern then begin
-          next_steps := IndexMap.update next (function
-              | None -> Some (IndexSet.singleton lr1)
-              | Some lr1s -> Some (IndexSet.add lr1 lr1s)
-            ) !next_steps;
-          match IndexMap.find_opt lr1 goto with
-          | None -> ()
-          | Some nodes ->
-            process_reduction_nodes matching next_steps lr1 reduction nodes
-        end
+        if intersecting reachable reduction.pattern then
+          begin
+            next_steps := IndexMap.update next (function
+                | None -> Some (IndexSet.singleton lr1)
+                | Some lr1s -> Some (IndexSet.add lr1 lr1s)
+              ) !next_steps;
+            match IndexMap.find_opt lr1 goto with
+            | None -> ()
+            | Some nodes ->
+              process_reduction_nodes matching next_steps lr1 reduction nodes
+          end
       end nodes
     in
     let process_reduction_step matching next_steps filter reduction step =
       let {Redgraph. goto; next; _} = rg.steps.:(step) in
       if false then
         Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
-      if IndexSet.is_singleton filter then
+      if IndexSet.is_empty filter then
+        ()
+      else if IndexSet.is_singleton filter then
         let lr1 = IndexSet.choose filter in
         match IndexMap.find_opt lr1 goto with
         | Some nodes ->
-          process_reduction_nodes matching next_steps lr1 reduction nodes;
+          process_reduction_nodes matching next_steps lr1 reduction nodes
         | None -> ()
       else
         IndexMap.rev_iter begin fun (lr1, nodes) ->
@@ -296,8 +299,8 @@ module K = struct
       | Reducing {reduction; steps; next} ->
         let matching = ref IndexSet.empty in
         let next_steps = ref IndexMap.empty in
-        let steps' = IndexSet.map (process_reduction_step matching next_steps label.filter reduction) steps in
-        let shortest = reduction.policy = Shortest in
+        let f = process_reduction_step matching next_steps label.filter reduction in
+        let steps' = IndexSet.map f steps in
         let push_matching () =
           if not (IndexSet.is_empty !matching) then (
             let label = {label with filter = !matching} in
@@ -305,19 +308,25 @@ module K = struct
             process_k label next
           )
         in
-        if shortest then
-          push_matching ();
-        let label = Label.capture label reduction.capture Usage.empty in
-        begin match IndexSet.filter (is_live reduction) steps' with
-          | steps when IndexSet.is_empty steps -> ()
-          | steps -> continue ks label (Reducing {reduction; steps; next})
-        end;
-        IndexMap.rev_iter
-          (fun (step, filter) ->
-             continue ks {label with filter} (Reducing {reduction; steps = IndexSet.singleton step; next}))
-          !next_steps;
-        if not shortest then
-          push_matching ()
+        let push_steps () =
+          let label = Label.capture label reduction.capture Usage.empty in
+          begin match IndexSet.filter (is_live reduction) steps' with
+            | steps when IndexSet.is_empty steps -> ()
+            | steps -> continue ks label (Reducing {reduction; steps; next})
+          end;
+          IndexMap.rev_iter
+            (fun (step, filter) ->
+               continue ks {label with filter} (Reducing {reduction; steps = IndexSet.singleton step; next}))
+            !next_steps
+        in
+        begin match reduction.policy with
+          | Shortest ->
+            push_matching ();
+            push_steps ()
+          | Longest ->
+            push_steps ();
+            push_matching ()
+        end
 
     and process_re label self next = function
       | Set (s, var, usage) ->
