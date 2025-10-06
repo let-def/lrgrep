@@ -248,15 +248,37 @@ module K = struct
       intersecting reduction.pattern reachable
     in
     let ks = ref [] in
-    let push_reduction_step label reduction next step =
-      if is_live reduction step then
-        let label = Label.capture label reduction.capture Usage.empty in
-        match !ks with
-        | (label', (Reducing r as k)) :: ks'
-          when reduction == r.reduction &&
-               next == r.next && step = r.step ->
-          ks := (Label.union label' label, k) :: ks'
-        | ks' -> ks := (label, Reducing {reduction; step; next}) :: ks'
+    let rec process_reduction_nodes matching next_steps lr1 (reduction : _ Reductions.t) nodes =
+      if intersecting nodes reduction.pattern then
+        matching := IndexSet.add lr1 !matching;
+      IndexSet.iter begin fun node ->
+        let _, nstep = rg.nodes.:(node) in
+        let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
+        if intersecting reachable reduction.pattern then begin
+          next_steps := (lr1, next) :: !next_steps;
+          match IndexMap.find_opt lr1 goto with
+          | None -> ()
+          | Some nodes ->
+            process_reduction_nodes matching next_steps lr1 reduction nodes
+        end
+      end nodes
+    in
+    let process_reduction_step matching next_steps filter reduction step =
+      let {Redgraph. goto; next; _} = rg.steps.:(step) in
+      if false then
+        Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
+      if IndexSet.is_singleton filter then
+        let lr1 = IndexSet.choose filter in
+        match IndexMap.find_opt lr1 goto with
+        | Some nodes ->
+          process_reduction_nodes matching next_steps lr1 reduction nodes;
+        | None -> ()
+      else
+        IndexMap.iter begin fun lr1 nodes ->
+          if IndexSet.mem lr1 filter then
+            process_reduction_nodes matching next_steps lr1 reduction nodes
+        end goto;
+      next
     in
     let rec process_k label = function
       | Accept ->
@@ -269,35 +291,29 @@ module K = struct
         process_re label self next re.desc
 
       | Reducing {reduction; step; next} ->
-        process_reduction_step label reduction next step
-
-    and process_reduction_step label reduction k step =
-      let {Redgraph. goto; next; _} = rg.steps.:(step) in
-      if false then
-        Printf.printf "reduction step %d, next %d\n" (step :> int) (next :> int);
-      IndexMap.iter begin fun lr1 nodes ->
-        if IndexSet.mem lr1 label.filter then (
-          let label = {label with filter = IndexSet.singleton lr1} in
-          process_reduction_nodes label lr1 reduction k nodes
-        )
-      end goto;
-      push_reduction_step label reduction k next;
-
-    and process_reduction_nodes label lr1 reduction k nodes =
-      if intersecting nodes reduction.pattern then
-        process_k (Label.capture label IndexSet.empty reduction.usage) k;
-      IndexSet.iter begin fun node ->
-        let _, nstep = rg.nodes.:(node) in
-        let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
-        if intersecting reachable reduction.pattern then
-          begin
-            push_reduction_step label reduction k next;
-            match IndexMap.find_opt lr1 goto with
-            | None -> ()
-            | Some nodes ->
-              process_reduction_nodes label lr1 reduction k nodes
-          end;
-      end nodes
+        let matching = ref IndexSet.empty in
+        let next_steps = ref [] in
+        let step' = process_reduction_step matching next_steps label.filter reduction step in
+        let shortest = reduction.policy = Shortest in
+        let push_matching () =
+          if not (IndexSet.is_empty !matching) then (
+            let label = {label with filter = !matching} in
+            let label = Label.capture label IndexSet.empty reduction.usage in
+            process_k label next
+          )
+        in
+        if shortest then
+          push_matching ();
+        let label = Label.capture label reduction.capture Usage.empty in
+        if is_live reduction step' then
+          continue ks label (Reducing {reduction; step=step'; next});
+        List.iter (fun (lr1, step') ->
+          continue ks
+            {label with filter = IndexSet.singleton lr1}
+            (Reducing {reduction; step=step'; next})
+          ) !next_steps;
+        if not shortest then
+          push_matching ()
 
     and process_re label self next = function
       | Set (s, var, usage) ->
@@ -335,8 +351,9 @@ module K = struct
         in
         IndexSet.iter begin fun lr1 ->
           let label = {label with filter = IndexSet.singleton lr1} in
-          push_reduction_step label reduction next
-            (snd rg.nodes.:(rg.initials.:(lr1)))
+          let _, step = rg.nodes.:(rg.initials.:(lr1)) in
+          if is_live reduction step then
+            continue ks label (Reducing {reduction; step; next})
         end label.filter
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
