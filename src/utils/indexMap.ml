@@ -71,3 +71,6 @@ let filter_inflate (f : 'n index -> 'a option) (set : 'n IndexSet.t) : ('n, 'a) 
        | None -> map
        | Some x -> add i x map
     ) set empty
+
+let rev_iter f t =
+  Seq.iter f (to_rev_seq t)

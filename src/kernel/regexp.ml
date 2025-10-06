@@ -255,7 +255,10 @@ module K = struct
         let _, nstep = rg.nodes.:(node) in
         let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
         if intersecting reachable reduction.pattern then begin
-          next_steps := (lr1, next) :: !next_steps;
+          next_steps := IndexMap.update next (function
+              | None -> Some (IndexSet.singleton lr1)
+              | Some lr1s -> Some (IndexSet.add lr1 lr1s)
+            ) !next_steps;
           match IndexMap.find_opt lr1 goto with
           | None -> ()
           | Some nodes ->
@@ -274,7 +277,7 @@ module K = struct
           process_reduction_nodes matching next_steps lr1 reduction nodes;
         | None -> ()
       else
-        IndexMap.iter begin fun lr1 nodes ->
+        IndexMap.rev_iter begin fun (lr1, nodes) ->
           if IndexSet.mem lr1 filter then
             process_reduction_nodes matching next_steps lr1 reduction nodes
         end goto;
@@ -292,7 +295,7 @@ module K = struct
 
       | Reducing {reduction; step; next} ->
         let matching = ref IndexSet.empty in
-        let next_steps = ref [] in
+        let next_steps = ref IndexMap.empty in
         let step' = process_reduction_step matching next_steps label.filter reduction step in
         let shortest = reduction.policy = Shortest in
         let push_matching () =
@@ -307,11 +310,9 @@ module K = struct
         let label = Label.capture label reduction.capture Usage.empty in
         if is_live reduction step' then
           continue ks label (Reducing {reduction; step=step'; next});
-        List.iter (fun (lr1, step') ->
-          continue ks
-            {label with filter = IndexSet.singleton lr1}
-            (Reducing {reduction; step=step'; next})
-          ) !next_steps;
+        IndexMap.iter
+          (fun step filter -> continue ks {label with filter} (Reducing {reduction; step; next}))
+          !next_steps;
         if not shortest then
           push_matching ()
 
