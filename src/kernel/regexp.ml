@@ -366,7 +366,7 @@ module K = struct
         in
         IndexSet.iter begin fun lr1 ->
           let label = {label with filter = IndexSet.singleton lr1} in
-          let _, step = rg.nodes.:(rg.initials.:(lr1)) in
+          let step = rg.initials.:(lr1) in
           if is_live reduction step then
             continue ks label (Reducing {reduction; steps = IndexSet.singleton step; next})
         end label.filter

@@ -329,12 +329,12 @@ type 'g node_desc = {
 
 let prepare (type g) (g : g grammar) rc
   : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector *
-    (g lr1, (g, g lr1) node index) vector
+    (g lr1, (g lr1, (g, g lr1) node indexset) indexmap list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
   let table = Vector.make (Lr1.cardinal g) IndexSet.Map.empty in
-  let get_memoize lr1 la ~f =
+  let get_memoize la lr1 ~f =
     let map0 = table.:(lr1) in
     match IndexSet.Map.find_opt la map0 with
     | Some index -> index
@@ -342,7 +342,7 @@ let prepare (type g) (g : g grammar) rc
       let r = IndexBuffer.Gen.reserve nodes in
       let i = IndexBuffer.Gen.index r in
       table.:(lr1) <- IndexSet.Map.add la i map0;
-      IndexBuffer.Gen.commit nodes r (f ());
+      IndexBuffer.Gen.commit nodes r (f la lr1);
       i
   in
   let rec visit_reductions la lr1s = function
@@ -352,7 +352,8 @@ let prepare (type g) (g : g grammar) rc
       let curr =
         IndexMap.inflate begin fun lr1 ->
           IndexMap.fold begin fun nt la acc ->
-            visit_state la (Transition.find_goto_target g lr1 nt) :: acc
+            let tgt = Transition.find_goto_target g lr1 nt in
+            get_memoize la tgt ~f:visit_state :: acc
           end nts [] 
           |> List.rev
           |> IndexSet.of_list
@@ -362,16 +363,16 @@ let prepare (type g) (g : g grammar) rc
       match next with
       | [] when IndexMap.is_empty curr -> []
       | _ -> curr :: next
-  and visit_state la lr1 : Nodes.n index =
-    get_memoize lr1 la ~f:begin fun () ->
-      let reductions = rc.:(lr1).reductions in
-      let transitions =
-        visit_reductions la (Lr1.predecessors g lr1) reductions
-      in
-      ({lr1; lookaheads = la}, transitions)
-    end
+  and visit_state la lr1 =
+    let reductions = rc.:(lr1).reductions in
+    let transitions =
+      visit_reductions la (Lr1.predecessors g lr1) reductions
+    in
+    ({lr1; lookaheads = la}, transitions)
   in
-  let initials = Vector.init (Lr1.cardinal g) (visit_state (Terminal.all g)) in
+  let initials = Vector.init (Lr1.cardinal g)
+      (fun lr1 -> snd (visit_state (Terminal.all g) lr1))
+  in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
   let open Node.Eq(struct
@@ -389,15 +390,15 @@ type ('g, 's) step_desc = {
 
 type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
-  initials: ('g lr1, ('g,'s) node index) vector;
+  initials: ('g lr1, ('g,'s) step index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
   goto_sources: (('g, 's) node, 'g lr1 indexset) vector;
 }
 
 let small_steps (type g)
-    (_g : g grammar)
-    (gr_nodes : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector)
-    (gr_initials : (g lr1, (g, g lr1) node index) vector)
+    ((gr_nodes, gr_initials)
+     : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector *
+       (g lr1, (g lr1, (g, g lr1) node indexset) indexmap list) vector)
   : (g, g lr1) graph
   =
   let flatten_map map acc =IndexMap.fold (fun _ -> IndexSet.union) map acc in
@@ -448,6 +449,7 @@ let small_steps (type g)
   let pack_transitions trs = List.fold_right get trs zero in
   let add_reachables (node, transitions) = (node, pack_transitions transitions) in
   let nodes = Vector.map add_reachables gr_nodes in
+  let initials = Vector.map pack_transitions gr_initials in
   let steps = Dyn.contents index Steps.n in
   stopwatch 2 "closed the small-step successors (%d elements)"
     (Vector.length_as_int steps);
@@ -458,11 +460,9 @@ let small_steps (type g)
     end step_desc.goto
   end steps;
   stopwatch 2 "indexed reduction patterns";
-  {nodes; initials = gr_initials; steps; goto_sources}
+  {nodes; initials; steps; goto_sources}
 
-let make g rc =
-  let nodes, initials = prepare g rc in
-  small_steps g nodes initials
+let make g rc = small_steps (prepare g rc)
 
 let dump_dot oc g (*grc*) graph =
   let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in

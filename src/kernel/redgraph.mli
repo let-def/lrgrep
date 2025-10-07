@@ -48,7 +48,7 @@ type ('g, 's) step_desc = {
 
 type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
-  initials: ('g lr1, ('g,'s) node index) vector;
+  initials: ('g lr1, ('g,'s) step index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
   goto_sources: (('g, 's) node, 'g lr1 indexset) vector;
 }
