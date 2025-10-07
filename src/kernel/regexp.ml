@@ -255,8 +255,8 @@ module K = struct
       if intersecting targets reduction.pattern then
         matching := IndexSet.add lr1 !matching;
       IndexSet.iter begin fun node ->
-        let _, nstep = rg.nodes.:(node) in
-        let {Redgraph. goto; next; reachable} = rg.steps.:(nstep) in
+        let _, trs = rg.nodes.:(node) in
+        let {Redgraph. goto; next; reachable} = rg.steps.:(IndexMap.find lr1 trs) in
         if intersecting reachable reduction.pattern then
           begin
             next_steps := IndexMap.update next (function

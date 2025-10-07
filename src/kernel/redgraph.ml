@@ -329,7 +329,7 @@ type 'g node_desc = {
 
 type 'g pre_step = ('g lr1, 'g target indexset * ('g, 'g lr1) node indexset) indexmap
 let prepare (type g) (g : g grammar) rc targets
-  : ((g, g lr1) node, g node_desc * g pre_step list) vector *
+  : ((g, g lr1) node, g node_desc * (g lr1, g pre_step list) indexmap) vector *
     (g lr1, g pre_step list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
@@ -349,7 +349,7 @@ let prepare (type g) (g : g grammar) rc targets
   let rec visit_reductions la lr1s = function
     | [] -> []
     | nts :: next ->
-      let lazy lr1s = lr1s.lnext in
+      let lazy lr1s = lr1s in
       let curr =
         IndexMap.inflate begin fun lr1 ->
           let tgts, nodes =
@@ -368,17 +368,26 @@ let prepare (type g) (g : g grammar) rc targets
           (tgts, IndexSet.of_list (List.rev nodes))
         end lr1s.lvalue
       in
-      let next = visit_reductions la lr1s next in
+      let next = visit_reductions la lr1s.lnext next in
       match next with
       | [] when IndexMap.is_empty curr -> []
       | _ -> curr :: next
   and visit_state lookaheads lr1 =
     let reductions = rc.:(lr1).reductions in
-    let transitions = visit_reductions lookaheads (Lr1.predecessors g lr1) reductions in
+    let lr1s = (Lazy.force (Lr1.predecessors g lr1).lnext).lvalue in
+    let transitions =
+      IndexMap.inflate (fun lr1 ->
+          let lr1s = Lr1.predecessors g lr1 in
+          visit_reductions lookaheads (lazy lr1s) reductions 
+        ) lr1s
+    in
     ({lr1; lookaheads}, transitions)
   in
-  let initials = Vector.init (Lr1.cardinal g)
-      (fun lr1 -> snd (visit_state (Terminal.all g) lr1))
+  let initials =
+    Vector.init (Lr1.cardinal g) (fun lr1 ->
+        let lr1s = (Lr1.predecessors g lr1).lnext in
+        visit_reductions (Terminal.all g) lr1s rc.:(lr1).reductions
+      )
   in
   let nodes = IndexBuffer.Gen.freeze nodes in
   stopwatch 2 "viable2: %d nodes\n" (Vector.length_as_int nodes);
@@ -396,13 +405,13 @@ type ('g, 's) step_desc = {
 }
 
 type ('g, 's) graph = {
-  nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
+  nodes: (('g,'s) node, 'g node_desc * ('g lr1, ('g,'s) step index) indexmap) vector;
   initials: ('g lr1, ('g,'s) step index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
 }
 
 let small_steps (type g)
-    ((gr_nodes : ((g, g lr1) node, g node_desc * g pre_step list) vector),
+    ((gr_nodes : ((g, g lr1) node, g node_desc * (g lr1, g pre_step list) indexmap) vector),
      (gr_initials : (g lr1, g pre_step list) vector))
   : (g, g lr1) graph
   =
@@ -412,10 +421,14 @@ let small_steps (type g)
   let flatten_nodes map acc =
     IndexMap.fold (fun _ (_, nodes) acc -> IndexSet.union nodes acc) map acc
   in
-  let flatten_list ~f (_, trs) = List.fold_right f trs IndexSet.empty in
+  let flatten_maplist ~f (_, mtrs) =
+    IndexMap.fold (fun _ trs acc ->
+        IndexSet.union (List.fold_right f trs IndexSet.empty) acc
+      ) mtrs IndexSet.empty
+  in
   (* Compute the set reachable states (closure of successors). *)
-  let successors = Vector.map (flatten_list ~f:flatten_nodes) gr_nodes in
-  let reachable_from = Vector.map (flatten_list ~f:flatten_targets) gr_nodes in
+  let successors = Vector.map (flatten_maplist ~f:flatten_nodes) gr_nodes in
+  let reachable_from = Vector.map (flatten_maplist ~f:flatten_targets) gr_nodes in
   stopwatch 2 "prepared big-step successors";
   Tarjan.close_relation (Vector.get successors) reachable_from;
   stopwatch 2 "closed the big-step successors";
@@ -456,7 +469,7 @@ let small_steps (type g)
       step
   in
   let pack_transitions trs = List.fold_right get trs zero in
-  let add_reachables (node, transitions) = (node, pack_transitions transitions) in
+  let add_reachables (node, transitions) = (node, IndexMap.map pack_transitions transitions) in
   let nodes = Vector.map add_reachables gr_nodes in
   let initials = Vector.map pack_transitions gr_initials in
   let steps = Dyn.contents index Steps.n in
@@ -466,8 +479,9 @@ let small_steps (type g)
 
 let make g rc targets = small_steps (prepare g rc targets)
 
-let dump_dot oc g (*grc*) graph =
-  let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+let dump_dot _oc _g (*grc*) _graph =
+  failwith "TODO"
+  (*let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
   p "digraph {";
   p "  rankdir=LR;";
   p "  node[shape=rect];";
@@ -512,4 +526,4 @@ let dump_dot oc g (*grc*) graph =
       (IndexSet.cardinal desc.lookaheads);
     follow_step (pnode i) step
   end graph.nodes;
-  p "}"
+    p "}"*)
