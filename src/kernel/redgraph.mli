@@ -18,6 +18,19 @@ val close_goto_reductions
   -> ('g lr1, 'g reduction_closure) vector
   -> ('g goto_transition, 'g reduction_closure) vector
 
+type 'g target
+
+type 'g trie = private {
+  mutable sub: ('g lr1, 'g trie) indexmap;
+  mutable immediates: 'g lr1 indexset;
+  mutable targets: ('g lr1, 'g target index) indexmap;
+}
+
+val index_targets
+  :  'g grammar
+  -> ('g lr1, 'g reduction_closure) vector
+  -> 'g trie * ('g goto_transition, ('g target index * 'g terminal indexset) list) vector
+
 type ('g, 's) node
 type ('g, 's) step
 
