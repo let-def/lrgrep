@@ -327,9 +327,10 @@ type 'g node_desc = {
   lookaheads: 'g terminal indexset;
 }
 
+type 'g pre_step = ('g lr1, ('g, 'g lr1) node indexset) indexmap
 let prepare (type g) (g : g grammar) rc
-  : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector *
-    (g lr1, (g lr1, (g, g lr1) node indexset) indexmap list) vector
+  : ((g, g lr1) node, g node_desc * g pre_step list) vector *
+    (g lr1, g pre_step list) vector
   =
   let module Nodes = IndexBuffer.Gen.Make() in
   let nodes = Nodes.get_generator () in
@@ -363,12 +364,10 @@ let prepare (type g) (g : g grammar) rc
       match next with
       | [] when IndexMap.is_empty curr -> []
       | _ -> curr :: next
-  and visit_state la lr1 =
+  and visit_state lookaheads lr1 =
     let reductions = rc.:(lr1).reductions in
-    let transitions =
-      visit_reductions la (Lr1.predecessors g lr1) reductions
-    in
-    ({lr1; lookaheads = la}, transitions)
+    let transitions = visit_reductions lookaheads (Lr1.predecessors g lr1) reductions in
+    ({lr1; lookaheads}, transitions)
   in
   let initials = Vector.init (Lr1.cardinal g)
       (fun lr1 -> snd (visit_state (Terminal.all g) lr1))
@@ -396,17 +395,15 @@ type ('g, 's) graph = {
 }
 
 let small_steps (type g)
-    ((gr_nodes, gr_initials)
-     : ((g, g lr1) node, g node_desc * (g lr1, (g, g lr1) node indexset) indexmap list) vector *
-       (g lr1, (g lr1, (g, g lr1) node indexset) indexmap list) vector)
+    ((gr_nodes : ((g, g lr1) node, g node_desc * g pre_step list) vector),
+     (gr_initials : (g lr1, g pre_step list) vector))
   : (g, g lr1) graph
   =
   let flatten_map map acc =IndexMap.fold (fun _ -> IndexSet.union) map acc in
   (* Compute the set reachable states (closure of successors). *)
   let successors =
-    Vector.map
-      (fun (_, transitions) -> List.fold_right flatten_map transitions IndexSet.empty)
-      gr_nodes
+    let flatten_trs (_, trs) = List.fold_right flatten_map trs IndexSet.empty in
+    Vector.map flatten_trs gr_nodes
   in
   let reachable_from = Vector.copy successors in
   stopwatch 2 "prepared big-step successors";
