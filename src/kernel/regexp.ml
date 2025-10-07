@@ -316,7 +316,9 @@ module K = struct
           end;
           IndexMap.rev_iter
             (fun (step, filter) ->
-               continue ks {label with filter} (Reducing {reduction; steps = IndexSet.singleton step; next}))
+               if is_live reduction step then
+               continue ks {label with filter}
+                 (Reducing {reduction; steps = IndexSet.singleton step; next}))
             !next_steps
         in
         begin match reduction.policy with
