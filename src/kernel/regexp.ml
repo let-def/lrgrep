@@ -61,7 +61,7 @@ end
     expressions to a Cmon document. *)
 module Reductions = struct
   type 'g t = {
-    pattern: ('g, 'g lr1) Redgraph.node indexset;
+    pattern: 'g Redgraph.target indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -248,8 +248,11 @@ module K = struct
       intersecting reduction.pattern reachable
     in
     let ks = ref [] in
-    let rec process_reduction_nodes matching next_steps lr1 (reduction : _ Reductions.t) nodes =
-      if intersecting nodes reduction.pattern then
+    let rec process_reduction_nodes
+        matching next_steps lr1 (reduction : _ Reductions.t)
+        (targets, nodes)
+      =
+      if intersecting targets reduction.pattern then
         matching := IndexSet.add lr1 !matching;
       IndexSet.iter begin fun node ->
         let _, nstep = rg.nodes.:(node) in
@@ -262,8 +265,8 @@ module K = struct
               ) !next_steps;
             match IndexMap.find_opt lr1 goto with
             | None -> ()
-            | Some nodes ->
-              process_reduction_nodes matching next_steps lr1 reduction nodes
+            | Some next_nodes ->
+              process_reduction_nodes matching next_steps lr1 reduction next_nodes
           end
       end nodes
     in

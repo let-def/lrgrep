@@ -53,7 +53,7 @@ end
     expressions to a Cmon document. *)
 module Reductions : sig
   type 'g t = {
-    pattern: ('g, 'g lr1) Redgraph.node indexset;
+    pattern: 'g Redgraph.target indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;

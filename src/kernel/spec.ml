@@ -30,7 +30,7 @@ type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 let import_rule (type g) (g : g grammar)
     (rg : (g, g lr1) Redgraph.graph)
     (indices : g Transl.Indices.t)
-    (trie : g Transl.Reductum_trie.t)
+    (trie : g Redgraph.trie)
     (rule : Syntax.rule) : g _rule
   =
   let open struct type r end in

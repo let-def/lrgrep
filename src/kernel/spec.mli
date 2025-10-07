@@ -29,5 +29,5 @@ type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 val import_rule : 'g grammar ->
   ('g, 'g lr1) Redgraph.graph ->
   'g Transl.Indices.t ->
-  'g Transl.Reductum_trie.t ->
+  'g Redgraph.trie ->
   Syntax.rule -> 'g _rule

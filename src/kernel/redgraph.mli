@@ -36,31 +36,25 @@ type ('g, 's) step
 
 type 'g node_desc = {
   lr1: 'g lr1 index;
-  (*gotos: 'g goto_transition indexset;*)
   lookaheads: 'g terminal indexset;
 }
 
 type ('g, 's) step_desc = {
   next: ('g, 's) step index;
-  reachable: ('g, 's) node indexset;
-  goto: ('g lr1, ('g, 's) node indexset) indexmap;
+  reachable: 'g target indexset;
+  goto: ('g lr1, 'g target indexset * ('g, 's) node indexset) indexmap;
 }
 
 type ('g, 's) graph = {
   nodes: (('g,'s) node, 'g node_desc * ('g,'s) step index) vector;
   initials: ('g lr1, ('g,'s) step index) vector;
   steps: (('g,'s) step, ('g, 's) step_desc) vector;
-  goto_sources: (('g, 's) node, 'g lr1 indexset) vector;
 }
-
 
 val make
   :  'g grammar
-  (* -> 's cardinal *)
-  (* -> ('s index -> 'g lr1 index) *)
-  (* -> ('s index -> 's indexset lazy_stream) *)
   -> ('g lr1, 'g reduction_closure) vector
-  (* -> ('g goto_transition, 'g reduction_closure) vector *)
+  -> ('g goto_transition, ('g target index * 'g terminal indexset) list) vector
   -> ('g,'g lr1) graph
 
 val dump_closure

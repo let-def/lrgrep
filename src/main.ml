@@ -350,23 +350,24 @@ module T = struct
       Kernel.Redgraph.dump_closure grammar (Kernel.Transl.string_of_goto grammar) gt_closure
     )
 
-  let redgraph = Kernel.Redgraph.make grammar lr_closure
+  let red_trie, red_targets = Kernel.Redgraph.index_targets grammar lr_closure
+  let red_graph = Kernel.Redgraph.make grammar lr_closure red_targets
   let () = stopwatch 1 "Done with viable2 reductions"
 
-  let () =
-    if true then (
+  (*let () = if true then (
       let oc = open_out_bin "redgraph.dot" in
       Kernel.Redgraph.dump_dot oc grammar redgraph;
       close_out oc;
-      stopwatch 1 "(dumped to redgraph.dot)"
-    )
+        stopwatch 1 "(dumped to redgraph.dot)"
+    )*)
 
   let indices = Kernel.Transl.Indices.make grammar
+
   let () = stopwatch 1 "Indexed items and symbols for translation"
-  let trie = Kernel.Transl.Reductum_trie.make grammar lr_closure redgraph
-  let () =
-    if false then
-      Kernel.Transl.Reductum_trie.dump_trie grammar trie
+
+  (*let () = if false then
+      Kernel.Transl.Reductum_trie.dump_trie grammar trie*)
+
   let () = stopwatch 1 "Indexed reductions for translation"
 end
 
@@ -432,10 +433,10 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Fun.id (*Vector.get T.lrc.lr1_of;*)
     } in
     let Kernel.Spec.Rule (clauses, branches) =
-      Kernel.Spec.import_rule grammar T.redgraph T.indices T.trie rule
+      Kernel.Spec.import_rule grammar T.red_graph T.indices T.red_trie rule
     in
     stopwatch 1 "constructing NFA";
-    let nfa = Kernel.Automata.NFA.from_branches grammar T.redgraph branches in
+    let nfa = Kernel.Automata.NFA.from_branches grammar T.red_graph branches in
     Vector.iteri (fun br nfa ->
         if !dump_dot then
           with_output_file "%s_%s_br_%d_line_%d.dot" parser_name rule.name
@@ -524,7 +525,7 @@ let do_compile spec (cp : Code_printer.t option) =
             (Lr1.to_string grammar lr1);
           List.concat_map (fun k ->
               List.map snd (
-                Kernel.Regexp.K.derive grammar T.redgraph
+                Kernel.Regexp.K.derive grammar T.red_graph
                   (IndexSet.singleton lr1)
                   k
               )
