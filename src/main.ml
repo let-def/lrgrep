@@ -212,8 +212,18 @@ let lrc = lazy (
   result
 )
 
-let viable = lazy (
-  let result = Viable_reductions.make !!grammar in
+let red_closure = lazy (
+  Redgraph.close_lr1_reductions !!grammar
+
+)
+
+let red_index = lazy (
+  Redgraph.index_targets !!grammar !!red_closure
+)
+
+let red_graph = lazy (
+  let _, red_targets = !!red_index in
+  let result = Redgraph.make !!grammar !!red_closure red_targets in
   stopwatch 1 "Computed viable reductions";
   result
 )
@@ -221,12 +231,6 @@ let viable = lazy (
 let indices = lazy (
   let result = Transl.Indices.make !!grammar in
   stopwatch 1 "Indexed items and symbols for translation";
-  result
-)
-
-let trie = lazy (
-  let result = Transl.Reductum_trie.make !!viable in
-  stopwatch 1 "Indexed reductions for translation";
   result
 )
 
@@ -291,9 +295,10 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Vector.get !!lrc.lr1_of;
     } in
     let Spec.Rule (clauses, branches) =
-      Spec.import_rule grammar !!viable !!indices !!trie rule
+      let red_trie, _ = !!red_index in
+      Spec.import_rule grammar !!red_graph !!indices red_trie rule
     in
-    let nfa = Automata.NFA.from_branches grammar !!viable branches in
+    let nfa = Automata.NFA.from_branches grammar !!red_graph branches in
     Vector.iteri (fun br nfa ->
         if !opt_dump_dot then
           with_output_file "%s_%s_br_%d_line_%d.dot" !!parser_name rule.name

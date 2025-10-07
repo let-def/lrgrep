@@ -292,3 +292,5 @@ val domain : ('n, _) t -> 'n IndexSet.t
 val inflate : ('n index -> 'a) -> 'n IndexSet.t -> ('n, 'a) t
 
 val filter_inflate : ('n index -> 'a option) -> 'n IndexSet.t -> ('n, 'a) t
+
+val rev_iter : (('n index * 'a) -> unit) -> ('n, 'a) t -> unit
