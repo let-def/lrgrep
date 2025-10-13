@@ -62,17 +62,20 @@ value bit_lib_lsb_index_tagged(value x)
   return Val_long(lsb_index((uintptr_t)x >> 1));
 }
 
-static inline uintptr_t extract_msb(uintptr_t x)
+static inline unsigned long long extract_msb(unsigned long long x)
 {
-  return __builtin_stdc_bit_floor(x);
+  const unsigned int N = sizeof(unsigned long long) * CHAR_BIT;
+  unsigned int leading_zeros = __builtin_clzll(x);
+  unsigned int msb_position = (N - 1) - leading_zeros;
+  return (unsigned long long)1 << msb_position;
 }
 
 uintptr_t bit_lib_extract_msb(uintptr_t x)
 {
-  return extract_msb((x << 1) >> 1);
+  return extract_msb((unsigned long long)x & (~(unsigned long long)0 >> 1));
 }
 
 value bit_lib_extract_msb_tagged(uintptr_t x)
 {
-  return Val_long(bit_lib_extract_msb(x >> 1));
+  return Val_long(extract_msb(x >> 1));
 }
