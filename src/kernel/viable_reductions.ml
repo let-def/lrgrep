@@ -101,7 +101,7 @@ let make (type g) (g : g grammar) : g t =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   let module VEq = Viable.Eq(struct type t = g include States end) in
-  let Refl : (States.n, g viable) eq = Obj.magic () in
+  let Refl : (g viable, States.n) eq = VEq.eq in
   (* Get the generator for state indices. *)
   let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
