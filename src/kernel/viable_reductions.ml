@@ -313,6 +313,11 @@ let make (type g) (g : g grammar) : g t =
            ~group:(fun top sources ->
              let config = {top; rest = []; lookahead} in
              let source = IndexSet.of_list sources in
+             begin match IndexSet.cardinal source with
+               | 1 -> ()
+               | n -> Printf.eprintf "viable goto transition with %d sources (hash = %08X)\n" n
+                        (Hashtbl.hash source)
+             end;
              let target = visit_config config in
              {source; target; lookahead; reduction=red}
            )
