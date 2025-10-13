@@ -159,6 +159,7 @@ type row_mapping = Lrgrep_runtime.Sparse_table.row array
 let add_row t cells =
   let index = t.rows in
   t.rows <- t.rows + 1;
+  let cells = List.sort (fun (i, _) (j, _) -> Int.compare i j) cells in
   let rec columns i = function
     | [] -> 1 + i
     | (j, _) :: rest ->
