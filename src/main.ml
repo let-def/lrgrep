@@ -212,6 +212,18 @@ let lrc = lazy (
   result
 )
 
+let rc = lazy (
+  let result = Viable_reductions.close_lr1_reductions !!grammar in
+  stopwatch 1 "Computed closure of lr1 reductions";
+  result
+)
+
+let viable_targets = lazy (
+  let result = Viable_reductions.index_targets !!grammar !!rc in
+  stopwatch 1 "Indexed targets of viable reductions";
+  result
+)
+
 let viable = lazy (
   let result = Viable_reductions.make !!grammar in
   stopwatch 1 "Computed viable reductions";

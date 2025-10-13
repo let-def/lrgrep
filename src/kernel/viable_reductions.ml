@@ -33,6 +33,149 @@ open Utils
 open Misc
 open Info
 
+(* Step 1: pre-compute closure of ϵ-reductions *)
+
+(* Group items being reduced by their depth (reductions with zero, one, two producers, ...). *)
+let group_reductions g = function
+  | [] -> []
+  | items ->
+    let rec group depth acc = function
+      | [] -> [acc]
+      | (it, la) :: rest when depth = Item.position g it ->
+        let lhs = Production.lhs g (Item.production g it) in
+        group depth (IndexMap.update lhs (union_update la) acc) rest
+      | otherwise ->
+        acc :: group (depth + 1) IndexMap.empty otherwise
+    in
+    let compare_items (it1, _) (it2, _) =
+      Int.compare (Item.position g it1) (Item.position g it2)
+    in
+    group 0 IndexMap.empty (List.sort compare_items items)
+
+type 'g reduction_closure = {
+  failing: 'g terminal indexset;
+  reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
+  stacks: ('g lr1 index list * 'g terminal indexset) list;
+}
+
+let add_failing g r reject la =
+  r := IndexSet.union (Terminal.intersect g reject la) !r
+
+(* Close ϵ-reductions of each LR(1) states *)
+let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure) vector =
+  Vector.init (Lr1.cardinal g) @@ fun lr1 ->
+  let failing = ref IndexSet.empty in
+  let rec pop lookahead acc (item : g item index) = function
+    | [] ->
+      let items, stacks = acc in
+      ((item, lookahead) :: items, stacks)
+    | hd :: tl as stack ->
+      match Item.prev g item with
+      | Some item' -> pop lookahead acc item' tl
+      | None ->
+        let lhs = Production.lhs g (Item.production g item) in
+        let stack = Transition.find_goto_target g hd lhs :: stack in
+        let items, stacks = acc in
+        let acc = (items, (stack, lookahead) :: stacks) in
+        reduce lookahead acc stack
+  and reduce lookahead acc stack =
+    let lr1 = List.hd stack in
+    add_failing g failing (Lr1.reject g lr1) lookahead;
+    IndexSet.fold begin fun red acc ->
+      match Terminal.intersect g (Reduction.lookaheads g red) lookahead with
+      | la when IndexSet.is_empty la -> acc
+      | la ->
+        pop la acc (Item.last g (Reduction.production g red)) stack
+    end (Reduction.from_lr1 g lr1) acc
+  in
+  let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
+  let reductions = group_reductions g items in
+  let failing = !failing in
+  {failing; reductions; stacks}
+
+(* Reduction target indexation *)
+module Target = Unsafe_cardinal()
+type 'g target = 'g Target.t
+
+type 'g trie = {
+  mutable sub: ('g lr1, 'g trie) indexmap;
+  mutable immediates: 'g lr1 indexset;
+  mutable targets: ('g lr1, 'g target index) indexmap;
+}
+
+let index_targets (type g) (g : g grammar) rc
+    : g trie * (g goto_transition, (g target index * g terminal indexset) list) vector
+  =
+  (* Index sources of goto transitions *)
+  let goto_sources = Vector.make (Lr1.cardinal g) IndexSet.empty in
+  Index.rev_iter (Transition.goto g) begin fun gt ->
+    goto_sources.@(Transition.target g (Transition.of_goto g gt)) <-
+      IndexSet.add gt 
+  end;
+  (* Allocate target identifiers *)
+  let module Gen = Gensym() in
+  let open Target.Eq(struct
+      type t = g
+      include Gen
+    end) in
+  let Refl = eq in
+  (* Targets by goto transition *) 
+  let by_goto = Vector.make (Transition.goto g) [] in
+  (* Manage trie nodes *)
+  let fresh_node () = {
+    sub = IndexMap.empty;
+    immediates = IndexSet.empty;
+    targets = IndexMap.empty;
+  } in
+  let get_child (node, lr1) =
+    match IndexMap.find_opt lr1 node.sub with
+    | Some node' -> node' 
+    | None -> 
+      let node' = fresh_node () in
+      node.sub <- IndexMap.add lr1 node' node.sub;
+      node'
+  in
+  let root = fresh_node () in
+  let rec follow_path = function
+    | [] -> assert false
+    | [lr1] -> (root, lr1)
+    | lr1 :: path -> (get_child (follow_path path), lr1)
+  in
+  (* Construct target trie *)
+  Index.rev_iter (Lr1.cardinal g) begin fun tgt ->
+    (* For each LR(1), there are three sources of reduction targets:
+       - stacks directly reachable from this state,
+         these are marked as "immediate" in the trie
+       - goto transitions reaching this target (found using the goto_sources)
+       - composition of both
+    *)
+    let roots = List.map (fun (stack, la) -> follow_path stack, la) rc.:(tgt).stacks in
+    (* 1. Register immediates *)
+    List.iter
+      (fun ((node, lr1), _) ->
+         node.immediates <- IndexSet.add lr1 node.immediates)
+      roots;
+    (* Goto sources *)
+    let sources = goto_sources.:(tgt) in
+    if not (IndexSet.is_empty sources) then
+      (* Prepend all goto transitions (by construction, rc stacks already end with tgt) *)
+      let roots =
+        (get_child (root, tgt), Terminal.all g) ::
+        List.map (fun (root, la) -> (get_child root, la)) roots
+      in
+      IndexSet.iter begin fun gt ->
+        List.iter
+          (fun (root, la) ->
+             let index = Gen.fresh () in
+             by_goto.@(gt) <- List.cons (index, la);
+             let src = Transition.source g (Transition.of_goto g gt) in
+             root.targets <- IndexMap.add src index root.targets
+          ) roots
+      end sources
+  end;
+  (* Done *)
+  (root, by_goto)
+
 module Viable = Unsafe_cardinal()
 type 'g viable = 'g Viable.t
 
@@ -101,7 +244,7 @@ let make (type g) (g : g grammar) : g t =
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
   let module VEq = Viable.Eq(struct type t = g include States end) in
-  let Refl : (States.n, g viable) eq = Obj.magic () in
+  let Refl : (g viable, States.n) eq = VEq.eq in
   (* Get the generator for state indices. *)
   let states = States.get_generator () in
   (* A hashtable to store configurations and their corresponding state indices. *)
