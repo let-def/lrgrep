@@ -76,3 +76,10 @@ let domain t =
   Seq.fold_left
     (fun set (n, _) -> IndexSet.add n set)
     IndexSet.empty (to_rev_seq t)
+
+let deflate t f =
+  Seq.fold_left begin fun set (k, v) ->
+    if f k v
+    then IndexSet.add k set
+    else set
+  end IndexSet.empty (to_rev_seq t)
