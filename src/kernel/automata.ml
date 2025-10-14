@@ -166,21 +166,34 @@ module DFA = struct
     initial: 'dfa index;
     states: ('dfa, ('g, 'r, 'dfa) packed) vector;
     domain: ('dfa, 'g lr1 indexset) vector;
+    kernels: ('dfa, ('g, 'r) NFA.t array) vector;
   }
+
+  let pp doc =
+    let buf = Buffer.create 7 in
+    PPrint.ToBuffer.pretty 0.9 80 buf (Cmon.print doc);
+    String.split_on_char '\n' (Buffer.contents buf)
 
   let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     p "  node[shape=rect];\n";
     Vector.iter (fun (Packed state) ->
-        let acc = ref [] in
-        Vector.iteri (fun i br ->
-            if Boolvector.test state.accepting i then
-              push acc br
-          ) state.branches;
-        p "  st%d[label=%S];\n"
+        let exprs = ref [] in
+        let accept = ref [] in
+        Array.iter begin fun nfa ->
+          exprs := List.rev_append (pp (K.cmon nfa.NFA.k)) !exprs;
+        end t.kernels.:(state.index);
+        Vector.iteri begin fun i br ->
+          if Boolvector.test state.accepting i then
+            push accept br
+        end state.branches;
+        p "  st%d[label=\"%s\"];\n"
           (Index.to_int state.index)
-          (string_concat_map "," string_of_index (List.rev !acc));
+          (String.concat "\\l" @@
+           (List.rev !exprs)
+           @ [string_concat_map "," string_of_index (List.rev !accept)])
+        ;
         List.iter (fun (Transition tr) ->
             p "  st%d -> st%d [label=%S];\n"
               (Index.to_int state.index)
@@ -405,7 +418,11 @@ module DFA = struct
             ) p.raw_transitions;
       ) Construction.prestates;
     stopwatch 3 "Determinized DFA (%d states)" (cardinal Construction.n);
-    T {initial = Construction.initial; states; domain = Construction.domain}
+    let kernels = Vector.make Construction.n (Vector.as_array initial) in
+    Construction.KernelMap.iter begin fun _ (Construction.Prepacked st) ->
+      kernels.:(st.index) <- Vector.as_array st.kernel
+    end !Construction.dfa;
+    T {initial = Construction.initial; states; domain = Construction.domain; kernels}
 
   let state_count dfa = Vector.length dfa.states
 end
