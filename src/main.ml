@@ -302,7 +302,7 @@ let do_compile spec (cp : Code_printer.t option) =
       ) nfa;
     stopwatch 1 "constructed NFA\n";
     let Automata.DFA.T dfa =
-      Automata.DFA.determinize branches stacks nfa in
+      Automata.DFA.determinize grammar branches stacks nfa in
     if !opt_dump_dot then
       with_output_file "%s_%s_dfa.dot" !!parser_name rule.name
         (Automata.DFA.dump grammar dfa);

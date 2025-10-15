@@ -211,6 +211,7 @@ module DFA = struct
   type ('g, 'r) _t = T : ('g, 'r, 'dfa) t -> ('g, 'r) _t
 
   let determinize (type g r s)
+      (g : g grammar)
       (branches: (g, r) branches)
       (stacks: (g, s) stacks) initial : (g, r) _t
     =
@@ -339,6 +340,9 @@ module DFA = struct
         in
         let update bound (Prepacked t) =
           let todo = scheduled.*(t.index) in
+          Printf.eprintf "processing#%d: %s\n"
+            (Index.to_int t.index)
+            (Lr1.set_to_string g (IndexSet.map stacks.label todo));
           visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
           scheduled.*(t.index) <- IndexSet.empty;
           let by_label =
