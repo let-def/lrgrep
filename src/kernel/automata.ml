@@ -188,7 +188,8 @@ module DFA = struct
           if Boolvector.test state.accepting i then
             push accept br
         end state.branches;
-        p "  st%d[label=\"%s\"];\n"
+        p "  st%d[label=\"#%d:%s\"];\n"
+          (Index.to_int state.index)
           (Index.to_int state.index)
           (String.concat "\\l" @@
            (List.rev !exprs)
