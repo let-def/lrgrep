@@ -186,7 +186,12 @@ let make (type g) (g : g grammar) : g t =
     )
   in
   let states = IndexBuffer.Gen.freeze states in
-  stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
+  let count = ref 0 in
+  Vector.iter (fun (cfg, _) ->
+      if List.is_empty cfg.rest then
+        incr count
+    ) states;
+  stopwatch 2 "constructed viable reduction graph with %d nodes (%d outer)" (cardinal States.n) !count;
   (* Compute the set reachable states (closure of successors). *)
   let successors =
     let add_target acc step = IndexSet.add step.target acc in

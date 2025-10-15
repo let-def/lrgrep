@@ -340,6 +340,7 @@ module DFA = struct
         in
         let update bound (Prepacked t) =
           let todo = scheduled.*(t.index) in
+          if false then
           Printf.eprintf "processing#%d: %s\n"
             (Index.to_int t.index)
             (Lr1.set_to_string g (IndexSet.map stacks.label todo));
