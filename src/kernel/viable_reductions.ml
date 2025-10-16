@@ -183,15 +183,16 @@ type 'g viable = 'g Viable.t
    the source state (different for inner/epsilon-reductions, and outer ones),
    and the reduction to be performed. *)
 type 'g goto_transition = {
-  target: 'g viable index;
+  viable: 'g viable index;
   lookahead: 'g terminal indexset;
+  targets: ('g lr1, 'g target indexset) indexmap;
   source: 'g lr1 indexset;
 }
 
 (* A step in the reduction process, which includes the set of reachable states and a list
    of goto candidates. *)
 type 'g reduction_step = {
-  reachable: 'g viable indexset;
+  reachable: 'g target indexset;
   goto_transitions: 'g goto_transition list;
 }
 
@@ -210,11 +211,11 @@ type 'g config = {
 type 'g t = {
   initial: ('g lr1, 'g transitions) vector;
   config: ('g viable, 'g config) vector;
-  reachable_from: ('g viable, 'g viable indexset) vector;
+  reachable_from: ('g viable, 'g target indexset) vector;
   transitions: ('g viable, 'g transitions) vector;
 }
 
-let make (type g) (g : g grammar) rc : g t =
+let make (type g) (g : g grammar) rc targets : g t =
   stopwatch 2 "constructing viable reduction graph";
   let open Info in
   let module States = IndexBuffer.Gen.Make() in
@@ -251,7 +252,8 @@ let make (type g) (g : g grammar) rc : g t =
         if IndexSet.is_empty lookahead then acc
         else
           let process_target source acc =
-            (source, Transition.find_goto_target g source lhs) :: acc
+            let gt = Transition.find_goto g source lhs in
+            (gt, Transition.target g (Transition.of_goto g gt)) :: acc
           in
           IndexSet.fold process_target lr1_states.lvalue []
           |> List.sort (fun (s1,t1) (s2,t2) ->
@@ -259,11 +261,27 @@ let make (type g) (g : g grammar) rc : g t =
               if c <> 0 then c else Index.compare s1 s2)
           |> merge_group
             ~equal:Index.equal
-            ~group:(fun top sources ->
+            ~group:(fun top gts ->
                 let config = {top; lookahead} in
-                let source = IndexSet.of_list sources in
-                let target = visit_config config in
-                {source; target; lookahead}
+                let source = IndexSet.of_list (List.map (fun gt -> Transition.source g (Transition.of_goto g gt)) gts) in
+                let viable = visit_config config in
+                let targets = List.fold_left (fun acc gt ->
+                    match 
+                      List.filter_map (fun (tgt, la) ->
+                          if not (IndexSet.disjoint lookahead la)
+                          then Some tgt
+                          else None
+                        ) targets.:(gt)
+                    with
+                    | [] -> acc
+                    | xs ->
+                      IndexMap.add
+                        (Transition.source g (Transition.of_goto g gt))
+                        (IndexSet.of_list xs)
+                        acc
+                  ) IndexMap.empty gts
+                in
+                {source; viable; lookahead; targets}
               )
       in
     let gotos = IndexMap.fold process_goto gotos [] in
@@ -278,7 +296,7 @@ let make (type g) (g : g grammar) rc : g t =
   stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
   (* Compute the set reachable states (closure of successors). *)
   let successors =
-    let add_target acc step = IndexSet.add step.target acc in
+    let add_target acc step = IndexSet.add step.viable acc in
     let add_targets acc l =
       List.fold_left (List.fold_left add_target) acc l
     in
@@ -287,7 +305,11 @@ let make (type g) (g : g grammar) rc : g t =
          add_targets (IndexSet.singleton self) outer)
       states
   in
-  let reachable_from = Vector.copy successors in
+  let reachable_from =
+    Vector.map (fun (_, outer) ->
+        ()
+      ) states
+  in
   Tarjan.close_relation (Vector.get successors) reachable_from;
   stopwatch 2 "closed the big-step successors";
   (* Compute reachability for all steps of a reduction *)
@@ -300,7 +322,7 @@ let make (type g) (g : g grammar) rc : g t =
         | x :: _ -> x.reachable
       in
       let reachable =
-        let add_reach acc c = IndexSet.union acc reachable_from.:(c.target) in
+        let add_reach acc c = IndexSet.union acc reachable_from.:(c.viable) in
         List.fold_left add_reach acc step
       in
       {reachable; goto_transitions=step} :: steps
