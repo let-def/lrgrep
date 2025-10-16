@@ -107,9 +107,9 @@ let index_targets (type g) (g : g grammar) rc
     : g trie * (g goto_transition, (g target index * g terminal indexset) list) vector
   =
   (* Index sources of goto transitions *)
-  let goto_sources = Vector.make (Lr1.cardinal g) IndexSet.empty in
+  let goto_by_target = Vector.make (Lr1.cardinal g) IndexSet.empty in
   Index.rev_iter (Transition.goto g) begin fun gt ->
-    goto_sources.@(Transition.target g (Transition.of_goto g gt)) <-
+    goto_by_target.@(Transition.target g (Transition.of_goto g gt)) <-
       IndexSet.add gt 
   end;
   (* Allocate target identifiers *)
@@ -146,7 +146,7 @@ let index_targets (type g) (g : g grammar) rc
     (* For each LR(1), there are three sources of reduction targets:
        - stacks directly reachable from this state,
          these are marked as "immediate" in the trie
-       - goto transitions reaching this target (found using the goto_sources)
+       - goto transitions reaching this target (found using the goto_by_target)
        - composition of both
     *)
     let roots = List.map (fun (stack, la) -> follow_path stack, la) rc.:(tgt).stacks in
@@ -155,23 +155,22 @@ let index_targets (type g) (g : g grammar) rc
       (fun ((node, lr1), _) ->
          node.immediates <- IndexSet.add lr1 node.immediates)
       roots;
-    (* Goto sources *)
-    let sources = goto_sources.:(tgt) in
-    if not (IndexSet.is_empty sources) then
+    (* Iterate goto transitions targetting `tgt` *)
+    let gts = goto_by_target.:(tgt) in
+    if not (IndexSet.is_empty gts) then
       (* Prepend all goto transitions (by construction, rc stacks already end with tgt) *)
       let roots =
         (get_child (root, tgt), Terminal.all g) ::
         List.map (fun (root, la) -> (get_child root, la)) roots
       in
       IndexSet.iter begin fun gt ->
-        List.iter
-          (fun (root, la) ->
-             let index = Gen.fresh () in
-             by_goto.@(gt) <- List.cons (index, la);
-             let src = Transition.source g (Transition.of_goto g gt) in
-             root.targets <- IndexMap.add src index root.targets
-          ) roots
-      end sources
+        List.iter begin fun (root, la) ->
+          let index = Gen.fresh () in
+          by_goto.@(gt) <- List.cons (index, la);
+          let src = Transition.source g (Transition.of_goto g gt) in
+          root.targets <- IndexMap.add src index root.targets
+        end roots
+      end gts
   end;
   (* Done *)
   (root, by_goto)
