@@ -139,35 +139,21 @@ struct
       let source_transitions =
         match Source.prj source with
         | L v -> viable.transitions.:(v)
-        | R lr1 -> {Viable_reductions.inner=[]; outer=viable.initial.:(lr1)}
+        | R lr1 -> viable.initial.:(lr1)
       in
       let transitions = visit_transitions lrcs source_transitions in
       IndexBuffer.Gen.commit states reservation {config; transitions};
       index
 
-  (* Visit transitions from a given configuration *)
-  and visit_transitions lrcs {Viable_reductions. inner; outer} =
-    let inner =
-      List.fold_left (fun acc {Viable_reductions. goto_transitions; _} ->
-          List.fold_left
-            (fun acc {Viable_reductions. target; lookahead=_; source=(); reduction} ->
-               let state = visit_config lrcs (Source.inj_l target) in
-               (state, reduction) :: acc)
-            acc goto_transitions
-        ) [] inner
-    in
-    match visit_outer lrcs outer with
-    | [] -> [inner]
-    | x :: xs -> (inner @ x) :: xs
-
   (* Visit outer transitions with lookahead restrictions *)
-  and visit_outer lrcs = function
+  and visit_transitions lrcs = function
     | [] -> []
     | {Viable_reductions. goto_transitions; _} :: rest ->
       let visit_goto_transition
-          {Viable_reductions. target; lookahead=_; source=lr1s; reduction} =
+          {Viable_reductions. target; lookahead=_; source=lr1s} =
         let compatible_lrc lr1 = IndexSet.inter lrcs lrc_graph.lrcs_of.:(lr1) in
         let lrcs = IndexSet.bind lr1s compatible_lrc in
+        let reduction = assert false in
         if IndexSet.is_empty lrcs
         then None
         else Some (visit_config lrcs (Source.inj_l target), reduction)
@@ -176,7 +162,7 @@ struct
       let rest =
         match rest with
         | [] -> []
-        | rest -> visit_outer (IndexSet.bind lrcs (Vector.get entrypoints.predecessors)) rest
+        | rest -> visit_transitions (IndexSet.bind lrcs (Vector.get entrypoints.predecessors)) rest
       in
       candidates :: rest
 

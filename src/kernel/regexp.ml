@@ -196,7 +196,7 @@ module K = struct
     | More of 'g Expr.t * 'g t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: 'g Viable_reductions.outer_transitions;
+        transitions: 'g Viable_reductions.transitions;
         next: 'g t;
       }
 
@@ -245,7 +245,7 @@ module K = struct
       | Reducing _, More _ -> +1
 
   let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
-      {target; lookahead; source; reduction=_}
+      {target; lookahead; source}
     =
     Cmon.record [
       "target"    , cmon_index target;
@@ -308,22 +308,10 @@ module K = struct
        viable.transitions.:(target))
     || IndexSet.mem target r.pattern
 
-  and reduce_inner_transitions viable ~on_outer r {Viable_reductions. inner; outer} =
-    let matched = ref false in
-    let visit_candidate (c : ('g, unit) Viable_reductions.goto_transition) =
-      if reduce_target viable ~on_outer r c.target then
-        matched := true
-    in
-    let rec loop = function
-      | step :: xs when live_redstep r step ->
-        List.iter visit_candidate step.goto_transitions;
-        loop xs
-      | _ -> ()
-    in
-    loop inner;
+  and reduce_inner_transitions _viable ~on_outer _r outer =
     if outer <> [] then
       on_outer outer;
-    !matched
+    false
 
   let derive viable filter k =
     let continue r label next = match !r with

@@ -125,7 +125,7 @@ module K : sig
     | More of 'g Expr.t * 'g t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: 'g Viable_reductions.outer_transitions;
+        transitions: 'g Viable_reductions.transitions;
         next: 'g t;
       }
 

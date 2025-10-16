@@ -152,7 +152,7 @@ module Reductum_trie = struct
         visit_trie node' xs
     in
     Vector.iteri (fun state (config : _ Viable_reductions.config) ->
-        let node = visit_trie root (config.top :: config.rest) in
+        let node = visit_trie root [config.top] in
         node.reached <- IndexSet.add state node.reached
       ) viable.config;
     root
@@ -342,17 +342,14 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
       | (label, K.Accept) ->
         if node == trie then
           immediate := IndexSet.union !immediate label.filter
+        else if IndexSet.equal (Lr1.all g) label.filter then
+          reached := IndexSet.union node.reached !reached
         else
-          reached := (
-            if IndexSet.equal (Lr1.all g) label.filter then
-              IndexSet.union node.reached !reached
-            else
-              IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
-                  if IndexSet.mem lr1 label.filter
-                  then IndexSet.union acc node'.reached
-                  else acc
-                ) node.sub !reached
-          )
+          reached := IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
+              if IndexSet.mem lr1 label.filter
+              then IndexSet.union acc node'.reached
+              else acc
+            ) node.sub !reached
       | (label, k') ->
         IndexMap.iter (fun lr1 node' ->
             if IndexSet.mem lr1 label.filter then

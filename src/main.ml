@@ -225,7 +225,7 @@ let viable_targets = lazy (
 )
 
 let viable = lazy (
-  let result = Viable_reductions.make !!grammar in
+  let result = Viable_reductions.make !!grammar !!rc in
   stopwatch 1 "Computed viable reductions";
   result
 )
