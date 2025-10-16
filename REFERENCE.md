@@ -1,13 +1,11 @@
-# Documentation for DSL
-
-I am working on a DSL that needs documentation, examples and test:
+_NOTE: This document should remain accessible at https://github.com/let-def/lrgrep/blob/main/REFERENCE.md to not break external references_
 
 LRGrep is a tool designed to produce high-quality and maintenable syntax error messages for an LR parser.
 This document described the version 0.1 of the DSL and the associated tools.
 
 # A DSL for specifying syntax errors
 
-LRGrep takes an "error specification" as input, stored in a file with extension `.mlyl`. It complements a `.mly` grammar and specifies how syntax errors in an LR parser should be handled.
+LRGrep takes an "error specification" as input, stored in a file with extension `.lrgrep`. It complements a `.mly` grammar and specifies how syntax errors in an LR parser should be handled.
 
 An error specification consists of one or more named **rules**. Each rule is made of a list of **branches**, each containing a **pattern** and an **action**.
 
