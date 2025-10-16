@@ -312,16 +312,17 @@ module K = struct
       | r' ->
         r := (label, next) :: r'
     in
+    let push_transitions ks next label reduction = function
+      | step' :: _ as transitions when live_redstep reduction step' ->
+        let reducing = Reducing {reduction; transitions; next} in
+        push ks (label, reducing)
+      | _ -> ()
+    in
     let reduce_outer matching ks next label reduction transitions =
       let rec visit_transitions label reduction = function
         | step :: transitions when live_redstep reduction step ->
           List.iter (visit_candidate label) step.goto_transitions;
-          begin match transitions with
-            | step' :: _ when live_redstep reduction step' ->
-              let reducing = Reducing {reduction; transitions; next} in
-              push ks (label, reducing)
-            | _ -> ()
-          end
+          push_transitions ks next label reduction transitions
         | _ -> ()
       and visit_candidate label (candidate : _ Viable_reductions.goto_transition) =
         match Label.filter label candidate.source with
@@ -400,28 +401,9 @@ module K = struct
             (IndexSet.union cap reduction.capture)
             Usage.empty
         in
-        let ks' = ref [] in
-        let matching = ref IndexSet.empty in
         IndexSet.iter (fun lr1 ->
-            reduce_outer matching ks'
-              next
-              {label with filter = IndexSet.singleton lr1}
-              reduction
-              viable.initial.:(lr1)
+            push_transitions ks next {label with filter = IndexSet.singleton lr1} reduction viable.initial.:(lr1)
           ) label.filter;
-        let label =
-          Label.filter
-            (Label.capture label IndexSet.empty reduction.usage)
-            !matching
-        in
-        begin match reduction.policy with
-          | Shortest ->
-            Option.iter (fun label -> process_k label next) label;
-            ks := !ks' @ !ks;
-          | Longest ->
-            ks := !ks' @ !ks;
-            Option.iter (fun label -> process_k label next) label;
-        end
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
     process_k label k;
