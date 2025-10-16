@@ -96,4 +96,4 @@ sig
   val component : (G.n, n index) vector
 end
 
-val close_relation : ('n index -> 'n indexset) -> ('n, 'a indexset) vector -> unit
+val close_relation : (('n index -> unit) -> 'n index -> unit) -> ('n, 'a indexset) vector -> unit

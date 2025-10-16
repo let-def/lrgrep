@@ -53,7 +53,7 @@ end
     expressions to a Cmon document. *)
 module Reductions : sig
   type 'g t = {
-    pattern: 'g Viable_reductions.viable indexset;
+    pattern: 'g Viable_reductions.target indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;

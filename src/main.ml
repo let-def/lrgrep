@@ -224,8 +224,13 @@ let viable_targets = lazy (
   result
 )
 
+
+let viable_trie = lazy (fst !!viable_targets)
+
+let viable_targets = lazy (snd !!viable_targets)
+
 let viable = lazy (
-  let result = Viable_reductions.make !!grammar !!rc in
+  let result = Viable_reductions.make !!grammar !!rc !!viable_targets in
   stopwatch 1 "Computed viable reductions";
   result
 )
@@ -233,12 +238,6 @@ let viable = lazy (
 let indices = lazy (
   let result = Transl.Indices.make !!grammar in
   stopwatch 1 "Indexed items and symbols for translation";
-  result
-)
-
-let trie = lazy (
-  let result = Transl.Reductum_trie.make !!viable in
-  stopwatch 1 "Indexed reductions for translation";
   result
 )
 
@@ -303,7 +302,7 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Vector.get !!lrc.lr1_of;
     } in
     let Spec.Rule (clauses, branches) =
-      Spec.import_rule grammar !!viable !!indices !!trie rule
+      Spec.import_rule grammar !!viable !!indices !!viable_trie rule
     in
     let nfa = Automata.NFA.from_branches grammar !!viable branches in
     Vector.iteri (fun br nfa ->

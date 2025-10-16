@@ -295,23 +295,19 @@ let make (type g) (g : g grammar) rc targets : g t =
   let states = IndexBuffer.Gen.freeze states in
   stopwatch 2 "constructed viable reduction graph with %d nodes" (cardinal States.n);
   (* Compute the set reachable states (closure of successors). *)
-  let successors =
-    let add_target acc step = IndexSet.add step.viable acc in
-    let add_targets acc l =
-      List.fold_left (List.fold_left add_target) acc l
-    in
-    Vector.mapi
-      (fun self (_, outer) ->
-         add_targets (IndexSet.singleton self) outer)
-      states
+  let successors f self =
+    let iter_viable tr = f tr.viable in
+    f self;
+    List.iter (List.iter iter_viable) (snd states.:(self))
   in
+  let reached_by acc tr = IndexMap.fold (fun _ -> IndexSet.union) tr.targets acc in
   let reachable_from =
-    Vector.map (fun (_, outer) ->
-        ()
-      ) states
+    let add_targets (_, trs) = List.fold_left (List.fold_left reached_by) IndexSet.empty trs in
+    Vector.map add_targets states
   in
-  Tarjan.close_relation (Vector.get successors) reachable_from;
-  stopwatch 2 "closed the big-step successors";
+  Tarjan.close_relation successors reachable_from;
+  let reached = Vector.fold_left IndexSet.union IndexSet.empty reachable_from in
+  stopwatch 2 "closed the big-step successors (reaching %d targets)" (IndexSet.cardinal reached);
   (* Compute reachability for all steps of a reduction *)
   let rec process_steps = function
     | [] -> []
@@ -322,7 +318,7 @@ let make (type g) (g : g grammar) rc targets : g t =
         | x :: _ -> x.reachable
       in
       let reachable =
-        let add_reach acc c = IndexSet.union acc reachable_from.:(c.viable) in
+        let add_reach acc c = IndexSet.union (reached_by acc c) reachable_from.:(c.viable) in
         List.fold_left add_reach acc step
       in
       {reachable; goto_transitions=step} :: steps

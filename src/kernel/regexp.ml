@@ -61,7 +61,7 @@ end
     expressions to a Cmon document. *)
 module Reductions = struct
   type 'g t = {
-    pattern: 'g Viable_reductions.viable indexset;
+    pattern: 'g Viable_reductions.target indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -211,11 +211,14 @@ module K = struct
           list_compare f xs ys
 
   let compare_outer_candidate c1 c2 =
-    let c = compare_index c1.target c2.target in
+    let c = compare_index c1.viable c2.viable in
     if c <> 0 then c else
       let c = IndexSet.compare c1.source c2.source in
       if c <> 0 then c else
-        IndexSet.compare c1.lookahead c2.lookahead
+        let c = IndexSet.compare c1.lookahead c2.lookahead in
+        if c <> 0 then c else
+          let c = IndexMap.compare IndexSet.compare c1.targets c1.targets in
+          c
 
   let compare_reduction_step r1 r2 =
     let c = IndexSet.compare r1.reachable r2.reachable in
@@ -245,10 +248,10 @@ module K = struct
       | Reducing _, More _ -> +1
 
   let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
-      {target; lookahead; source}
+      {viable; lookahead; source; _}
     =
     Cmon.record [
-      "target"    , cmon_index target;
+      "viable"    , cmon_index viable;
       "lookahead" , (
         match lookahead' with
         | None -> cmon_set_cardinal lookahead
@@ -302,17 +305,6 @@ module K = struct
   let live_redstate viable (red : _ Reductions.t) (state : _ index) =
     intersecting red.pattern viable.reachable_from.:(state)
 
-  let rec reduce_target viable ~on_outer r target =
-    (live_redstate viable r target &&
-     reduce_inner_transitions viable ~on_outer r
-       viable.transitions.:(target))
-    || IndexSet.mem target r.pattern
-
-  and reduce_inner_transitions _viable ~on_outer _r outer =
-    if outer <> [] then
-      on_outer outer;
-    false
-
   let derive viable filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
@@ -333,10 +325,16 @@ module K = struct
         | _ -> ()
       and visit_candidate label (candidate : _ Viable_reductions.goto_transition) =
         match Label.filter label candidate.source with
-        | Some label
-          when reduce_target viable reduction candidate.target
-              ~on_outer:(visit_transitions label reduction) ->
-          matching := IndexSet.union label.filter !matching
+        | Some label ->
+          if live_redstate viable reduction candidate.viable then
+            visit_transitions label reduction viable.transitions.:(candidate.viable);
+          let filter = IndexSet.filter (fun lr1 ->
+              match IndexMap.find_opt lr1 candidate.targets with
+              | None -> false
+              | Some targets -> intersecting targets reduction.pattern
+            ) label.filter
+          in
+          matching := IndexSet.union filter !matching
         | _ -> ()
       in
       visit_transitions

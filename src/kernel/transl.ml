@@ -131,33 +131,6 @@ module Indices = struct
     | Some sym -> sym
 end
 
-module Reductum_trie = struct
-  type 'g t = {
-    mutable sub : ('g Info.lr1, 'g t) indexmap;
-    mutable reached : 'g Viable_reductions.viable indexset;
-  }
-
-  let make (viable : _ Viable_reductions.t) =
-    let root = {sub = IndexMap.empty; reached = IndexSet.empty} in
-    let rec visit_trie node = function
-      | [] -> node
-      | x :: xs ->
-        let node' = match IndexMap.find_opt x node.sub with
-          | Some node' -> node'
-          | None ->
-            let node' = {sub = IndexMap.empty; reached = IndexSet.empty} in
-            node.sub <- IndexMap.add x node' node.sub;
-            node'
-        in
-        visit_trie node' xs
-    in
-    Vector.iteri (fun state (config : _ Viable_reductions.config) ->
-        let node = visit_trie root [config.top] in
-        node.reached <- IndexSet.add state node.reached
-      ) viable.config;
-    root
-end
-
 module Globbing = struct
 
   type 'g glob_skip = {
@@ -337,19 +310,16 @@ let compile_reduce_expr (type g) (g : g grammar) viable trie re =
   let open Info in
   let reached = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
-  let rec step (node : g Reductum_trie.t) k =
+  let rec step (node : g Viable_reductions.trie) k =
     let process_next : g Label.t * _ -> unit = function
       | (label, K.Accept) ->
-        if node == trie then
-          immediate := IndexSet.union !immediate label.filter
-        else if IndexSet.equal (Lr1.all g) label.filter then
-          reached := IndexSet.union node.reached !reached
-        else
-          reached := IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
-              if IndexSet.mem lr1 label.filter
-              then IndexSet.union acc node'.reached
-              else acc
-            ) node.sub !reached
+        immediate := IndexSet.union !immediate
+            (IndexSet.inter node.immediates label.filter);
+        reached := IndexMap.fold (fun lr1 target acc ->
+            if IndexSet.mem lr1 label.filter
+            then IndexSet.add target acc
+            else acc
+          ) node.targets !reached
       | (label, k') ->
         IndexMap.iter (fun lr1 node' ->
             if IndexSet.mem lr1 label.filter then
@@ -397,10 +367,10 @@ let transl (type g) (g : g grammar) viable indices trie ~capture re =
       (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
       let re = transl ~for_reduction:true expr in
       let pattern, immediate = compile_reduce_expr g viable trie re in
-      (*warn re.position
-          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
-          (IndexSet.cardinal immediate);*)
+      warn re.position
+          "Reduce pattern is matching %d cases (and matches immediately for %d states)"
+          (IndexSet.cardinal pattern) (*(cardinal Redgraph.state)*)
+          (IndexSet.cardinal immediate);
       let capture, capture_end = match capture with
         | None -> IndexSet.empty, IndexSet.empty
         | Some name ->

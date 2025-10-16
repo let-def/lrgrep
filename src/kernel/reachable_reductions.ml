@@ -150,9 +150,10 @@ struct
     | [] -> []
     | {Viable_reductions. goto_transitions; _} :: rest ->
       let visit_goto_transition
-          {Viable_reductions. target; lookahead=_; source=lr1s} =
+          {Viable_reductions. lookahead=_; source=lr1s; _} =
         let compatible_lrc lr1 = IndexSet.inter lrcs lrc_graph.lrcs_of.:(lr1) in
         let lrcs = IndexSet.bind lr1s compatible_lrc in
+        let target = assert false in
         let reduction = assert false in
         if IndexSet.is_empty lrcs
         then None

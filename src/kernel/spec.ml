@@ -30,7 +30,7 @@ type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 let import_rule (type g) (g : g grammar)
     (viable : g Viable_reductions.t)
     (indices : g Transl.Indices.t)
-    (trie : g Transl.Reductum_trie.t)
+    (trie : g Viable_reductions.trie)
     (rule : Syntax.rule) : g _rule
   =
   let open struct type r end in
