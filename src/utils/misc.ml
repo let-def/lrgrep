@@ -366,9 +366,16 @@ let stopwatch_perfs =
   | None -> []
   | Some list ->
     let steps = String.split_on_char ',' list in
-    List.mapi (fun i step ->
-        (i land 1 = 0),
-        int_of_string step
+    List.concat_map (fun step ->
+        match String.split_on_char '-' step with
+        | [step] ->
+          let step = int_of_string step in
+          [true, step - 1; false, step]
+        | [start;stop] ->
+          let start = int_of_string start in
+          let stop = int_of_string stop in
+          [true, start - 1; false, stop]
+        | _ -> assert false
       ) steps
 
 let stopwatch_perf_step i =
