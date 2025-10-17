@@ -1083,71 +1083,77 @@ let make (type g) (g : g grammar) : g t = (module struct
         let get i = Vector.get costs i
         let set i x = Vector.set costs i x
       end)(BoolMap())
-
-    (* Run the solver for finite languages *)
-    module Bool_or = struct
-      type property = bool
-      let leq_join = (||)
-    end
-
-    module Finite = BoolMap()
-
-    module FiniteGraph = struct
-      type variable = Cell.n index
-
-      let count = Vector.make Cell.goto 0
-
-      let () =
-        Index.iter Cell.n (fun cell ->
-            Reverse_dependencies.visit_occurrences cell
-              ~visit_goto:(fun goto -> count.@(goto) <- succ)
-              ~acc:()
-              ~acc_right:(fun () _ -> ())
-              ~from_left:(fun ~right:() ~parent:_ -> ())
-              ~from_right:(fun ~left:_ ~parent:_ -> ())
-          )
-
-      let foreach_root visit_root =
-        Index.iter (Transition.shift g) (fun sh ->
-            let node = Tree.leaf (Transition.of_shift g sh) in
-            visit_root (Cell.first_cell node) true
-          );
-        Index.iter (Transition.goto g) (fun gt ->
-            Cell.iter_goto gt (fun gt' ->
-                let index = Cell.of_goto gt' in
-                if costs.:(index) < max_int && count.:(gt') = 0 then
-                  visit_root index true
-              )
-          )
-
-      (* Visit all the successors of a cell.
-         This amounts to:
-         - finding the node the cell belongs to
-         - looking at the reverse dependencies of this node
-         - visiting all cells that are affected in the dependencies
-      *)
-      let foreach_successor index finite f =
-        if finite then
-          Reverse_dependencies.visit_occurrences index
-            ~visit_goto:(fun gt ->
-                let count' = count.:(gt) - 1  in
-                count.:(gt) <- count';
-                assert (count' >= 0);
-                if count' = 0 then
-                  f index true
-              )
-            ~acc:true ~acc_right:(fun acc right -> acc && Finite.get right)
-            ~from_left:(fun ~right ~parent -> if right then f parent true)
-            ~from_right:(fun ~left ~parent ->
-                if Finite.get left then f parent true)
-    end
-    include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(BoolMap())
     let () = stopwatch 2 "solved minimal costs"
   end
 
   module Analysis = struct
     let cost = Vector.get Solver.costs
-    let finite = Solver.Finite.get
+    let finite =
+      let get = lazy (
+      let open struct
+        (* Run the solver for finite languages *)
+        module Bool_or = struct
+          type property = bool
+          let leq_join = (||)
+        end
+
+        module Finite = Solver.BoolMap()
+
+        module FiniteGraph = struct
+          type variable = Cell.n index
+
+          let count = Vector.make Cell.goto 0
+
+          let () =
+            Index.iter Cell.n (fun cell ->
+                Reverse_dependencies.visit_occurrences cell
+                  ~visit_goto:(fun goto -> count.@(goto) <- succ)
+                  ~acc:()
+                  ~acc_right:(fun () _ -> ())
+                  ~from_left:(fun ~right:() ~parent:_ -> ())
+                  ~from_right:(fun ~left:_ ~parent:_ -> ())
+              )
+
+          let foreach_root visit_root =
+            Index.iter (Transition.shift g) (fun sh ->
+                let node = Tree.leaf (Transition.of_shift g sh) in
+                visit_root (Cell.first_cell node) true
+              );
+            Index.iter (Transition.goto g) (fun gt ->
+                Cell.iter_goto gt (fun gt' ->
+                    let index = Cell.of_goto gt' in
+                    if Solver.costs.:(index) < max_int && count.:(gt') = 0 then
+                      visit_root index true
+                  )
+              )
+
+          (* Visit all the successors of a cell.
+             This amounts to:
+             - finding the node the cell belongs to
+             - looking at the reverse dependencies of this node
+             - visiting all cells that are affected in the dependencies
+          *)
+          let foreach_successor index finite f =
+            if finite then
+              Reverse_dependencies.visit_occurrences index
+                ~visit_goto:(fun gt ->
+                    let count' = count.:(gt) - 1  in
+                    count.:(gt) <- count';
+                    assert (count' >= 0);
+                    if count' = 0 then
+                      f index true
+                  )
+                ~acc:true ~acc_right:(fun acc right -> acc && Finite.get right)
+                ~from_left:(fun ~right ~parent -> if right then f parent true)
+                ~from_right:(fun ~left ~parent ->
+                    if Finite.get left then f parent true)
+        end
+        include Fix.DataFlow.ForCustomMaps(Bool_or)(FiniteGraph)(Finite)(Solver.BoolMap())
+      end
+      in
+      Finite.get
+    ) in
+      fun x -> Lazy.force get x
   end
 
   (*let () =
