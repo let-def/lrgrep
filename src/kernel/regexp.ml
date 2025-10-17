@@ -71,7 +71,12 @@ module Reductions = struct
     if r1 == r2 then 0 else
       let c = IndexSet.compare r1.pattern r2.pattern in
       if c <> 0 then c else
-        IndexSet.compare r1.capture r2.capture
+        let c = IndexSet.compare r1.capture r2.capture in
+        if c <> 0 then c else
+          let c = compare r1.policy r2.policy in
+          if c <> 0 then c else
+            let c = compare r1.usage r2.usage in
+            c
 
   let cmon {capture; pattern; usage; policy} =
     Cmon.record [

@@ -1,4 +1,4 @@
-type mark = { mutable used : bool; }
+type mark
 val new_mark : unit -> mark
 val is_unused : mark -> bool
 val cmon_mark : mark -> Cmon.t
@@ -10,3 +10,6 @@ val singleton : mark -> set
 val join : set -> set -> set
 val mark_used : set -> unit
 val cmon_set : set -> Cmon.t
+
+val equal : set -> set -> bool
+val compare : set -> set -> int
