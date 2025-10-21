@@ -220,7 +220,7 @@ module K = struct
   let compare_reduction_step r1 r2 =
     let c = IndexSet.compare r1.reachable r2.reachable in
     if c <> 0 then c else
-      list_compare compare_outer_candidate r1.goto_transitions r1.goto_transitions
+      list_compare compare_outer_candidate r1.goto_transitions r2.goto_transitions
 
   let rec compare t1 t2 =
     if t1 == t2 then 0 else
