@@ -1,9 +1,35 @@
+(* MIT License
+
+   Copyright (c) 2025 Frédéric Bour
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+ *)
+
 open Utils
 open Misc
 open Syntax
 open Fix.Indexing
 open Regexp
 open Info
+
+let printf_debug = false
 
 (* Index LR(1) states by incoming symbol, goto transitions, items, ... *)
 module Indices = struct
@@ -131,32 +157,11 @@ module Indices = struct
     | Some sym -> sym
 end
 
-module Reductum_trie = struct
-  type 'g t = {
-    mutable sub : ('g Info.lr1, 'g t) indexmap;
-    mutable reached : 'g Viable_reductions.viable indexset;
-  }
-
-  let make (viable : _ Viable_reductions.t) =
-    let root = {sub = IndexMap.empty; reached = IndexSet.empty} in
-    let rec visit_trie node = function
-      | [] -> node
-      | x :: xs ->
-        let node' = match IndexMap.find_opt x node.sub with
-          | Some node' -> node'
-          | None ->
-            let node' = {sub = IndexMap.empty; reached = IndexSet.empty} in
-            node.sub <- IndexMap.add x node' node.sub;
-            node'
-        in
-        visit_trie node' xs
-    in
-    Vector.iteri (fun state (config : _ Viable_reductions.config) ->
-        let node = visit_trie root (config.top :: config.rest) in
-        node.reached <- IndexSet.add state node.reached
-      ) viable.config;
-    root
-end
+let string_of_goto g gt =
+  let tr = Transition.of_goto g gt in
+  let src = Transition.source g tr in
+  let tgt = Transition.target g tr in
+  Printf.sprintf "%s -> %s" (Lr1.to_string g src) (Lr1.to_string g tgt)
 
 module Globbing = struct
 
@@ -316,7 +321,7 @@ end
 
 let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
   let transl_sym = Option.map (Indices.get_symbol indices position) in
-  let lhs = transl_sym (Option.join lhs) in
+  let lhs = transl_sym lhs in
   let prods = match lhs with
     | None -> Production.all g
     | Some lhs ->
@@ -333,38 +338,39 @@ let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
   in
   IndexSet.bind prods matching_states
 
-let compile_reduce_expr (type g) (g : g grammar) viable trie re =
+let compile_reduce_expr (type g) (g : g grammar) rg trie re =
   let open Info in
-  let reached = ref IndexSet.empty in
+  let targets = ref IndexSet.empty in
   let immediate = ref IndexSet.empty in
-  let rec step (node : g Reductum_trie.t) k =
-    let process_next : g Label.t * _ -> unit = function
-      | (label, K.Accept) ->
-        if node == trie then
-          immediate := IndexSet.union !immediate label.filter
-        else
-          reached := (
-            if IndexSet.equal (Lr1.all g) label.filter then
-              IndexSet.union node.reached !reached
-            else
-              IndexMap.fold (fun lr1 (node' : g Reductum_trie.t) acc ->
-                  if IndexSet.mem lr1 label.filter
-                  then IndexSet.union acc node'.reached
-                  else acc
-                ) node.sub !reached
-          )
-      | (label, k') ->
-        IndexMap.iter (fun lr1 node' ->
-            if IndexSet.mem lr1 label.filter then
-              step node' k'
-          ) node.sub
-    in
-    List.iter process_next (K.derive viable (Lr1.all g) k)
+  let rec follow path (node : g Redgraph.target_trie) (label, k : _ Label.t * _ K.t) =
+    match k with
+    | K.Accept ->
+      if false then
+        print_endline (Lr1.list_to_string g (List.rev path));
+      immediate := IndexSet.union (IndexSet.inter label.filter node.immediates) !immediate;
+      targets := IndexMap.fold (fun lr1 target acc ->
+          if IndexSet.mem lr1 label.filter
+          then IndexSet.add target acc
+          else acc
+        ) node.targets !targets
+    | k ->
+      IndexMap.iter begin fun lr1 node' ->
+        if IndexSet.mem lr1 label.Label.filter then
+          derive (lr1 :: path) node' k
+      end node.sub
+  and derive path node k =
+    List.iter (follow path node) (K.derive g rg (Lr1.all g) k)
   in
-  step trie (K.More (re, K.Done));
-  (!reached, !immediate)
+  derive [] trie (K.More (re, K.Done));
+  (* if printf_debug then
+    Printf.printf "pattern:\n\
+                   - goto: %s\n\
+                   - immediate: %s\n"
+      (string_of_indexset ~index:(string_of_goto g) !goto)
+      (Lr1.set_to_string g !immediate); *)
+  (!targets, !immediate)
 
-let transl (type g) (g : g grammar) viable indices trie ~capture re =
+let transl (type g) (g : g grammar) rg indices trie ~capture re =
   let all_cap = ref IndexSet.empty in
   let mk_capture kind name =
     let index = capture kind name in
@@ -399,11 +405,12 @@ let transl (type g) (g : g grammar) viable indices trie ~capture re =
         error re.position "Reductions cannot be nested";
       (* print_cmon stderr (Front.Syntax.cmon_regular_expression expr);*)
       let re = transl ~for_reduction:true expr in
-      let pattern, immediate = compile_reduce_expr g viable trie re in
-      (*warn re.position
-          "Reduce pattern is matching %d/%d cases (and matches immediately for %d states)"
-          (IndexSet.cardinal pattern) (cardinal Redgraph.state)
-          (IndexSet.cardinal immediate);*)
+      let pattern, immediate = compile_reduce_expr g rg trie re in
+      if false then
+        warn re.position
+          "Reduce pattern is matching %d cases (and matches immediately for %d states)"
+          (IndexSet.cardinal pattern)
+          (IndexSet.cardinal immediate);
       let capture, capture_end = match capture with
         | None -> IndexSet.empty, IndexSet.empty
         | Some name ->
@@ -422,6 +429,7 @@ let transl (type g) (g : g grammar) viable indices trie ~capture re =
     | Concat res ->
       Expr.Seq (List.rev_map (transl ~for_reduction) res)
     | Filter {lhs; rhs} ->
+      let lhs = Option.join lhs in
       let states = transl_filter g indices re.position ~lhs ~rhs in
       if IndexSet.is_empty states then
         warn re.position "No items match this filter";

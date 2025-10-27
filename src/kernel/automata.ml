@@ -113,21 +113,25 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
-  let make (type g) (g : g grammar) viable branch =
-    let module KMap = Map.Make(struct type t = g Regexp.K.t let compare = Regexp.K.compare end) in
+  let make (type g) (g : g grammar) rg branch =
+    let module KMap = Map.Make(struct
+        type t = g Regexp.K.t
+        let compare = Regexp.K.compare
+      end)
+    in
     let nfa = ref KMap.empty in
     let rec aux k =
       match KMap.find_opt k !nfa with
       | Some t -> t
       | None ->
-        (*let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
-          let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in*)
+        let inj ({Label. filter; usage; captures}, t) = (filter, (usage, captures, t)) in
+        let prj filter (usage, captures, t) = ({Label. filter; usage; captures}, t) in
         let transitions =
-          K.derive viable (Lr1.all g) k
+          K.derive g rg (Lr1.all g) k
           |> process_transitions
-          (*|> List.map inj
-            |> IndexRefine.annotated_partition
-            |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)*)
+          |> List.map inj
+          |> IndexRefine.annotated_partition
+          |> List.concat_map (fun (filter, l) -> List.map (prj filter) l)
         in
         let uid = uid () in
         let t = {uid; k; transitions; branch; mark=default_mark} in
@@ -139,8 +143,8 @@ module NFA = struct
     in
     aux
 
-  let from_branches info viable branches =
-    Vector.mapi (fun br re -> make info viable br (Regexp.K.More (re, Regexp.K.Done)))
+  let from_branches info rg branches =
+    Vector.mapi (fun br re -> make info rg br (Regexp.K.More (re, Regexp.K.Done)))
       branches.expr
 end
 
@@ -174,15 +178,28 @@ module DFA = struct
     PPrint.ToBuffer.pretty 0.9 80 buf (Cmon.print doc);
     String.split_on_char '\n' (Buffer.contents buf)
 
-  let dump g t oc =
+  let dump g t (rg : _ Redgraph.graph) oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
     p "  node[shape=rect];\n";
     Vector.iter (fun (Packed state) ->
         let exprs = ref [] in
         let accept = ref [] in
+        let step index0 =
+          let index = ref index0 in
+          while match Redgraph.follow rg !index with
+            | Advance index' -> index := index'; true
+            | Switch _ -> false
+          do () done;
+          if !index = index0 then
+            cmon_index index0
+          else
+            Printf.ksprintf Cmon.constant "%d-%d"
+              (Index.to_int !index)
+              (Index.to_int !index - Index.to_int index0)
+        in
         Array.iter begin fun nfa ->
-          exprs := List.rev_append (pp (K.cmon nfa.NFA.k)) !exprs;
+          exprs := List.rev_append (pp (K.cmon ~step nfa.NFA.k)) !exprs;
         end t.kernels.:(state.index);
         Vector.iteri begin fun i br ->
           if Boolvector.test state.accepting i then

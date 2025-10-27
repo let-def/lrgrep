@@ -1,3 +1,27 @@
+(* MIT License:
+
+   Copyright (c) 2025 Frédéric Bour
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+ *)
+
 open Utils
 open Misc
 open Fix.Indexing
@@ -212,8 +236,17 @@ let lrc = lazy (
   result
 )
 
-let viable = lazy (
-  let result = Viable_reductions.make !!grammar in
+let red_closure = lazy (
+  Redgraph.close_lr1_reductions !!grammar
+)
+
+let red_trie, red_targets =
+  let red_index = lazy (Redgraph.index_targets !!grammar !!red_closure) in
+  lazy (fst (Lazy.force red_index)),
+  lazy (snd (Lazy.force red_index))
+
+let red_graph = lazy (
+  let result = Redgraph.make !!grammar !!red_closure !!red_targets in
   stopwatch 1 "Computed viable reductions";
   result
 )
@@ -221,12 +254,6 @@ let viable = lazy (
 let indices = lazy (
   let result = Transl.Indices.make !!grammar in
   stopwatch 1 "Indexed items and symbols for translation";
-  result
-)
-
-let trie = lazy (
-  let result = Transl.Reductum_trie.make !!viable in
-  stopwatch 1 "Indexed reductions for translation";
   result
 )
 
@@ -291,9 +318,9 @@ let do_compile spec (cp : Code_printer.t option) =
       label = Vector.get !!lrc.lr1_of;
     } in
     let Spec.Rule (clauses, branches) =
-      Spec.import_rule grammar !!viable !!indices !!trie rule
+      Spec.import_rule grammar !!red_graph !!indices !!red_trie rule
     in
-    let nfa = Automata.NFA.from_branches grammar !!viable branches in
+    let nfa = Automata.NFA.from_branches grammar !!red_graph branches in
     Vector.iteri (fun br nfa ->
         if !opt_dump_dot then
           with_output_file "%s_%s_br_%d_line_%d.dot" !!parser_name rule.name
@@ -305,7 +332,7 @@ let do_compile spec (cp : Code_printer.t option) =
       Automata.DFA.determinize grammar branches stacks nfa in
     if !opt_dump_dot then
       with_output_file "%s_%s_dfa.dot" !!parser_name rule.name
-        (Automata.DFA.dump grammar dfa);
+        (Automata.DFA.dump grammar dfa !!red_graph);
     begin
       let states = Vector.length_as_int dfa.states in
       let branches = ref 0 in

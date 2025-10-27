@@ -61,7 +61,7 @@ end
     expressions to a Cmon document. *)
 module Reductions = struct
   type 'g t = {
-    pattern: 'g Viable_reductions.viable indexset;
+    pattern: 'g Redgraph.target indexset;
     capture: Capture.set;
     usage: Usage.set;
     policy: Syntax.quantifier_kind;
@@ -71,13 +71,14 @@ module Reductions = struct
     if r1 == r2 then 0 else
       let c = IndexSet.compare r1.pattern r2.pattern in
       if c <> 0 then c else
-        IndexSet.compare r1.capture r2.capture
+        let c = IndexSet.compare r1.capture r2.capture in
+        c
 
-  let cmon {capture; pattern; usage; policy} =
+  let cmon {capture=_; pattern; usage=_; policy} =
     Cmon.record [
-      "capture", cmon_indexset capture;
-      "pattern", cmon_set_cardinal (*cmon_indexset*) pattern;
-      "usage", Usage.cmon_set usage;
+      (*"capture", cmon_indexset capture;*)
+      "pattern_domain", cmon_set_cardinal (*cmon_indexset*) pattern;
+      (*"usage", Usage.cmon_set usage;*)
       "policy", Syntax.cmon_quantifier_kind policy;
     ]
 end
@@ -128,22 +129,22 @@ module Expr = struct
   let compare t1 t2 =
     Int.compare t1.uid t2.uid
 
-  let cmon t =
+  let cmon ?(lr1=cmon_index) t =
     let rec aux t =
       match t.desc with
-      | Set (lr1s, var, usage) ->
+      | Set (lr1s, _var, _usage) ->
         Cmon.construct "Set" [
-          cmon_set_cardinal lr1s;
-          cmon_indexset var;
-          Usage.cmon_set usage;
+          cmon_indexset ~index:lr1 lr1s;
+          (*cmon_indexset var;
+            Usage.cmon_set usage;*)
         ]
       | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
       | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
       | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
       | Filter lr1s ->
-        Cmon.constructor "Filter" (cmon_set_cardinal lr1s)
-      | Reduce (var, r) ->
-        Cmon.construct "Reduce" [cmon_indexset var; Reductions.cmon r]
+        Cmon.constructor "Filter" (cmon_indexset ~index:lr1 lr1s)
+      | Reduce (_var, r) ->
+        Cmon.construct "Reduce" [(*cmon_indexset var;*) Reductions.cmon r]
     in
     aux t
 end
@@ -154,10 +155,6 @@ module Label = struct
     captures: Capture.set;
     usage: Usage.set;
   }
-
-  (*let is_immediate {filter; captures; usage=_} =
-    IndexSet.equal filter Lr1.all &&
-    IndexSet.is_empty captures *)
 
   let compare l1 l2 =
     if l1 == l2 then 0 else
@@ -186,8 +183,6 @@ module Label = struct
                   usage = Usage.join label.usage usage}
 end
 
-open Viable_reductions
-
 module K = struct
 
   type 'g t =
@@ -196,31 +191,24 @@ module K = struct
     | More of 'g Expr.t * 'g t
     | Reducing of {
         reduction: 'g Reductions.t;
-        transitions: 'g Viable_reductions.outer_transitions;
+        steps: 'g Redgraph.step indexset;
         next: 'g t;
       }
 
-  let rec list_compare f xxs yys =
-    if xxs == yys then 0 else
-      match xxs, yys with
-      | [], _  -> -1
-      | _ , [] -> +1
-      | (x :: xs), (y :: ys) ->
-        let c = f x y in
-        if c <> 0 then c else
-          list_compare f xs ys
-
-  let compare_outer_candidate c1 c2 =
-    let c = compare_index c1.target c2.target in
-    if c <> 0 then c else
-      let c = IndexSet.compare c1.source c2.source in
-      if c <> 0 then c else
-        IndexSet.compare c1.lookahead c2.lookahead
-
-  let compare_reduction_step r1 r2 =
-    let c = IndexSet.compare r1.reachable r2.reachable in
-    if c <> 0 then c else
-      list_compare compare_outer_candidate r1.goto_transitions r2.goto_transitions
+  let cmon ?lr1 ?step k =
+    let rec aux = function
+    | Accept -> Cmon.constant "Accept"
+    | Done -> Cmon.constant "Done"
+    | More (e, t) ->
+      Cmon.construct "More" [Expr.cmon ?lr1 e; aux t]
+    | Reducing {reduction=_; steps; next} ->
+      Cmon.crecord "Reducing" [
+        "reduction", Cmon.constant "...";
+        "steps", cmon_indexset ?index:step steps;
+        "next", aux next;
+      ]
+    in
+    aux k
 
   let rec compare t1 t2 =
     if t1 == t2 then 0 else
@@ -234,7 +222,7 @@ module K = struct
       | Reducing r1, Reducing r2 ->
         let c = Reductions.compare r1.reduction r2.reduction in
         if c <> 0 then c else
-          let c = list_compare compare_reduction_step r1.transitions r2.transitions in
+          let c = IndexSet.compare r1.steps r2.steps in
           if c <> 0 then c else
             compare r1.next r2.next
       | Accept, (More _ | Reducing _ | Done) -> -1
@@ -244,118 +232,44 @@ module K = struct
       | More _, Reducing _ -> -1
       | Reducing _, More _ -> +1
 
-  let cmon_goto_transition ?lookahead:lookahead' ~source:cmon_source
-      {target; lookahead; source; reduction=_}
-    =
-    Cmon.record [
-      "target"    , cmon_index target;
-      "lookahead" , (
-        match lookahead' with
-        | None -> cmon_set_cardinal lookahead
-        | Some lookahead' ->
-          Cmon.constant (
-            Printf.sprintf "{%d elements} (%d matching current reduction)"
-              (IndexSet.cardinal lookahead)
-              (IndexSet.cardinal (IndexSet.inter lookahead lookahead'))
-          )
-      );
-      "source"    , cmon_source source;
-    ]
-
-  let cmon_outer_goto_transition ?(lr1=string_of_index) ?lookahead c =
-    cmon_goto_transition ?lookahead c
-      ~source:(fun source ->
-          if IndexSet.cardinal source >= 10 then cmon_set_cardinal source else
-            cmon_indexset source
-              ~index:(fun ilr1 -> Cmon.constant (lr1 ilr1));
-        )
-
-  let cmon_transitions ~goto_transition trs =
-    Cmon.list_map begin fun {reachable; goto_transitions} ->
-      Cmon.record [
-        "reachable", cmon_set_cardinal reachable;
-        "goto_transitions", Cmon.list_map goto_transition goto_transitions;
-      ]
-    end trs
-
-  let rec cmon ?lr1 = function
-    | Accept ->
-      Cmon.constant "Accept"
-    | Done ->
-      Cmon.constant "Done"
-    | More (re, next) ->
-      Cmon.construct "More" [Expr.cmon re; cmon next]
-    | Reducing {reduction; transitions; next} ->
-      let goto_transition = cmon_outer_goto_transition ?lr1 in
-      Cmon.crecord "Reducing" [
-        "reduction"   , Reductions.cmon reduction;
-        "transitions" , cmon_transitions ~goto_transition transitions;
-        "next"        , cmon next;
-      ]
-
   let intersecting s1 s2 =
     not (IndexSet.disjoint s1 s2)
 
-  let live_redstep (red : _ Reductions.t) (step : _ Viable_reductions.reduction_step) =
-    intersecting red.pattern step.reachable
-
-  let live_redstate viable (red : _ Reductions.t) (state : _ index) =
-    intersecting red.pattern viable.reachable_from.:(state)
-
-  let rec reduce_target viable ~on_outer r target =
-    (live_redstate viable r target &&
-     reduce_inner_transitions viable ~on_outer r
-       viable.transitions.:(target))
-    || IndexSet.mem target r.pattern
-
-  and reduce_inner_transitions viable ~on_outer r {Viable_reductions. inner; outer} =
-    let matched = ref false in
-    let visit_candidate (c : ('g, unit) Viable_reductions.goto_transition) =
-      if reduce_target viable ~on_outer r c.target then
-        matched := true
-    in
-    let rec loop = function
-      | step :: xs when live_redstep r step ->
-        List.iter visit_candidate step.goto_transitions;
-        loop xs
-      | _ -> ()
-    in
-    loop inner;
-    if outer <> [] then
-      on_outer outer;
-    !matched
-
-  let derive viable filter k =
+  let derive (type g) (_g : g grammar) (rg: g Redgraph.graph) filter k =
     let continue r label next = match !r with
       | (label', next') :: r' when next' == next ->
         r := (Label.union label' label, next) :: r'
       | r' ->
         r := (label, next) :: r'
     in
-    let reduce_outer matching ks next label reduction transitions =
-      let rec visit_transitions label reduction = function
-        | step :: transitions when live_redstep reduction step ->
-          List.iter (visit_candidate label) step.goto_transitions;
-          begin match transitions with
-            | step' :: _ when live_redstep reduction step' ->
-              let reducing = Reducing {reduction; transitions; next} in
-              push ks (label, reducing)
-            | _ -> ()
-          end
-        | _ -> ()
-      and visit_candidate label (candidate : _ Viable_reductions.goto_transition) =
-        match Label.filter label candidate.source with
-        | Some label
-          when reduce_target viable reduction candidate.target
-              ~on_outer:(visit_transitions label reduction) ->
-          matching := IndexSet.union label.filter !matching
-        | _ -> ()
-      in
-      visit_transitions
-        (Label.capture label reduction.capture Usage.empty)
-        reduction transitions
-    in
     let ks = ref [] in
+    let rec process_reduction_step matching next_steps filter (reduction : _ Reductions.t) step =
+      match Redgraph.follow rg step with
+      | Advance step' ->
+        next_steps := IndexMap.update step' (union_update filter) !next_steps
+      | Switch map ->
+        let matching' = ref IndexSet.empty in
+        IndexMap.rev_iter begin fun (lr1, trs) ->
+          if IndexSet.mem lr1 filter then (
+            let has_match = ref false in
+            List.iter begin fun (tr : _ Redgraph.transition) ->
+              if not !has_match then
+                has_match := intersecting tr.reached reduction.pattern;
+              if intersecting tr.reachable reduction.pattern then begin
+                (*let reach = IndexSet.inter reachable reduction.pattern in
+                  Printf.eprintf "continuing to step %d on %s because targets %s are reachable\n"
+                  (step : _ index :> int) (Lr1.to_string g lr1)
+                  (string_of_indexset reach)
+                  ;*)
+                process_reduction_step matching next_steps (IndexSet.singleton lr1) reduction tr.step
+              end
+            end trs;
+            if !has_match then
+              matching' := IndexSet.add lr1 !matching';
+          )
+        end map;
+        matching := IndexSet.union !matching' !matching
+    in
     let rec process_k label = function
       | Accept ->
         ()
@@ -366,19 +280,42 @@ module K = struct
       | More (re, next) as self ->
         process_re label self next re.desc
 
-      | Reducing {reduction; transitions; next} ->
-        let l' = ref IndexSet.empty in
-        let ks' : ('a Label.t * 'a t) list ref = ref [] in
-        reduce_outer l' ks' next label reduction transitions;
-        match Label.filter label !l', reduction.policy with
-        | None, _ ->
-          ks := !ks' @ !ks
-        | Some label, Longest ->
-          ks := !ks' @ !ks;
-          process_k (Label.capture label IndexSet.empty reduction.usage) next
-        | Some label, Shortest ->
-          process_k (Label.capture label IndexSet.empty reduction.usage) next;
-          ks := !ks' @ !ks
+      | Reducing {reduction; steps; next} ->
+        let filter0 = label.filter in
+        let matching = ref IndexSet.empty in
+        let next_steps = ref IndexMap.empty in
+        let f = process_reduction_step matching next_steps label.filter reduction in
+        IndexSet.iter f steps;
+        let push_matching () =
+          if not (IndexSet.is_empty !matching) then (
+            let label = {label with filter = !matching} in
+            let label = Label.capture label IndexSet.empty reduction.usage in
+            process_k label next
+          )
+        in
+        let push_steps () =
+          let label = Label.capture label reduction.capture Usage.empty in
+          let next_steps =
+            !next_steps
+            |> IndexMap.bindings
+            |> List.map (fun (a, b) -> (b, a))
+            |> IndexRefine.annotated_partition
+          in
+          List.iter (fun (filter, steps) ->
+              assert (IndexSet.subset filter filter0);
+              let steps = IndexSet.of_list steps in
+              continue ks {label with filter}
+                (Reducing {reduction; steps; next});
+            ) next_steps;
+        in
+        begin match reduction.policy with
+          | Shortest ->
+            push_matching ();
+            push_steps ()
+          | Longest ->
+            push_steps ();
+            push_matching ()
+        end
 
     and process_re label self next = function
       | Set (s, var, usage) ->
@@ -414,28 +351,23 @@ module K = struct
             (IndexSet.union cap reduction.capture)
             Usage.empty
         in
-        let ks' = ref [] in
-        let matching = ref IndexSet.empty in
-        IndexSet.iter (fun lr1 ->
-            reduce_outer matching ks'
-              next
-              {label with filter = IndexSet.singleton lr1}
-              reduction
-              viable.initial.:(lr1)
-          ) label.filter;
-        let label =
-          Label.filter
-            (Label.capture label IndexSet.empty reduction.usage)
-            !matching
-        in
-        begin match reduction.policy with
-          | Shortest ->
-            Option.iter (fun label -> process_k label next) label;
-            ks := !ks' @ !ks;
-          | Longest ->
-            ks := !ks' @ !ks;
-            Option.iter (fun label -> process_k label next) label;
-        end
+        let next_steps = ref [] in
+        IndexSet.iter begin fun lr1 ->
+          let steps =
+            List.fold_right begin fun (tr : _ Redgraph.transition) steps ->
+              if intersecting tr.reachable reduction.pattern
+              then IndexSet.add tr.step steps
+              else steps
+            end (Redgraph.initial rg lr1) IndexSet.empty
+          in
+          if not (IndexSet.is_empty steps) then
+            push next_steps (steps, lr1);
+        end label.filter;
+        let next_steps = IndexRefine.annotated_partition !next_steps in
+        List.iter (fun (steps, filter) ->
+            let filter = IndexSet.of_list filter in
+            continue ks {label with filter} (Reducing {reduction; steps; next})
+          ) next_steps;
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
     process_k label k;

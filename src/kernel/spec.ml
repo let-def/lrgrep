@@ -1,3 +1,27 @@
+(* MIT License
+
+   Copyright (c) 2025 Frédéric Bour
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+ *)
+
 open Utils
 open Misc
 open Fix.Indexing
@@ -28,9 +52,9 @@ type ('g, 'r) branches = {
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
 
 let import_rule (type g) (g : g grammar)
-    (viable : g Viable_reductions.t)
+    (rg : g Redgraph.graph)
     (indices : g Transl.Indices.t)
-    (trie : g Transl.Reductum_trie.t)
+    (trie : g Redgraph.target_trie)
     (rule : Syntax.rule) : g _rule
   =
   let open struct type r end in
@@ -67,35 +91,35 @@ let import_rule (type g) (g : g grammar)
     Vector.map import Clauses.vector
   in
   let lookaheads =
-    Vector.map (fun pattern ->
-        match pattern.Syntax.lookaheads with
-        | [] -> None
-        | symbols ->
-          let lookahead_msg =
-            "Lookahead can either be a terminal or `first(nonterminal)'"
-          in
-          let sym_pattern (sym, pos) =
-            match sym with
-            | Syntax.Apply ("first", [sym]) ->
-              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
-                | T t ->
-                  let t = Terminal.to_string g t in
-                  failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                            t ^ " is a terminal")
-                | N n -> Nonterminal.first g n
-              end
-            | Syntax.Name _ ->
-              begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
-                | N n ->
-                  failwith (lookahead_msg ^ "; " ^
-                            Nonterminal.to_string g n ^ " is a nonterminal")
-                | T t -> IndexSet.singleton t
-              end
-            | _ ->
-              failwith lookahead_msg
-          in
-          Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
-      ) pattern
+    Vector.map begin fun pattern ->
+      match pattern.Syntax.lookaheads with
+      | [] -> None
+      | symbols ->
+        let lookahead_msg =
+          "Lookahead can either be a terminal or `first(nonterminal)'"
+        in
+        let sym_pattern (sym, pos) =
+          match sym with
+          | Syntax.Apply ("first", [sym]) ->
+            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+              | T t ->
+                let t = Terminal.to_string g t in
+                failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
+                          t ^ " is a terminal")
+              | N n -> Nonterminal.first g n
+            end
+          | Syntax.Name _ ->
+            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+              | N n ->
+                failwith (lookahead_msg ^ "; " ^
+                          Nonterminal.to_string g n ^ " is a nonterminal")
+              | T t -> IndexSet.singleton t
+            end
+          | _ ->
+            failwith lookahead_msg
+        in
+        Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
+    end pattern
   in
   let is_total =
     Boolvector.init branch_count @@ fun br ->
@@ -125,7 +149,7 @@ let import_rule (type g) (g : g grammar)
         index
     in
     let translate_branch (br : Branches.n index) =
-      let cap, exp = Transl.transl g viable indices trie ~capture pattern.:(br).expr in
+      let cap, exp = Transl.transl g rg indices trie ~capture pattern.:(br).expr in
       br_captures.:(br) <- cap;
       expr.:(br) <- exp;
     in
