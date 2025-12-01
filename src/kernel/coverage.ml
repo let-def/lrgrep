@@ -71,9 +71,10 @@ let coverage (type g r st tr lrc)
   =
   let state_count = Vector.length machine.outgoing in
   let reached = Vector.make state_count IndexMap.empty in
+  let transitions = Vector.make state_count [] in
   let pending = ref [] in
   let todo = Vector.make state_count IndexMap.empty in
-  let schedule st lrc pos la =
+  let schedule st0 lrc0 pos0 st lrc pos la =
     let la =
       match IndexMap.find_opt lrc reached.:(st) with
       | None -> la
@@ -87,6 +88,7 @@ let coverage (type g r st tr lrc)
       if IndexMap.is_empty map then (
         push pending st;
         todo.:(st) <- IndexMap.singleton lrc (IndexMap.singleton pos la);
+        transitions.@(st) <- List.cons (lrc, pos, st0, lrc0, pos0, la);
       ) else
         todo.:(st) <- IndexMap.update lrc (function
             | None -> Some (IndexMap.singleton pos la)
@@ -112,12 +114,12 @@ let coverage (type g r st tr lrc)
         let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
         let trs = machine.outgoing.:(st) in
         let process tr lrcs =
-          let target = machine.target.:(tr) in
+          let st' = machine.target.:(tr) in
           let filter = machine.label.:(tr).filter in
           List.filter begin fun (lr1, lrcs) ->
             if IndexSet.mem lr1 filter then (
               IndexSet.iter
-                (fun lrc -> schedule target lrc pos' la)
+                (fun lrc' -> schedule st lrc pos st' lrc' pos' la)
                 lrcs;
               false
             ) else
@@ -128,11 +130,12 @@ let coverage (type g r st tr lrc)
       | Either.Left nt ->
         let src = stacks.label lrc in
         let tgt = Transition.find_goto_target g src nt in
-        List.iteri begin fun pos nts ->
+        List.iteri begin fun pos' nts ->
           IndexMap.iter begin fun nt la' ->
             let la = IndexSet.inter la la' in
             if not (IndexSet.is_empty la) then
-              schedule st lrc (inject_position positions nt pos) la
+              let pos' = inject_position positions nt pos' in
+              schedule st lrc pos st lrc pos' la
           end nts
         end rcs.:(tgt).reductions
   in
@@ -155,7 +158,7 @@ let coverage (type g r st tr lrc)
         List.iteri begin fun pos nts ->
           IndexMap.iter begin fun nt la ->
             let pos = inject_position positions nt (pos + 1) in
-            IndexSet.iter (fun lrc -> schedule st lrc pos la) lrcs
+            IndexSet.iter (fun lrc -> schedule st lrc pos st lrc pos la) lrcs
           end nts
         end rcs.:(lr1).reductions;
         (*rcs.:(lr1).reductions
@@ -169,5 +172,7 @@ let coverage (type g r st tr lrc)
   in
   ignore (IndexSet.fold process trs lrcs);
   fixpoint ~propagate pending;
-  stopwatch 2 "computed coverage";
+  stopwatch 2 "computed coverage (%d transitions)"
+    (Vector.fold_left (fun acc trs -> acc + List.length trs) 0 transitions)
+  ;
   ()
