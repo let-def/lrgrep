@@ -47,6 +47,7 @@ type ('g, 'r) branches = {
   lookaheads : (('g, 'r) branch, 'g terminal indexset option) vector;
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
   is_total: ('g, 'r) branch Boolvector.t;
+  is_partial: ('g, 'r) branch Boolvector.t;
 }
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
@@ -121,13 +122,18 @@ let import_rule (type g) (g : g grammar)
         Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
     end pattern
   in
+  let is_partial =
+    Boolvector.init branch_count begin fun br ->
+      match Clauses.vector.:(clause.:(br)).action with
+      | Syntax.Partial _ -> true
+      | Syntax.Total _ | Syntax.Unreachable -> false
+    end
+  in
   let is_total =
-    Boolvector.init branch_count @@ fun br ->
-    Option.is_none lookaheads.:(br) &&
-    match Clauses.vector.:(clause.:(br)).action with
-    | Syntax.Total _ -> true
-    | Syntax.Partial _ -> false
-    | Syntax.Unreachable -> true
+    Boolvector.init branch_count begin fun br ->
+      Option.is_none lookaheads.:(br) &&
+      not (Boolvector.test is_partial br)
+    end
   in
   let br_captures = Vector.make branch_count IndexSet.empty in
   let expr = Vector.make branch_count Expr.empty in
@@ -170,7 +176,8 @@ let import_rule (type g) (g : g grammar)
     end) in
   let Refl = Branches_def.eq in
   let clauses = {syntax = Clauses.vector; captures} in
-  let branches = {clause; pattern; expr; of_clause; lookaheads; br_captures; is_total} in
+  let branches = {clause; pattern; expr; of_clause; lookaheads;
+                  br_captures; is_total; is_partial} in
   Rule (clauses, branches)
 
 let branch_count branches = Vector.length branches.expr
