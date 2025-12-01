@@ -175,6 +175,18 @@ module type S1 = sig
 
   val to_seq : 'a t -> 'a element Seq.t
   val bind : 'a t -> ('a element -> 'b t) -> 'b t
+
+  (** Split a set into consecutive “runs” of elements that share the same class.
+
+      {b Parameters}
+      - [cls : 'a element → 'b element] that assigns a class to each element.
+      - [xs  : 'a t] – the input set to be split.
+
+      {b Returns}
+      A list of pairs.  Each pair is made of a class (the result of [cls] for
+      the run) and the subset of the original elements that belong to that run
+      (preserving the original order). *)
+  val split_by_run : ('a element -> 'b element) -> 'a t -> ('b element * 'a t) list
 end
 
 module type S0 = sig

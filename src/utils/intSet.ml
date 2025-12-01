@@ -556,3 +556,65 @@ and c addr q' = function
     fun () -> Seq.Cons (addr + i, c addr q' (mask lxor (1 lsl i)))
 
 let bind m f = fold (fun elt acc -> union (f elt) acc) m empty
+
+(** Split a set into consecutive “runs” of elements that share the same class.
+
+    {b Parameters}
+    - [cls : 'a element → 'b element] that assigns a class to each element.
+    - [xs  : 'a t] – the input set to be split.
+
+    {b Returns}
+    A list of pairs.  Each pair is made of a class (the result of [cls] for
+    the run) and the subset of the original elements that belong to that run
+    (preserving the original order). *)
+
+let rec split_by_run cls = function
+  | N -> assert false
+  | C (base, ss, N) ->
+    let bit = Bit_lib.msb_index ss in
+    let key = ref (cls (base + bit)) in
+    let mask = ref (1 lsl bit) in
+    let ss' = ref (ss lxor (1 lsl bit)) in
+    let accu = ref [] in
+    for _ = 1 to Bit_lib.pop_count ss - 1 do
+      let bit = Bit_lib.msb_index !ss' in
+      let key' = cls (base + bit) in
+      if Int.equal key' !key then
+        mask := !mask lor (1 lsl bit)
+      else (
+        accu := (!key, C (base, !mask, N)) :: !accu;
+        key := key';
+        mask := 1 lsl bit;
+      );
+      ss' := !ss' lxor (1 lsl bit);
+    done;
+    (!key, C (base, !mask, N), !accu)
+  | C (base, ss, qs) ->
+    let key, tail, accu = split_by_run cls qs in
+    let key = ref key in
+    let tail = ref tail in
+    let mask = ref 0 in
+    let accu = ref accu in
+    let ss' = ref ss in
+    for _ = 0 to Bit_lib.pop_count ss - 1 do
+      let bit = Bit_lib.msb_index !ss' in
+      let key' = cls (base + bit) in
+      if Int.equal key' !key then
+        mask := !mask lor (1 lsl bit)
+      else (
+        if !mask <> 0
+        then accu := (!key, C (base, !mask, !tail)) :: !accu
+        else accu := (!key, !tail) :: !accu;
+        tail := N;
+        key := key';
+        mask := 1 lsl bit;
+      );
+      ss' := !ss' lxor (1 lsl bit);
+    done;
+    (!key, C (base, !mask, !tail), !accu)
+
+let split_by_run cls = function
+  | N -> []
+  | set ->
+    let (key, tail, result) = split_by_run cls set in
+    (key, tail) :: result
