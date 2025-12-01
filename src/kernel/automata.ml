@@ -42,6 +42,7 @@ open Spec
 open Regexp
 
 type ('g, 'n) stacks = {
+  domain: 'n cardinal;
   tops: 'n indexset;
   prev: 'n index -> 'n indexset;
   label: 'n index -> 'g lr1 index;
@@ -1187,6 +1188,12 @@ module Machine = struct
           let c = IndexSet.compare t1.clear t1.clear in
           c
 
+  (* A machine is parameterized by:
+     - ['g] is the grammar (input)
+     - ['r] is the set of rules (input)
+     - ['st] is the set of states (output)
+     - ['tr] is the set of transitions (output)
+  *)
   type ('g, 'r, 'st, 'tr) t = {
     initial: 'st index option;
     source: ('tr, 'st index) vector;
@@ -1215,6 +1222,8 @@ module Machine = struct
     register_count : int;
     partial_captures : Capture.set;
   }
+
+  type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
 
   let dump g t oc =
     let p fmt = Printf.fprintf oc fmt in
@@ -1251,8 +1260,6 @@ module Machine = struct
           );
       ) t.label;
     p "}\n"
-
-  type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
 
   let minimize (type g r dfa)
       (branches : (g, r) branches)

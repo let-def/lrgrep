@@ -310,6 +310,7 @@ let do_compile spec (cp : Code_printer.t option) =
     let subset = lrc_from_entrypoints initial_states in
     let stacks = {
       Automata.
+      domain = Vector.length !!lrc.lr1_of;
       tops =
         if fst rule.error
         then subset.wait
@@ -354,7 +355,19 @@ let do_compile spec (cp : Code_printer.t option) =
       with_output_file "%s_%s_machine.dot" !!parser_name rule.name
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
-    stopwatch 1 "table & code generation"
+    stopwatch 1 "table & code generation";
+    Option.iter (fun initial ->
+      ignore (
+        Coverage.coverage
+          grammar
+          branches
+          machine
+          stacks
+          !!red_closure
+          (Coverage.make_positions grammar)
+          initial
+      )
+    ) machine.initial;
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
 

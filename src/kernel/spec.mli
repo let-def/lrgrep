@@ -44,6 +44,7 @@ type ('g, 'r) branches = {
   lookaheads : (('g, 'r) branch, 'g terminal indexset option) vector;
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
   is_total: ('g, 'r) branch Boolvector.t;
+  is_partial: ('g, 'r) branch Boolvector.t;
 }
 
 val branch_count : ('g, 'r) branches -> ('g, 'r) branch cardinal
