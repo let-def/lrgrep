@@ -56,6 +56,7 @@ let group_reductions g = function
     group 0 IndexMap.empty (List.sort compare_items items)
 
 type 'g reduction_closure = {
+  accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: ('g lr1 index list * 'g terminal indexset) list;
@@ -63,12 +64,13 @@ type 'g reduction_closure = {
 
 type ('g, 'n) reduction_closures = ('n, 'g reduction_closure) vector
 
-let add_failing g r reject la =
-  r := IndexSet.union (Terminal.intersect g reject la) !r
+let add_subset g r set la =
+  r := IndexSet.union (Terminal.intersect g set la) !r
 
 (* Close ϵ-reductions of each LR(1) states *)
 let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure) vector =
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
+  let accepting = ref IndexSet.empty in
   let failing = ref IndexSet.empty in
   let rec pop lookahead acc (item : g item index) = function
     | [] ->
@@ -85,7 +87,8 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
         reduce lookahead acc stack
   and reduce lookahead acc stack =
     let lr1 = List.hd stack in
-    add_failing g failing (Lr1.reject g lr1) lookahead;
+    add_subset g failing (Lr1.reject g lr1) lookahead;
+    add_subset g accepting (Lr1.shift_on g lr1) lookahead;
     IndexSet.fold begin fun red acc ->
       match Terminal.intersect g (Reduction.lookaheads g red) lookahead with
       | la when IndexSet.is_empty la -> acc
@@ -96,7 +99,8 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
   let reductions = group_reductions g items in
   let failing = !failing in
-  {failing; reductions; stacks}
+  let accepting = !accepting in
+  {accepting; failing; reductions; stacks}
 
 let rec filter_reductions g la = function
   | [] -> []
@@ -144,7 +148,8 @@ let rec merge_reductions = function
 let close_goto_reductions (type g) (g : g grammar) rcs
   : (g goto_transition, g reduction_closure) vector
   =
-  let sentinel = {failing = IndexSet.empty; reductions = []; stacks = []} in
+  let sentinel = {accepting = IndexSet.empty; failing = IndexSet.empty;
+                  reductions = []; stacks = []} in
   let table = Vector.make (Transition.goto g) sentinel in
   Index.rev_iter (Transition.goto g) begin fun gt ->
     if printf_debug then
@@ -160,13 +165,15 @@ let close_goto_reductions (type g) (g : g grammar) rcs
       | rs -> push reductions rs
     in
     let failing = ref IndexSet.empty in
+    let accepting = ref IndexSet.empty in
     let rec visit_target tgt la =
       let rc = rcs.:(tgt) in
       if printf_debug then
         Printf.printf "- reaching target %s @ %s\n"
           (Lr1.to_string g tgt)
           (Terminal.lookaheads_to_string g la);
-      add_failing g failing rc.failing la;
+      add_subset g failing rc.failing la;
+      add_subset g accepting rc.accepting la;
       if printf_debug then
         Printf.printf "importing %d stacks\n" (List.length rc.stacks);
       stacks := ([tgt], la) :: filter_stacks g la !stacks rc.stacks;
@@ -184,15 +191,17 @@ let close_goto_reductions (type g) (g : g grammar) rcs
         visit_target (Transition.target g (Transition.of_goto g gt')) la
       else
         let rc = table.:(gt') in
-        add_failing g failing rc.failing la;
+        add_subset g failing rc.failing la;
+        add_subset g accepting rc.accepting la;
         stacks := filter_stacks g la !stacks rc.stacks;
         push_reductions (filter_reductions g la rc.reductions)
     in
     visit_target tgt (Terminal.all g);
     let failing = !failing in
+    let accepting = !accepting in
     let stacks = !stacks in
     let reductions = merge_reductions !reductions in
-    table.:(gt) <- {failing; reductions; stacks}
+    table.:(gt) <- {accepting; failing; reductions; stacks}
   end;
   flush stdout;
   table
