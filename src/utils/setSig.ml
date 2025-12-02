@@ -32,6 +32,8 @@ module type S1 = sig
 
   val is_empty: 'a t -> bool
 
+  val is_not_empty: 'a t -> bool
+
   (* [singleton x] returns a singleton set containing [x] as its only
      element. *)
 

@@ -24,6 +24,12 @@ let is_empty = function
   | C _ ->
     false
 
+let is_not_empty = function
+  | N ->
+    false
+  | C _ ->
+    true
+
 let add i s =
   let ioffset = i mod word_size in
   let iaddr = i - ioffset
