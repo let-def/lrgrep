@@ -327,7 +327,7 @@ let do_compile spec (cp : Code_printer.t option) =
             (br : _ index :> int) branches.expr.:(br).position.pos_lnum
             (Automata.NFA.dump grammar nfa);
       ) nfa;
-    stopwatch 1 "constructed NFA\n";
+    stopwatch 1 "constructed NFA";
     let Automata.DFA.T dfa =
       Automata.DFA.determinize grammar branches stacks nfa in
     if !opt_dump_dot then
@@ -339,22 +339,22 @@ let do_compile spec (cp : Code_printer.t option) =
       Vector.iter (fun (Automata.DFA.Packed st) ->
           branches := !branches + Vector.length_as_int st.branches
         ) dfa.states;
-      stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)\n"
+      stopwatch 1 "determinization (%d states, %d branches, average %.02f branch/state)"
         states !branches (float !branches /. float states);
     end;
     let dataflow = Automata.Dataflow.make branches dfa in
-    stopwatch 1 "dataflow analysis\n";
+    stopwatch 1 "dataflow analysis";
     if !opt_dump_dot then
       with_output_file "%s_%s_dataflow.dot" !!parser_name rule.name
         (Automata.Dataflow.dump grammar dfa dataflow);
     let Automata.Machine.T machine =
       Automata.Machine.minimize branches dfa dataflow in
-    stopwatch 1 "machine minimization\n";
+    stopwatch 1 "machine minimization";
     if !opt_dump_dot then
       with_output_file "%s_%s_machine.dot" !!parser_name rule.name
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
-    stopwatch 1 "table & code generation\n";
+    stopwatch 1 "table & code generation";
     Option.iter (
       Coverage.coverage
         grammar
