@@ -56,14 +56,33 @@ let project_position (type g) (p : g positions) pos =
 
 let previous_position (type g) (p : g positions) pos =
   match p.desc.:(pos) with
-  | Free -> assert false
-  | Reducing (_, 0) -> assert false
-  | Reducing _ -> Index.of_int (Vector.length p.desc) ((pos :> int) - 1)
+  | Free ->
+    Either.Right pos
+  | Reducing (nt, 0) ->
+    Either.Left nt
+  | Reducing _ ->
+    Either.Right (Index.of_int (Vector.length p.desc) ((pos :> int) - 1))
 
-let get_set map i =
-  match IndexMap.find_opt i map with
-  | None -> IndexSet.empty
-  | Some set -> set
+let pack_position positions i j =
+  Prod.inj (Vector.length positions.desc) i j
+
+let pack_inject positions lrc nt pos =
+  pack_position positions (inject_position positions nt pos) lrc
+
+let unpack_position positions i =
+  Prod.prj (Vector.length positions.desc) i
+
+let get_map v i j =
+  let map = v.:(i) in
+  match IndexMap.find_opt j map with
+  | Some r -> r
+  | None ->
+    let r = ref IndexSet.empty in
+    v.:(i) <- IndexMap.add j r map;
+    r
+
+let (@:=) r f =
+  r := f !r
 
 let coverage (type g r st tr lrc)
     (g : g grammar)
@@ -79,29 +98,24 @@ let coverage (type g r st tr lrc)
   let transitions = Vector.make state_count [] in
   let pending = ref [] in
   let todo = Vector.make state_count IndexMap.empty in
-  let schedule st0 lrc0 pos0 st lrc pos la =
-    let la =
-      match IndexMap.find_opt lrc reached.:(st) with
-      | None -> la
-      | Some positions ->
-        match IndexMap.find_opt pos positions with
-        | None -> la
-        | Some la' -> IndexSet.diff la la'
-    in
-    if not (IndexSet.is_empty la) then (
-      let map = todo.:(st) in
-      if IndexMap.is_empty map then (
+  let schedule st0 lp0 st lp la =
+    let reached = get_map reached st lp in
+    let la = IndexSet.diff la !reached in
+    if IndexSet.is_not_empty la then (
+      reached @:= IndexSet.union la;
+      let todo = get_map todo st lp in
+      if IndexSet.is_empty !todo then
         push pending st;
-        todo.:(st) <- IndexMap.singleton lrc (IndexMap.singleton pos la);
-        transitions.@(st) <- List.cons (lrc, pos, st0, lrc0, pos0, la);
-      ) else
-        todo.:(st) <- IndexMap.update lrc (function
-            | None -> Some (IndexMap.singleton pos la)
-            | Some poss -> Some (IndexMap.update pos (union_update la) poss)
-          ) map;
+      todo @:= IndexSet.union la;
+      transitions.@(st) <- List.cons (st0, lp0, st, lp, la);
     )
   in
-  let propagate_position st lrc pos la =
+  let unhandled_inner = ref 0 in
+  let unhandled_stack = ref 0 in
+  let unhandled_transitions xs =
+    unhandled_inner := !unhandled_inner + List.length xs
+  in
+  let propagate_position st lp la =
     let la =
       List.fold_left (fun la (br, _, _) ->
           if Boolvector.test branches.is_partial br then
@@ -114,65 +128,48 @@ let coverage (type g r st tr lrc)
         ) la machine.accepting.:(st)
     in
     if not (IndexSet.is_empty la) then
-      match positions.desc.:(pos) with
-      | Reducing (nt, 0) ->
+      let pos, lrc = unpack_position positions lp in
+      match previous_position positions pos with
+      | Left nt ->
         let src = stacks.label lrc in
         let tgt = Transition.find_goto_target g src nt in
         List.iteri begin fun pos' nts ->
-          IndexMap.iter begin fun nt la' ->
+          IndexMap.iter begin fun nt' la' ->
             let la = IndexSet.inter la la' in
-            if not (IndexSet.is_empty la) then
-              let pos' = inject_position positions nt pos' in
-              schedule st lrc pos st lrc pos' la
+            if IndexSet.is_not_empty la then
+              schedule st lp st (pack_inject positions lrc nt' pos') la
           end nts
         end rcs.:(tgt).reductions;
-        let la' = IndexSet.inter la rcs.:(tgt).failing in
-        if not (IndexSet.is_empty la') then
-          schedule st lrc pos st lrc positions.free la'
-      | Reducing _ ->
-        let pos' = previous_position positions pos in
+        let la = IndexSet.inter la rcs.:(tgt).failing in
+        if IndexSet.is_not_empty la then
+          schedule st lp st (pack_position positions positions.free lrc) la
+
+      | Right pos' ->
         let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
-        let trs = machine.outgoing.:(st) in
-        let process tr lrcs =
-          let st' = machine.target.:(tr) in
-          let filter = machine.label.:(tr).filter in
-          List.filter begin fun (lr1, lrcs) ->
-            if IndexSet.mem lr1 filter then (
-              IndexSet.iter
-                (fun lrc' -> schedule st lrc pos st' lrc' pos' la)
-                lrcs;
-              false
-            ) else
-              true
-          end lrcs
-        in
-        ignore (IndexSet.fold process trs lrcs)
-      | Free ->
-        let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
-        let trs = machine.outgoing.:(st) in
-        let process tr lrcs =
-          let st' = machine.target.:(tr) in
-          let filter = machine.label.:(tr).filter in
-          List.filter begin fun (lr1, lrcs) ->
-            if IndexSet.mem lr1 filter then (
-              IndexSet.iter
-                (fun lrc' -> schedule st lrc pos st' lrc' pos la)
-                lrcs;
-              false
-            ) else
-              true
-          end lrcs
-        in
-        ignore (IndexSet.fold process trs lrcs)
+        if List.is_empty lrcs then
+          (* Initial state: all lookaheads should have been handled by now *)
+          incr unhandled_stack
+        else
+          let trs = machine.outgoing.:(st) in
+          let process tr lrcs =
+            let st' = machine.target.:(tr) in
+            let filter = machine.label.:(tr).filter in
+            List.filter begin fun (lr1, lrcs) ->
+              if IndexSet.mem lr1 filter then (
+                IndexSet.iter
+                  (fun lrc' -> schedule st lp st' (pack_position positions pos' lrc') la)
+                  lrcs;
+                false
+              ) else
+                true
+            end lrcs
+          in
+          unhandled_transitions (IndexSet.fold process trs lrcs)
   in
   let propagate st =
     let map = todo.:(st) in
     todo.:(st) <- IndexMap.empty;
-    reached.@(st) <-
-      IndexMap.union
-        (fun _ ma mb -> Some (IndexMap.union (fun _ sa sb -> Some (IndexSet.union sa sb)) ma mb))
-        map;
-    IndexMap.iter (fun lrc -> IndexMap.iter (propagate_position st lrc)) map
+    IndexMap.iter (fun lp set -> propagate_position st lp !set) map
   in
   let lrcs = IndexSet.split_by_run stacks.label stacks.tops in
   let trs = machine.outgoing.:(initial) in
@@ -184,21 +181,26 @@ let coverage (type g r st tr lrc)
         List.iteri begin fun pos nts ->
           IndexMap.iter begin fun nt la ->
             let pos = inject_position positions nt (pos + 1) in
-            IndexSet.iter (fun lrc -> schedule st lrc pos st lrc pos la) lrcs
+            IndexSet.iter begin fun lrc ->
+              let lp = pack_position positions pos lrc in
+              schedule st lp st lp la
+            end lrcs
           end nts
         end rcs.:(lr1).reductions;
-        (*rcs.:(lr1).reductions
-          IndexSet.iter
-          (fun lrc -> schedule target lrc pos' la)
-          lrcs;*)
         false
       end else
         true
     end lrcs
   in
-  ignore (IndexSet.fold process trs lrcs);
-  fixpoint ~propagate pending;
-  stopwatch 2 "computed coverage (%d transitions)"
+  let counter = ref 0 in
+  let unhandled = IndexSet.fold process trs lrcs in
+  fixpoint ~counter ~propagate pending;
+  stopwatch 2 "computed coverage (%d transitions, %d iterations, \
+               %d unhandled initial, %d unhandled inner, %d unhandled stacks)"
     (Vector.fold_left (fun acc trs -> acc + List.length trs) 0 transitions)
+    !counter
+    (List.length unhandled)
+    !unhandled_inner
+    !unhandled_stack
   ;
   ()
