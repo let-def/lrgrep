@@ -7,9 +7,13 @@ open Info
 module Position = Unsafe_cardinal()
 type 'g position = 'g Position.t
 
+type 'g position_desc =
+  | Free
+  | Reducing of 'g nonterminal index * int
 type 'g positions = {
-  desc: ('g position, 'g nonterminal index * int) vector;
+  desc: ('g position, 'g position_desc) vector;
   zero: ('g nonterminal, 'g position index) vector;
+  free: 'g position index;
 }
 
 let make_positions (type g) (g : g grammar) : g positions =
@@ -20,40 +24,41 @@ let make_positions (type g) (g : g grammar) : g positions =
   let open Position.Const(struct
       type t = g
       let cardinal =
-        Vector.fold_left (+) (Vector.length_as_int length) length
+        Vector.fold_left (+) (1 + Vector.length_as_int length) length
     end)
   in
-  let desc = Vector.make' n
-      (fun () -> Index.of_int (Nonterminal.cardinal g) 0, 0)
-  in
+  let desc = Vector.make n Free in
   let enum = Index.enumerate n in
+  let free = enum () in
   let zero = Vector.mapi (fun nt count ->
       let zero = enum () in
-      desc.:(zero) <- (nt, 0);
+      desc.:(zero) <- Reducing (nt, 0);
       for i = 1 to count do
-        desc.:(enum ()) <- (nt, i);
+        desc.:(enum ()) <- Reducing (nt, i);
       done;
       zero
     ) length
   in
-  {desc; zero}
+  {desc; zero; free}
 
 let inject_position (type g) (p : g positions) nt pos =
   assert (pos >= 0);
   let p0 = p.zero.:(nt) in
   let pn = Index.of_int (Vector.length p.desc) ((p0 :> int) + pos) in
-  assert (Index.equal nt (fst p.desc.:(pn)));
+  begin match p.desc.:(pn) with
+    | Reducing (nt', _) -> assert (Index.equal nt nt')
+    | Free -> assert false
+  end;
   pn
 
 let project_position (type g) (p : g positions) pos =
   p.desc.:(pos)
 
 let previous_position (type g) (p : g positions) pos =
-  let nt, pos' = p.desc.:(pos) in
-  if pos' = 0 then
-    Either.Left nt
-  else
-    Either.Right (Index.of_int (Vector.length p.desc) ((pos :> int) - 1))
+  match p.desc.:(pos) with
+  | Free -> assert false
+  | Reducing (_, 0) -> assert false
+  | Reducing _ -> Index.of_int (Vector.length p.desc) ((pos :> int) - 1)
 
 let get_set map i =
   match IndexMap.find_opt i map with
@@ -109,8 +114,23 @@ let coverage (type g r st tr lrc)
         ) la machine.accepting.:(st)
     in
     if not (IndexSet.is_empty la) then
-      match previous_position positions pos with
-      | Either.Right pos' ->
+      match positions.desc.:(pos) with
+      | Reducing (nt, 0) ->
+        let src = stacks.label lrc in
+        let tgt = Transition.find_goto_target g src nt in
+        List.iteri begin fun pos' nts ->
+          IndexMap.iter begin fun nt la' ->
+            let la = IndexSet.inter la la' in
+            if not (IndexSet.is_empty la) then
+              let pos' = inject_position positions nt pos' in
+              schedule st lrc pos st lrc pos' la
+          end nts
+        end rcs.:(tgt).reductions;
+        let la' = IndexSet.inter la rcs.:(tgt).failing in
+        if not (IndexSet.is_empty la') then
+          schedule st lrc pos st lrc positions.free la'
+      | Reducing _ ->
+        let pos' = previous_position positions pos in
         let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
         let trs = machine.outgoing.:(st) in
         let process tr lrcs =
@@ -127,17 +147,23 @@ let coverage (type g r st tr lrc)
           end lrcs
         in
         ignore (IndexSet.fold process trs lrcs)
-      | Either.Left nt ->
-        let src = stacks.label lrc in
-        let tgt = Transition.find_goto_target g src nt in
-        List.iteri begin fun pos' nts ->
-          IndexMap.iter begin fun nt la' ->
-            let la = IndexSet.inter la la' in
-            if not (IndexSet.is_empty la) then
-              let pos' = inject_position positions nt pos' in
-              schedule st lrc pos st lrc pos' la
-          end nts
-        end rcs.:(tgt).reductions
+      | Free ->
+        let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
+        let trs = machine.outgoing.:(st) in
+        let process tr lrcs =
+          let st' = machine.target.:(tr) in
+          let filter = machine.label.:(tr).filter in
+          List.filter begin fun (lr1, lrcs) ->
+            if IndexSet.mem lr1 filter then (
+              IndexSet.iter
+                (fun lrc' -> schedule st lrc pos st' lrc' pos la)
+                lrcs;
+              false
+            ) else
+              true
+          end lrcs
+        in
+        ignore (IndexSet.fold process trs lrcs)
   in
   let propagate st =
     let map = todo.:(st) in
