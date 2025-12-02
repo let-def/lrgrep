@@ -287,7 +287,7 @@ module K = struct
         let f = process_reduction_step matching next_steps label.filter reduction in
         IndexSet.iter f steps;
         let push_matching () =
-          if not (IndexSet.is_empty !matching) then (
+          if IndexSet.is_not_empty !matching then (
             let label = {label with filter = !matching} in
             let label = Label.capture label IndexSet.empty reduction.usage in
             process_k label next
@@ -360,7 +360,7 @@ module K = struct
               else steps
             end (Redgraph.initial rg lr1) IndexSet.empty
           in
-          if not (IndexSet.is_empty steps) then
+          if IndexSet.is_not_empty steps then
             push next_steps (steps, lr1);
         end label.filter;
         let next_steps = IndexRefine.annotated_partition !next_steps in

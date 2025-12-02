@@ -344,7 +344,7 @@ module DFA = struct
           let Prepacked t as packed = IndexBuffer.Gen.get prestates i in
           if min_clause t <= bound then
             let set = IndexSet.diff set visited.*(i) in
-            if not (IndexSet.is_empty set) then (
+            if IndexSet.is_not_empty set then (
               if IndexSet.is_empty scheduled.*(i) then (
                 scheduled.*(i) <- set;
                 match t.accept with
@@ -381,7 +381,7 @@ module DFA = struct
             let stacks = IndexSet.bind label expand_stack in
             if not !really_empty then
               let lazy (Fwd_mapping (_, t')) = target in
-              if not (IndexSet.is_empty stacks) then
+              if IndexSet.is_not_empty stacks then
                 schedule bound t'.index stacks
           end t.raw_transitions
         in
@@ -429,7 +429,7 @@ module DFA = struct
           List.filter_map (fun (label, target) ->
               if Lazy.is_val target then
                 let label = IndexSet.inter label domain  in
-                if not (IndexSet.is_empty label) then
+                if IndexSet.is_not_empty label then
                   let Construction.Fwd_mapping (mapping, target) =
                     Lazy.force target in
                   let target = from_prestate target in
@@ -668,7 +668,7 @@ module Dataflow = struct
           IndexSet.init_from_set
             (Vector.length t.state.branches)
             (Boolvector.test t.state.accepting);
-        if not (IndexSet.is_empty t.new_splits) then
+        if IndexSet.is_not_empty t.new_splits then
           push todo (Packed t);
       end data;
       let schedule (type n) (t : n data) (splits : n indexset) =
@@ -992,7 +992,7 @@ module Dataflow = struct
           in
           Vector.iteri process_mapping mapping;
         end;
-        if Vector.exists (fun set -> not (IndexSet.is_empty set)) result then
+        if Vector.exists IndexSet.is_not_empty result then
           schedule (get_data tgt);
         Vector.as_array result
       in
@@ -1345,7 +1345,7 @@ module Machine = struct
             let label = label tr in
             push acc (label.filter, tr);
             if label.captures <> [] ||
-               not (IndexSet.is_empty label.clear) ||
+               IndexSet.is_not_empty label.clear ||
                not (IndexMap.is_empty label.moves) then
               push actions ({label with filter = IndexSet.empty}, tr);
           );

@@ -127,7 +127,7 @@ let coverage (type g r st tr lrc)
             | Some la' -> IndexSet.diff la la'
         ) la machine.accepting.:(st)
     in
-    if not (IndexSet.is_empty la) then
+    if IndexSet.is_not_empty la then
       let pos, lrc = unpack_position positions lp in
       match previous_position positions pos with
       | Left nt ->

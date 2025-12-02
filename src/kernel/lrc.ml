@@ -197,7 +197,7 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
         Vector.set table i succ;
       )
     in
-    while not (IndexSet.is_empty !todo) do
+    while IndexSet.is_not_empty !todo do
       let todo' = !todo in
       todo := IndexSet.empty;
       IndexSet.rev_iter populate todo';
@@ -225,7 +225,7 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
           Vector.set table state prefix;
           let prefix = state :: prefix in
           let succ = successors.:(state) in
-          if not (IndexSet.is_empty succ) then
+          if IndexSet.is_not_empty succ then
             push todo (succ, prefix)
         | _ -> ()
       in

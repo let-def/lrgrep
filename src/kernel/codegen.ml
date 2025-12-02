@@ -326,7 +326,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
             (fun branch -> Option.is_some branches.lookaheads.:(branch))
             brs
         in
-        if not (IndexSet.is_empty constrained) then
+        if IndexSet.is_not_empty constrained then
           Code_printer.fmt out "  | (%s), _ -> None\n"
             (string_concat_map "|" string_of_index (IndexSet.elements constrained))
       in
