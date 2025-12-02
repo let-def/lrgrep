@@ -6,7 +6,7 @@
   (targets parse_errors.ml)
   (deps    parser.cmly parse_errors.mlyl)
   (action
-     (run lrgrep -g parser.cmly -s parse_errors.mlyl
+     (run lrgrep -v -v -g parser.cmly -s parse_errors.mlyl
           compile -o parse_errors.ml)))
 
 (executable
