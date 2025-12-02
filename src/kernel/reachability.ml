@@ -996,7 +996,7 @@ let make (type g) (g : g grammar) : g t = (module struct
       let node = Tree.leaf (Transition.of_goto g tr) in
       let eqn = Tree.goto_equations tr in
       (* Set matrix cells corresponding to nullable reductions to 0 *)
-      if not (IndexSet.is_empty eqn.nullable_lookaheads) then (
+      if IndexSet.is_not_empty eqn.nullable_lookaheads then (
         let pre = Tree.pre_classes node in
         let post = Tree.post_classes node in
         (* We use:

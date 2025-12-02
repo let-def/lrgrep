@@ -888,7 +888,7 @@ let () = match nt_inclusion with
     Vector.iteri begin fun nt nts ->
       (* .. to prune the trivial parts of the graph
          (non-terminals not related to any other) *)
-      if not (IndexSet.is_empty nts) || IndexSet.mem nt on_rhs then (
+      if IndexSet.is_not_empty nts || IndexSet.mem nt on_rhs then (
         p " st%d[label=%S];\n" (Index.to_int nt) (Nonterminal.to_string grammar nt);
         IndexSet.iter
           (fun nt' -> p " st%d -> st%d;\n" (Index.to_int nt) (Index.to_int nt'))
@@ -1056,7 +1056,7 @@ module Shadowing() = struct
   (** Print the results of the analysis by iterating over each clause *)
   let () = Vector.iteri begin fun c cs ->
       (* Check if the clause has any shadowers. *)
-      if not (IndexSet.is_empty cs) then (
+      if IndexSet.is_not_empty cs then (
         (* Print the unreachable clause and its shadowers. *)
         Syntax.warn (Transl.Clause.position c)
           "Clause is unreachable. It is shadowed at least by clauses %s.\n"
@@ -1260,7 +1260,7 @@ module Enum = struct
       | _, {child = _ :: _; _} -> ()
       | _, {stack; _} ->
         let reduce, filter = pattern_from_stack stack in
-        if not (IndexSet.is_empty filter) then
+        if IndexSet.is_not_empty filter then
           match Hashtbl.find_opt table reduce with
           | None -> Hashtbl.add table reduce (ref [i, filter])
           | Some r -> r := (i, filter) :: !r

@@ -200,7 +200,7 @@ struct
             let eqn = Tree.goto_equations goto in
             let c_pre = (Tree.pre_classes node).(i_pre) in
             let c_post = (Tree.post_classes node).(i_post) in
-            if not (IndexSet.is_empty eqn.nullable_lookaheads) &&
+            if IndexSet.is_not_empty eqn.nullable_lookaheads &&
               IndexSet.quick_subset c_post eqn.nullable_lookaheads &&
               not (IndexSet.disjoint c_pre c_post) then
               (* If a nullable reduction is possible, don't do anything *)

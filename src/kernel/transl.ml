@@ -86,7 +86,7 @@ module Indices = struct
       let rec close acc nt =
         if IndexSet.mem nt acc then acc else
           let acc' = Vector.get table nt in
-          if not (IndexSet.is_empty acc') then
+          if IndexSet.is_not_empty acc' then
             IndexSet.union acc acc'
           else
             let acc = IndexSet.add nt acc in

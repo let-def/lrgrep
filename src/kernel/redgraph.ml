@@ -199,7 +199,7 @@ let close_goto_reductions (type g) (g : g grammar) rcs
 
 let dump_closure ?(failing=false) g print_label vector =
   Vector.iteri begin fun st def ->
-    let has_failing = failing && not (IndexSet.is_empty def.failing) in
+    let has_failing = failing && IndexSet.is_not_empty def.failing in
     let has_reductions = not (list_is_empty def.reductions) in
     let has_stacks = not (list_is_empty def.stacks) in
     if has_failing || has_reductions || has_stacks then
@@ -298,7 +298,7 @@ let index_targets (type g) (g : g grammar) rc
       roots;
     (* Goto sources *)
     let sources = goto_sources.:(tgt) in
-    if not (IndexSet.is_empty sources) then
+    if IndexSet.is_not_empty sources then
       (* Prepend all goto transitions (by construction, rc stacks already end with tgt) *)
       let roots =
         (get_child (root, tgt), Terminal.all g) ::
@@ -381,13 +381,13 @@ let make (type g) (g : g grammar) rc targets : g graph =
     List.iteri begin fun depth goto ->
       IndexMap.iter begin fun nt la ->
         let la = IndexSet.inter la0 la in
-        if not (IndexSet.is_empty la) then (
+        if IndexSet.is_not_empty la then (
           let cell = get_cell nt la in
           let states = predecessors depth in
           let done_ = Dyn.get cells cell in
           let todo = IndexSet.diff states done_ in
           push result (src, reached, depth, cell0, cell, states);
-          if not (IndexSet.is_empty todo) then (
+          if IndexSet.is_not_empty todo then (
             Dyn.set cells cell (IndexSet.union todo done_);
             IndexSet.rev_iter (explore_cell cell nt la) todo;
           )
