@@ -28,6 +28,7 @@ open Misc
 open Info
 
 type 'g reduction_closure = {
+  accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: ('g lr1 index list * 'g terminal indexset) list;
