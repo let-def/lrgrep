@@ -84,6 +84,69 @@ let get_map v i j =
 let (@:=) r f =
   r := f !r
 
+type ('g, 'lrc) failure_node = {
+  lrc: 'lrc index;
+  nt: 'g nonterminal index;
+  mutable fallible: 'g terminal indexset;
+  mutable fail_fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+  mutable fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+  mutable bkd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+}
+
+let failures (type g lrc)
+    (g : g grammar)
+    (stacks : (g, lrc) Automata.stacks)
+    (rcs : (g lr1, g Redgraph.reduction_closure) vector)
+  =
+  let table = Vector.make stacks.domain IndexMap.empty in
+  let todo = ref [] in
+  let rec explore lrc nt =
+    let map = table.:(lrc) in
+    match IndexMap.find_opt nt map with
+    | Some node -> node
+    | None ->
+      let tgt = Transition.find_goto_target g (stacks.label lrc) nt in
+      let rc = rcs.:(tgt) in
+      let node = {lrc; nt; fallible = rc.failing; fwd = []; bkd = []; fail_fwd = []} in
+      push todo node;
+      table.:(lrc) <- IndexMap.add nt node map;
+      let _, fwd = List.fold_left (fun (lrcs, fwd) nts ->
+          let lrcs = IndexSet.bind lrcs stacks.prev in
+          let fwd = IndexMap.fold (fun nt la fwd ->
+              IndexSet.fold (fun lrc fwd ->
+                  let node' = explore lrc nt in
+                  node'.bkd <- (node, la) :: node'.bkd;
+                  (node', la) :: fwd
+                ) lrcs fwd
+            ) nts fwd
+          in
+          (lrcs, fwd)
+        ) (IndexSet.singleton lrc, []) rc.reductions
+      in
+      node.fwd <- fwd;
+      node
+  in
+  let propagate node =
+    List.iter (fun (node', la) ->
+        let fallible = IndexSet.union (IndexSet.inter node.fallible la) node'.fallible in
+        if fallible != node'.fallible then (
+          let delta = IndexSet.diff node'.fallible fallible in
+          node'.fallible <- fallible;
+          node'.fail_fwd <- (node, delta) :: node'.fail_fwd;
+          push todo node'
+        )
+      ) node.bkd
+  in
+  let rec explore_all lrcs nt = function
+    | 0 ->
+      let nodes = IndexSet.fold (fun lrc acc -> explore lrc nt :: acc) lrcs [] in
+      fixpoint ~propagate todo;
+      nodes
+    | n ->
+      explore_all (IndexSet.bind lrcs stacks.prev) nt (n - 1)
+  in
+  explore_all
+
 let coverage (type g r st tr lrc)
     (g : g grammar)
     (branches : (g, r) Spec.branches)
@@ -148,7 +211,8 @@ let coverage (type g r st tr lrc)
         let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
         if List.is_empty lrcs then
           (* Initial state: all lookaheads should have been handled by now *)
-          incr unhandled_stack
+          (assert (pos' = positions.free);
+           incr unhandled_stack)
         else
           let trs = machine.outgoing.:(st) in
           let process tr lrcs =

@@ -310,6 +310,7 @@ let do_compile spec (cp : Code_printer.t option) =
     let subset = lrc_from_entrypoints initial_states in
     let stacks = {
       Automata.
+      domain = Vector.length !!lrc.lr1_of;
       tops =
         if fst rule.error
         then subset.wait

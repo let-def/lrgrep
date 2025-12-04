@@ -42,6 +42,7 @@ open Spec
 open Regexp
 
 type ('g, 'n) stacks = {
+  domain: 'n cardinal;
   tops: 'n indexset;
   prev: 'n index -> 'n indexset;
   label: 'n index -> 'g lr1 index;
