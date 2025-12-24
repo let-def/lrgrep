@@ -7,13 +7,11 @@ open Info
 module Position = Unsafe_cardinal()
 type 'g position = 'g Position.t
 
-type 'g position_desc =
-  | Free
-  | Reducing of 'g nonterminal index * int
+type 'g position_desc = 'g nonterminal index * int
+
 type 'g positions = {
   desc: ('g position, 'g position_desc) vector;
   zero: ('g nonterminal, 'g position index) vector;
-  free: 'g position index;
 }
 
 let make_positions (type g) (g : g grammar) : g positions =
@@ -27,28 +25,25 @@ let make_positions (type g) (g : g grammar) : g positions =
         Vector.fold_left (+) (1 + Vector.length_as_int length) length
     end)
   in
-  let desc = Vector.make n Free in
+  let desc = Vector.make' n (fun () -> Index.of_int (Nonterminal.cardinal g) 0, 0) in
   let enum = Index.enumerate n in
-  let free = enum () in
   let zero = Vector.mapi (fun nt count ->
       let zero = enum () in
-      desc.:(zero) <- Reducing (nt, 0);
+      desc.:(zero) <- (nt, 0);
       for i = 1 to count do
-        desc.:(enum ()) <- Reducing (nt, i);
+        desc.:(enum ()) <- (nt, i);
       done;
       zero
     ) length
   in
-  {desc; zero; free}
+  {desc; zero}
 
 let inject_position (type g) (p : g positions) nt pos =
   assert (pos >= 0);
   let p0 = p.zero.:(nt) in
   let pn = Index.of_int (Vector.length p.desc) ((p0 :> int) + pos) in
-  begin match p.desc.:(pn) with
-    | Reducing (nt', _) -> assert (Index.equal nt nt')
-    | Free -> assert false
-  end;
+  let (nt', _) = p.desc.:(pn)  in
+  assert (Index.equal nt nt');
   pn
 
 let project_position (type g) (p : g positions) pos =
@@ -56,12 +51,8 @@ let project_position (type g) (p : g positions) pos =
 
 let previous_position (type g) (p : g positions) pos =
   match p.desc.:(pos) with
-  | Free ->
-    Either.Right pos
-  | Reducing (nt, 0) ->
-    Either.Left nt
-  | Reducing _ ->
-    Either.Right (Index.of_int (Vector.length p.desc) ((pos :> int) - 1))
+  | (nt, 0) -> Either.Left nt
+  | _ -> Either.Right (Index.of_int (Vector.length p.desc) ((pos :> int) - 1))
 
 let pack_position positions i j =
   Prod.inj (Vector.length positions.desc) i j
@@ -205,14 +196,15 @@ let coverage (type g r st tr lrc)
         end rcs.:(tgt).reductions;
         let la = IndexSet.inter la rcs.:(tgt).failing in
         if IndexSet.is_not_empty la then
-          schedule st lp st (pack_position positions positions.free lrc) la
-
+          () (*TODO: unhandled la*)
+          (*schedule st lp st (pack_position positions positions.free lrc) la*)
       | Right pos' ->
         let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
         if List.is_empty lrcs then
+          assert false
           (* Initial state: all lookaheads should have been handled by now *)
-          (assert (pos' = positions.free);
-           incr unhandled_stack)
+          (* assert (pos' = positions.free);
+             incr unhandled_stack) *)
         else
           let trs = machine.outgoing.:(st) in
           let process tr lrcs =
