@@ -75,16 +75,54 @@ let get_map v i j =
 let (@:=) r f =
   r := f !r
 
+(* Computation of free failures:
+
+   Given a set of stacks and an initial reduction, find each lookahead that end
+   up being rejected by at least one stack of the set.
+*)
+
+(* A failure node associates to a goto transition the set of lookaheads that can
+   be rejected (directly or not). *)
 type ('g, 'lrc) failure_node = {
+
+  (* Characterizing the goto transition *)
+
+  (* The lrc index represent the set of stacks ending in this state. *)
   lrc: 'lrc index;
+  (* The nonterminal labelling the goto transition to follow from these stacks. *)
   nt: 'g nonterminal index;
+
+  (* Results of the analysis *)
+
+  (* The lookahead symbols that are rejected by at least one of the stack that
+     end in [lrc] after following the transition labelled [nt], written [lrc+nt]. *)
   mutable fallible: 'g terminal indexset;
-  mutable fail_fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+
+  (* forward transitions (a transition [nd, la] is in [fwd] if [nd] is reachable by
+     reducing at least one stack from [lrc+nt], while looking ahead a symbol in [la]. *)
   mutable fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+
+  (* backward transition, the converse of the [fwd] relation *)
   mutable bkd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+
+  (* [fail_fwd] records the shortest path to certain failures.
+     E.g. to find how to make a certain terminal [t ∈ nd.fallible] fails, look
+     for a transition [nd', la] in [nd.fail_fwd] such that [t ∈ la]:
+     - if there is one, repeat the search in [nd']
+     - if there is none, [t] is rejected directly by [nd]
+  *)
+  mutable fail_fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+
 }
 
-let failures (type g lrc)
+(* Staged and cached lazy computation for construction the graph of failure nodes:
+   1. [let finder = free_failures grammar stacks rcs]
+      lazily constructs the graph
+   2. [finder lrcs nt depth] is the list of failure nodes reachable by following
+      a goto transition labelled [nt] [depth] states deep in the stacks
+      described by [lrcs].
+*)
+let free_failures (type g lrc)
     (g : g grammar)
     (stacks : (g, lrc) Automata.stacks)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
@@ -137,6 +175,13 @@ let failures (type g lrc)
       explore_all (IndexSet.bind lrcs stacks.prev) nt (n - 1)
   in
   explore_all
+
+(* Compute coverage of a machine (an automaton realizing an error
+   specification).
+
+   TODO: remember the shortest path to certain states during the
+   construction.
+*)
 
 let coverage (type g r st tr lrc)
     (g : g grammar)
