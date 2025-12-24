@@ -240,6 +240,110 @@ let red_closure = lazy (
   Redgraph.close_lr1_reductions !!grammar
 )
 
+module Completion() = struct
+  open Info
+
+  type node = g nonterminal index
+
+  type completion = {
+    shift: (g terminal index * g lr1 index list) list;
+    reduce: (int * node * g terminal indexset) list;
+  }
+
+  let grammar = !!grammar
+
+  let shift_or_goto =
+    Vector.init (Lr1.cardinal grammar) @@ fun lr1 ->
+    IndexSet.split_sum (Transition.goto grammar)  (Transition.successors grammar lr1)
+
+  let by_lr1 =
+    let of_rc (rc : _ Redgraph.reduction_closure) =
+      let shift =
+        List.concat_map (fun (stack, la) ->
+            IndexSet.fold (fun sh acc ->
+                let terminal = Transition.shift_symbol grammar sh in
+                if IndexSet.mem terminal la then
+                  let target = Transition.(target grammar (of_shift grammar sh)) in
+                  (terminal, target :: stack) :: acc
+                else
+                  acc
+              ) (snd shift_or_goto.:(List.hd stack)) []
+          ) rc.stacks
+      in
+      let reduce =
+        List.concat @@
+        List.mapi begin fun depth nts ->
+          List.map
+            (fun (nt, la) -> (depth, nt, la))
+            (IndexMap.bindings nts)
+        end rc.reductions
+      in
+      {shift; reduce}
+    in
+    Vector.map of_rc !!red_closure
+
+  let () =
+    let to_bitset s =
+      let s = (s : _ indexset :> IntSet.t) in
+      match IntSet.maximum s with
+      | None -> Lrgrep_bitset.empty
+      | Some i ->
+        Lrgrep_bitset.init (i + 1) (fun j -> IntSet.mem j s)
+    in
+    let p fmt = Printf.printf fmt in
+    let sharing = false in
+    let stable = Hashtbl.create 7 in
+    let populate s =
+      match Hashtbl.find_opt stable s with
+      | Some (_, r) -> incr r
+      | None ->
+        let i = Hashtbl.length stable in
+        Hashtbl.add stable s ("s" ^ string_of_int i, ref 1);
+    in
+    let source s =
+      Printf.sprintf "%S" (Lrgrep_bitset.export (to_bitset s))
+    in
+    let export s =
+      if sharing then
+        match Hashtbl.find stable s with
+        | _, {contents = 1} -> source s
+        | v, _ -> v
+      else
+        source s
+    in
+    if sharing then (
+      Vector.iter (fun compl ->
+          List.iter (fun (_, _, ts) -> populate ts) compl.reduce;
+        ) by_lr1;
+      Hashtbl.iter (fun ts (v, r) ->
+          if !r > 1 then
+            p "let %s = %s in\n" v (source ts)
+        ) stable;
+    );
+    p "[|";
+    Vector.iter (fun compl ->
+        p "([";
+        List.iteri (fun i (t, stack) ->
+            p "%s%d,[%s]"
+              (if i > 0 then ";" else "")
+              (Index.to_int t)
+              (string_concat_map ";" string_of_index stack)
+          ) compl.shift;
+        p "],[";
+        List.iteri (fun i (depth, nt, ts) ->
+            p "%s%d,%d,%s"
+              (if i > 0 then ";" else "")
+              depth
+              (Index.to_int nt)
+              (export ts)
+          ) compl.reduce;
+        p "]);";
+      ) by_lr1;
+    p "|]"
+
+
+end
+
 let red_trie, red_targets =
   let red_index = lazy (Redgraph.index_targets !!grammar !!red_closure) in
   lazy (fst (Lazy.force red_index)),
@@ -555,3 +659,5 @@ let () =
     usage_prompt
     ~no_subcommand:(fun () -> usage_error "expecting at least one command")
 (* Load and pre-process grammar *)
+
+include Completion()

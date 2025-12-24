@@ -6,9 +6,8 @@ include SetSig.S1 with type 'a t = private IntSet.t
 val unsafe_to_indexset : 'a t -> 'b t
 val unsafe_of_intset : IntSet.t -> 'a t
 
-module CoerceSum(X : CARDINAL)(Y : CARDINAL) : sig
-  val coerce : X.n t -> (X.n, Y.n) Sum.n t
-end
+val coerce_sum : 'a t -> ('a, 'b) Sum.n t
+val split_sum : 'a cardinal -> ('a, 'b) Sum.n t -> 'a t * 'b t
 
 val all : 'a cardinal -> 'a t
 val init_from_set : 'a cardinal -> ('a index -> bool) -> 'a t

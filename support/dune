@@ -9,4 +9,4 @@
  (name runtime)
  (public_name lrgrep.runtime)
  (wrapped false)
- (modules lrgrep_runtime))
+ (modules lrgrep_runtime lrgrep_bitset))

@@ -28,9 +28,19 @@ module IndexSet = Index.Unsafe.Coerce(FSet)(FIntSet)
 
 include IndexSet
 
-module CoerceSum(X : CARDINAL)(Y : CARDINAL) = struct
-  let coerce : X.n t -> (X.n, Y.n) Sum.n t = unsafe_to_indexset
-end
+let coerce_sum = unsafe_to_indexset
+
+let split_sum (type a b) (a : a cardinal) (s : (a, b) Sum.n t) : a t * b t =
+  filter_map (fun x ->
+      match Sum.prj a x with
+      | L l -> Some l
+      | R _ -> None
+    ) s,
+  filter_map (fun x ->
+      match Sum.prj a x with
+      | L _ -> None
+      | R r -> Some r
+    ) s
 
 let all n =
   let i = Fix.Indexing.cardinal n in
