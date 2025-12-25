@@ -316,9 +316,15 @@ let coverage (type g r st tr lrc)
   let unhandled_initial =
     collect_unhandled_lrc (IndexSet.fold process_initial trs lrcs)
   in
+  let total_list_elements v = Vector.fold_left (fun acc xs -> acc + List.length xs) 0 v in
   fixpoint ~counter ~propagate pending;
-  stopwatch 2 "computed coverage (%d transitions, %d iterations)"
-    (Vector.fold_left (fun acc trs -> acc + List.length trs) 0 transitions)
-    !counter;
+  stopwatch 2 "computed coverage (%d transitions, %d iterations, %d uncovered initial states, \
+               %d states with uncovered lookaheads, %d states with uncovered predecessors)"
+    (total_list_elements transitions)
+    !counter
+    (IndexSet.cardinal unhandled_initial)
+    (total_list_elements unhandled_lookaheads)
+    (total_list_elements unhandled_predecessors)
+  ;
   {transitions; unhandled_initial;
    unhandled_lookaheads; unhandled_predecessors}
