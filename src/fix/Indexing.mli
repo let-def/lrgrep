@@ -84,11 +84,22 @@ val const : int -> (module CARDINAL)
 (**{!Empty} contains a type-level name for the empty set. *)
 module Empty: CARDINAL
 
-(**{!Unit} contains a type-level name for the singleto set. *)
+(**{!Unit} contains a type-level name for the singleton set. *)
 module Unit: sig
   include CARDINAL
   val element : n index
 end
+
+(**{!Opt} adds one element to a set. *)
+module Opt: sig
+  type 'n n
+  val none : 'n n index
+  val some : 'n index -> 'n n index
+
+  val prj : 'n n index -> 'n index option
+  val cardinal : 'n cardinal -> 'n n cardinal
+end
+type 'n opt = 'n Opt.n
 
 (**[Gensym()] creates an open-ended type-level set, whose cardinality is not
    known a priori. As long as the cardinal of the set has not been observed by
