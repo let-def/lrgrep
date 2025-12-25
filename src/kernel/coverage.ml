@@ -92,6 +92,9 @@ type ('g, 'lrc) failure_node = {
   (* The nonterminal labelling the goto transition to follow from these stacks. *)
   nt: 'g nonterminal index;
 
+  (* Lookaheads failing immediately *)
+  failing: 'g terminal indexset;
+
   (* Results of the analysis *)
 
   (* The lookahead symbols that are rejected by at least one of the stack that
@@ -107,10 +110,7 @@ type ('g, 'lrc) failure_node = {
 
   (* [fail_fwd] records the shortest path to certain failures.
      E.g. to find how to make a certain terminal [t ∈ nd.fallible] fails, look
-     for a transition [nd', la] in [nd.fail_fwd] such that [t ∈ la]:
-     - if there is one, repeat the search in [nd']
-     - if there is none, [t] is rejected directly by [nd]
-  *)
+     for a transition [nd', la] in [nd.fail_fwd] such that [t ∈ la]. *)
   mutable fail_fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
 
 }
@@ -136,21 +136,25 @@ let free_failures (type g lrc)
     | None ->
       let tgt = Transition.find_goto_target g (stacks.label lrc) nt in
       let rc = rcs.:(tgt) in
-      let node = {lrc; nt; fallible = rc.failing; fwd = []; bkd = []; fail_fwd = []} in
+      let node = {lrc; nt; failing = rc.failing;
+                  fallible = IndexSet.empty;
+                  fwd = []; bkd = []; fail_fwd = []} in
       push todo node;
       table.:(lrc) <- IndexMap.add nt node map;
-      let _, fwd = List.fold_left (fun (lrcs, fwd) nts ->
+      let _, fwd =
+        List.fold_left begin fun (lrcs, fwd) nts ->
           let lrcs = IndexSet.bind lrcs stacks.prev in
-          let fwd = IndexMap.fold (fun nt la fwd ->
-              IndexSet.fold (fun lrc fwd ->
-                  let node' = explore lrc nt in
-                  node'.bkd <- (node, la) :: node'.bkd;
-                  (node', la) :: fwd
-                ) lrcs fwd
-            ) nts fwd
+          let fwd =
+            IndexMap.fold begin fun nt la fwd ->
+              IndexSet.fold begin fun lrc fwd ->
+                let node' = explore lrc nt in
+                node'.bkd <- (node, la) :: node'.bkd;
+                (node', la) :: fwd
+              end lrcs fwd
+            end nts fwd
           in
           (lrcs, fwd)
-        ) (IndexSet.singleton lrc, []) rc.reductions
+        end (IndexSet.singleton lrc, []) rc.reductions
       in
       node.fwd <- fwd;
       node
