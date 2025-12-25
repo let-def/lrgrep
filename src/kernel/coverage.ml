@@ -103,16 +103,22 @@ type ('g, 'lrc) failure_node = {
 
   (* forward transitions (a transition [nd, la] is in [fwd] if [nd] is reachable by
      reducing at least one stack from [lrc+nt], while looking ahead a symbol in [la]. *)
-  mutable fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+  mutable fwd: ('g, 'lrc) failure_edge list;
 
   (* backward transition, the converse of the [fwd] relation *)
-  mutable bkd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+  mutable bkd: ('g, 'lrc) failure_edge list;
 
   (* [fail_fwd] records the shortest path to certain failures.
      E.g. to find how to make a certain terminal [t ∈ nd.fallible] fails, look
      for a transition [nd', la] in [nd.fail_fwd] such that [t ∈ la]. *)
-  mutable fail_fwd: (('g, 'lrc) failure_node * 'g terminal indexset) list;
+  mutable fail_fwd: ('g, 'lrc) failure_edge list;
+}
 
+and ('g, 'lrc) failure_edge = {
+  path: 'lrc index list;
+  source: ('g, 'lrc) failure_node;
+  target: ('g, 'lrc) failure_node;
+  lookahead: 'g terminal indexset;
 }
 
 (* Staged and cached lazy computation for construction the graph of failure nodes:
@@ -129,7 +135,7 @@ let free_failures (type g lrc)
   =
   let table = Vector.make stacks.domain IndexMap.empty in
   let todo = ref [] in
-  let rec explore lrc nt =
+  let rec explore lrc path nt =
     let map = table.:(lrc) in
     match IndexMap.find_opt nt map with
     | Some node -> node
@@ -141,32 +147,40 @@ let free_failures (type g lrc)
                   fwd = []; bkd = []; fail_fwd = []} in
       push todo node;
       table.:(lrc) <- IndexMap.add nt node map;
-      let _, fwd =
-        List.fold_left begin fun (lrcs, fwd) nts ->
-          let lrcs = IndexSet.bind lrcs stacks.prev in
+      let _paths, fwd =
+        List.fold_left begin fun (paths, fwd) nts ->
           let fwd =
-            IndexMap.fold begin fun nt la fwd ->
-              IndexSet.fold begin fun lrc fwd ->
-                let node' = explore lrc nt in
-                node'.bkd <- (node, la) :: node'.bkd;
-                (node', la) :: fwd
-              end lrcs fwd
-            end nts fwd
+            List.fold_left begin fun fwd (lrc, path) ->
+              IndexMap.fold begin fun nt la fwd ->
+                let path = lrc :: path in
+                IndexSet.fold begin fun lrc' fwd ->
+                  let node' = explore lrc' path nt in
+                  let edge = {source=node; target=node'; path; lookahead=la} in
+                  node'.bkd <- edge :: node'.bkd;
+                  edge :: fwd
+                end (stacks.prev lrc) fwd
+              end nts fwd
+            end fwd paths
           in
-          (lrcs, fwd)
-        end (IndexSet.singleton lrc, []) rc.reductions
+          (paths, fwd)
+        end ([lrc, path], []) rc.reductions
       in
       node.fwd <- fwd;
       node
   in
   let propagate node =
-    List.iter (fun (node', la) ->
-        let fallible = IndexSet.union (IndexSet.inter node.fallible la) node'.fallible in
-        if fallible != node'.fallible then (
-          let delta = IndexSet.diff node'.fallible fallible in
-          node'.fallible <- fallible;
-          node'.fail_fwd <- (node, delta) :: node'.fail_fwd;
-          push todo node'
+    List.iter (fun edge ->
+        let source = edge.source in
+        let fallible =
+          IndexSet.union
+            (IndexSet.inter node.fallible edge.lookahead)
+            source.fallible
+        in
+        if fallible != source.fallible then (
+          let lookahead = IndexSet.diff source.fallible fallible in
+          source.fallible <- fallible;
+          source.fail_fwd <- {edge with lookahead} :: source.fail_fwd;
+          push todo edge.source
         )
       ) node.bkd
   in
