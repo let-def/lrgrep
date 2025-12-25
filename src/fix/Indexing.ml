@@ -55,6 +55,25 @@ module Unit = struct
   let element = 0
 end
 
+(**{!Opt} adds one element to a set. *)
+module Opt = struct
+  type 'n n = unit
+  let none : 'n n index = 0
+  let some : 'n index -> 'n n index = succ
+
+  let prj = function
+    | 0 -> None
+    | i -> Some (i - 1)
+
+  let cardinal (type n) (Cardinal n : n cardinal) =
+    if Lazy.is_val n then
+      let n = 1 + Lazy.force_val n in
+      Cardinal (lazy n)
+    else
+      Cardinal (Lazy.map succ n)
+end
+type 'n opt = 'n Opt.n
+
 module Const (X : sig val cardinal : int end) : CARDINAL = struct
   type n = unit
   let () = assert (X.cardinal >= 0)
