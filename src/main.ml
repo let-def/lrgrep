@@ -356,14 +356,17 @@ let do_compile spec (cp : Code_printer.t option) =
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
-    Option.iter (
-      Coverage.coverage
-        grammar
-        branches
-        machine
-        stacks
-        !!red_closure
-        (Coverage.make_positions grammar)
+    Option.iter (fun initial ->
+      ignore (
+        Coverage.coverage
+          grammar
+          branches
+          machine
+          stacks
+          !!red_closure
+          (Coverage.make_positions grammar)
+          initial
+      )
     ) machine.initial;
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
