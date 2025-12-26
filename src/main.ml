@@ -356,7 +356,7 @@ let do_compile spec (cp : Code_printer.t option) =
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
-    Option.iter (fun initial ->
+    (*Option.iter (fun initial ->
       ignore (
         Coverage.coverage
           grammar
@@ -367,7 +367,15 @@ let do_compile spec (cp : Code_printer.t option) =
           (Coverage.make_positions grammar)
           initial
       )
-    ) machine.initial;
+      ) machine.initial;*)
+    let enum_graph = Enumeration.make_graph grammar stacks !!red_closure in
+    IndexSet.iter begin fun lrc ->
+      Enumeration.mark_entry enum_graph
+        (Enumeration.get_node enum_graph lrc Opt.none)
+        (Terminal.regular grammar)
+    end stacks.tops;
+    Enumeration.solve enum_graph;
+    Enumeration.maximal_patterns enum_graph subset.some_prefix
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
 
