@@ -189,6 +189,9 @@ module type S1 = sig
       the run) and the subset of the original elements that belong to that run
       (preserving the original order). *)
   val split_by_run : ('a element -> 'b element) -> 'a t -> ('b element * 'a t) list
+
+  (* [fused_inter_union a b ~acc] is [union (inter a b) acc] *)
+  val fused_inter_union : 'a t -> 'a t -> acc:'a t -> 'a t
 end
 
 module type S0 = sig

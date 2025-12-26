@@ -70,7 +70,7 @@ let split i s =
       if iaddr < addr then
         (* Stop now. *)
         (N, false, s)
-        
+
       else if iaddr = addr then
         (* Found appropriate cell, split bit field. *)
         let found = ss land imask <> 0 in
@@ -288,6 +288,44 @@ let rec inter s1 s2 =
       else if ss = ss1 && qs == qs1
       then s1
       else C (addr1, ss, qs)
+
+let fused_inter_union a b ~acc =
+  let rec inter_loop a b acc =
+    match a, b with
+    | N, _ | _, N -> acc
+    | C (addr1, ss1, qs1), C (addr2, ss2, qs2) ->
+      if addr1 < addr2 then
+        inter_loop qs1 b acc
+      else if addr1 > addr2 then
+        inter_loop a qs2 acc
+      else
+        match ss1 land ss2 with
+        | 0 -> inter_loop qs1 qs2 acc
+        | ss -> union_loop addr1 ss qs1 qs2 acc
+  and union_loop addr ss a b acc =
+    match acc with
+    | N -> C (addr, ss, inter a b)
+    | C (addr', ss', acc') ->
+      if addr < addr' then
+        C (addr, ss, inter_loop a b acc')
+      else if addr > addr' then
+        let acc'' = union_loop addr ss a b acc' in
+        if acc'' != acc' then
+          C (addr', ss', acc'')
+        else
+          acc
+      else (* addr = addr' *)
+        let ss = ss lor ss' in
+        if ss = ss' then
+          let acc'' = inter_loop a b acc' in
+          if acc'' != acc' then
+            C (addr', ss', acc'')
+          else
+            acc
+        else
+          C (addr', ss, inter_loop a b acc')
+  in
+  inter_loop a b acc
 
 exception Found of int
 
