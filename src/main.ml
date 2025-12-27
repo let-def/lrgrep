@@ -371,8 +371,8 @@ let do_compile spec (cp : Code_printer.t option) =
     let enum_graph = Enumeration.make_graph grammar stacks !!red_closure in
     IndexSet.iter begin fun lrc ->
       Enumeration.mark_entry enum_graph
-        (Enumeration.get_node enum_graph lrc Opt.none)
-        (Terminal.regular grammar)
+        (Enumeration.get_node enum_graph lrc Opt.none
+           (Terminal.regular grammar))
     end stacks.tops;
     Enumeration.solve enum_graph;
     Enumeration.maximal_patterns enum_graph subset.some_prefix
