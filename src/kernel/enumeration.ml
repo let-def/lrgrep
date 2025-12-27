@@ -11,10 +11,7 @@ open Info
 
 (* A failure node associates to a goto transition the set of lookaheads that can
    be rejected (directly or not). *)
-type ('g, 'lrc) node = {
-
-  (* Characterizing the stacks analyzed at node *)
-
+type ('g, 'lrc) kernel = {
   (* The lrc index represent the set of stacks ending in this state. *)
   lrc: 'lrc index;
 
@@ -22,8 +19,17 @@ type ('g, 'lrc) node = {
      or none if the if the stacks should be considered directly. *)
   nto: 'g nonterminal opt index;
 
-  (* Lookaheads failing immediately *)
+  (* Lookahead *)
+  lookahead: 'g terminal indexset;
+}
+
+type ('g, 'lrc) node = {
+  ker: ('g, 'lrc) kernel;
   failing: 'g terminal indexset;
+
+  (* If [entry], then this node is an entrypoint: we can stop at this node when
+     generating a sentence. *)
+  mutable entry: bool;
 
   (* forward transitions (a transition [nd, la] is in [fwd] if [nd] is reachable by
      reducing at least one stack from [lrc+nt], while looking ahead a symbol in [la]. *)
@@ -34,20 +40,10 @@ type ('g, 'lrc) node = {
 
   (* Flow analyses *)
 
-  (* If [entry] is non-empty, then this node is an entrypoint,
-     entered while looking ahead at any symbol is [entry].
-
-     The goal is then to find stacks ending in this node that fails
-     when looking at symbols in [entry]. *)
-  mutable entry: 'g terminal indexset;
-
   (* Marker to remember if node is already scheduled for processing *)
   mutable scheduled: bool;
 
   (* Pass 1: forward analyses. *)
-
-  (* Lookaheads for which there exists at least one stack suffix reducing to this node *)
-  mutable reachable: 'g terminal indexset;
 
   (* Lookaheads that are rejected in at least one stack suffix reducing to this
      node. These lookaheads are reachable and failing in at least one (possibly
@@ -66,14 +62,13 @@ and ('g, 'lrc) edge = {
   path: 'lrc index list;
   source: ('g, 'lrc) node;
   target: ('g, 'lrc) node;
-  lookahead: 'g terminal indexset;
 }
 
 type ('g, 'lrc) graph = {
   grammar : 'g grammar;
   stacks : ('g, 'lrc) Automata.stacks;
   rcs : ('g lr1, 'g Redgraph.reduction_closure) vector;
-  table: ('lrc, ('g nonterminal opt, ('g, 'lrc) node) indexmap) vector;
+  table: (('g, 'lrc) kernel, ('g, 'lrc) node) Hashtbl.t;
   mutable frozen : bool;
   mutable todo: ('g, 'lrc) node list;
 }
@@ -99,13 +94,24 @@ let make_graph (type g lrc)
     (stacks : (g, lrc) Automata.stacks)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
   =
-  let table = Vector.make stacks.domain IndexMap.empty in
+  let table = Hashtbl.create 500 in
   {table; grammar; stacks; rcs; frozen = false; todo = []}
 
-let rec get_node gr lrc nto =
-  let map = gr.table.:(lrc) in
-  match IndexMap.find_opt nto map with
-  | Some node -> node
+let rec get_node gr lrc nto suffix_fallible lookahead =
+  assert (not gr.frozen);
+  assert (IndexSet.is_not_empty lookahead);
+  let ker = {lrc; nto; lookahead} in
+  match Hashtbl.find_opt gr.table ker with
+  | Some node ->
+    let fallible = IndexSet.union suffix_fallible node.suffix_fallible in
+    if fallible != node.suffix_fallible then (
+      node.suffix_fallible <- fallible;
+      if not node.scheduled then (
+        gr.todo <- node :: gr.todo;
+        node.scheduled <- true;
+      );
+    );
+    node
   | None ->
     let paths, tgt =
       let lr1 = gr.stacks.label lrc in
@@ -119,24 +125,29 @@ let rec get_node gr lrc nto =
         ([lrc, []], Transition.find_goto_target gr.grammar lr1 nt)
     in
     let rc = gr.rcs.:(tgt) in
+    let failing = IndexSet.inter rc.failing lookahead in
+    let suffix_fallible = IndexSet.union suffix_fallible failing in
     let node = {
-      lrc; nto; failing = rc.failing;
+      ker; failing;
+      entry = false;
       fwd = []; bkd = [];
       scheduled = false;
-      entry = IndexSet.empty;
-      reachable = IndexSet.empty;
-      suffix_fallible = IndexSet.empty;
-      prefix_faillible = IndexSet.empty;
+      suffix_fallible;
+      prefix_faillible = rc.failing;
     } in
-    gr.table.:(lrc) <- IndexMap.add nto node map;
+    Hashtbl.add gr.table ker node;
     let explore_paths paths acc nts =
-      IndexMap.fold begin fun nt lookahead acc ->
-        List.fold_left begin fun acc (lrc', path) ->
-          let target = get_node gr lrc' (Opt.some nt) in
-          let edge = {source=node; target; path; lookahead} in
-          target.bkd <- edge :: target.bkd;
-          edge :: acc
-        end acc paths
+      IndexMap.fold begin fun nt lookahead' acc ->
+        let e_lookahead = IndexSet.inter lookahead lookahead' in
+        if IndexSet.is_not_empty e_lookahead then
+          List.fold_left begin fun acc (lrc', path) ->
+            let target = get_node gr lrc' (Opt.some nt) suffix_fallible e_lookahead in
+            let edge = {source=node; target; path} in
+            target.bkd <- edge :: target.bkd;
+            edge :: acc
+          end acc paths
+        else
+          acc
       end nts acc
     in
     let expand_paths paths =
@@ -148,55 +159,30 @@ let rec get_node gr lrc nto =
     node.fwd <- fold_expand expand_paths paths explore_paths [] rc.reductions;
     node
 
+let get_node gr lrc nto lookahead =
+  get_node gr lrc nto IndexSet.empty lookahead
+
 let iter_nodes gr f =
-  Vector.iter (fun map -> IndexMap.iter (fun _ v -> f v) map) gr.table
+  Hashtbl.iter (fun _ v -> f v) gr.table
 
 (* Analyses *)
 
-let mark_entry gr node reachable =
+let mark_entry gr node =
   assert (not gr.frozen);
-  if IndexSet.is_not_empty reachable then (
-    node.entry <- IndexSet.union reachable node.entry;
-    node.reachable <- node.entry;
-    if not node.scheduled then (
-      gr.todo <- node :: gr.todo;
-      node.scheduled <- true;
-    )
-  )
+  node.entry <- true
 
 let solve gr =
   assert (not gr.frozen);
   gr.frozen <- true;
-  (* Forward pass 1: lookahead reachability *)
   let todo = ref gr.todo in
   gr.todo <- [];
   let schedule nd =
     if not nd.scheduled then (
       nd.scheduled <- true;
-      push todo nd;
+      push todo nd
     )
   in
-  let propagate_reachable nd =
-    nd.scheduled <- false;
-    List.iter (fun edge ->
-        let reachable =
-          IndexSet.fused_inter_union
-            nd.reachable edge.lookahead
-            ~acc:edge.target.reachable
-        in
-        if edge.target.reachable != reachable then (
-          edge.target.reachable <- reachable;
-          schedule edge.target;
-        )
-      ) nd.fwd
-  in
-  fixpoint ~propagate:propagate_reachable todo;
-  (* Forward pass 2: lookaheads fallible in suffix *)
-  iter_nodes gr begin fun nd ->
-    nd.suffix_fallible <- IndexSet.inter nd.failing nd.reachable;
-    if IndexSet.is_not_empty nd.suffix_fallible then
-      schedule nd
-  end;
+  (* Forward pass: lookaheads fallible in suffix *)
   let propagate_suffix_fallible nd =
     nd.scheduled <- false;
     List.iter begin fun edge ->
@@ -209,26 +195,19 @@ let solve gr =
   in
   fixpoint ~propagate:propagate_suffix_fallible todo;
   (* Backward pass: lookaheads fallible in prefix *)
-  iter_nodes gr begin fun nd ->
-    nd.prefix_faillible <- IndexSet.inter nd.failing nd.reachable;
-    if IndexSet.is_not_empty nd.prefix_faillible then
-      schedule nd
-  end;
   let propagate_prefix_fallible nd =
     nd.scheduled <- false;
-    List.iter (fun edge ->
-        let fallible = IndexSet.inter nd.prefix_faillible edge.lookahead in
-        let fallible =
-          IndexSet.fused_inter_union
-            fallible edge.source.reachable
-            ~acc:edge.source.prefix_faillible
-        in
-        if fallible != edge.source.prefix_faillible then (
-          edge.source.prefix_faillible <- fallible;
-          schedule edge.source;
-        )
-      ) nd.bkd
+    List.iter begin fun edge ->
+      let fallible =
+        IndexSet.union nd.prefix_faillible edge.source.prefix_faillible
+      in
+      if fallible != edge.source.prefix_faillible then (
+        edge.source.prefix_faillible <- fallible;
+        schedule edge.source;
+      )
+    end nd.bkd
   in
+  iter_nodes gr propagate_prefix_fallible;
   fixpoint ~propagate:propagate_prefix_fallible todo
 
 let extract_suffixes nodes =
@@ -240,35 +219,33 @@ let extract_suffixes nodes =
   let todo = ref (List.map prepare nodes) in
   let suffixes = ref [] in
   let propagate (nd, path, failing) =
-    let failing = IndexSet.inter (IndexSet.union nd.failing failing) nd.reachable in
-    let u =
-      let u = !uncovered in
-      let handled = IndexSet.inter (IndexSet.inter nd.entry u) failing in
-      if IndexSet.is_not_empty handled then (
-        push suffixes (nd, path, handled, failing);
-        uncovered := IndexSet.diff u handled;
-        !uncovered
-      ) else u
-    in
-    if not (IndexSet.disjoint nd.suffix_fallible u) || not (IndexSet.disjoint failing u) then
+    let failing = IndexSet.union nd.failing failing in
+    if nd.entry then (
+      let covered = IndexSet.inter failing !uncovered in
+      if IndexSet.is_not_empty covered then (
+        push suffixes (nd, path, covered, failing);
+        uncovered := IndexSet.diff !uncovered covered;
+      )
+    );
+    if not (IndexSet.disjoint nd.suffix_fallible !uncovered) then
       List.iter begin fun edge ->
-          push todo (edge.source, edge :: path, failing)
+        push todo (edge.source, edge :: path, failing)
       end nd.bkd;
   in
   fixpoint ~propagate todo;
   !suffixes
 
 let maximal_patterns gr prefix =
-  let get_top_state node =
-    let lr1 = gr.stacks.label node.lrc in
-    match Opt.prj node.nto with
+  let get_top_state ker =
+    let lr1 = gr.stacks.label ker.lrc in
+    match Opt.prj ker.nto with
     | None -> lr1
     | Some nt -> Transition.find_goto_target gr.grammar lr1 nt
   in
   let by_lr0 = ref [] in
   iter_nodes gr begin fun node ->
     if List.is_empty node.fwd then begin
-      let lr0 = Lr1.to_lr0 gr.grammar (get_top_state node) in
+      let lr0 = Lr1.to_lr0 gr.grammar (get_top_state node.ker) in
       push by_lr0 (lr0, node);
     end
   end;
@@ -317,8 +294,8 @@ let maximal_patterns gr prefix =
     print_endline lines;
     List.iter begin fun (node, edges, handled, failing) ->
       let suffix = List.fold_left
-          (fun path edge -> edge.target.lrc :: List.rev_append edge.path path)
-          [node.lrc] edges
+          (fun path edge -> edge.target.ker.lrc :: List.rev_append edge.path path)
+          [node.ker.lrc] edges
       in
       let base = List.hd suffix in
       let complete = List.rev_append (prefix base) suffix in
@@ -328,6 +305,6 @@ let maximal_patterns gr prefix =
       print_endline ("  for unique lookaheads: " ^ Terminal.lookaheads_to_string gr.grammar handled);
       let failing = IndexSet.diff failing handled in
       if IndexSet.is_not_empty failing then
-        print_endline ("  for unique lookaheads: " ^ Terminal.lookaheads_to_string gr.grammar failing);
+        print_endline ("  for redundant lookaheads: " ^ Terminal.lookaheads_to_string gr.grammar failing);
     end sentences;
   end by_lr0
