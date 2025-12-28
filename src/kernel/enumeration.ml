@@ -40,8 +40,9 @@ type ('g, 'lrc) node = {
 
   (* Flow analyses *)
 
-  (* Marker to remember if node is already scheduled for processing *)
+  (* Markers to remember node state in graph traversals *)
   mutable scheduled: bool;
+  mutable visited: 'g terminal indexset;
 
   (* Pass 1: forward analyses. *)
 
@@ -132,6 +133,7 @@ let rec get_node gr lrc nto suffix_fallible lookahead =
       entry = false;
       fwd = []; bkd = [];
       scheduled = false;
+      visited = IndexSet.empty;
       suffix_fallible;
       prefix_faillible = rc.failing;
     } in
@@ -165,7 +167,17 @@ let get_node gr lrc nto lookahead =
 let iter_nodes gr f =
   Hashtbl.iter (fun _ v -> f v) gr.table
 
+let fold_nodes gr f acc =
+  Hashtbl.fold (fun _ v acc -> f v acc) gr.table acc
+
 (* Analyses *)
+
+let get_lr0_state gr node =
+  let lr1 = gr.stacks.label node.ker.lrc in
+  Lr1.to_lr0 gr.grammar @@
+  match Opt.prj node.ker.nto with
+  | None -> lr1
+  | Some nt -> Transition.find_goto_target gr.grammar lr1 nt
 
 let mark_entry gr node =
   assert (not gr.frozen);
@@ -235,41 +247,37 @@ let extract_suffixes nodes =
   fixpoint ~propagate todo;
   !suffixes
 
-let maximal_patterns gr prefix =
-  let get_top_state ker =
-    let lr1 = gr.stacks.label ker.lrc in
-    match Opt.prj ker.nto with
-    | None -> lr1
-    | Some nt -> Transition.find_goto_target gr.grammar lr1 nt
-  in
-  let by_lr0 = ref [] in
-  iter_nodes gr begin fun node ->
-    if List.is_empty node.fwd then begin
-      let lr0 = Lr1.to_lr0 gr.grammar (get_top_state node.ker) in
-      push by_lr0 (lr0, node);
-    end
-  end;
-  let by_lr0 =
-    let order (lr0, _) (lr0', _) =
-      match Index.compare lr0 lr0' with
-      | 0 ->
-        (* Same lr0 *)
-        0
-      | c0 ->
-        (* Not the same:
-           - Order first by decreasing number of items
-           - If same number of items, fall back to an (arbitrary) total order
-             induced by LR(0) state number *)
-        match Int.compare
-                (IndexSet.cardinal (Lr0.items gr.grammar lr0))
-                (IndexSet.cardinal (Lr0.items gr.grammar lr0'))
-        with
-        | 0 -> c0
-        | c -> c
-    in
-    let group (lr0, node) rest = (lr0, node :: List.map snd rest) in
-    group_by ~compare:order ~group !by_lr0
-  in
+let cover_maximal_patterns gr =
+  fold_nodes gr begin fun node acc ->
+    if List.is_empty node.fwd
+    then (get_lr0_state gr node, node) :: acc
+    else acc
+  end []
+
+(* Group sentences by patterns
+
+   let order (lr0, _) (lr0', _) =
+    match Index.compare lr0 lr0' with
+    | 0 ->
+      (* Same lr0 *)
+      0
+    | c0 ->
+      (* Not the same:
+   - Order first by decreasing number of items
+   - If same number of items, fall back to an (arbitrary) total order
+           induced by LR(0) state number *)
+      match Int.compare
+              (IndexSet.cardinal (Lr0.items gr.grammar lr0))
+              (IndexSet.cardinal (Lr0.items gr.grammar lr0'))
+      with
+      | 0 -> c0
+      | c -> c
+     in
+     group_by !by_lr0 ~compare:order
+     ~group:(fun (lr0, node) rest -> (lr0, node :: List.map snd rest))
+*)
+
+(*
   List.iter begin fun (lr0, nodes) ->
     let sentences = extract_suffixes nodes in
     let lhs =
@@ -308,3 +316,50 @@ let maximal_patterns gr prefix =
         print_endline ("  for redundant lookaheads: " ^ Terminal.lookaheads_to_string gr.grammar failing);
     end sentences;
   end by_lr0
+*)
+
+let cover_entries_with_maximal_patterns gr =
+  let process_entry node =
+    let results = ref [] in
+    let todo = ref [node, [], IndexSet.empty]  in
+    let propagate (node, path, failing) =
+      let failing = IndexSet.union node.failing failing in
+      if not node.scheduled || not (IndexSet.equal node.visited failing) then (
+        node.scheduled <- true;
+        node.visited <- IndexSet.union node.visited failing;
+        match node.fwd with
+        | [] -> push results (path, failing)
+        | edges ->
+          List.iter begin fun edge ->
+            push todo (edge.target, edge :: path, failing)
+          end edges
+      )
+    in
+    fixpoint ~propagate todo;
+    let rec clear node =
+      if node.scheduled then (
+        node.scheduled <- false;
+        node.visited <- IndexSet.empty;
+        List.iter (fun edge -> clear edge.target) node.fwd
+      )
+    in
+    clear node;
+    !results
+  in
+  fold_nodes gr begin fun node acc ->
+    if node.entry then
+      (node, process_entry node) :: acc
+    else
+      acc
+  end []
+
+let cover_remaining gr sentences =
+  let covered = Vector.make (Lr0.cardinal gr.grammar) IndexSet.empty in
+  (* Gather cases already covered by sentences *)
+  List.iter begin fun (path, failing) ->
+    List.iter
+      (fun node -> covered.@(get_lr0_state gr node) <- IndexSet.union failing)
+      path;
+  end sentences;
+  (* Cover remaining cases; use a DFS *)
+  ()
