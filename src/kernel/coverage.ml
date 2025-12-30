@@ -346,3 +346,94 @@ let coverage (type g r st tr lrc)
   ;
   {transitions; unhandled_initial;
    unhandled_lookaheads; unhandled_predecessors}
+
+let report_coverage
+  grammar positions (stacks : _ Automata.stacks)
+  {transitions; unhandled_initial;
+   unhandled_lookaheads; unhandled_predecessors}
+  =
+  let _enum_initials =
+    IndexSet.fold
+      (fun lrc acc ->
+       Enumeration.kernel lrc (Terminal.regular grammar) :: acc)
+      unhandled_initial []
+  in
+  let predecessors =
+    let rec generate_suffixes pos acc =
+      if pos = 0 then
+        acc
+      else
+        generate_suffixes (pos - 1)
+          (List.concat_map (fun (lrc, path) ->
+               let path = lrc :: path in
+               List.map
+                 (fun lrc' -> (lrc', path))
+                 (IndexSet.elements (stacks.prev lrc))
+             ) acc)
+    in
+    Vector.fold_lefti (fun acc st transitions ->
+        List.fold_left (fun acc (lp, lrcs, la) ->
+            let pos, _ = unpack_position positions lp in
+            let _, pos = project_position positions pos in
+            let suffixes =
+              generate_suffixes (pos - 1)
+                (List.map (fun lrc -> (lrc, [])) (IndexSet.elements lrcs))
+            in
+            let desc = (st, lp, la) in
+            List.map (fun (lrc, suffix) -> desc, lrc, suffix) suffixes @ acc
+          ) acc transitions
+      ) [] unhandled_predecessors
+  in
+  let _enum_predecessors =
+    List.map begin fun ((_st,lp,lookahead), lrc, _suffix) ->
+      let pos, _ = unpack_position positions lp in
+      let goto, _ = project_position positions pos in
+      Enumeration.kernel lrc ~goto lookahead
+    end predecessors
+  in
+  let suffixes =
+    let tr_index = Vector.make (Vector.length transitions) IndexMap.empty in
+    let get_transitions st =
+      let map = tr_index.:(st) in
+      if IndexMap.is_empty map then
+        let map =
+          List.fold_left
+            (fun map ct -> IndexMap.update ct.target_position (cons_update ct) map)
+            IndexMap.empty transitions.:(st)
+        in
+        tr_index.:(st) <- map;
+        map
+      else
+        map
+    in
+    let rec synthesize_suffix st lp la =
+      match IndexMap.find_opt lp (get_transitions st) with
+      | None -> [(st,lp)] (* Done ? *)
+      | Some cts ->
+        let ct = List.find (fun ct -> IndexSet.subset la ct.lookahead) cts in
+        if (st, lp) = (ct.source, ct.source_position) then
+          [(st, lp)]
+        else
+          (st, lp) :: synthesize_suffix ct.source ct.source_position la
+    in
+    Vector.fold_lefti (fun acc st cases ->
+        List.fold_left
+          (fun acc (lp, la) -> (synthesize_suffix st lp la, la) :: acc)
+          acc cases
+      ) [] unhandled_lookaheads
+  in
+  List.iter (fun (suffix, la) ->
+      let lr1s =
+        List.filter_map (fun (_, lp) ->
+            let pos, lrc = unpack_position positions lp in
+            let _, pos = project_position positions pos in
+            if pos = 0 then
+              None
+            else
+              Some (stacks.label lrc)
+          ) suffix
+      in
+      Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
+        (Lr1.list_to_string grammar lr1s)
+        (Terminal.lookaheads_to_string grammar la)
+    ) suffixes
