@@ -75,128 +75,8 @@ let get_map v i j =
 let (@:=) r f =
   r := f !r
 
-(* Computation of free failures:
-
-   Given a set of stacks and an initial reduction, find each lookahead that end
-   up being rejected by at least one stack of the set.
-*)
-
-(* A failure node associates to a goto transition the set of lookaheads that can
-   be rejected (directly or not). *)
-type ('g, 'lrc) failure_node = {
-
-  (* Characterizing the goto transition *)
-
-  (* The lrc index represent the set of stacks ending in this state. *)
-  lrc: 'lrc index;
-  (* The nonterminal labelling the goto transition to follow from these stacks. *)
-  nt: 'g nonterminal index;
-
-  (* Lookaheads failing immediately *)
-  failing: 'g terminal indexset;
-
-  (* Results of the analysis *)
-
-  (* The lookahead symbols that are rejected by at least one of the stack that
-     end in [lrc] after following the transition labelled [nt], written [lrc+nt]. *)
-  mutable fallible: 'g terminal indexset;
-
-  (* forward transitions (a transition [nd, la] is in [fwd] if [nd] is reachable by
-     reducing at least one stack from [lrc+nt], while looking ahead a symbol in [la]. *)
-  mutable fwd: ('g, 'lrc) failure_edge list;
-
-  (* backward transition, the converse of the [fwd] relation *)
-  mutable bkd: ('g, 'lrc) failure_edge list;
-
-  (* [fail_fwd] records the shortest path to certain failures.
-     E.g. to find how to make a certain terminal [t ∈ nd.fallible] fails, look
-     for a transition [nd', la] in [nd.fail_fwd] such that [t ∈ la]. *)
-  mutable fail_fwd: ('g, 'lrc) failure_edge list;
-}
-
-and ('g, 'lrc) failure_edge = {
-  path: 'lrc index list;
-  source: ('g, 'lrc) failure_node;
-  target: ('g, 'lrc) failure_node;
-  lookahead: 'g terminal indexset;
-}
-
-(* Staged and cached lazy computation for construction the graph of failure nodes:
-   1. [let finder = free_failures grammar stacks rcs]
-      lazily constructs the graph
-   2. [finder lrcs nt depth] is the list of failure nodes reachable by following
-      a goto transition labelled [nt] [depth] states deep in the stacks
-      described by [lrcs].
-*)
-let free_failures (type g lrc)
-    (g : g grammar)
-    (stacks : (g, lrc) Automata.stacks)
-    (rcs : (g lr1, g Redgraph.reduction_closure) vector)
-  =
-  let table = Vector.make stacks.domain IndexMap.empty in
-  let todo = ref [] in
-  let rec explore lrc path nt =
-    let map = table.:(lrc) in
-    match IndexMap.find_opt nt map with
-    | Some node -> node
-    | None ->
-      let tgt = Transition.find_goto_target g (stacks.label lrc) nt in
-      let rc = rcs.:(tgt) in
-      let node = {lrc; nt; failing = rc.failing;
-                  fallible = IndexSet.empty;
-                  fwd = []; bkd = []; fail_fwd = []} in
-      push todo node;
-      table.:(lrc) <- IndexMap.add nt node map;
-      let _paths, fwd =
-        List.fold_left begin fun (paths, fwd) nts ->
-          let fwd =
-            List.fold_left begin fun fwd (lrc, path) ->
-              IndexMap.fold begin fun nt la fwd ->
-                let path = lrc :: path in
-                IndexSet.fold begin fun lrc' fwd ->
-                  let node' = explore lrc' path nt in
-                  let edge = {source=node; target=node'; path; lookahead=la} in
-                  node'.bkd <- edge :: node'.bkd;
-                  edge :: fwd
-                end (stacks.prev lrc) fwd
-              end nts fwd
-            end fwd paths
-          in
-          (paths, fwd)
-        end ([lrc, path], []) rc.reductions
-      in
-      node.fwd <- fwd;
-      node
-  in
-  let propagate node =
-    List.iter (fun edge ->
-        let source = edge.source in
-        let fallible =
-          IndexSet.union
-            (IndexSet.inter node.fallible edge.lookahead)
-            source.fallible
-        in
-        if fallible != source.fallible then (
-          let lookahead = IndexSet.diff source.fallible fallible in
-          source.fallible <- fallible;
-          source.fail_fwd <- {edge with lookahead} :: source.fail_fwd;
-          push todo edge.source
-        )
-      ) node.bkd
-  in
-  let rec explore_all lrcs nt = function
-    | 0 ->
-      let nodes = IndexSet.fold (fun lrc acc -> explore lrc nt :: acc) lrcs [] in
-      fixpoint ~propagate todo;
-      nodes
-    | n ->
-      explore_all (IndexSet.bind lrcs stacks.prev) nt (n - 1)
-  in
-  explore_all
-
 (* Compute coverage of a machine (an automaton realizing an error
-   specification).
-*)
+   specification).*)
 
 type ('g, 'lrc) lrc_position = ('g position, 'lrc) Prod.n index
 
@@ -406,33 +286,45 @@ let report_coverage
       else
         map
     in
-    let rec synthesize_suffix st lp la =
+    let rec synthesize_suffix prefix st lp la =
+      let prefix = (st, lp) :: prefix in
       match IndexMap.find_opt lp (get_transitions st) with
-      | None -> [(st,lp)] (* Done ? *)
+      | None -> [prefix, la] (* Done ? *)
       | Some cts ->
-        let ct = List.find (fun ct -> IndexSet.subset la ct.lookahead) cts in
-        if (st, lp) = (ct.source, ct.source_position) then
-          [(st, lp)]
-        else
-          (st, lp) :: synthesize_suffix ct.source ct.source_position la
+        List.concat_map (fun ct ->
+            let la = IndexSet.inter la ct.lookahead in
+            if IndexSet.is_empty la then
+              []
+            else if Index.equal st ct.source && Index.equal lp ct.source_position then
+              [prefix, la]
+            else
+              synthesize_suffix prefix ct.source ct.source_position la
+          ) cts
     in
     Vector.fold_lefti (fun acc st cases ->
-        List.fold_left
-          (fun acc (lp, la) -> (synthesize_suffix st lp la, la) :: acc)
-          acc cases
+        List.concat_map (fun (lp, la) -> synthesize_suffix [] st lp la) cases @ acc
       ) [] unhandled_lookaheads
   in
   List.iter (fun (suffix, la) ->
+      let pattern = ref None in
       let lr1s =
-        List.filter_map (fun (_, lp) ->
+        List.fold_left (fun acc (_, lp) ->
             let pos, lrc = unpack_position positions lp in
-            let _, pos = project_position positions pos in
-            if pos = 0 then
-              None
-            else
-              Some (stacks.label lrc)
-          ) suffix
+            let nt, pos = project_position positions pos in
+            if pos = 0
+            then (
+              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+              pattern := Some (Lr1.to_lr0 grammar lr1);
+              acc
+            ) else stacks.label lrc :: acc
+          ) [] suffix
       in
+      begin match !pattern with
+        | None -> assert false
+        | Some lr0 ->
+          List.iter print_endline
+            (List.map (Item.to_string grammar) (IndexSet.elements (Lr0.items grammar lr0)))
+      end;
       Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
         (Lr1.list_to_string grammar lr1s)
         (Terminal.lookaheads_to_string grammar la)
