@@ -128,24 +128,8 @@ let get_lr0_state grammar (stacks : _ Automata.stacks) ker =
 
 (* Analysis of reachable lookaheads *)
 
-type ('g, 'n) fallible_lookaheads = {
-  fwd_fallible: ('n, 'g terminal indexset) vector;
-  bkd_fallible: ('n, 'g terminal indexset) vector;
-}
-
 let get_failing grammar stacks rcs ker =
   rcs.:(get_lr1_state grammar stacks ker).Redgraph.failing
-
-let fallible_lookaheads (type n) grammar stacks rcs (gr : (_, _, n) _graph) =
-  let n = Vector.length gr.ker in
-  let fwd = Vector.map (get_failing grammar stacks rcs) gr.ker in
-  let bkd = Vector.copy fwd in
-  let succ f nd = List.iter (fun edge -> f edge.target) gr.fwd.:(nd) in
-  let scc = Tarjan.indexed_scc n ~succ in
-  Tarjan.close_forward scc ~succ fwd;
-  let pred f nd = List.iter (fun edge -> f edge.source) gr.bkd.:(nd) in
-  Tarjan.close_backward scc ~pred fwd;
-  {fwd_fallible = fwd; bkd_fallible = bkd}
 
 let cover_with_maximal_patterns grammar stacks rcs gr =
   let results = ref [] in
@@ -168,23 +152,57 @@ let cover_with_maximal_patterns grammar stacks rcs gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_remaining grammar stacks gr sentences {fwd_fallible; bkd_fallible} =
-  let uncovered = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
-  (* Gather lookaheads to cover *)
-  Vector.iteri begin fun i ker ->
-    uncovered.@(get_lr0_state grammar stacks ker) <-
-      IndexSet.union (IndexSet.union fwd_fallible.:(i) bkd_fallible.:(i))
-  end gr.ker;
-  (* Remove those already covered by sentences *)
-  List.iter begin fun (node, path, failing) ->
-    let remove node =
-      let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
-      uncovered.:(lr0) <- IndexSet.diff uncovered.:(lr0) failing
-    in
-    remove node;
-    List.iter (fun edge -> remove edge.source) path
-  end sentences;
-  (* Cover remaining cases; use a DFS *)
+let cover_all (type n) grammar stacks rcs (gr : (_, _, n) _graph) =
+  let n = Vector.length gr.ker in
+  let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
+  let visited = Boolvector.make n false in
+  let fallible = Vector.make n IndexSet.empty in
+  let prefixes = Vector.make n [] in
+  let suffixes = Vector.make n [] in
+  let shortest_prefix = Vector.make n [] in
+  let shortest_suffix = Vector.make n [] in
+  let todo = ref [] in
+  let propagate (dir, node, path, failing) =
+    let ker = gr.ker.:(node) in
+    let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
+    begin match dir with
+      | `Prefix ->
+        if List.is_empty shortest_prefix.:(node) then
+          shortest_prefix.:(node) <- path
+      | `Suffix ->
+        if List.is_empty shortest_suffix.:(node) then
+          shortest_suffix.:(node) <- path
+    end;
+    let fallible' = IndexSet.union failing fallible.:(node) in
+    if not (Boolvector.test visited node) || fallible' != fallible.:(node) then (
+      Boolvector.set visited node;
+      fallible.:(node) <- fallible';
+      let lr0 = get_lr0_state grammar stacks ker in
+      let fallible0' = IndexSet.diff failing fallible0.:(lr0) in
+      (* Save path if it is the first to cover some lookahead *)
+      if IndexSet.is_not_empty fallible0' then (
+        fallible0.@(lr0) <- IndexSet.union fallible0';
+        let sentences = match dir with
+          | `Prefix -> prefixes
+          | `Suffix -> suffixes
+        in
+        sentences.@(node) <- List.cons (path, failing);
+      );
+      (* Extend path with successors *)
+      let succ f = match dir with
+        | `Prefix -> List.iter (fun edge -> f edge edge.source) gr.bkd.:(node)
+        | `Suffix -> List.iter (fun edge -> f edge edge.target) gr.fwd.:(node)
+      in
+      succ (fun edge node' -> push todo (dir, node', edge :: path, failing))
+    );
+  in
+  Index.iter n begin fun node ->
+    if List.is_empty gr.bkd.:(node) then
+      propagate (`Suffix, node, [], IndexSet.empty)
+    else if List.is_empty gr.fwd.:(node) then
+      propagate (`Prefix, node, [], IndexSet.empty)
+  end;
+  fixpoint ~propagate todo
 
 (* Strategy for enumeration
 
