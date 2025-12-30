@@ -277,6 +277,14 @@ module Index = struct
       yield i
     done
 
+  let init_seq (n : 'n cardinal) f =
+    Seq.init (cardinal n) f
+
+  let rev_init_seq (n : 'n cardinal) f =
+    let n = cardinal n in
+    let n' = n - 1 in
+    Seq.init n (fun i -> f (n' - i))
+
   exception End_of_set
 
   let enumerate (n : 'n cardinal) : unit -> 'n index =
