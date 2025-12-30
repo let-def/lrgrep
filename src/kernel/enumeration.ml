@@ -152,9 +152,17 @@ let cover_with_maximal_patterns grammar stacks rcs gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_all (type n) grammar stacks rcs (gr : (_, _, n) _graph) =
+let cover_all (type n) grammar stacks rcs ?(already_covered=[]) (gr : (_, _, n) _graph) =
   let n = Vector.length gr.ker in
   let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
+  List.iter begin fun (node, path, failing) ->
+    let mark node =
+      let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
+      fallible0.@(lr0) <- IndexSet.union failing
+    in
+    mark node;
+    List.iter (fun edge -> mark edge.source) path
+  end already_covered;
   let visited = Boolvector.make n false in
   let fallible = Vector.make n IndexSet.empty in
   let prefixes = Vector.make n [] in
@@ -202,7 +210,44 @@ let cover_all (type n) grammar stacks rcs (gr : (_, _, n) _graph) =
     else if List.is_empty gr.fwd.:(node) then
       propagate (`Prefix, node, [], IndexSet.empty)
   end;
-  fixpoint ~propagate todo
+  fixpoint ~propagate todo;
+  Index.init_seq n begin fun node () ->
+    let output (prefix, pfail) (suffix, sfail) =
+      let failing = IndexSet.union pfail sfail in
+      let sentence = List.rev_append prefix suffix in
+      let first = match sentence with
+        | [] -> node
+        | x :: _ -> x.target
+      in
+      (first, sentence, failing)
+    in
+    let sprefix = shortest_prefix.:(node) in
+    let ssuffix = shortest_suffix.:(node) in
+    let output_prefixes prefixes =
+      List.to_seq prefixes
+      |> Seq.map (fun prefix' -> output prefix' (ssuffix, IndexSet.empty))
+    in
+    let output_suffixes suffixes =
+      List.to_seq suffixes
+      |> Seq.map (fun suffix' -> output (sprefix, IndexSet.empty) suffix')
+    in
+    let output_prefixes_suffixes prefixes suffixes () =
+      Seq.Cons (output_prefixes prefixes,
+                fun () -> Seq.Cons (output_suffixes suffixes, Seq.empty))
+    in
+    match List.rev prefixes.:(node), List.rev suffixes.:(node) with
+    | prefix0 :: prefixes, suffix0 :: suffixes ->
+      Seq.Cons (Seq.singleton (output prefix0 suffix0),
+                output_prefixes_suffixes prefixes suffixes)
+    | prefixes, suffixes ->
+      output_prefixes_suffixes prefixes suffixes ()
+  end
+  |> Seq.concat
+  |> Seq.concat
+(* FIXME: there will be many sentences not contributing to coverage (because
+   some splits are redundant).
+
+   We should filter those sentences here. *)
 
 (* Strategy for enumeration
 
