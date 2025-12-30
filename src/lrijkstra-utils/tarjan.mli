@@ -83,17 +83,35 @@ open Utils
 open Misc
 open Fix.Indexing
 
+module type SCC = sig
+  type node
+  type n
+  val n : n cardinal
+  val representatives : (n, node index) vector
+  val nodes : (n, node indexset) vector
+  val component : (node, n index) vector
+end
+
 module IndexedSCC (G : sig
     type n
     val n : n cardinal
     val successors : (n index -> unit) -> n index -> unit
-  end) :
-sig
-  type n
-  val n : n cardinal
-  (*val representatives : (n, G.n index) vector*)
-  val nodes : (n, G.n indexset) vector
-  val component : (G.n, n index) vector
-end
+  end) : SCC with type node = G.n
+
+type 'n scc = (module SCC with type node = 'n)
+
+val indexed_scc : 'n cardinal -> succ:(('n index -> unit) -> 'n index -> unit) -> 'n scc
+
+val close_forward
+  :  'n scc
+  -> succ:(('n index -> unit) -> 'n index -> unit)
+  -> ('n, 'a indexset) vector
+  -> unit
+
+val close_backward
+  :  'n scc
+  -> pred:(('n index -> unit) -> 'n index -> unit)
+  -> ('n, 'a indexset) vector
+  -> unit
 
 val close_relation : (('n index -> unit) -> 'n index -> unit) -> ('n, 'a indexset) vector -> unit
