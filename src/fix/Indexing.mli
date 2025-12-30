@@ -241,6 +241,9 @@ module Index : sig
   val compare : 'n index -> 'n index -> int
   val minimum : 'n index -> 'n index -> 'n index
   val maximum : 'n index -> 'n index -> 'n index
+
+  val init_seq : 'n cardinal -> ('n index -> 'a) -> 'a Seq.t
+  val rev_init_seq : 'n cardinal -> ('n index -> 'a) -> 'a Seq.t
 end
 
 (**A vector of type [(n, a) vector] is a (fixed-size) array whose indices lie
