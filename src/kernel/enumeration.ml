@@ -27,10 +27,6 @@ type ('g, 'lrc) node = {
   ker: ('g, 'lrc) kernel;
   failing: 'g terminal indexset;
 
-  (* If [entry], then this node is an entrypoint: we can stop at this node when
-     generating a sentence. *)
-  mutable entry: bool;
-
   (* forward transitions (a transition [nd, la] is in [fwd] if [nd] is reachable by
      reducing at least one stack from [lrc+nt], while looking ahead a symbol in [la]. *)
   mutable fwd: ('g, 'lrc) edge list;
@@ -130,7 +126,6 @@ let rec get_node gr lrc nto suffix_fallible lookahead =
     let suffix_fallible = IndexSet.union suffix_fallible failing in
     let node = {
       ker; failing;
-      entry = false;
       fwd = []; bkd = [];
       scheduled = false;
       visited = IndexSet.empty;
@@ -179,10 +174,6 @@ let get_lr0_state gr node =
   | None -> lr1
   | Some nt -> Transition.find_goto_target gr.grammar lr1 nt
 
-let mark_entry gr node =
-  assert (not gr.frozen);
-  node.entry <- true
-
 let solve gr =
   assert (not gr.frozen);
   gr.frozen <- true;
@@ -221,38 +212,6 @@ let solve gr =
   in
   iter_nodes gr propagate_prefix_fallible;
   fixpoint ~propagate:propagate_prefix_fallible todo
-
-let extract_suffixes nodes =
-  let uncovered = ref IndexSet.empty in
-  let prepare nd =
-    uncovered := IndexSet.union nd.suffix_fallible !uncovered;
-    (nd, [], IndexSet.empty)
-  in
-  let todo = ref (List.map prepare nodes) in
-  let suffixes = ref [] in
-  let propagate (nd, path, failing) =
-    let failing = IndexSet.union nd.failing failing in
-    if nd.entry then (
-      let covered = IndexSet.inter failing !uncovered in
-      if IndexSet.is_not_empty covered then (
-        push suffixes (nd, path, covered, failing);
-        uncovered := IndexSet.diff !uncovered covered;
-      )
-    );
-    if not (IndexSet.disjoint nd.suffix_fallible !uncovered) then
-      List.iter begin fun edge ->
-        push todo (edge.source, edge :: path, failing)
-      end nd.bkd;
-  in
-  fixpoint ~propagate todo;
-  !suffixes
-
-let cover_maximal_patterns gr =
-  fold_nodes gr begin fun node acc ->
-    if List.is_empty node.fwd
-    then (get_lr0_state gr node, node) :: acc
-    else acc
-  end []
 
 (* Group sentences by patterns
 
@@ -318,48 +277,92 @@ let cover_maximal_patterns gr =
   end by_lr0
 *)
 
-let cover_entries_with_maximal_patterns gr =
-  let process_entry node =
-    let results = ref [] in
-    let todo = ref [node, [], IndexSet.empty]  in
-    let propagate (node, path, failing) =
-      let failing = IndexSet.union node.failing failing in
-      if not node.scheduled || not (IndexSet.equal node.visited failing) then (
-        node.scheduled <- true;
-        node.visited <- IndexSet.union node.visited failing;
-        match node.fwd with
-        | [] -> push results (path, failing)
-        | edges ->
-          List.iter begin fun edge ->
-            push todo (edge.target, edge :: path, failing)
-          end edges
-      )
-    in
-    fixpoint ~propagate todo;
-    let rec clear node =
-      if node.scheduled then (
-        node.scheduled <- false;
-        node.visited <- IndexSet.empty;
-        List.iter (fun edge -> clear edge.target) node.fwd
-      )
-    in
-    clear node;
-    !results
-  in
-  fold_nodes gr begin fun node acc ->
-    if node.entry then
-      (node, process_entry node) :: acc
-    else
-      acc
-  end []
+let rec clear_marks node =
+  if node.scheduled then (
+    node.scheduled <- false;
+    node.visited <- IndexSet.empty;
+    List.iter (fun edge -> clear_marks edge.target) node.fwd
+  )
 
-let cover_remaining gr sentences =
-  let covered = Vector.make (Lr0.cardinal gr.grammar) IndexSet.empty in
-  (* Gather cases already covered by sentences *)
-  List.iter begin fun (path, failing) ->
-    List.iter
-      (fun node -> covered.@(get_lr0_state gr node) <- IndexSet.union failing)
-      path;
+let cover_entries_with_maximal_patterns nodes =
+  let results = ref [] in
+  let todo = ref (List.map (fun node -> node, [], IndexSet.empty) nodes) in
+  let propagate (node, path, failing as acc) =
+    let failing = IndexSet.union node.failing failing in
+    if not node.scheduled || not (IndexSet.equal node.visited failing) then (
+      node.scheduled <- true;
+      node.visited <- IndexSet.union node.visited failing;
+      match node.fwd with
+      | [] -> push results acc
+      | edges ->
+        List.iter begin fun edge ->
+          push todo (edge.target, edge :: path, failing)
+        end edges
+    )
+  in
+  fixpoint ~propagate todo;
+  List.iter clear_marks nodes;
+  !results
+
+let cover_remaining gr nodes sentences =
+  let uncovered = Vector.make (Lr0.cardinal gr.grammar) IndexSet.empty in
+  (* Gather lookaheads to cover *)
+  let rec gather node =
+    if not node.scheduled then (
+      node.scheduled <- true;
+      uncovered.@(get_lr0_state gr node) <-
+        IndexSet.union (IndexSet.union node.prefix_faillible node.suffix_fallible);
+      List.iter (fun edge -> gather edge.target) node.fwd
+    )
+  in
+  List.iter gather nodes;
+  List.iter clear_marks nodes;
+  (* Remove those already covered by sentences *)
+  List.iter begin fun (node, path, failing) ->
+    let remove node =
+      let lr0 = get_lr0_state gr node in
+      uncovered.:(lr0) <- IndexSet.diff uncovered.:(lr0) failing
+    in
+    remove node;
+    List.iter (fun edge -> remove edge.source) path
   end sentences;
   (* Cover remaining cases; use a DFS *)
-  ()
+
+(* Strategy for enumeration
+
+   - Construct the graph using [get_node] to inject each entry point.
+   - Use [cover_entries_with_maximal_patterns] to produce suffixes starting from
+     all entrypoints simulateneously and covering all lookaheads.
+
+   This is sufficient for maximal patterns, but if we want exhaustive coverage,
+   we need a second pass:
+
+   - We take the entry nodes and the suffixes produced so far
+   - We visit all the LR(0) reachable from entry nodes to gather
+     all the lookaheads with which they can be reached
+   - We visit all suffixes to remove the lookaheads that are already covered
+   - We do a BFS to collect suffixes reaching LR(0) states we still have to
+     cover.
+   - We do a BFS to collect prefixes reaching LR(0) states we still have to
+     cover.
+   - Then for each LR(0) state we still have to cover, pick enough prefixes and
+     suffixes to cover everything, update remaining things to cover.
+
+   For this we will construct do a BFS, reified as a tree, in which in each
+   branch we commit to covering the yet uncovered lookaheads.
+   When outputting a sentence, we drop the non-productive (not covering anything
+   new) prefix, then we update all other branches of the BFS to drop the already
+   committed lookaheads.  Woooo...
+
+   Then for printing, we group sentences by their final lr0 state, which
+   represent the right pattern.
+*)
+
+type ('g, 'lrc) bfs_node =
+  | Root of ('g, 'lrc) node
+  | Edge of {
+      edge: ('g, 'lrc) edge;
+      parent: ('g, 'lrc) bfs_node;
+      mutable mark: int;
+      mutable committed: 'g terminal indexset;
+    }
