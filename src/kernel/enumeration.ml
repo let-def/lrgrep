@@ -23,6 +23,10 @@ type ('g, 'lrc) kernel = {
   lookahead: 'g terminal indexset;
 }
 
+let kernel lrc ?goto lookahead =
+  let nto = Opt.(Option.fold ~none ~some goto) in
+  {lrc; nto; lookahead}
+
 type ('lrc, 'n) edge = {
   path: 'lrc index list;
   source: 'n index;
