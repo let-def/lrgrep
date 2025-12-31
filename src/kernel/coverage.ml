@@ -94,6 +94,76 @@ type ('g, 'st, 'lrc) machine_coverage = {
   unhandled_predecessors: ('st, (('g, 'lrc) lrc_position * 'lrc indexset * 'g terminal indexset) list) vector;
 }
 
+let failing_prefixes
+  (type g r st tr lrc)
+  (grammar : g grammar)
+  (branches : (g, r) Spec.branches)
+  (machine : (g, r, st, tr) Automata.Machine.t)
+  (stacks : (g, lrc) Automata.stacks)
+  =
+  let table = Vector.make (Vector.length machine.outgoing) IndexMap.empty in
+  let rec find st lrc =
+    let map = table.:(st) in
+    match IndexMap.find_opt lrc map with
+    | Some prefixes -> prefixes
+    | None ->
+      let result =
+        (* FIXME: check for unreachable clauses *)
+        if List.exists (fun (br, _, _) ->
+            not (Boolvector.test branches.is_partial br) &&
+            Option.is_none branches.lookaheads.:(br)
+          ) machine.accepting.:(st)
+        then []
+        else
+          let accepted =
+            List.fold_left begin fun la (br, _, _) ->
+              if Boolvector.test branches.is_partial br
+              then la
+              else IndexSet.union (Option.get branches.lookaheads.:(br)) la
+            end IndexSet.empty machine.accepting.:(st)
+          in
+          let lrcs = IndexSet.split_by_run stacks.label (stacks.prev lrc) in
+          let trs = machine.outgoing.:(st) in
+          let deps = ref [] in
+          let process tr lrcs =
+            let st' = machine.target.:(tr) in
+            let filter = machine.label.:(tr).filter in
+            List.filter begin fun (lr1, lrcs) ->
+              if IndexSet.mem lr1 filter then (
+                push deps (st', lrcs);
+                false
+              ) else
+                true
+            end lrcs
+          in
+          let unhandled = IndexSet.fold process trs lrcs in
+          let result =
+            let rejected = IndexSet.diff (Terminal.regular grammar) accepted in
+            List.fold_left (fun acc (_lr1, lrcs) ->
+                IndexSet.fold (fun lrc' acc -> ([st, lrc], lrc', rejected) :: acc) lrcs acc
+              ) [] unhandled
+          in
+          table.:(st) <- IndexMap.add lrc result map;
+          List.fold_left begin fun acc (st', lrcs) ->
+            IndexSet.fold begin fun lrc' acc ->
+              List.fold_left begin fun acc (prefix, lrc0, rejected) ->
+                ((st, lrc) :: prefix, lrc0, rejected) :: acc
+              end acc (find st' lrc')
+            end lrcs acc
+          end result !deps
+      in
+      table.:(st) <- IndexMap.add lrc result map;
+      result
+  in
+  fun st lrc la ->
+    List.filter_map (fun (prefix, uncovered, la') ->
+        let la = IndexSet.inter la la' in
+        if IndexSet.is_empty la then
+          None
+        else
+          Some (prefix, uncovered, la)
+      ) (find st lrc)
+
 let coverage (type g r st tr lrc)
     (g : g grammar)
     (branches : (g, r) Spec.branches)
@@ -228,7 +298,7 @@ let coverage (type g r st tr lrc)
    unhandled_lookaheads; unhandled_predecessors}
 
 let report_coverage
-  grammar rcs (stacks : _ Automata.stacks) positions
+  grammar branches machine rcs (stacks : _ Automata.stacks) positions
   {transitions; unhandled_initial;
    unhandled_lookaheads; unhandled_predecessors}
   =
@@ -236,6 +306,7 @@ let report_coverage
   (* FIXME: we have not proven yet that they are rejected...
      We have to follow transitions in the automaton until we are sure at least
      some lookaheads are not accepted. *)
+  let prefixes = failing_prefixes grammar branches machine stacks in
   let suffixes =
     let tr_index = Vector.make (Vector.length transitions) IndexMap.empty in
     let get_transitions st =
@@ -267,10 +338,26 @@ let report_coverage
           ) cts
     in
     Vector.fold_lefti (fun acc st cases ->
-        List.concat_map (fun (lp, la) -> synthesize_suffix [] st lp la) cases @ acc
+        List.concat_map (fun (lp, la) ->
+            let _, lrc = unpack_position positions lp in
+            let prefixes = prefixes st lrc la in
+            if List.is_empty prefixes then
+              []
+            else
+              let suffixes = synthesize_suffix [] st lp la in
+              List.concat_map (fun (prefix, last, la0) ->
+                  List.concat_map (fun (suffix, la1) ->
+                      let la = IndexSet.inter la0 la1 in
+                      if IndexSet.is_empty la then
+                        []
+                      else
+                        [prefix, suffix, last, la]
+                    ) suffixes
+                ) prefixes
+          ) cases @ acc
       ) [] unhandled_lookaheads
   in
-  List.iter begin fun (suffix, la) ->
+  List.iter begin fun (prefix, suffix, last, la) ->
     let pattern = ref None in
     let lr1s =
       List.fold_left (fun acc (_, lp) ->
@@ -282,6 +369,12 @@ let report_coverage
             acc
           ) else stacks.label lrc :: acc
         ) [] suffix
+    in
+    let lr1s =
+      stacks.label last ::
+      List.fold_left (fun acc (_, lrc) ->
+          stacks.label lrc :: acc
+        ) lr1s prefix
     in
     begin match !pattern with
       | None -> assert false
@@ -340,7 +433,7 @@ let report_coverage
   in
   let _cover = Enumeration.cover_all
       ~manually_covered:(fun (covered : _ lr0 index -> _ terminal indexset -> unit) ->
-          List.iter (fun (suffix, la) ->
+          List.iter (fun (_, suffix, _, la) ->
               List.iter (fun (_, lp) ->
                   let pos, lrc = unpack_position positions lp in
                   let nt, pos = project_position positions pos in
