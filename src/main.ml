@@ -276,6 +276,37 @@ let lrc_from_entrypoints =
       stopwatch 2 "Computed LRC subset reachable from entrypoints";
       ep
 
+let translate_entrypoints symbols =
+  let unknown = ref [] in
+  let initial_states =
+    List.filter_map (fun (sym, pos) ->
+        let result = Hashtbl.find_opt (Lr1.entrypoint_table !!grammar) sym in
+        if Option.is_none result then
+          push unknown (sym, pos);
+        result
+      ) symbols
+    |> IndexSet.of_list
+  in
+  begin match List.rev !unknown with
+    | [] -> ()
+    | (_, pos) :: _ as unknowns ->
+      let names = String.concat ", " (List.map fst unknowns) in
+      let candidates = Hashtbl.to_seq_keys (Lr1.entrypoint_table !!grammar) in
+      Syntax.error pos
+        "unknown start symbols %s.\n\
+         Start symbols of this grammar are:\n\
+         %s\n"
+        names (String.concat ", " (List.of_seq candidates))
+  end;
+  initial_states
+
+let make_stacks (subset : _ Lrc.entrypoints) ~error_only =
+  let domain = Vector.length !!lrc.lr1_of in
+  let tops = if error_only then subset.wait else subset.reachable in
+  let prev = Vector.get subset.predecessors in
+  let label = Vector.get !!lrc.lr1_of in
+  {Automata. domain; tops; prev; label}
+
 (* Compile command *)
 
 let opt_output_name = ref None
@@ -284,40 +315,11 @@ let do_compile spec (cp : Code_printer.t option) =
   let grammar = !!grammar in
   Codegen.output_header grammar spec cp;
   List.iter begin fun (rule : Syntax.rule) ->
-    let unknown = ref [] in
-    let initial_states =
-      List.filter_map (fun (sym, pos) ->
-          let result = Hashtbl.find_opt (Lr1.entrypoint_table grammar) sym in
-          if Option.is_none result then
-            push unknown (sym, pos);
-          result
-        ) rule.startsymbols
-      |> IndexSet.of_list
+    let stacks =
+      make_stacks
+        (lrc_from_entrypoints (translate_entrypoints rule.startsymbols))
+        ~error_only:(fst rule.error)
     in
-    begin match List.rev !unknown with
-      | [] -> ()
-      | (_, pos) :: _ as unknowns ->
-        let names = String.concat ", " (List.map fst unknowns) in
-        let candidates =
-          String.concat ", " (List.of_seq (Hashtbl.to_seq_keys (Lr1.entrypoint_table grammar)))
-        in
-        Syntax.error pos
-          "unknown start symbols %s.\n\
-           Start symbols of this grammar are:\n\
-           %s\n"
-          names candidates
-    end;
-    let subset = lrc_from_entrypoints initial_states in
-    let stacks = {
-      Automata.
-      domain = Vector.length !!lrc.lr1_of;
-      tops =
-        if fst rule.error
-        then subset.wait
-        else subset.reachable;
-      prev = Vector.get subset.predecessors;
-      label = Vector.get !!lrc.lr1_of;
-    } in
     let Spec.Rule (clauses, branches) =
       Spec.import_rule grammar !!red_graph !!indices !!red_trie rule
     in
@@ -373,13 +375,13 @@ let do_compile spec (cp : Code_printer.t option) =
     if false then (
       let Enumeration.Graph gr =
         let lookahead = Terminal.regular grammar in
-        Enumeration.make_graph grammar stacks !!red_closure
+        Enumeration.make_graph grammar !!red_closure stacks
           (IndexSet.fold
              (fun lrc acc -> Enumeration.kernel lrc lookahead :: acc)
              stacks.tops [])
       in
       let _ = Enumeration.cover_with_maximal_patterns
-          grammar stacks !!red_closure gr
+          grammar !!red_closure stacks gr
       in
       ()
     );
@@ -399,6 +401,127 @@ let compile_command () =
     do_compile {parser_name = !!parser_name; lexer_definition= !!spec} (Some cp);
     close_out oc
 
+(* Enumeration command *)
+
+let opt_enum_all = ref false
+let opt_enum_entrypoints = ref []
+
+let enumerate_command () =
+  let grammar = !!grammar in
+  let initial_states =
+    !opt_enum_entrypoints
+    |> List.rev_map (fun name -> name, Lexing.dummy_pos)
+    |> translate_entrypoints
+  in
+  let subset = lrc_from_entrypoints initial_states in
+  let stacks = make_stacks subset ~error_only:true in
+  let initial_enum =
+    let lookahead = Terminal.regular grammar in
+    let add lrc = List.cons (Enumeration.kernel lrc lookahead) in
+    IndexSet.fold add stacks.tops []
+  in
+  let Enumeration.Graph graph =
+    Enumeration.make_graph
+      grammar
+      !!red_closure
+      stacks
+      initial_enum
+  in
+  let cases = ref 0 in
+  let report_sentences sentences =
+    let by_lr0 = Vector.make (Lr0.cardinal grammar) [] in
+    Seq.iter begin fun (node, _edges, _failing as sentence) ->
+      let lr0 =
+        Enumeration.get_lr0_state grammar stacks
+          graph.ker.:(node)
+      in
+      by_lr0.@(lr0) <- List.cons sentence
+    end sentences;
+    let output_pattern lr0 =
+      let lhs =
+        match Lr0.incoming grammar lr0 with
+        | Some sym when Symbol.is_nonterminal grammar sym ->
+          Symbol.name grammar sym
+        | _ -> ""
+      in
+      let pad = String.make (String.length lhs + 1) ' ' in
+      let first = ref true in
+      let items = Lr0.items grammar lr0 in
+      if IndexSet.is_empty items then
+        Printf.printf "[]\n"
+      else (
+        IndexSet.iter begin fun item ->
+          Printf.printf "%c%s /%s"
+            (if !first then '[' else '\n')
+            (if !first then lhs else pad)
+            (Item.to_string grammar item);
+          first := false
+        end items;
+        Printf.printf "]\n";
+      )
+    in
+    Vector.iteri begin fun lr0 -> function
+      | [] -> ()
+      | sentences ->
+        Printf.printf
+          "## Pattern %d\n\
+           \n\
+           ```\n" !cases;
+        incr cases;
+        output_pattern lr0;
+        Printf.printf "```\n";
+        List.iteri begin fun i (node, edges, failing) ->
+          Printf.printf
+            "### Sample sentence %d\n\
+             \n\
+             Here is a sample sentence prefix covered this pattern:\n\
+             ```\n" i;
+          let lrc = graph.ker.:(node).lrc in
+          let suffix =
+            lrc ::
+            List.concat_map (fun edge -> edge.Enumeration.path) edges
+          in
+          let prefix = subset.some_prefix lrc in
+          let lrcs = List.rev_append prefix suffix in
+          List.iter (fun lrc ->
+              Printf.printf " %s"
+                (Lr1.symbol_to_string grammar (stacks.label lrc))
+            ) lrcs;
+          Printf.printf
+            "\n```\n\
+             \n\
+             It is rejected when looking ahead at:\n\
+             ```\n";
+          IndexSet.rev_iter (fun t ->
+              Printf.printf " %s" (Terminal.to_string grammar t)
+            ) failing;
+          Printf.printf
+            "\n```\n\
+            \n\
+            It is also covered by these intermediate patterns:\n\
+            ```\n";
+          List.iter (fun edge ->
+              let node = edge.Enumeration.source in
+              let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
+              output_pattern lr0
+            ) edges;
+          Printf.printf "```\n"
+        end sentences
+    end by_lr0;
+  in
+  let sentences = Enumeration.cover_with_maximal_patterns
+      grammar !!red_closure stacks graph
+  in
+  Printf.printf "# Maximal patterns\n\n";
+  report_sentences (List.to_seq sentences);
+  if !opt_enum_all then
+    let sentences =
+      Enumeration.cover_all grammar !!red_closure stacks graph
+        ~already_covered:sentences
+    in
+    Printf.printf "# Exhaustive coverage\n\n";
+    report_sentences sentences
+
 (* Argument parser *)
 let commands =
   let not_implemented command () =
@@ -412,12 +535,16 @@ let commands =
     ] ~commit:compile_command;
     command "interpret" "Parse a sentence and suggest patterns that can match it" []
       ~commit:(not_implemented "interpret");
-    command "cover" "Generate sentences to cover possible failures" []
+    command "cover" "Check that the error specification cover all possible failures" []
       ~commit:(not_implemented "cover");
     command "recover" "Generate an error-resilient parser for the grammar" []
       ~commit:(not_implemented "recover");
     command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
       ~commit:(not_implemented "complete");
+    command "enumerate" "Generate sentences to cover possible failures" [
+      "-a", Arg.Set opt_enum_all, "";
+      "-e", Arg.String (push opt_enum_entrypoints), "";
+    ] ~commit:enumerate_command;
 ]
 
 let () =
