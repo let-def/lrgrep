@@ -135,6 +135,17 @@ let get_lr0_state grammar (stacks : _ Automata.stacks) ker =
 let get_failing grammar stacks rcs ker =
   rcs.:(get_lr1_state grammar stacks ker).Redgraph.failing
 
+type ('g, 'lrc, 'n) failing_sentence = {
+  first: 'n index;
+  edges: ('lrc, 'n) edge list;
+  failing: 'g terminal indexset;
+  entry: int;
+}
+
+let make_failing_sentence (first, edges, failing) =
+  let entry = List.fold_left (fun _ edge -> edge.source) first edges in
+  {first; edges; failing; entry = Index.to_int entry}
+
 let cover_with_maximal_patterns grammar rcs stacks gr =
   let results = ref [] in
   let todo = ref (List.map (fun node -> node, [], IndexSet.empty) gr.entries) in
@@ -148,7 +159,7 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
       match gr.fwd.:(node) with
       | [] ->
         if IndexSet.is_not_empty failing then
-          push results (node, path, failing)
+          push results (make_failing_sentence (node, path, failing))
       | edges ->
         List.iter begin fun edge ->
           push todo (edge.target, edge :: path, failing)
@@ -158,17 +169,16 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_all (type n) grammar rcs stacks ?(already_covered=[]) (gr : (_, _, n) _graph) =
+let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_covered=ignore) (gr : (_, _, n) _graph) =
   let n = Vector.length gr.ker in
   let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
-  List.iter begin fun (node, path, failing) ->
-    let mark node =
-      let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
-      fallible0.@(lr0) <- IndexSet.union failing
-    in
-    mark node;
-    List.iter (fun edge -> mark edge.source) path
+  let cover lr0 set = fallible0.@(lr0) <- IndexSet.union set in
+  List.iter begin fun {first; edges; failing; _} ->
+    let mark node = cover (get_lr0_state grammar stacks gr.ker.:(node)) failing in
+    mark first;
+    List.iter (fun edge -> mark edge.source) edges
   end already_covered;
+  manually_covered cover;
   let visited = Boolvector.make n false in
   let fallible = Vector.make n IndexSet.empty in
   let prefixes = Vector.make n [] in
@@ -263,6 +273,7 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) (gr : (_, _, n) 
       in
       productive node || List.exists (fun edge -> productive edge.source) edges
     )
+  |> Seq.map make_failing_sentence
   |> Seq.memoize
 
 (* Strategy for enumeration
