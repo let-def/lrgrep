@@ -60,8 +60,8 @@ let rec fold_expand expand env f acc = function
 
 let make_graph (type g lrc)
     (grammar : g grammar)
-    (stacks : (g, lrc) Automata.stacks)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
+    (stacks : (g, lrc) Automata.stacks)
     (entries : (g, lrc) kernel list)
   =
   let open IndexBuffer in
@@ -135,7 +135,7 @@ let get_lr0_state grammar (stacks : _ Automata.stacks) ker =
 let get_failing grammar stacks rcs ker =
   rcs.:(get_lr1_state grammar stacks ker).Redgraph.failing
 
-let cover_with_maximal_patterns grammar stacks rcs gr =
+let cover_with_maximal_patterns grammar rcs stacks gr =
   let results = ref [] in
   let todo = ref (List.map (fun node -> node, [], IndexSet.empty) gr.entries) in
   let marked = Boolvector.make (Vector.length gr.ker) false in
@@ -156,7 +156,7 @@ let cover_with_maximal_patterns grammar stacks rcs gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_all (type n) grammar stacks rcs ?(already_covered=[]) (gr : (_, _, n) _graph) =
+let cover_all (type n) grammar rcs stacks ?(already_covered=[]) (gr : (_, _, n) _graph) =
   let n = Vector.length gr.ker in
   let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
   List.iter begin fun (node, path, failing) ->
@@ -239,7 +239,7 @@ let cover_all (type n) grammar stacks rcs ?(already_covered=[]) (gr : (_, _, n) 
       Seq.Cons (output_prefixes prefixes,
                 fun () -> Seq.Cons (output_suffixes suffixes, Seq.empty))
     in
-    match List.rev prefixes.:(node), List.rev suffixes.:(node) with
+    match List.rev prefixes.:(node), suffixes.:(node) with
     | prefix0 :: prefixes, suffix0 :: suffixes ->
       Seq.Cons (seq_singleton (output prefix0 suffix0),
                 output_prefixes_suffixes prefixes suffixes)
@@ -248,10 +248,20 @@ let cover_all (type n) grammar stacks rcs ?(already_covered=[]) (gr : (_, _, n) 
   end
   |> Seq.concat
   |> Seq.concat
-(* FIXME: there will be many sentences not contributing to coverage (because
-   some splits are redundant).
-
-   We should filter those sentences here. *)
+  |> Seq.filter (fun (node, edges, failing) ->
+      let productive node =
+        let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
+        let fallible = fallible0.:(lr0) in
+        let fallible' = IndexSet.diff fallible failing in
+        if not (IndexSet.equal fallible fallible') then (
+          fallible0.:(lr0) <- fallible';
+          true
+        ) else
+          false
+      in
+      productive node || List.exists (fun edge -> productive edge.source) edges
+    )
+  |> Seq.memoize
 
 (* Strategy for enumeration
 
