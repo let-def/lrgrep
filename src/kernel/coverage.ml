@@ -233,6 +233,9 @@ let report_coverage
    unhandled_lookaheads; unhandled_predecessors}
   =
   (* Start with unhandled lookaheads *)
+  (* FIXME: we have not proven yet that they are rejected...
+     We have to follow transitions in the automaton until we are sure at least
+     some lookaheads are not accepted. *)
   let suffixes =
     let tr_index = Vector.make (Vector.length transitions) IndexMap.empty in
     let get_transitions st =
