@@ -358,33 +358,16 @@ let do_compile spec (cp : Code_printer.t option) =
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
-    Option.iter (fun initial ->
-        let cposition = Coverage.make_positions grammar in
-        let coverage =
-          Coverage.coverage
-            grammar
-            branches
-            machine
-            stacks
-            !!red_closure
-            cposition
-            initial
-        in
-        Coverage.report_coverage grammar cposition stacks coverage
-      ) machine.initial;
-    if false then (
-      let Enumeration.Graph gr =
-        let lookahead = Terminal.regular grammar in
-        Enumeration.make_graph grammar !!red_closure stacks
-          (IndexSet.fold
-             (fun lrc acc -> Enumeration.kernel lrc lookahead :: acc)
-             stacks.tops [])
+    Option.iter begin fun initial ->
+      let cposition = Coverage.make_positions grammar in
+      let coverage =
+        Coverage.coverage
+          grammar branches machine stacks
+          !!red_closure cposition initial
       in
-      let _ = Enumeration.cover_with_maximal_patterns
-          grammar !!red_closure stacks gr
-      in
-      ()
-    );
+      Coverage.report_coverage grammar !!red_closure stacks cposition coverage
+    end machine.initial;
+    stopwatch 1 "coverage check";
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
 
@@ -430,10 +413,10 @@ let enumerate_command () =
   let cases = ref 0 in
   let report_sentences sentences =
     let by_lr0 = Vector.make (Lr0.cardinal grammar) [] in
-    Seq.iter begin fun (node, _edges, _failing as sentence) ->
+    Seq.iter begin fun sentence ->
       let lr0 =
         Enumeration.get_lr0_state grammar stacks
-          graph.ker.:(node)
+          graph.ker.:(sentence.Enumeration.first)
       in
       by_lr0.@(lr0) <- List.cons sentence
     end sentences;
@@ -470,16 +453,18 @@ let enumerate_command () =
         incr cases;
         output_pattern lr0;
         Printf.printf "```\n\n";
-        List.iteri begin fun i (node, edges, failing) ->
+        List.iteri begin fun i sentence ->
           Printf.printf
             "### Sample sentence %d\n\
              \n\
              Here is a sample sentence prefix covered this pattern:\n\
              ```\n" i;
-          let lrc = graph.ker.:(node).lrc in
+          let lrc = graph.ker.:(sentence.Enumeration.first).lrc in
           let suffix =
             lrc ::
-            List.concat_map (fun edge -> edge.Enumeration.path) edges
+            List.concat_map
+              (fun edge -> edge.Enumeration.path)
+              sentence.edges
           in
           let prefix = subset.some_prefix lrc in
           let lrcs = List.rev_append prefix suffix in
@@ -494,11 +479,11 @@ let enumerate_command () =
              ```\n";
           IndexSet.rev_iter (fun t ->
               Printf.printf " %s" (Terminal.to_string grammar t)
-            ) failing;
+            ) sentence.failing;
           Printf.printf
             "\n```\n\
              \n";
-          if not (List.is_empty edges) then (
+          if not (List.is_empty sentence.edges) then (
             Printf.printf
               "It is also covered by these intermediate patterns:\n\
                ```\n";
@@ -506,7 +491,7 @@ let enumerate_command () =
                 let node = edge.Enumeration.source in
                 let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
                 output_pattern lr0
-              ) edges;
+              ) sentence.edges;
             Printf.printf "```\n\n"
           )
         end sentences
