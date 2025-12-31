@@ -140,13 +140,15 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
   let todo = ref (List.map (fun node -> node, [], IndexSet.empty) gr.entries) in
   let marked = Boolvector.make (Vector.length gr.ker) false in
   let visited = Vector.make (Vector.length gr.ker) IndexSet.empty in
-  let propagate (node, path, failing as acc) =
+  let propagate (node, path, failing) =
     let failing = IndexSet.union (get_failing grammar stacks rcs gr.ker.:(node)) failing in
     if not (Boolvector.test marked node) || not (IndexSet.equal visited.:(node) failing) then (
       Boolvector.set marked node;
       visited.@(node) <- IndexSet.union failing;
       match gr.fwd.:(node) with
-      | [] -> push results acc
+      | [] ->
+        if IndexSet.is_not_empty failing then
+          push results (node, path, failing)
       | edges ->
         List.iter begin fun edge ->
           push todo (edge.target, edge :: path, failing)
