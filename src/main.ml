@@ -441,7 +441,7 @@ let enumerate_command () =
       let lhs =
         match Lr0.incoming grammar lr0 with
         | Some sym when Symbol.is_nonterminal grammar sym ->
-          Symbol.name grammar sym
+          Symbol.name grammar sym ^ " "
         | _ -> ""
       in
       let pad = String.make (String.length lhs + 1) ' ' in
@@ -451,7 +451,7 @@ let enumerate_command () =
         Printf.printf "[]\n"
       else (
         IndexSet.iter begin fun item ->
-          Printf.printf "%c%s /%s"
+          Printf.printf "%c%s/%s"
             (if !first then '[' else '\n')
             (if !first then lhs else pad)
             (Item.to_string grammar item);
@@ -469,7 +469,7 @@ let enumerate_command () =
            ```\n" !cases;
         incr cases;
         output_pattern lr0;
-        Printf.printf "```\n";
+        Printf.printf "```\n\n";
         List.iteri begin fun i (node, edges, failing) ->
           Printf.printf
             "### Sample sentence %d\n\
@@ -497,15 +497,18 @@ let enumerate_command () =
             ) failing;
           Printf.printf
             "\n```\n\
-            \n\
-            It is also covered by these intermediate patterns:\n\
-            ```\n";
-          List.iter (fun edge ->
-              let node = edge.Enumeration.source in
-              let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
-              output_pattern lr0
-            ) edges;
-          Printf.printf "```\n"
+             \n";
+          if not (List.is_empty edges) then (
+            Printf.printf
+              "It is also covered by these intermediate patterns:\n\
+               ```\n";
+            List.iter (fun edge ->
+                let node = edge.Enumeration.source in
+                let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
+                output_pattern lr0
+              ) edges;
+            Printf.printf "```\n\n"
+          )
         end sentences
     end by_lr0;
   in
