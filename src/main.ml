@@ -365,7 +365,7 @@ let do_compile spec (cp : Code_printer.t option) =
           grammar branches machine stacks
           !!red_closure cposition initial
       in
-      Coverage.report_coverage grammar branches machine !!red_closure stacks cposition coverage
+      Coverage.report_coverage grammar !!red_closure stacks cposition coverage
     end machine.initial;
     stopwatch 1 "coverage check";
   end spec.lexer_definition.rules;
