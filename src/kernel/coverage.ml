@@ -93,7 +93,6 @@ type ('g, 'st, 'lrc) coverage_transition = {
 type ('g, 'st, 'lrc) machine_coverage = {
   transitions: ('st, ('g, 'st, 'lrc) coverage_transition list) vector;
   unhandled_initial: 'lrc indexset;
-  unhandled_lookaheads: ('st, (('g, 'lrc) lrc_position * 'g terminal indexset) list) vector;
   unhandled_predecessors: ('st, (('g, 'lrc) lrc_position * 'lrc indexset * 'g terminal indexset) list) vector;
 }
 
@@ -110,7 +109,6 @@ let coverage (type g r st tr lrc)
   let state_count = Vector.length machine.outgoing in
   let reached = Vector.make state_count IndexMap.empty in
   let transitions = Vector.make state_count [] in
-  let unhandled_lookaheads = Vector.make state_count [] in
   let unhandled_predecessors = Vector.make state_count [] in
   let pending = ref [] in
   let todo = Vector.make state_count IndexMap.empty in
@@ -159,33 +157,35 @@ let coverage (type g r st tr lrc)
         end rcs.:(tgt).reductions;
         let la = IndexSet.inter la rcs.:(tgt).failing in
         if IndexSet.is_not_empty la then
-          unhandled_lookaheads.@(st) <- List.cons (lp, la)
+          schedule st lp st (pack_position positions Opt.none lrc) la
       | Right pos' ->
         let lrcs = stacks.prev lrc in
         if IndexSet.is_empty lrcs then
           (* Only initial state has no predecessors.  But all lookaheads should
              have been handled before reaching this configuration. *)
-          assert false;
-        (* Group by lr1 core *)
-        let lrcs = IndexSet.split_by_run stacks.label lrcs in
-        let trs = machine.outgoing.:(st) in
-        let process tr lrcs =
-          let st' = machine.target.:(tr) in
-          let filter = machine.label.:(tr).filter in
-          List.filter begin fun (lr1, lrcs) ->
-            if IndexSet.mem lr1 filter then (
-              IndexSet.iter
-                (fun lrc' -> schedule st lp st' (pack_position positions pos' lrc') la)
-                lrcs;
-              false
-            ) else
-              true
-          end lrcs
-        in
-        let unhandled = IndexSet.fold process trs lrcs in
-        if not (List.is_empty unhandled) then
           unhandled_predecessors.@(st) <-
-            List.cons (lp, collect_unhandled_lrc unhandled, la)
+            List.cons (lp, IndexSet.empty, la)
+        else
+          (* Group by lr1 core *)
+          let lrcs = IndexSet.split_by_run stacks.label lrcs in
+          let trs = machine.outgoing.:(st) in
+          let process tr lrcs =
+            let st' = machine.target.:(tr) in
+            let filter = machine.label.:(tr).filter in
+            List.filter begin fun (lr1, lrcs) ->
+              if IndexSet.mem lr1 filter then (
+                IndexSet.iter
+                  (fun lrc' -> schedule st lp st' (pack_position positions pos' lrc') la)
+                  lrcs;
+                false
+              ) else
+                true
+            end lrcs
+          in
+          let unhandled = IndexSet.fold process trs lrcs in
+          if not (List.is_empty unhandled) then
+            unhandled_predecessors.@(st) <-
+              List.cons (lp, collect_unhandled_lrc unhandled, la)
   in
   let propagate st =
     let map = todo.:(st) in
@@ -220,20 +220,17 @@ let coverage (type g r st tr lrc)
   let total_list_elements v = Vector.fold_left (fun acc xs -> acc + List.length xs) 0 v in
   fixpoint ~counter ~propagate pending;
   stopwatch 2 "computed coverage (%d transitions, %d iterations, %d uncovered initial states, \
-               %d states with uncovered lookaheads, %d states with uncovered predecessors)"
+               %d states with uncovered predecessors)"
     (total_list_elements transitions)
     !counter
     (IndexSet.cardinal unhandled_initial)
-    (total_list_elements unhandled_lookaheads)
     (total_list_elements unhandled_predecessors)
   ;
-  {transitions; unhandled_initial;
-   unhandled_lookaheads; unhandled_predecessors}
+  {transitions; unhandled_initial; unhandled_predecessors}
 
 let report_coverage
   grammar rcs (stacks : _ Automata.stacks) positions
-  {transitions; unhandled_initial;
-   unhandled_lookaheads; unhandled_predecessors}
+  {transitions; unhandled_initial; unhandled_predecessors}
   =
   (* Start with unhandled lookaheads *)
   (* FIXME: we have not proven yet that they are rejected...
@@ -259,43 +256,50 @@ let report_coverage
       match IndexMap.find_opt lp (get_transitions st) with
       | None -> [prefix, la] (* Done ? *)
       | Some cts ->
-        List.concat_map (fun ct ->
-            let la = IndexSet.inter la ct.lookahead in
-            if IndexSet.is_empty la then
-              []
-            else if Index.equal st ct.source && Index.equal lp ct.source_position then
-              [prefix, la]
-            else
-              synthesize_suffix prefix ct.source ct.source_position la
-          ) cts
+        List.concat_map begin fun ct ->
+          let la = IndexSet.inter la ct.lookahead in
+          if IndexSet.is_empty la then
+            []
+          else if Index.equal st ct.source && Index.equal lp ct.source_position then
+            [prefix, la]
+          else
+            synthesize_suffix prefix ct.source ct.source_position la
+        end cts
     in
-    Vector.fold_lefti (fun acc st cases ->
-        List.concat_map (fun (lp, la) -> synthesize_suffix [] st lp la) cases @ acc
-      ) [] unhandled_lookaheads
+    Vector.fold_lefti begin fun acc st cases ->
+      List.fold_left begin fun acc (lp, lrcs, la) ->
+        let pos, _ = unpack_position positions lp in
+        match Opt.prj pos with
+        | None -> (lrcs, synthesize_suffix [] st lp la) :: acc
+        | Some _ -> acc
+      end acc cases
+    end [] unhandled_predecessors
   in
-  List.iter begin fun (suffix, la) ->
-    let pattern = ref None in
-    let lr1s =
-      List.fold_left (fun acc (_, lp) ->
-          let pos, lrc = unpack_position positions lp in
-          match previous_position positions pos with
-          | Either.Left nt ->
-            let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-            pattern := Some (Lr1.to_lr0 grammar lr1);
-            acc
-          | Either.Right _ ->
-            stacks.label lrc :: acc
-        ) [] suffix
-    in
-    begin match !pattern with
-      | None -> assert false
-      | Some lr0 ->
-        List.iter print_endline
-          (List.map (Item.to_string grammar) (IndexSet.elements (Lr0.items grammar lr0)))
-    end;
-    Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
-      (Lr1.list_to_string grammar lr1s)
-      (Terminal.lookaheads_to_string grammar la)
+  List.iter begin fun (_lrcs, suffixes) ->
+    List.iter begin fun (suffix, la) ->
+      let pattern = ref None in
+      let lr1s =
+        List.fold_left (fun acc (_, lp) ->
+            let pos, lrc = unpack_position positions lp in
+            match previous_position positions pos with
+            | Either.Left nt ->
+              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+              pattern := Some (Lr1.to_lr0 grammar lr1);
+              acc
+            | Either.Right _ ->
+              stacks.label lrc :: acc
+          ) [] suffix
+      in
+      begin match !pattern with
+        | None -> assert false
+        | Some lr0 ->
+          List.iter print_endline
+            (List.map (Item.to_string grammar) (IndexSet.elements (Lr0.items grammar lr0)))
+      end;
+      Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
+        (Lr1.list_to_string grammar lr1s)
+        (Terminal.lookaheads_to_string grammar la)
+    end suffixes;
   end suffixes;
   (* Pursue with initials and predecessors, delegating the work to the
   enumeration module. *)
@@ -346,15 +350,17 @@ let report_coverage
   in
   let _cover = Enumeration.cover_all grammar rcs stacks graph
       ~manually_covered:begin fun (covered : _ lr0 index -> _ terminal indexset -> unit) ->
-        List.iter begin fun (suffix, la) ->
-          List.iter begin fun (_, lp) ->
-            let pos, lrc = unpack_position positions lp in
-            match previous_position positions pos with
-            | Either.Left nt ->
-              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-              covered (Lr1.to_lr0 grammar lr1) la
-            | Either.Right _ -> ()
-          end suffix
+        List.iter begin fun (_lrcs, suffixes) ->
+          List.iter begin fun (suffix, la) ->
+            List.iter begin fun (_, lp) ->
+              let pos, lrc = unpack_position positions lp in
+              match previous_position positions pos with
+              | Either.Left nt ->
+                let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+                covered (Lr1.to_lr0 grammar lr1) la
+              | Either.Right _ -> ()
+            end suffix
+          end suffixes
         end suffixes
       end
   in
