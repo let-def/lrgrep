@@ -44,24 +44,27 @@ let inject_position (type g) (p : g positions) nt pos =
   let pn = Index.of_int (Vector.length p.desc) ((p0 :> int) + pos) in
   let (nt', _) = p.desc.:(pn)  in
   assert (Index.equal nt nt');
-  pn
+  Opt.some pn
 
 let project_position (type g) (p : g positions) pos =
   p.desc.:(pos)
 
 let previous_position (type g) (p : g positions) pos =
-  match p.desc.:(pos) with
-  | (nt, 0) -> Either.Left nt
-  | _ -> Either.Right (Index.of_int (Vector.length p.desc) ((pos :> int) - 1))
+  match Opt.prj pos with
+  | None -> Either.Right Opt.none
+  | Some pos' ->
+    match p.desc.:(pos') with
+    | (nt, 0) -> Either.Left nt
+    | _ -> Either.Right (Option.get (Index.pred pos))
 
 let pack_position positions i j =
-  Prod.inj (Vector.length positions.desc) i j
+  Prod.inj (Opt.cardinal (Vector.length positions.desc)) i j
 
 let pack_inject positions lrc nt pos =
   pack_position positions (inject_position positions nt pos) lrc
 
 let unpack_position positions i =
-  Prod.prj (Vector.length positions.desc) i
+  Prod.prj (Opt.cardinal (Vector.length positions.desc)) i
 
 let get_map v i j =
   let map = v.:(i) in
@@ -78,7 +81,7 @@ let (@:=) r f =
 (* Compute coverage of a machine (an automaton realizing an error
    specification).*)
 
-type ('g, 'lrc) lrc_position = ('g position, 'lrc) Prod.n index
+type ('g, 'lrc) lrc_position = ('g position Opt.n, 'lrc) Prod.n index
 
 type ('g, 'st, 'lrc) coverage_transition = {
   source: 'st index;
@@ -275,12 +278,13 @@ let report_coverage
     let lr1s =
       List.fold_left (fun acc (_, lp) ->
           let pos, lrc = unpack_position positions lp in
-          let nt, pos = project_position positions pos in
-          if pos = 0 then (
+          match previous_position positions pos with
+          | Either.Left nt ->
             let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
             pattern := Some (Lr1.to_lr0 grammar lr1);
             acc
-          ) else stacks.label lrc :: acc
+          | Either.Right _ ->
+            stacks.label lrc :: acc
         ) [] suffix
     in
     begin match !pattern with
@@ -302,55 +306,57 @@ let report_coverage
       unhandled_initial []
   in
   let predecessors =
-    let rec generate_suffixes pos acc =
-      if pos = 0 then
-        acc
-      else
-        generate_suffixes (pos - 1)
-          (List.concat_map (fun (lrc, path) ->
-               let path = lrc :: path in
-               List.map
-                 (fun lrc' -> (lrc', path))
-                 (IndexSet.elements (stacks.prev lrc))
-             ) acc)
+    let extend_path (lrc, path) =
+      let path = lrc :: path in
+      List.map (fun lrc' -> (lrc', path)) (IndexSet.elements (stacks.prev lrc))
     in
-    Vector.fold_lefti (fun acc st transitions ->
-        List.fold_left (fun acc (lp, lrcs, la) ->
-            let pos, _ = unpack_position positions lp in
-            let _, pos = project_position positions pos in
-            let suffixes =
-              generate_suffixes (pos - 1)
-                (List.map (fun lrc -> (lrc, [])) (IndexSet.elements lrcs))
-            in
-            let desc = (st, lp, la) in
-            List.map (fun (lrc, suffix) -> desc, lrc, suffix) suffixes @ acc
-          ) acc transitions
-      ) [] unhandled_predecessors
+    let rec generate_suffixes pos acc =
+      if pos = 0
+      then acc
+      else generate_suffixes (pos - 1) (List.concat_map extend_path acc)
+    in
+    Vector.fold_lefti begin fun acc st transitions ->
+      List.fold_left begin fun acc (lp, lrcs, la) ->
+        let desc = (st, lp, la) in
+        let suffixes0 = (List.map (fun lrc -> (lrc, [])) (IndexSet.elements lrcs)) in
+        let pos, _ = unpack_position positions lp in
+        match Opt.prj pos with
+        | Some pos ->
+          let _, pos = project_position positions pos in
+          let suffixes = generate_suffixes (pos - 1) suffixes0 in
+          List.map (fun (lrc, suffix) -> desc, lrc, suffix) suffixes @ acc
+        | None ->
+          List.map (fun (lrc, suffix) -> desc, lrc, suffix) suffixes0 @ acc
+      end acc transitions
+    end [] unhandled_predecessors
   in
   let enum_predecessors =
-    List.map begin fun ((_st,lp,lookahead), lrc, _suffix) ->
+    List.filter_map begin fun ((_st,lp,lookahead), lrc, _suffix) ->
       let pos, _ = unpack_position positions lp in
-      let goto, _ = project_position positions pos in
-      Enumeration.kernel lrc ~goto lookahead
+      match Opt.prj pos with
+      | None -> None
+      | Some pos ->
+        let goto, _ = project_position positions pos in
+        Some (Enumeration.kernel lrc ~goto lookahead)
     end predecessors
   in
   let Enumeration.Graph graph =
     Enumeration.make_graph grammar rcs stacks
       (enum_initials @ enum_predecessors)
   in
-  let _cover = Enumeration.cover_all
-      ~manually_covered:(fun (covered : _ lr0 index -> _ terminal indexset -> unit) ->
-          List.iter (fun (suffix, la) ->
-              List.iter (fun (_, lp) ->
-                  let pos, lrc = unpack_position positions lp in
-                  let nt, pos = project_position positions pos in
-                  if pos = 0 then
-                    let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-                    covered (Lr1.to_lr0 grammar lr1) la
-                ) suffix
-            ) suffixes
-        )
-      grammar rcs stacks graph
+  let _cover = Enumeration.cover_all grammar rcs stacks graph
+      ~manually_covered:begin fun (covered : _ lr0 index -> _ terminal indexset -> unit) ->
+        List.iter begin fun (suffix, la) ->
+          List.iter begin fun (_, lp) ->
+            let pos, lrc = unpack_position positions lp in
+            match previous_position positions pos with
+            | Either.Left nt ->
+              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+              covered (Lr1.to_lr0 grammar lr1) la
+            | Either.Right _ -> ()
+          end suffix
+        end suffixes
+      end
   in
   (* FIXME: Report all sentences with a uniform presentation *)
   ()
