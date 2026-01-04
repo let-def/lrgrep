@@ -2,6 +2,11 @@ open Fix.Indexing
 open Utils
 open Misc
 
+let (.:()) = Vector.get
+let (.:()<-) = Vector.set
+let (.@()<-) v i f =
+  v.:(i) <- f v.:(i)
+
 let grammar_filename =
   let filename, oc = Filename.open_temp_file "lrgrep-interpreter" "cmly" in
   output_string oc Interpreter_data.grammar;
@@ -87,7 +92,7 @@ and explore_state path stack n visited lookaheads =
                 ) map
             else
               map
-          ) (Vector.get shift_transitions st) map
+          ) shift_transitions.:(st) map
       ) states IndexMap.empty
   in
   IndexMap.iter (fun sym set ->
@@ -169,6 +174,7 @@ let () =
 
 let time = Stopwatch.create ()
 
+(* Helper to compute the iterated predecessors *)
 let pred_n states rdepth depth =
   assert (!rdepth <= depth);
   while !rdepth < depth do
@@ -177,123 +183,140 @@ let pred_n states rdepth depth =
   done;
   !states
 
-let reduce_to =
-  Vector.init Lr1.n (fun lr1 ->
-      let reductions =
-        IndexSet.fold (fun red acc ->
-            let prod = Reduction.production red in
-            let depth = Production.length prod in
-            (depth, red) :: acc
-          ) (Reduction.from_lr1 lr1) []
-        |> List.sort (fun (d1, _) (d2, _) -> Int.compare d1 d2)
-      in
-      let states_at = pred_n (ref (IndexSet.singleton lr1)) (ref 0) in
-      List.fold_left (fun acc (depth, r) ->
-          let nt = Production.lhs (Reduction.production r) in
-          let lookaheads = Reduction.lookaheads r in
-          let update = function
-            | None -> Some lookaheads
-            | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
-          in
-          IndexSet.fold
-            (fun lr1 acc ->
-               let target = Transition.find_goto_target lr1 nt in
-               IndexMap.update target update acc)
-            (states_at depth) acc
-        ) IndexMap.empty reductions
-    )
+let rec is_sorted compare = function
+  | [] | [_] -> true
+  | x :: (y :: _ as ys) ->
+    compare x y <= 0 && is_sorted compare ys
 
+(* Compute which states an LR(1) state can reduce to.
+   E.g. [(st', la) ∈ reduce_to.:(st)] if it is possible, when in state [st] and
+   looking ahead at a symbol in [la], to reduce to a configuration ending in
+   state [st'].
+
+   Initially, relate only states reachable by a single reduction... *)
+let reduce_to =
+  Vector.init Lr1.n @@ fun lr1 ->
+  let reductions =
+    IndexSet.fold begin fun red acc ->
+      let prod = Reduction.production red in
+      let depth = Production.length prod in
+      (depth, red) :: acc
+    end (Reduction.from_lr1 lr1) []
+  in
+  assert (is_sorted (fun (d1, _) (d2, _) -> Int.compare d1 d2) reductions);
+  let states_at = pred_n (ref (IndexSet.singleton lr1)) (ref 0) in
+  List.fold_left begin fun acc (depth, r) ->
+    let nt = Production.lhs (Reduction.production r) in
+    let lookaheads = Reduction.lookaheads r in
+    let update = function
+      | None -> Some lookaheads
+      | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
+    in
+    IndexSet.fold
+      (fun lr1 acc ->
+         let target = Transition.find_goto_target lr1 nt in
+         IndexMap.update target update acc)
+      (states_at depth) acc
+  end IndexMap.empty reductions
+
+(* Now close the relation, relate states reachable by any chain of reductions.
+   (fixed point computation) *)
 let () =
   let table = Vector.make Lr1.n IndexMap.empty in
-  Vector.iteri (fun source targets ->
-      IndexMap.iter (fun target lookaheads ->
-          let update = function
-            | None -> Some lookaheads
-            | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
-          in
-          Vector.set table target
-            (IndexMap.update source update (Vector.get table target))
-        ) targets
-    ) reduce_to;
+  Vector.iteri begin fun source targets ->
+    IndexMap.iter begin fun target lookaheads ->
+      let update = function
+        | None -> Some lookaheads
+        | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
+      in
+      table.:(target) <- IndexMap.update source update table.:(target)
+    end targets
+  end reduce_to;
   let deltas = ref [] in
   let apply_delta tgt delta =
-    IndexMap.iter (fun src la ->
-        let map = Vector.get reduce_to src in
-        let delta = IndexMap.filter_map
-            (fun goal la' ->
-               let la = IndexSet.inter la la' in
-               if IndexSet.is_empty la
-               then None
-               else match IndexMap.find_opt goal map with
-                 | None -> Some la
-                 | Some la' ->
-                   let la = IndexSet.diff la la' in
-                   if IndexSet.is_empty la
-                   then None
-                   else Some la)
-            delta
-        in
-        if not (IndexMap.is_empty delta) then (
-          push deltas (src, delta);
-          Vector.set reduce_to src
-            (IndexMap.union
-               (fun _ la la' -> Some (IndexSet.union la la'))
-               map delta)
-        )
+    IndexMap.iter begin fun src la ->
+      let map = reduce_to.:(src) in
+      let delta = IndexMap.filter_map
+          (fun goal la' ->
+             let la = IndexSet.inter la la' in
+             if IndexSet.is_empty la
+             then None
+             else match IndexMap.find_opt goal map with
+               | None -> Some la
+               | Some la' ->
+                 let la = IndexSet.diff la la' in
+                 if IndexSet.is_empty la
+                 then None
+                 else Some la)
+          delta
+      in
+      if not (IndexMap.is_empty delta) then (
+        push deltas (src, delta);
+        reduce_to.:(src) <-
+          IndexMap.union
+            (fun _ la la' -> Some (IndexSet.union la la'))
+            map delta
       )
-      (Vector.get table tgt)
+    end table.:(tgt)
   in
   Vector.iteri apply_delta reduce_to;
-  let iter = ref 0 in
-  while !deltas <> [] do
-    incr iter;
-    let deltas' = !deltas in
-    deltas := [];
-    List.iter (fun (tgt, delta) -> apply_delta tgt delta) deltas';
-  done;
-  Printf.eprintf "Converged after %d iterations\n" !iter
+  let counter = ref 0 in
+  fixpoint ~counter ~propagate:(fun (tgt, delta) -> apply_delta tgt delta) deltas;
+  Printf.eprintf "Converged after %d iterations\n" !counter
 
+(* Find all states that it is possible to shift to from a given state
+   (that is, by simply following a shift transition). *)
 let shift_to =
   let table = Vector.make Lr1.n IndexSet.empty in
-  Index.iter Transition.shift
-    (fun tr -> vector_set_add table Transition.(source (of_shift tr)) tr);
+  Index.rev_iter Transition.shift
+    (fun tr -> table.@(Transition.(source (of_shift tr))) <- IndexSet.add tr);
   table
 
+(* Now compose reduce_to and shift_to to find all states that it is possible to
+   shift, allowing an arbitrary number of reductions in between. *)
 let shift_closure =
-  Vector.init Transition.shift (fun tr ->
-      let lr1 = Transition.(target (of_shift tr)) in
-      IndexMap.fold (fun lr1' lookaheads targets ->
-          let targets' = Vector.get shift_to lr1' in
-          let targets' =
-            IndexSet.filter
-              (fun tr -> IndexSet.mem (Transition.shift_symbol tr) lookaheads)
-              targets'
-          in
-          IndexSet.union targets' targets
-        )
-        (Vector.get reduce_to lr1)
-        (Vector.get shift_to lr1)
-      (*|> group_by_terminal*)
-    )
+  Vector.init Transition.shift @@ fun tr ->
+  let lr1 = Transition.(target (of_shift tr)) in
+  IndexMap.fold begin fun lr1' lookaheads targets ->
+    let targets' =
+      IndexSet.filter
+        (fun tr -> IndexSet.mem (Transition.shift_symbol tr) lookaheads)
+        shift_to.:(lr1')
+    in
+    IndexSet.union targets' targets
+  end reduce_to.:(lr1) shift_to.:(lr1)
+  (*|> group_by_terminal*)
 
+(* Now reverse the relation *)
 let rev_shift_closure = relation_reverse shift_closure
 
 let () =
   Stopwatch.step time "Precomputed data structures for fast enumeration"
 
+let add_update x = function
+  | None -> Some (IndexSet.singleton x)
+  | Some xs -> Some (IndexSet.add x xs)
+
+(* Now quickly enumerate the predecessors and successors of a shift transition.
+   This gives us the terminal trigrams that are allowed by the grammar together
+   with the states in which they are allowed.
+
+   In [let pred, succ = fast_enum sh], where [sh] is a shift transition:
+   - [pred] is a map from terminals to lr1 states such that
+     [st ∈ pred(t)] if when in state [st], looking ahead at [t] it is possible
+     to get to a configuration in which [sh] will be reachable next.
+   - [succ] is the set of terminals that will be permitted after following [sh]
+*)
 let fast_enum tr =
   let terminals =
-    IndexSet.map Transition.shift_symbol (Vector.get shift_closure tr)
+    IndexSet.map Transition.shift_symbol shift_closure.:(tr)
   in
-  let pred = Vector.get rev_shift_closure tr in
+  let pred = rev_shift_closure.:(tr) in
   let group =
-    IndexSet.fold (fun tr acc ->
-        let src = Transition.(source (of_shift tr)) in
-        IndexMap.update (Transition.shift_symbol tr) (function
-            | None -> Some (IndexSet.singleton src)
-            | Some targets -> Some (IndexSet.add src targets)
-          ) acc
-      ) pred IndexMap.empty
+    IndexSet.fold begin fun tr acc ->
+      IndexMap.update (Transition.shift_symbol tr)
+        (add_update (Transition.(source (of_shift tr)))) acc
+    end pred IndexMap.empty
   in
   (group, terminals)
 
@@ -301,33 +324,46 @@ let cons t i = cardinal Terminal.n * i + Index.to_int t
 
 let () =
   let term_max = cardinal Terminal.n in
+  (* Number of trigrams possible *)
   let seq_max = term_max * term_max * term_max in
+  (* Allocate a big cube to map a trigram to the set of LR(1) states it could
+     follow (if there exists a parser in state [st] that accepts an input
+     starting by [t₀t₁t₂], then [st ∈ path3.(t₀).(t₁).(t₂)]). *)
   let path3 =
     Array.init term_max (fun _ ->
         Array.init term_max (fun _ ->
             Array.make term_max IndexSet.empty))
   in
+  (* Same contents, but as a linear array (just experimenting, clean up
+     later). *)
   let paths = Array.make seq_max IndexSet.empty in
-  Index.iter Transition.shift (fun tr ->
-      let (pred, succ) = fast_enum tr in
-      let p0 = Index.to_int (Transition.shift_symbol tr) in
-      let path = p0 in
-      IndexSet.iter (fun s ->
-          let p1 = Index.to_int s in
-          let path = cons s path in
-          IndexMap.iter (fun t img ->
-              let p2 = Index.to_int t in
-              let path = cons t path in
-              paths.(path) <- IndexSet.union img paths.(path);
-              path3.(p0).(p1).(p2) <- IndexSet.union img path3.(p0).(p1).(p2);
-            ) pred
-        ) succ;
-    );
+  (* Populate the arrays *)
+  Index.iter Transition.shift begin fun tr ->
+    let (pred, succ) = fast_enum tr in
+    let p0 = Index.to_int (Transition.shift_symbol tr) in
+    let path = p0 in
+    IndexSet.iter begin fun s ->
+      let p1 = Index.to_int s in
+      let path = cons s path in
+      IndexMap.iter begin fun t img ->
+        let p2 = Index.to_int t in
+        let path = cons t path in
+        paths.(path) <- IndexSet.union img paths.(path);
+        path3.(p0).(p1).(p2) <- IndexSet.union img path3.(p0).(p1).(p2);
+      end pred
+    end succ;
+  end;
+  (* Now we are trying to devise a compact and efficient representation for
+     marshalling the arrays.  Let's compute some statistics. *)
+  (* Number of unique mappings from the last element of a trigram to set of
+    states *)
   let uniq_last = Hashtbl.create 7 in
-  Array.iter (Array.iter (fun a ->
+  Array.iter begin Array.iter begin fun a ->
       if not (Hashtbl.mem uniq_last a) then
         Hashtbl.add uniq_last a (Hashtbl.length uniq_last);
-    )) path3;
+    end end path3;
+  (* Number of unique mappings from the middle element of a trigram to mappings
+     of the last element to set of states *)
   let uniq_mid = Hashtbl.create 7 in
   Array.iter (fun a ->
       let a' = Array.map (Hashtbl.find uniq_last) a in
@@ -338,6 +374,14 @@ let () =
     (Hashtbl.length uniq_last) (term_max * term_max)
     (float (Hashtbl.length uniq_last) /. float (term_max * term_max) *. 100.0)
   ;
+  (* ... Basically, we are trying to find which level of the trie mapping
+     is the most efficient to share. *)
+
+  (* Other states:
+     - count empty and non-empty cells of the cube
+     - count the number of unique and shared sets, on average and at most per
+       last-level
+  *)
   let empty = ref 0 in
   let non_empty = ref 0 in
   Hashtbl.iter (fun a _ ->
@@ -383,8 +427,14 @@ let () =
     if not (IndexSet.is_empty paths.(i)) then
       incr seq_count;
   done;
+  (* How many trigrams are allowed out of all possible ones? *)
   Printf.eprintf "Sequence efficiency: %d/%d = %.02f%%\n%!"
     !seq_count seq_max (float !seq_count /. float seq_max *. 100.0);
+
+  (* Now lets try a packing scheme... *)
+
+  (* First, give a unique, monotonically increasing, index to each set.
+     [-1] is reserved for the empty set. *)
   let index = Hashtbl.create 7 in
   let index_of st =
     if IndexSet.is_empty st then -1 else
@@ -421,8 +471,11 @@ let () =
   let sets' = visit sets in*)
   let card = Array.make (Hashtbl.length index) 0 in
   Hashtbl.iter (fun st i -> card.(i) <- IndexSet.cardinal st) index;
+  (* Number of elements, if we were to represent all sets as a contiguous sequence of elements. *)
   let st_count = Array.fold_left (fun sum i -> if i = -1 then sum else sum + card.(i)) 0 indexes in
   let st_max = seq_max * cardinal Lr1.n in
+  (* Estimate how much bits would be needed to store all the sets, assuming a
+     state fit in a 16 bit integer and we use delta encoding. *)
   Printf.eprintf "State efficiency: %d/%d = %.02f%%, %d groups\n%!" (* (or %d with %.02f%% error)\n%! *)
     st_count st_max (float st_count /. float st_max *. 100.0) (Hashtbl.length index) (*(List.length sets') (100. /. float tolerance)*);
   let output_b16 i =
@@ -458,4 +511,10 @@ let () =
   Printf.eprintf "Unused cells: %d / %d (%.02f%%)\n" !unused
     (Array.length indexes)
     (100. *. float !unused /. float (Array.length indexes));
-  Stopwatch.step time "Enumerated paths"
+  Stopwatch.step time "Enumerated paths";
+  (* Idea for the future:
+     - represent the trigrams as a sequence of tries, with sharing (use statistics to estimate the cost)
+     - give an index to each unique non-empty set of states, then:
+       - store a mapping from trigrams to indices
+       - store for each LR(1) state the indices of sets that contain it
+  *)
