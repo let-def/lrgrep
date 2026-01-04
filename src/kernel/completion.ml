@@ -6,6 +6,9 @@ open Info
 module Make(G : sig
     type g
     val g : g grammar
+    val permute
+      :  g terminal index * g terminal index * g terminal index
+      -> g terminal index * g terminal index * g terminal index
   end) =
 struct
   open G
@@ -329,14 +332,11 @@ struct
     (* Populate the arrays *)
     Index.iter (Transition.shift g) begin fun tr ->
       let (pred, succ) = fast_enum tr in
-      let p0 = Transition.shift_symbol g tr in
-      let path = p0 in
-      IndexSet.iter begin fun s ->
-        let p1 = s in
-        let path = cons s path in
-        IndexMap.iter begin fun t img ->
-          let p2 = t in
-          let path = cons t path in
+      let t0 = Transition.shift_symbol g tr in
+      IndexSet.iter begin fun t1 ->
+        IndexMap.iter begin fun t2 img ->
+          let p0, p1, p2 = permute (t0, t1, t2) in
+          let path = cons p0 (cons p1 p2) in
           paths.:(path) <- IndexSet.union img paths.:(path);
           path3.:(p0).:(p1).:(p2) <- IndexSet.union img path3.:(p0).:(p1).:(p2);
         end pred
