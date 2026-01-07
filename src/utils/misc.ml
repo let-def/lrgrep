@@ -496,3 +496,6 @@ let rec list_rev_mappend f xs acc =
 let list_is_empty = function
   | [] -> true
   | _ :: _ -> false
+
+let seq_singleton x () =
+  Seq.Cons (x, Seq.empty)
