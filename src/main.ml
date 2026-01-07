@@ -637,12 +637,29 @@ let commands =
     ] ~commit:enumerate_command;
     command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
       ~commit:(fun () ->
-          let module _ = Kernel.Completion.Make(struct
+          let module G = struct
               type nonrec g = g
               let g = !!grammar
-              let permute (a,b,c) = (a,b,c)
-            end) in
-          ()
+          end in
+          let module FE = Kernel.Completion.Fast_enum(G) in
+          let permute = [
+            (fun (a,b,c) -> (a,b,c));
+            (fun (a,b,c) -> (a,c,b));
+            (fun (a,b,c) -> (b,a,c));
+            (fun (a,b,c) -> (b,c,a));
+            (fun (a,b,c) -> (c,a,b));
+            (fun (a,b,c) -> (c,b,a));
+          ] in
+          List.iteri (fun i permute ->
+              Printf.eprintf "Permutation %d\n" i;
+              let module _ = Kernel.Completion.Make(struct
+                  type nonrec g = g
+                  let g = !!grammar
+                  let permute = permute
+                  let fast_enum = FE.fast_enum
+                end) in
+              ()
+            ) permute;
         );
 ]
 

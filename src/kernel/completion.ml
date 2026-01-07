@@ -3,12 +3,106 @@ open Utils
 open Misc
 open Info
 
-module Make(G : sig
+(* # Computing trigrams.
+
+   The goal is to quickly find in which states the parser can accept certain
+   trigrams.
+   E.g. given `let x =`, in which states can the LR(1) parser be to
+   accept this input?
+   This is only an over-approximation, for instance for `) ) )`
+   only the first `)` can be guaranteed to be recognized given the current
+   state, the rest depends on the contents of the stack.
+
+   These trigrams are then used to efficiently select recovery and completion
+   candidates.
+
+   For completion, the candidates can be generated from the prefix alone.
+   But to find which candidate is more likely in the current context, it is
+   useful to peek at the suffix and rank the candidates compatible with the
+   closest trigrams first.
+
+   Similarly, for recovery, our heuristics produce many candidates which are
+   then pruned by trigrams, because a good recovery not only preserve the prefix
+   but should also reconnect rapidly with the remaining suffix.
+
+   # Trigrams generation
+
+   To pre-compute the trigrams, we start from shift transitions, the reduction
+   closure and the reduction graph to construct a map `shift_closure` from a
+   shift transition to a set of shift transitions such that
+   `sh' ∈ shift_closure(sh)` if there exists a stack ending in `sh` that reduces
+   to a stack ending in `sh'` when looking-ahead at `symbol(sh')`.
+
+   For each shift transition `sh`, we also list the LR(1) states a parser can go
+   through on the way to reducing to a state where this transition can be
+   followed.
+
+   From these two pieces of information, it is easy to compute a reasonably precise
+   approximation of trigrams.
+*)
+
+let fast_enum (type g)
+    (g : g grammar)
+    (rcs : (g, g lr1) Redgraph.reduction_closures)
+    (grcs : (g, g goto_transition) Redgraph.reduction_closures)
+  : (g shift_transition, g transition indexset) vector
+  =
+  (* Construct a precise reduction graph *)
+  let open IndexBuffer in
+  let module Nodes = Gen.Make() in
+  let nodes = Nodes.get_generator () in
+  let table = Hashtbl.create 7 in
+  let rec visit lookahead (lazy {lvalue; lnext}, acc) nts =
+    let acc =
+      IndexMap.fold begin fun nt lookahead' acc ->
+        let lookahead = Terminal.intersect g lookahead lookahead' in
+        if IndexSet.is_empty lookahead then
+          acc
+        else
+          IndexSet.fold begin fun lr1 acc ->
+            goto (Transition.find_goto g lr1 nt) lookahead :: acc
+          end lvalue acc
+      end nts acc
+    in
+    (lnext, acc)
+  and goto gt lookahead =
+    let key = (gt, lookahead) in
+    match Hashtbl.find_opt table key with
+    | Some index -> index
+    | None ->
+      let index = Gen.reserve nodes in
+      Hashtbl.add table key (Gen.index index);
+      let tr = Transition.of_goto g gt in
+      let predecessors = Lr1.predecessors g (Transition.source g tr) in
+      let _, targets =
+        List.fold_left
+          (visit lookahead)
+          (predecessors.lnext, [])
+          grcs.:(gt).reductions
+      in
+      Gen.commit nodes index (key, targets);
+      Gen.index index
+  in
+  let shift =
+    Vector.init (Transition.shift g) @@ fun sh ->
+    let tr = Transition.of_shift g sh in
+    let tgt = Transition.target g tr in
+    let predecessors = Lr1.predecessors g (Transition.source g tr) in
+    let _, targets =
+      List.fold_left
+        (visit (Terminal.all g))
+        (lazy predecessors, [])
+        rcs.:(tgt).reductions
+    in
+    targets
+  in
+  let nodes = Gen.freeze nodes in
+  ignore (nodes, shift);
+  failwith "TODO"
+
+module Fast_enum(G : sig
     type g
     val g : g grammar
-    val permute
-      :  g terminal index * g terminal index * g terminal index
-      -> g terminal index * g terminal index * g terminal index
   end) =
 struct
   open G
@@ -294,14 +388,27 @@ struct
     let terminals =
       IndexSet.map (Transition.shift_symbol g) shift_closure.:(tr)
     in
-    let pred = rev_shift_closure.:(tr) in
     let group =
       IndexSet.fold begin fun tr acc ->
         IndexMap.update (Transition.shift_symbol g tr)
           (add_update (Transition.(source g (of_shift g tr)))) acc
-      end pred IndexMap.empty
+      end rev_shift_closure.:(tr) IndexMap.empty
     in
     (group, terminals)
+end
+
+module Make(G : sig
+    type g
+    val g : g grammar
+    val permute
+      :  g terminal index * g terminal index * g terminal index
+      -> g terminal index * g terminal index * g terminal index
+    val fast_enum
+      : g shift_transition index ->
+        (g terminal, g lr1 indexset) indexmap * g terminal indexset
+  end) =
+struct
+  open G
 
   let () =
     let term = Terminal.cardinal g in
@@ -321,9 +428,9 @@ struct
     (* Populate the arrays *)
     Index.iter (Transition.shift g) begin fun tr ->
       let (pred, succ) = fast_enum tr in
-      let t0 = Transition.shift_symbol g tr in
-      IndexSet.iter begin fun t1 ->
-        IndexMap.iter begin fun t2 img ->
+      let t1 = Transition.shift_symbol g tr in
+      IndexSet.iter begin fun t2 ->
+        IndexMap.iter begin fun t0 img ->
           let p0, p1, p2 = permute (t0, t1, t2) in
           let path = cons p0 (cons p1 p2) in
           paths.:(path) <- IndexSet.union img paths.:(path);
