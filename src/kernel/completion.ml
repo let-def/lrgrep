@@ -133,8 +133,6 @@ let fast_enum (type g)
       (*(fun index -> IndexSet.singleton (snd (decompose index)))*)
   in
   stopwatch 2 "initialized shift predecessors";
-  Tarjan.close_backward scc ~pred sh_predecessors;
-  stopwatch 2 "closed shift predecessors";
   let lr_predecessors =
     Vector.init count
       (fun index ->
@@ -144,8 +142,16 @@ let fast_enum (type g)
       (*(fun index -> IndexSet.singleton (snd (decompose index)))*)
   in
   stopwatch 2 "initialized lr predecessors";
-  Tarjan.close_backward scc ~pred lr_predecessors;
-  stopwatch 2 "closed lr predecessors";
+  Tarjan.iter_backward scc ~pred begin fun ~cluster ~links ->
+    let all = IndexSet.union cluster links in
+    let sh = IndexSet.bind all (Vector.get sh_predecessors) in
+    let lr = IndexSet.bind all (Vector.get lr_predecessors) in
+    IndexSet.iter begin fun node ->
+      sh_predecessors.:(node) <- sh;
+      lr_predecessors.:(node) <- lr;
+    end cluster
+  end;
+  stopwatch 2 "closed predecessors";
   let result = Vector.make shifts (IndexSet.empty, IndexSet.empty) in
   Vector.rev_iteri2 begin fun index shs lrs ->
     let lookahead, tr = decompose index in
