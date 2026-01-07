@@ -410,21 +410,21 @@ module Vector = struct
   let fold_left2 (type n) f acc (Vector a : (n, _) t) (Vector b : (n, _) t) =
     let acc = ref acc in
     for i = 0 to Array.length a - 1 do
-      acc := f !acc a.(i) b.(i)
+      acc := f !acc (Array.unsafe_get a i) (Array.unsafe_get b i)
     done;
     !acc
 
   let fold_lefti (type n) f acc (Vector a : (n, _) t) =
     let acc = ref acc in
     for i = 0 to Array.length a - 1 do
-      acc := f !acc i a.(i)
+      acc := f !acc i (Array.unsafe_get a i)
     done;
     !acc
 
   let fold_lefti2 (type n) f acc (Vector a : (n, _) t) (Vector b : (n, _) t) =
     let acc = ref acc in
     for i = 0 to Array.length a - 1 do
-      acc := f !acc i a.(i) b.(i)
+      acc := f !acc i (Array.unsafe_get a i) (Array.unsafe_get b i)
     done;
     !acc
 
@@ -434,27 +434,32 @@ module Vector = struct
   let fold_right2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
     let acc = ref acc in
     for i = Array.length a - 1 downto 0 do
-      acc := f a.(i) b.(i) !acc
+      acc := f (Array.unsafe_get a i) (Array.unsafe_get b i) !acc
     done;
     !acc
 
   let fold_righti (type n) f (Vector a : (n, _) t) acc =
     let acc = ref acc in
     for i = Array.length a - 1 downto 0 do
-      acc := f i a.(i) !acc
+      acc := f i (Array.unsafe_get a i) !acc
     done;
     !acc
 
   let fold_righti2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) acc =
     let acc = ref acc in
     for i = Array.length a - 1 downto 0 do
-      acc := f i a.(i) b.(i) !acc
+      acc := f i (Array.unsafe_get a i) (Array.unsafe_get b i) !acc
     done;
     !acc
 
   let rev_iteri (type n) f (Vector a : (n, _) t) =
     for i = Array.length a - 1 downto 0 do
-      f i a.(i)
+      f i (Array.unsafe_get a i)
+    done
+
+  let rev_iteri2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    for i = Array.length a - 1 downto 0 do
+      f i (Array.unsafe_get a i) (Array.unsafe_get b i)
     done
 
   let as_array (type n) (Vector a : (n, _) t) = a

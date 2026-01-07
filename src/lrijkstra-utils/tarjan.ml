@@ -329,6 +329,19 @@ let close_forward (type a n)
     IndexSet.iter (fun i -> rel.:(i) <- set) nodes
   end Scc.nodes
 
+let iter_forward (type a n)
+    ((module Scc) : n scc)
+    ~(succ:(n index -> unit) -> n index -> unit)
+    (f : cluster:n indexset -> links:n indexset -> unit)
+  =
+  Vector.rev_iteri begin fun _scc nodes ->
+    let sccs = ref IndexSet.empty in
+    IndexSet.rev_iter begin fun i ->
+      succ (fun j -> sccs := IndexSet.add Scc.representatives.:(Scc.component.:(j)) !sccs) i
+    end nodes;
+    f ~cluster:nodes ~links:!sccs
+  end Scc.nodes
+
 let close_backward (type a n)
     ((module Scc) : n scc)
     ~(pred:(n index -> unit) -> n index -> unit)
@@ -343,6 +356,19 @@ let close_backward (type a n)
     let set = indexset_bind sccs (fun scc -> rel.:(Scc.representatives.:(scc))) in
     let set = IndexSet.union (indexset_bind nodes (Vector.get rel)) set in
     IndexSet.iter (fun i -> rel.:(i) <- set) nodes
+  end Scc.nodes
+
+let iter_backward (type a n)
+    ((module Scc) : n scc)
+    ~(pred:(n index -> unit) -> n index -> unit)
+    (f : cluster:n indexset -> links:n indexset -> unit)
+  =
+  Vector.iteri begin fun _scc nodes ->
+    let sccs = ref IndexSet.empty in
+    IndexSet.rev_iter begin fun i ->
+      pred (fun j -> sccs := IndexSet.add Scc.representatives.:(Scc.component.:(j)) !sccs) i
+    end nodes;
+    f ~cluster:nodes ~links:!sccs
   end Scc.nodes
 
 let close_relation

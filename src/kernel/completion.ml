@@ -45,9 +45,10 @@ let fast_enum (type g)
     (g : g grammar)
     (rcs : (g, g lr1) Redgraph.reduction_closures)
     (grcs : (g, g goto_transition) Redgraph.reduction_closures)
-  : (g shift_transition, g transition indexset) vector
+    (*: (g shift_transition, g transition indexset) vector*)
   =
   (* Construct a precise reduction graph *)
+  stopwatch 1 "befin fast_enum 2";
   let open IndexBuffer in
   let module Nodes = Gen.Make() in
   let nodes = Nodes.get_generator () in
@@ -83,8 +84,9 @@ let fast_enum (type g)
       Gen.commit nodes index (key, targets);
       Gen.index index
   in
+  let shifts = Transition.shift g in
   let shift =
-    Vector.init (Transition.shift g) @@ fun sh ->
+    Vector.init shifts @@ fun sh ->
     let tr = Transition.of_shift g sh in
     let tgt = Transition.target g tr in
     let predecessors = Lr1.predecessors g (Transition.source g tr) in
@@ -97,8 +99,70 @@ let fast_enum (type g)
     targets
   in
   let nodes = Gen.freeze nodes in
-  ignore (nodes, shift);
-  failwith "TODO"
+  stopwatch 2 "built graph";
+  let count = Sum.cardinal shifts Nodes.n in
+  let succ f node =
+    let targets = match Sum.prj shifts node with
+      | L sh -> shift.:(sh)
+      | R node -> snd nodes.:(node)
+    in
+    List.iter (fun node' -> f (Sum.inj_r shifts node')) targets
+  in
+  let scc = Tarjan.indexed_scc count ~succ in
+  stopwatch 2 "built scc";
+  let pred = Vector.make count IndexSet.empty in
+  Index.rev_iter count begin fun node ->
+    succ (fun node' -> pred.@(node') <- IndexSet.add node) node
+  end;
+  let pred f i = IndexSet.iter f pred.:(i) in
+  stopwatch 2 "precomputed predecessors";
+  let decompose index =
+    match Sum.prj shifts index with
+    | L sh -> (Terminal.all g, Transition.of_shift g sh)
+    | R node ->
+      let (gt, la), _ = nodes.:(node) in
+      (la, Transition.of_goto g gt)
+  in
+  let sh_predecessors =
+    Vector.init count
+      (fun index ->
+         match Sum.prj shifts index with
+         | L sh -> IndexSet.singleton sh
+         | R _ -> IndexSet.empty
+      )
+      (*(fun index -> IndexSet.singleton (snd (decompose index)))*)
+  in
+  stopwatch 2 "initialized shift predecessors";
+  Tarjan.close_backward scc ~pred sh_predecessors;
+  stopwatch 2 "closed shift predecessors";
+  let lr_predecessors =
+    Vector.init count
+      (fun index ->
+         let _, tr = decompose index in
+         IndexSet.singleton (Transition.target g tr)
+      )
+      (*(fun index -> IndexSet.singleton (snd (decompose index)))*)
+  in
+  stopwatch 2 "initialized lr predecessors";
+  Tarjan.close_backward scc ~pred lr_predecessors;
+  stopwatch 2 "closed lr predecessors";
+  let result = Vector.make shifts (IndexSet.empty, IndexSet.empty) in
+  Vector.rev_iteri2 begin fun index shs lrs ->
+    let lookahead, tr = decompose index in
+    IndexSet.rev_iter begin fun tr' ->
+      match Transition.split g tr' with
+      | L _gt -> ()
+      | R sh ->
+        if IndexSet.mem (Transition.shift_symbol g sh) lookahead then (
+          let shs', lrs' = result.:(sh) in
+          result.:(sh) <- (IndexSet.union shs shs', IndexSet.union lrs lrs')
+        )
+    end (Transition.successors g (Transition.target g tr))
+  end sh_predecessors lr_predecessors;
+  stopwatch 2 "filled result";
+  stopwatch 1 "fast_enum 2";
+  result
+
 
 module Fast_enum(G : sig
     type g

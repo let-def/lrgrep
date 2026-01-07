@@ -240,6 +240,10 @@ let red_closure = lazy (
   Redgraph.close_lr1_reductions !!grammar
 )
 
+let red_goto_closure = lazy (
+  Redgraph.close_goto_reductions !!grammar !!red_closure
+)
+
 module Completion() = struct
   open Info
 
@@ -637,6 +641,11 @@ let commands =
     ] ~commit:enumerate_command;
     command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
       ~commit:(fun () ->
+          let _ = Kernel.Completion.fast_enum
+              !!grammar
+              !!red_closure
+              !!red_goto_closure
+          in
           let module G = struct
               type nonrec g = g
               let g = !!grammar
