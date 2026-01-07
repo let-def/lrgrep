@@ -300,6 +300,7 @@ module Vector : sig
   val iter : ('a -> unit) -> ('n, 'a) t -> unit
   val iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
   val iter2 : ('a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit
+  val iteri2 : ('n index -> 'a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit
 
   val rev_iteri : ('n index -> 'a -> unit) -> ('n, 'a) t -> unit
   val rev_iteri2 : ('n index -> 'a -> 'b -> unit) -> ('n, 'a) t -> ('n, 'b) t -> unit

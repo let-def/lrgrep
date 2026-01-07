@@ -404,6 +404,11 @@ module Vector = struct
   let iter2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) =
     Array.iter2 f a b
 
+  let iteri2 (type n) f (Vector a : (n, _) t) (Vector b : (n, _) t) =
+    for i = 0 to Array.length a - 1 do
+      f i (Array.unsafe_get a i) (Array.unsafe_get b i)
+    done
+
   let fold_left (type n) f acc (Vector a : (n, _) t) =
     Array.fold_left f acc a
 
