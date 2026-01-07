@@ -253,7 +253,7 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_cover
     in
     match List.rev prefixes.:(node), suffixes.:(node) with
     | prefix0 :: prefixes, suffix0 :: suffixes ->
-      Seq.Cons (Seq.singleton (output prefix0 suffix0),
+      Seq.Cons (seq_singleton (output prefix0 suffix0),
                 output_prefixes_suffixes prefixes suffixes)
     | prefixes, suffixes ->
       output_prefixes_suffixes prefixes suffixes ()

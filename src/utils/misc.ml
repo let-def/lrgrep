@@ -487,3 +487,6 @@ let iterate_vector v =
   iterate
     (IndexSet.singleton x)
     (fun xs -> IndexSet.bind xs (Vector.get v))
+
+let seq_singleton x () =
+  Seq.Cons (x, Seq.empty)
