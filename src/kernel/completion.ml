@@ -167,8 +167,9 @@ struct
   *)
 
   (* Helper to compute the iterated predecessors *)
-  let pred_n state rdepth depth =
+  let pred_n ?(rdepth=ref 0) state =
     let states = ref (Lr1.predecessors g state) in
+    fun depth ->
     assert (!rdepth <= depth);
     while !rdepth < depth do
       states := Lazy.force states.contents.lnext;
@@ -195,21 +196,18 @@ struct
         let depth = Production.length g prod in
         (depth, red) :: acc
       end (Reduction.from_lr1 g lr1) []
+      |> List.sort (fun (d1, _) (d2, _) -> Int.compare d1 d2)
     in
     assert (is_sorted (fun (d1, _) (d2, _) -> Int.compare d1 d2) reductions);
-    let states_at = pred_n lr1 (ref 0) in
+    let states_at = pred_n lr1 in
     List.fold_left begin fun acc (depth, r) ->
       let nt = Production.lhs g (Reduction.production g r) in
       let lookaheads = Reduction.lookaheads g r in
-      let update = function
-        | None -> Some lookaheads
-        | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
-      in
-      IndexSet.fold
-        (fun lr1 acc ->
-           let target = Transition.find_goto_target g lr1 nt in
-           IndexMap.update target update acc)
-        (states_at depth) acc
+      IndexSet.fold begin fun lr1 acc ->
+        IndexMap.update
+          (Transition.find_goto_target g lr1 nt)
+          (union_update lookaheads) acc
+      end (states_at depth) acc
     end IndexMap.empty reductions
 
   (* Now close the relation, relate states reachable by any chain of reductions.
@@ -218,38 +216,33 @@ struct
     let table = Vector.make (Lr1.cardinal g) IndexMap.empty in
     Vector.iteri begin fun source targets ->
       IndexMap.iter begin fun target lookaheads ->
-        let update = function
-          | None -> Some lookaheads
-          | Some lookaheads' -> Some (IndexSet.union lookaheads lookaheads')
-        in
-        table.:(target) <- IndexMap.update source update table.:(target)
+        table.:(target) <- IndexMap.update source (union_update lookaheads) table.:(target)
       end targets
     end reduce_to;
     let deltas = ref [] in
     let apply_delta tgt delta =
       IndexMap.iter begin fun src la ->
         let map = reduce_to.:(src) in
-        let delta = IndexMap.filter_map
-            (fun goal la' ->
-               let la = IndexSet.inter la la' in
-               if IndexSet.is_empty la
-               then None
-               else match IndexMap.find_opt goal map with
-                 | None -> Some la
-                 | Some la' ->
-                   let la = IndexSet.diff la la' in
-                   if IndexSet.is_empty la
-                   then None
-                   else Some la)
-            delta
+        let delta =
+          IndexMap.filter_map begin fun goal la' ->
+            let la = IndexSet.inter la la' in
+            if IndexSet.is_empty la then None else
+              match IndexMap.find_opt goal map with
+              | None -> Some la
+              | Some la' ->
+                let la = IndexSet.diff la la' in
+                if IndexSet.is_empty la
+                then None
+                else Some la
+          end delta
         in
-        if not (IndexMap.is_empty delta) then (
+        if not (IndexMap.is_empty delta) then begin
           push deltas (src, delta);
           reduce_to.:(src) <-
             IndexMap.union
               (fun _ la la' -> Some (IndexSet.union la la'))
               map delta
-        )
+        end
       end table.:(tgt)
     in
     Vector.iteri apply_delta reduce_to;
@@ -286,10 +279,6 @@ struct
 
   let () =
     stopwatch 1 "Precomputed data structures for fast enumeration"
-
-  let add_update x = function
-    | None -> Some (IndexSet.singleton x)
-    | Some xs -> Some (IndexSet.add x xs)
 
   (* Now quickly enumerate the predecessors and successors of a shift transition.
      This gives us the terminal trigrams that are allowed by the grammar together

@@ -631,12 +631,19 @@ let commands =
       ~commit:(not_implemented "cover");
     command "recover" "Generate an error-resilient parser for the grammar" []
       ~commit:(not_implemented "recover");
-    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
-      ~commit:(not_implemented "complete");
     command "enumerate" "Generate sentences to cover possible failures" [
       "-a", Arg.Set opt_enum_all, "";
       "-e", Arg.String (push opt_enum_entrypoints), "";
     ] ~commit:enumerate_command;
+    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
+      ~commit:(fun () ->
+          let module _ = Kernel.Completion.Make(struct
+              type nonrec g = g
+              let g = !!grammar
+              let permute (a,b,c) = (a,b,c)
+            end) in
+          ()
+        );
 ]
 
 let () =
