@@ -102,18 +102,6 @@ type 'n scc = (module SCC with type node = 'n)
 
 val indexed_scc : 'n cardinal -> succ:(('n index -> unit) -> 'n index -> unit) -> 'n scc
 
-val close_forward
-  :  'n scc
-  -> succ:(('n index -> unit) -> 'n index -> unit)
-  -> ('n, 'a indexset) vector
-  -> unit
-
-val close_backward
-  :  'n scc
-  -> pred:(('n index -> unit) -> 'n index -> unit)
-  -> ('n, 'a indexset) vector
-  -> unit
-
 val iter_forward
   :  'n scc
   -> succ:(('n index -> unit) -> 'n index -> unit)
@@ -124,6 +112,18 @@ val iter_backward
   :  'n scc
   -> pred:(('n index -> unit) -> 'n index -> unit)
   -> (cluster:'n indexset -> links:'n indexset -> unit)
+  -> unit
+
+val close_forward
+  :  'n scc
+  -> succ:(('n index -> unit) -> 'n index -> unit)
+  -> ('n, 'a indexset) vector
+  -> unit
+
+val close_backward
+  :  'n scc
+  -> pred:(('n index -> unit) -> 'n index -> unit)
+  -> ('n, 'a indexset) vector
   -> unit
 
 val close_relation : (('n index -> unit) -> 'n index -> unit) -> ('n, 'a indexset) vector -> unit

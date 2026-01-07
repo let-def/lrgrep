@@ -309,26 +309,6 @@ let indexed_scc (type n) (n : n cardinal) ~succ : n scc =
   in
   (module Scc)
 
-let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
-  fun s f ->
-  IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
-
-let close_forward (type a n)
-    ((module Scc) : n scc)
-    ~(succ:(n index -> unit) -> n index -> unit)
-    (rel: (n, a indexset) vector)
-  =
-  Vector.rev_iteri begin fun _scc nodes ->
-    let sccs = ref IndexSet.empty in
-    IndexSet.rev_iter begin fun i ->
-      succ (fun j -> sccs := IndexSet.add Scc.component.:(j) !sccs) i
-    end nodes;
-    let sccs = !sccs in
-    let set = indexset_bind sccs (fun scc -> rel.:(Scc.representatives.:(scc))) in
-    let set = IndexSet.union (indexset_bind nodes (Vector.get rel)) set in
-    IndexSet.iter (fun i -> rel.:(i) <- set) nodes
-  end Scc.nodes
-
 let iter_forward (type a n)
     ((module Scc) : n scc)
     ~(succ:(n index -> unit) -> n index -> unit)
@@ -340,22 +320,6 @@ let iter_forward (type a n)
       succ (fun j -> sccs := IndexSet.add Scc.representatives.:(Scc.component.:(j)) !sccs) i
     end nodes;
     f ~cluster:nodes ~links:!sccs
-  end Scc.nodes
-
-let close_backward (type a n)
-    ((module Scc) : n scc)
-    ~(pred:(n index -> unit) -> n index -> unit)
-    (rel: (n, a indexset) vector)
-  =
-  Vector.iteri begin fun _scc nodes ->
-    let sccs = ref IndexSet.empty in
-    IndexSet.rev_iter begin fun i ->
-      pred (fun j -> sccs := IndexSet.add Scc.component.:(j) !sccs) i
-    end nodes;
-    let sccs = !sccs in
-    let set = indexset_bind sccs (fun scc -> rel.:(Scc.representatives.:(scc))) in
-    let set = IndexSet.union (indexset_bind nodes (Vector.get rel)) set in
-    IndexSet.iter (fun i -> rel.:(i) <- set) nodes
   end Scc.nodes
 
 let iter_backward (type a n)
@@ -370,6 +334,17 @@ let iter_backward (type a n)
     end nodes;
     f ~cluster:nodes ~links:!sccs
   end Scc.nodes
+
+let merge v ~cluster ~links =
+  let all = IndexSet.union cluster links in
+  let x = IndexSet.bind all (Vector.get v) in
+  IndexSet.iter (fun n -> v.:(n) <- x) cluster
+
+let close_forward scc ~succ rel =
+  iter_forward scc ~succ (merge rel)
+
+let close_backward scc ~pred rel =
+  iter_backward scc ~pred (merge rel)
 
 let close_relation
     (type n a)
