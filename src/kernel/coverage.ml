@@ -260,6 +260,7 @@ let print_pattern g lr0 =
 
 let report_coverage
   grammar rcs (stacks : _ Automata.stacks) positions
+  reachability
   {transitions; unhandled_initial; unhandled_predecessors}
   =
   (* Start with unhandled lookaheads *)
@@ -325,8 +326,11 @@ let report_coverage
         | Some lr0 ->
           print_endline (print_pattern grammar lr0)
       end;
-      Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
+      Printf.printf "Unhandled suffix:\n  %s\n  %s\nwhen looking ahead at:\n  %s\n"
         (Lr1.list_to_string grammar lr1s)
+        (string_concat_map " "
+           (Terminal.to_string grammar)
+           (Sentence_generation.sentence_of_stack grammar reachability lr1s))
         (Terminal.lookaheads_to_string grammar la)
     end suffixes;
   end suffixes;

@@ -32,7 +32,7 @@ let to_cells (type g cell) (g : g grammar) ((module R) : (g, cell) Reachability.
         |> Seq.filter_map (fun (post, classe) ->
             let cost, tail =
               List.fold_left begin fun (bcost, _ as best) (cclasse, ccost, tail) ->
-                if ccost < bcost && IndexSet.quick_subset classe cclasse
+                if ccost < bcost && IndexSet.quick_subset cclasse classe
                 then (ccost, tail)
                 else best
               end (max_int, []) candidates
