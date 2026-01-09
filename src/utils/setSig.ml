@@ -192,6 +192,9 @@ module type S1 = sig
 
   (* [fused_inter_union a b ~acc] is [union (inter a b) acc] *)
   val fused_inter_union : 'a t -> 'a t -> acc:'a t -> 'a t
+
+  val xor : 'a t -> 'a t -> 'a t
+  val hamming_distance : 'a t -> 'a t -> int
 end
 
 module type S0 = sig

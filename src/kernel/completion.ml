@@ -188,19 +188,289 @@ let trigrams (type g)
   in
   stopwatch 2 "Allocated trie";
   Vector.rev_iteri2 begin fun middle (before, _) after ->
-    let level = trie.:(Transition.shift_symbol g middle) in
-    IndexSet.rev_iter begin fun term ->
-      let level = level.:(term) in
-      IndexSet.rev_iter begin fun sh ->
-        let _, lr1 = enum.:(sh) in
-        level.@(Transition.shift_symbol g sh) <- IndexSet.union lr1
-      end before
-    end after
+    let t1 = Transition.shift_symbol g middle in
+    IndexSet.rev_iter begin fun s0 ->
+      let _, lr1 = enum.:(s0) in
+      let t0 = Transition.shift_symbol g s0 in
+      IndexSet.rev_iter begin fun t2 ->
+        trie.:(t2).:(t1).@(t0) <- IndexSet.union lr1
+      end after
+    end before
   end enum after;
-  stopwatch 2 "Indexed trie";
-  let uniq_sets = Hashtbl.create 7 in
+  stopwatch 2 "Computed trie";
+let uniq_sets = Hashtbl.create 7 in
   Vector.iter (Vector.iter (Vector.iter (fun set ->
       if not (Hashtbl.mem uniq_sets set) then
         Hashtbl.add uniq_sets set ();
     ))) trie;
-  Printf.eprintf "Unique sets: %d\n" (Hashtbl.length uniq_sets)
+  Printf.eprintf "Unique sets: %d\n" (Hashtbl.length uniq_sets);
+  let b = Buffer.create 100000 in
+  let var_int i =
+    assert (i >= 0);
+    if i <= 127 then
+      Buffer.add_int8 b i
+    else if i <= 16383 then (
+      Buffer.add_int8 b (0x80 lor (i lsr 8));
+      Buffer.add_int8 b (i land 0xFF);
+    ) else (
+      assert (i <= 0x3FFFFFFF);
+      Buffer.add_int8 b (0xC0 lor (i lsr 24));
+      Buffer.add_int8 b ((i lsr 16) land 0xFF);
+      Buffer.add_int8 b ((i lsr 8) land 0xFF);
+      Buffer.add_int8 b (i land 0xFF);
+    )
+  in
+  let store_set set =
+    var_int (IntSet.cardinal set);
+    let last = ref (-1) in
+    IntSet.iter (fun i ->
+        var_int (i - !last - 1);
+        last := i;
+      ) set;
+  in
+  let sets =
+    Hashtbl.fold (fun k () acc -> (IndexSet.cardinal k, k) :: acc) uniq_sets []
+    |> List.sort (fun (i,s1) (j,s2) ->
+        match Int.compare j i with
+        | 0 -> IndexSet.compare s1 s2
+        | n -> n)
+    |> List.mapi (fun i (_,set) -> (set, i+1))
+  in
+  let compute_one_delta candidates candidate =
+    List.fold_left (fun (best_dist, _, _ as acc) (candidate', index) ->
+        let dist = IntSet.hamming_distance candidate candidate' in
+        if dist < best_dist then
+          (dist, IntSet.xor candidate candidate', index)
+        else
+          acc
+      ) (IntSet.cardinal candidate, candidate, 0) candidates
+  in
+  let rec compute_delta = function
+    | [] -> []
+    | (x, _) :: xs ->
+      let (_, delta, index) = compute_one_delta xs x in
+      (delta, index) :: compute_delta xs
+  in
+  let delta = compute_delta (sets : (_ IndexSet.t * _) list :> (IntSet.t * _) list) in
+  List.iter (fun (delta, index) ->
+      var_int index;
+      store_set delta
+    ) delta;
+  Printf.eprintf "Sets storage size: %d\n" (Buffer.length b);
+  let cul = open_out_bin "cul" in
+  output_string cul (Buffer.contents b);
+  close_out cul
+
+  (*let level2 = Hashtbl.create 7 in
+  let packer2 = Lrgrep_support_packer.make () in
+  let level1 = Hashtbl.create 7 in
+  let packer1 = Lrgrep_support_packer.make () in
+  let level0 = Hashtbl.create 7 in
+  let packer0 = Lrgrep_support_packer.make () in
+  let index_of table packer pack key =
+    match Hashtbl.find_opt table key with
+    | Some promise -> promise
+    | None ->
+      let promise = Lrgrep_support_packer.add_row packer (pack key) in
+      Hashtbl.add table key promise;
+      promise
+  in
+  let pack_set set =
+    IntSet.portable_sparse_representation set
+  in
+  let pack_level lvl =
+    Vector.fold_righti (fun k v acc ->
+        match v with
+        | None -> acc
+        | Some p -> (Index.to_int k, p) :: acc
+      ) lvl []
+  in
+  let trie' =
+    Vector.map (fun l0 ->
+        let l0' = Vector.map (fun l1 ->
+            let l1' = Vector.map (fun l2 ->
+                let l2 = (l2 : _ IndexSet.t :> IntSet.t) in
+                if IntSet.is_empty l2
+                then None
+                else Some (index_of level2 packer2 pack_set l2)
+              ) l1
+            in
+            if Vector.for_all Option.is_none l1' then
+              None
+            else
+              Some (index_of level1 packer1 pack_level l1')
+          ) l0
+        in
+        if Vector.for_all Option.is_none l0' then
+          None
+        else
+          Some (index_of level0 packer0 pack_level l0')
+      ) trie
+  in
+  let mapping2, table2 =
+    Lrgrep_support_packer.pack packer2 Fun.id
+  in
+  let mapping1, table1 =
+    Lrgrep_support_packer.pack packer1 (Lrgrep_support_packer.resolve mapping2)
+  in
+  let mapping0, table0 =
+    Lrgrep_support_packer.pack packer0 (Lrgrep_support_packer.resolve mapping1)
+  in
+  let root = Vector.map (Option.map (Lrgrep_support_packer.resolve mapping0)) trie' in
+  let source2, _ = Lrgrep_support_packer.encode table2 in
+  let source1, _ = Lrgrep_support_packer.encode table1 in
+  let source0, _ = Lrgrep_support_packer.encode table0 in
+  stopwatch 2 "Indexed trie, size: %d+%d+%d = %d, + 1 array of %d ints"
+    (String.length source0)
+    (String.length source1)
+    (String.length source2)
+    (String.length source0 + String.length source1 + String.length source2)
+    (Vector.length_as_int root)
+  ;
+  ignore trie';*)
+
+  (*let uniq_sets = Hashtbl.create 7 in
+  Vector.iter (Vector.iter (Vector.iter (fun set ->
+      if not (Hashtbl.mem uniq_sets set) then
+        Hashtbl.add uniq_sets set ();
+    ))) trie;
+  Printf.eprintf "Unique sets: %d\n" (Hashtbl.length uniq_sets);
+  let total = ref 0 in
+  let var_int i =
+    assert (i >= 0);
+    if i <= 127 then
+      incr total
+    else if i <= 32767 then
+      total := !total + 2
+    else (
+      assert (i <= 0x7FFFFFFF);
+      total := !total + 4
+    )
+  in
+  let store_set set =
+    var_int (IntSet.cardinal set);
+    let last = ref (-1) in
+    IntSet.iter (fun i ->
+        var_int (i - !last - 1);
+        last := i;
+      ) set;
+  in
+  Hashtbl.iter (fun set () ->
+      store_set (set : _ IndexSet.t :> IntSet.t)
+    ) uniq_sets;
+  Printf.eprintf "Sets storage size: %d\n" !total*)
+  (*let part =
+    (IndexRefine.partition (Hashtbl.fold (fun set () acc -> set :: acc) uniq_sets []))
+  in
+  Printf.eprintf "Classes: %d\n" (List.length part);
+  let rsets = Vector.make (Lr1.cardinal g) IntSet.empty in
+  let k = ref (Hashtbl.length uniq_sets) in
+  Hashtbl.iter (fun set () ->
+      decr k;
+      IndexSet.iter (fun lr1 -> rsets.@(lr1) <- IntSet.add !k) set
+    ) uniq_sets;
+  Printf.eprintf "Elements: %d\n" (Hashtbl.fold (fun k () k' -> k' + IndexSet.cardinal k) uniq_sets 0);
+  if false then
+  Vector.iter (fun set ->
+      Printf.eprintf "- %s\n" (string_concat_map "," string_of_int (IntSet.elements set))
+    ) rsets;
+  let compute_delta candidates candidate =
+    List.fold_left (fun best candidate' ->
+        Int.min best (IntSet.hamming_distance candidate candidate')
+      ) (IntSet.cardinal candidate) candidates
+  in
+  let rec count_delta = function
+    | [] -> 0
+    | x :: xs ->
+      count_delta xs + compute_delta xs x
+  in
+  let rsets_table = Hashtbl.create 7 in
+  Vector.iter (fun set ->
+      Hashtbl.replace rsets_table set ();
+    ) rsets;
+  let rsets' =
+    Hashtbl.fold (fun k () acc -> (IntSet.cardinal k, k) :: acc) rsets_table []
+    |> List.sort (fun (i,_) (j,_) -> Int.compare i j)
+    |> List.map snd
+  in
+  Printf.eprintf "Unique rsets: %d (of %d); elements: %d; delta: %d\n"
+    (Hashtbl.length rsets_table) (Vector.length_as_int rsets)
+    (Hashtbl.fold (fun set () sum -> sum + IntSet.cardinal set) rsets_table 0)
+    (count_delta rsets');
+  let compute_delta candidates candidate =
+    List.fold_left (fun best candidate' ->
+        Int.min best (IndexSet.hamming_distance candidate candidate')
+      ) (IndexSet.cardinal candidate) candidates
+  in
+  let rec count_delta = function
+    | [] -> 0
+    | x :: xs ->
+      count_delta xs + compute_delta xs x
+  in
+  let sets =
+    Hashtbl.fold (fun k () acc -> (IndexSet.cardinal k, k) :: acc) uniq_sets []
+    |> List.sort (fun (i,_) (j,_) -> Int.compare i j)
+    |> List.map snd
+  in
+  let delta = count_delta sets in
+  Printf.eprintf "Delta-tree: %d\n" delta;
+  let table = Hashtbl.create 7 in
+  let shared = ref 0 in
+  let pop lvl = Vector.fold_left (fun acc set -> acc + IndexSet.cardinal set) 0 lvl in
+  Vector.iter begin fun level ->
+    Vector.iter begin fun level ->
+      begin match Hashtbl.find_opt table level with
+        | Some b -> if b then incr shared;
+        | None -> Hashtbl.add table level (pop level > 0)
+      end
+    end level;
+  end trie;
+  Printf.eprintf "Unique-levels: %d, shared: %d\n" (Hashtbl.length table) !shared;
+  Printf.eprintf "Elements: %d\n" (Hashtbl.fold (fun set _ acc -> acc + pop set) table 0);
+  if false then begin
+    let table = Hashtbl.create 7 in
+    Vector.iter begin fun level ->
+      begin match Hashtbl.find_opt table level with
+        | Some () -> Printf.eprintf "- shared\n"
+        | None ->
+          Hashtbl.add table level ();
+          let non_empty = ref 0 in
+          Vector.iter begin fun level ->
+            Vector.iter begin fun set ->
+              if IndexSet.is_not_empty set then
+                incr non_empty
+            end level
+          end level;
+          Printf.eprintf "- nonempty: %d\n" !non_empty
+      end
+    end trie;
+  end;
+  if false then begin
+    let subsets = ref 0 in
+    Vector.iter begin
+      Vector.iter begin fun level ->
+        Hashtbl.clear uniq_sets;
+        let nonempty = ref 0 in
+        Vector.iter (fun set ->
+            if IndexSet.is_not_empty set then (
+              incr nonempty;
+              if not (Hashtbl.mem uniq_sets set) then
+                Hashtbl.add uniq_sets set ();
+            )
+          ) level;
+        if !nonempty > 0 then (
+          subsets := !subsets + (Hashtbl.length uniq_sets);
+          let elements = Hashtbl.fold (fun k () k' -> IndexSet.cardinal k + k') uniq_sets 0 in
+          let all_elements = Hashtbl.fold (fun k () k' -> IndexSet.union k k') uniq_sets IndexSet.empty in
+          let common = Hashtbl.fold (fun k () k' -> IndexSet.inter k k') uniq_sets all_elements in
+          let delta = Hashtbl.fold (fun k () k' -> k' + IndexSet.cardinal (IndexSet.diff all_elements k)) uniq_sets 0 in
+          Printf.eprintf "- non-empty sub-sets: %d, unique sub-sets: %d (elements: %d, unique: %d, delta: %d, common: %d)\n"
+            !nonempty
+            (Hashtbl.length uniq_sets)
+            elements (IndexSet.cardinal all_elements)
+            delta (IndexSet.cardinal common)
+        )
+      end
+    end trie;
+    Printf.eprintf "Number of sub-sets: %d\n" !subsets;
+    end;*)

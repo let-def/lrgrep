@@ -662,3 +662,49 @@ let split_by_run cls = function
   | set ->
     let (key, tail, result) = split_by_run cls set in
     (key, tail) :: result
+
+let rec hamming_distance acc t0 t1 =
+  match t0, t1 with
+  | N, x | x, N -> acc + cardinal x
+  | C (a0, s0, t0'), C (a1, s1, t1') ->
+    if a0 < a1 then
+      hamming_distance
+        (acc + Bit_lib.pop_count s0)
+        t0' t1
+    else if a0 > a1 then
+      hamming_distance
+        (acc + Bit_lib.pop_count s1)
+        t0 t1'
+    else
+      hamming_distance
+        (acc + Bit_lib.pop_count (s0 lxor s1))
+        t0' t1'
+
+let hamming_distance t0 t1 =
+  hamming_distance 0 t0 t1
+
+let rec xor t0 t1 =
+  if t0 == t1 then
+    N
+  else match t0, t1 with
+    | N, x | x, N -> x
+    | C (a0, s0, q0), C (a1, s1, q1) ->
+      if a0 < a1 then
+        C (a0, s0, xor q0 t1)
+      else if a0 > a1 then
+        C (a1, s1, xor t0 q1)
+      else
+        match s0 lxor s1 with
+        | 0 -> xor q0 q1
+        | s -> C (a0, s, xor q0 q1)
+
+let portable_sparse_prepend x l =
+  let addr = x lsr 6 in
+  let mask = x land 63 in
+  match l with
+  | (addr', mask') :: ys when addr = addr' ->
+    (addr', mask lor mask') :: ys
+  | ys -> (addr, mask) :: ys
+
+let portable_sparse_representation t =
+  fold_right (fun l x -> portable_sparse_prepend x l) [] t
