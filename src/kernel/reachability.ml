@@ -155,6 +155,7 @@ module type S = sig
 end
 
 type 'g t = (module S with type g = 'g)
+type ('g, 'cell) t_cell = (module S with type g = 'g and type Cell.n = 'cell)
 
 let make (type g) (g : g grammar) : g t = (module struct
   type nonrec g = g
