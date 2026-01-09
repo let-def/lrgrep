@@ -228,6 +228,36 @@ let coverage (type g r st tr lrc)
   ;
   {transitions; unhandled_initial; unhandled_predecessors}
 
+let print_pattern g lr0 =
+  let decompose item =
+    let prod, pos = Item.desc g item in
+    let rhs = Production.rhs g prod in
+    (Production.lhs g prod,
+     Array.sub rhs 0 pos,
+     Some (Array.sub rhs pos (Array.length rhs - pos)))
+  in
+  let lines = ref [] in
+  let append item =
+    let lhs, pre, post = decompose item in
+    match !lines with
+    | (lhs', pre', post) :: rest
+      when Index.equal lhs lhs' && Array.equal Index.equal pre pre' ->
+      if Option.is_some post then
+        lines := (lhs', pre', None) :: rest
+    | lines' -> lines := (lhs, pre, post) :: lines'
+  in
+  IndexSet.rev_iter append (Lr0.items g lr0);
+  let print_line (lhs, pre, post) =
+    let syms syms = Array.to_list (Array.map (Symbol.name g) syms) in
+    String.concat " " @@
+    (Nonterminal.to_string g lhs ^ ":")
+    :: syms pre
+    @ "." :: match post with
+    | None -> ["_*"]
+    | Some post -> syms post
+  in
+  string_concat_map "\n" print_line !lines
+
 let report_coverage
   grammar rcs (stacks : _ Automata.stacks) positions
   {transitions; unhandled_initial; unhandled_predecessors}
@@ -293,8 +323,7 @@ let report_coverage
       begin match !pattern with
         | None -> assert false
         | Some lr0 ->
-          List.iter print_endline
-            (List.map (Item.to_string grammar) (IndexSet.elements (Lr0.items grammar lr0)))
+          print_endline (print_pattern grammar lr0)
       end;
       Printf.printf "Unhandled suffix:\n  %s\nwhen looking ahead at:\n  %s\n"
         (Lr1.list_to_string grammar lr1s)
