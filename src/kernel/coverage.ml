@@ -241,7 +241,7 @@ let print_pattern g lr0 =
     let lhs, pre, post = decompose item in
     match !lines with
     | (lhs', pre', post) :: rest
-      when Index.equal lhs lhs' && Array.equal Index.equal pre pre' ->
+      when Index.equal lhs lhs' && array_equal Index.equal pre pre' ->
       if Option.is_some post then
         lines := (lhs', pre', None) :: rest
     | lines' -> lines := (lhs, pre, post) :: lines'

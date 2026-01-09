@@ -42,6 +42,16 @@ let array_compare cmp a1 a2 =
   done;
   !c
 
+let array_equal cmp a1 a2 =
+  let len = Array.length a1 in
+  let b = ref (Int.equal len (Array.length a2)) in
+  let i = ref 0 in
+  while !b && !i < len do
+    b := cmp a1.(!i) a2.(!i);
+    incr i
+  done;
+  !b
+
 (** [group ~compare ~group list]
     Group togethers the elements of [list] that are equivalent according to
     [compare], using the [group] function *)
