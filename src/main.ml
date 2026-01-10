@@ -570,7 +570,7 @@ let group_lines lines =
       | `Autocomment ->
         aux lines
       | `Comment ->
-        push comments line;
+        push comments (String.sub line 1 (String.length line - 1));
         aux lines
       | `Text ->
         push texts (line, List.rev !comments);
@@ -593,6 +593,43 @@ type 'sentence message_block = {
   message_pre_comments: comment list;
   message: (string * comment list) list;
 }
+
+let decompose_sentence sentence =
+  let lhs, rhs =
+    match String.index_opt sentence ':' with
+    | None -> None, sentence
+    | Some colon ->
+      let lhs = String.trim (String.sub sentence 0 colon) in
+      let rhs =
+        String.sub sentence
+          (colon + 1)
+          (String.length sentence - colon - 1)
+      in
+      (Some lhs, rhs)
+  in
+  let rhs = List.filter ((<>) "") (String.split_on_char ' ' rhs) in
+  (lhs, rhs)
+
+let parse_terminal =
+  let terminals = Hashtbl.create 7 in
+  fun t ->
+    if Hashtbl.length terminals = 0 then (
+      let g = !!grammar in
+      Index.iter (Terminal.cardinal g)
+        (fun t -> Hashtbl.add terminals (Terminal.to_string g t) t)
+    );
+    match Hashtbl.find_opt terminals t with
+    | None ->
+      Printf.eprintf "Unknown terminal %S\n" t;
+      exit 1
+    | Some t -> t
+
+let parse_message message =
+  let parse_sentence (text, comments) =
+    let lhs, rhs = decompose_sentence text in
+    ((lhs, List.map parse_terminal rhs), comments)
+  in
+  {message with sentences = List.map parse_sentence message.sentences}
 
 let rec group_messages messages lines =
   match group_lines lines with
@@ -648,7 +685,9 @@ let import_command () =
                    \  message=[";
     List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
     Printf.eprintf "] }\n";
-  end blocks
+  end blocks;
+  let _blocks = List.map parse_message blocks in
+  ()
 
 (* Argument parser *)
 let commands =
