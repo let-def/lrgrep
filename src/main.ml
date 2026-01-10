@@ -511,6 +511,145 @@ let enumerate_command () =
     Printf.printf "# Exhaustive coverage\n\n";
     report_sentences sentences
 
+(* Command import *)
+
+let opt_import_file = ref ""
+let opt_import_output = ref ""
+
+let classify_line txt =
+  let is_whitespace = function ' ' | '\t' -> true | _ -> false in
+  let l = String.length txt in
+  let i = ref 0 in
+  while !i < l && is_whitespace txt.[!i] do
+    incr i
+  done;
+  if !i = l then
+    `Whitespace
+  else if txt.[!i] = '#' then (
+    if !i + 1 < l && txt.[!i+1] = '#' then
+      `Autocomment
+    else
+      `Comment
+  ) else
+    `Text
+
+(*let get_comments lines =
+  let rec aux comments = function
+    | Seq.Nil -> (comments, Seq.Nil)
+    | Seq.Cons (line, lines) as seq ->
+      match classify_line line with
+      | `Autocomment -> aux comments (lines ())
+      | `Comment -> aux (line :: comments) (lines ())
+      | _ -> comments, seq
+  in
+  let rev_comments, lines = aux [] (lines ()) in
+  (List.rev rev_comments, lines)
+
+let get_text lines =
+  let pre_comments, lines = get_comments lines in
+  match lines with
+  | Seq.Nil -> (pre_comments, None, Seq.Nil)
+  | Seq.Cons (line, lines) ->
+    match classify_line line with
+    | `Autocomment | `Comment -> assert false
+    | `Text text ->
+    | `Whitespace ws *)
+
+let group_lines lines =
+  let texts = ref [] in
+  let comments = ref [] in
+  let rec aux lines =
+    match lines () with
+    | Seq.Nil -> Seq.empty
+    | Seq.Cons (line, lines) ->
+      match classify_line line with
+      | `Whitespace ->
+        if list_is_empty !texts
+        then aux lines
+        else lines
+      | `Autocomment ->
+        aux lines
+      | `Comment ->
+        push comments line;
+        aux lines
+      | `Text ->
+        push texts (line, List.rev !comments);
+        comments := [];
+        aux lines
+  in
+  let lines = aux lines in
+  let rec post_process acc comments = function
+    | [] -> (comments, acc, lines)
+    | (text, comments') :: rest ->
+      post_process ((text, comments) :: acc) comments' rest
+  in
+  post_process [] (List.rev !comments) !texts
+
+type comment = string
+
+type 'sentence message_block = {
+  sentence_pre_comments: comment list;
+  sentences: ('sentence * comment list) list;
+  message_pre_comments: comment list;
+  message: (string * comment list) list;
+}
+
+let rec group_messages messages lines =
+  match group_lines lines with
+  | last_comments, [], _lines ->
+    (List.rev messages, last_comments)
+  | sentence_pre_comments, sentences, lines ->
+    let message_pre_comments, message, lines = group_lines lines in
+    if list_is_empty message then
+      Printf.eprintf "warning: last sentences without message in .messages file\n";
+    let message = {
+      sentence_pre_comments;
+      sentences;
+      message_pre_comments;
+      message;
+    } in
+    group_messages (message :: messages) lines
+
+let set_import_message_file path =
+  if !opt_import_file <> "" then
+    Printf.eprintf "unexpected argument %S: message file already set to %S\n"
+      path !opt_import_file;
+  opt_import_file := path
+
+let import_command () =
+  if !opt_import_file = "" then (
+    prerr_endline "No .message file specified";
+    exit 1
+  );
+  if !opt_import_output = "" then (
+    prerr_endline "Use -o <file.lrgrep> to specify the output";
+    exit 1
+  );
+  let ic = open_in_bin !opt_import_file in
+  let rec lines () =
+    match input_line ic with
+    | exception End_of_file -> Seq.Nil
+    | line -> Seq.Cons (line, lines)
+  in
+  let blocks, _comments = group_messages [] lines in
+  close_in ic;
+  Printf.eprintf ".messages: parsed %d messages"
+    (List.length blocks);
+  List.iter begin fun { sentence_pre_comments; sentences; message_pre_comments; message } ->
+    Printf.eprintf "{ sentence_pre_comments=[";
+    List.iter (Printf.eprintf "\n    %S") sentence_pre_comments;
+    Printf.eprintf "];\n\
+                   \  sentences=[";
+    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) sentences;
+    Printf.eprintf "];\n\
+                   \  message_pre_comments=[";
+    List.iter (Printf.eprintf "\n    %S") message_pre_comments;
+    Printf.eprintf "];\n\
+                   \  message=[";
+    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
+    Printf.eprintf "] }\n";
+  end blocks
+
 (* Argument parser *)
 let commands =
   let not_implemented command () =
@@ -531,9 +670,13 @@ let commands =
     command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
       ~commit:(not_implemented "complete");
     command "enumerate" "Generate sentences to cover possible failures" [
-      "-a", Arg.Set opt_enum_all, "";
-      "-e", Arg.String (push opt_enum_entrypoints), "";
+      "-a", Arg.Set opt_enum_all, " Cover all filter-reduce patterns";
+      "-e", Arg.String (push opt_enum_entrypoints),
+      " <entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
     ] ~commit:enumerate_command;
+    command "import-messages" "" [
+      "-o", Arg.Set_string opt_import_output, "";
+    ] ~anon:set_import_message_file ~commit:import_command;
 ]
 
 let () =
