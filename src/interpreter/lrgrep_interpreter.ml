@@ -1,7 +1,6 @@
-open MenhirSdk
-open Fix.Indexing
 open Utils
 open Misc
+open Fix.Indexing
 
 type 'terminal config = {
   print_reduce_filter : bool;
@@ -30,123 +29,126 @@ type ('lr1, 'terminal) parser_output = {
   remainder: 'terminal with_position Seq.node;
 }
 
-module Make(Grammar : Cmly_api.GRAMMAR)() : sig
-  open Grammar
+open Kernel.Info
 
-  val parse_sentence
-    :  entrypoint:lr1
-    -> sentence:terminal with_position Seq.t
-    -> (lr1, terminal) parser_output
+let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
+  let sprintf = Printf.sprintf in
+  let sline = loc_start.pos_lnum in
+  let scol  = loc_start.pos_cnum - loc_start.pos_bol in
+  let eline = loc_end.pos_lnum in
+  let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
+  if sline = eline then
+    sprintf "line %d:%d-%d\t" sline scol ecol
+  else
+    sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
-  val analyze_stack
-    :  terminal config
-    -> stack:lr1 with_position Seq.t
-    -> unit
+let print_items grammar indent suffix items =
+  Printf.printf "\t\t%s\x1b[0;32m  [%s" (String.make indent ' ') suffix;
+  let pad = String.make (indent + 3 + String.length suffix) ' ' in
+  let first = ref true in
+  IndexSet.iter (fun item ->
+      if !first then first := false else
+        Printf.printf "\n\t\t%s" pad;
+      Printf.printf " / %s" (Item.to_string grammar item);
+    ) items;
+  Printf.printf "]\n"
+
+let print_lr1 grammar state =
+  match Lr1.incoming grammar state with
+  | None -> None
+  | Some sym -> Some (Symbol.name grammar sym)
+
+let print_stack grammar config ~is_goto stack =
+  let top = List.hd stack in
+  let stack = List.rev stack in
+  let stack = if is_goto then stack else List.tl stack in
+  let stack = List.filter_map (Lr1.incoming grammar) stack in
+  Printf.printf "\t\t\x1b[1;33m↱ %s\n"
+    (string_concat_map " " (Symbol.name grammar) stack);
+  if config.print_reduce_filter then begin
+    print_items grammar 0 "_*" (Lr1.items grammar top);
+  end
+
+let rec filter_reductions la = function
+  | [] -> []
+  | x :: xs ->
+    let y = IndexMap.filter_map (fun _ la' ->
+        match IndexSet.inter la la' with
+        | la when IndexSet.is_empty la -> None
+        | la -> Some la
+      ) x
+    in
+    match filter_reductions la xs with
+    | [] when IndexMap.is_empty y -> []
+    | ys -> y :: ys
+
+let rec merge_reductions = function
+  | [], xs | xs, [] -> xs
+  | x :: xs, y :: ys ->
+    let xy = IndexMap.union (fun _ la la' -> Some (IndexSet.union la la')) x y in
+    let xys = merge_reductions (xs, ys) in
+    xy :: xys
+
+let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector) config ~stack =
+  Format.printf "Parser stack (most recent first):\n%!";
+  let failing = ref IndexSet.empty in
+  let outer = ref [] in
+  List.iteri begin fun i (state, start, stop) ->
+    let reached_state ~is_goto lookaheads state =
+      let rc = rcs.:(state) in
+      outer := merge_reductions (!outer, filter_reductions lookaheads rc.reductions);
+      failing := IndexSet.fused_inter_union rc.failing lookaheads ~acc:!failing;
+      List.iter begin fun (stack, lookaheads') ->
+        if not (IndexSet.disjoint lookaheads lookaheads') then
+          print_stack grammar config ~is_goto stack
+      end rc.stacks
+    in
+    let simulate_gotos nts =
+      IndexMap.iter begin fun nt lookaheads ->
+        reached_state ~is_goto:true lookaheads
+          (Transition.find_goto_target grammar state nt)
+      end nts
+    in
+    let rec simulate_reductions () =
+      match !outer with
+      | [] -> ()
+      | x :: xs when IndexMap.is_empty x ->
+        outer := xs
+      | x :: xs ->
+        outer := IndexMap.empty :: xs;
+        simulate_gotos x;
+        simulate_reductions ()
+    in
+    if i = 0 then
+      reached_state ~is_goto:false (Terminal.regular grammar) state
+    else
+      simulate_reductions ();
+    let items = Lr1.items grammar state in
+    if (i = 0 && config.print_reduce_filter) then (
+      print_items grammar 0 "" items;
+    ) else if config.print_stack_items then (
+      print_string "\x1b[0;36m";
+      IndexSet.iter
+        (fun item -> print_endline ("\t\t  [" ^ Item.to_string grammar item ^ "]"))
+        items;
+    );
+    print_string "\x1b[0m- ";
+    print_string (print_loc (start, stop));
+    print_string "\x1b[1m";
+    begin match print_lr1 grammar state with
+      | None ->
+        let prod = Option.get (Lr1.is_entrypoint grammar state) in
+        print_endline (Symbol.name grammar (Production.rhs grammar prod).(0))
+      | Some sym -> print_endline sym
+    end;
+    print_string "\x1b[0m";
+  end stack
+
+(*let parse_sentence ~entrypoint:_ ~sentence:_ =
+
 
   val analyze_sentence
-    :  terminal config
-    -> entrypoint:lr1
-    -> sentence:terminal with_position Seq.t ->
-    unit
-end =
-struct
-  open Kernel.Info
-  include Lift()
-  include Load_grammar(Grammar)
-
-  let reductions = Kernel.Redgraph.close_lr1_reductions grammar
-
-  let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
-    let sprintf = Printf.sprintf in
-    let sline = loc_start.pos_lnum in
-    let scol  = loc_start.pos_cnum - loc_start.pos_bol in
-    let eline = loc_end.pos_lnum in
-    let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
-    if sline = eline then
-      sprintf "line %d:%d-%d\t" sline scol ecol
-    else
-      sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
-
-  let print_items indent suffix items =
-    Printf.printf "\t\t%s\x1b[0;32m  [%s" (String.make indent ' ') suffix;
-    let pad = String.make (indent + 3 + String.length suffix) ' ' in
-    let first = ref true in
-    IndexSet.iter (fun item ->
-        if !first then first := false else
-          Printf.printf "\n\t\t%s" pad;
-        Printf.printf " / %s" (Item.to_string grammar item);
-      ) items;
-    Printf.printf "]\n"
-
-  let print_lr1 state =
-    match Lr1.incoming grammar state with
-    | None -> None
-    | Some sym -> Some (Symbol.name grammar sym)
-
-  (*let display config =
-    let rec display_steps la n acc = function
-      | [] -> acc
-      | {Viable. reachable=_; goto_transitions} :: rest ->
-         let acc = List.fold_left (display_goto_transition la n) acc goto_transitions in
-         display_steps la (n - 1) acc rest
-
-    and display_goto_transition la n acc = let la = IndexSet.inter la lookahead
-    in if IndexSet.is_empty la then acc else let {Viable. inner; outer} =
-    Viable.get_transitions target in let acc = if outer <> [] then (la, outer)
-    :: acc else acc in let acc = display_steps la (n + 1) acc inner in let
-    target = Viable.get_config target in Printf.printf "\t\t%s\x1b[1;33m↱ %s\n"
-    (String.make n ' ') (Option.get (print_lr1 target.top)); if
-    config.print_reduce_filter then ( let suffix = match target.rest with | [] |
-    [_] -> [target.top] | _ :: rest -> target.top :: rest in let suffix =
-    Utils.Misc.string_concat_map "; " (fun lr1 -> Option.get (print_lr1 lr1))
-    suffix in print_items n suffix (Lr1.items target.top); ); acc in
-    display_goto_transition*)
-
-  let analyze_stack config ~stack =
-    (*Format.printf "let stack = [%s]\n"
-      (String.concat ";" (List.map string_of_int (List.map fst stack)));*)
-    Format.printf "Parser stack (most recent first):\n%!";
-    let outer = ref [] in
-    List.iteri begin fun i (state, start, stop) ->
-      let state = Index.of_int (Lr1.cardinal grammar) (Grammar.Lr1.to_int state) in
-      let display_stacks
-
-      in
-      let rec simulate_reductions pending lookaheads = function
-        | [] -> pending
-        | nts :: remainder ->
-          let pending = cons_if (not (List.is_empty remainder)) remainder pending in
-          IndexMap.fold begin fun nt lookaheads' pending ->
-            let lookaheads = IndexSet.inter lookaheads lookaheads' in
-            if IndexSet.is_not_empty lookaheads then
-              let state' = Transition.find_goto_target grammar state nt in
-              simulate_reductions pending lookaheads reductions.:(state').reductions
-            else
-              pending
-          end nts pending
-      in
-      if i = 0 then
-        outer := [Terminal.all, reductions.:(state)];
-      outer := process_threads [] !outer;
-      let items = Lr1.items state in
-      if (i = 0 && config.print_reduce_filter) then (
-        print_items 0 "" items;
-      ) else if config.print_stack_items then (
-        print_string "\x1b[0;36m";
-        IndexSet.iter
-          (fun item -> print_endline ("\t\t  [" ^ Item.to_string item ^ "]"))
-          items;
-      );
-      print_string "\x1b[0m- ";
-      print_string (print_loc (start, stop));
-      print_string "\x1b[1m";
-      begin match print_lr1 state with
-      | None ->
-         let find_state (_,_,state') = state' = Lr1.to_g state in
-         let nt, _prod, _ = List.find find_state Grammar.Grammar.entry_points in
-         print_endline (Grammar.Nonterminal.name nt)
-      | Some sym -> print_endline sym
-      end;
-      print_string "\x1b[0m";
-    end stack
-end
+  :  terminal config
+  -> entrypoint:lr1
+  -> sentence:terminal with_position Seq.t ->
+  unit*)
