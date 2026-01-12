@@ -516,131 +516,6 @@ let enumerate_command () =
 let opt_import_file = ref ""
 let opt_import_output = ref ""
 
-let classify_line txt =
-  let is_whitespace = function ' ' | '\t' -> true | _ -> false in
-  let l = String.length txt in
-  let i = ref 0 in
-  while !i < l && is_whitespace txt.[!i] do
-    incr i
-  done;
-  if !i = l then
-    `Whitespace
-  else if txt.[!i] = '#' then (
-    if !i + 1 < l && txt.[!i+1] = '#' then
-      `Autocomment
-    else
-      `Comment
-  ) else
-    `Text
-
-(*let get_comments lines =
-  let rec aux comments = function
-    | Seq.Nil -> (comments, Seq.Nil)
-    | Seq.Cons (line, lines) as seq ->
-      match classify_line line with
-      | `Autocomment -> aux comments (lines ())
-      | `Comment -> aux (line :: comments) (lines ())
-      | _ -> comments, seq
-  in
-  let rev_comments, lines = aux [] (lines ()) in
-  (List.rev rev_comments, lines)
-
-let get_text lines =
-  let pre_comments, lines = get_comments lines in
-  match lines with
-  | Seq.Nil -> (pre_comments, None, Seq.Nil)
-  | Seq.Cons (line, lines) ->
-    match classify_line line with
-    | `Autocomment | `Comment -> assert false
-    | `Text text ->
-    | `Whitespace ws *)
-
-let group_lines lines =
-  let texts = ref [] in
-  let comments = ref [] in
-  let rec aux lines =
-    match lines () with
-    | Seq.Nil -> Seq.empty
-    | Seq.Cons (line, lines) ->
-      match classify_line line with
-      | `Whitespace ->
-        if list_is_empty !texts
-        then aux lines
-        else lines
-      | `Autocomment ->
-        aux lines
-      | `Comment ->
-        push comments (String.sub line 1 (String.length line - 1));
-        aux lines
-      | `Text ->
-        push texts (line, List.rev !comments);
-        comments := [];
-        aux lines
-  in
-  let lines = aux lines in
-  let rec post_process acc comments = function
-    | [] -> (comments, acc, lines)
-    | (text, comments') :: rest ->
-      post_process ((text, comments) :: acc) comments' rest
-  in
-  post_process [] (List.rev !comments) !texts
-
-type comment = string
-
-type 'sentence message_block = {
-  sentence_pre_comments: comment list;
-  sentences: ('sentence * comment list) list;
-  message_pre_comments: comment list;
-  message: (string * comment list) list;
-}
-
-let decompose_sentence sentence =
-  let lhs, rhs =
-    match String.index_opt sentence ':' with
-    | None -> None, sentence
-    | Some colon ->
-      let lhs = String.trim (String.sub sentence 0 colon) in
-      let rhs =
-        String.sub sentence
-          (colon + 1)
-          (String.length sentence - colon - 1)
-      in
-      (Some lhs, rhs)
-  in
-  let rhs = List.filter ((<>) "") (String.split_on_char ' ' rhs) in
-  (lhs, rhs)
-
-let parse_terminal t =
-  match Terminal.find !!grammar t with
-  | Result.Ok t -> t
-  | Result.Error dym ->
-    Printf.eprintf "Unknown terminal %S%a\n" t
-      (print_dym (fun (_,s,_) -> s)) dym;
-    exit 1
-
-let parse_message message =
-  let parse_sentence (text, comments) =
-    let lhs, rhs = decompose_sentence text in
-    ((lhs, List.map parse_terminal rhs), comments)
-  in
-  {message with sentences = List.map parse_sentence message.sentences}
-
-let rec group_messages messages lines =
-  match group_lines lines with
-  | last_comments, [], _lines ->
-    (List.rev messages, last_comments)
-  | sentence_pre_comments, sentences, lines ->
-    let message_pre_comments, message, lines = group_lines lines in
-    if list_is_empty message then
-      Printf.eprintf "warning: last sentences without message in .messages file\n";
-    let message = {
-      sentence_pre_comments;
-      sentences;
-      message_pre_comments;
-      message;
-    } in
-    group_messages (message :: messages) lines
-
 let set_import_message_file path =
   if !opt_import_file <> "" then
     Printf.eprintf "unexpected argument %S: message file already set to %S\n"
@@ -662,26 +537,27 @@ let import_command () =
     | exception End_of_file -> Seq.Nil
     | line -> Seq.Cons (line, lines)
   in
-  let blocks, _comments = group_messages [] lines in
+  let parser = Message_file.parse_sentence !!grammar in
+  let blocks =
+    lines
+    |> Message_file.extract_pre_block
+    |> Message_file.extract_block
+    |> Seq.map (Message_file.map_block (fun block ->
+        let sentences = List.map (Message_file.map_line (fun sentence ->
+            parser (Message_file.lift_sentence !!grammar sentence)
+          )) block.Message_file.sentences
+        in
+        {block with sentences}
+      ))
+    (* Force any error *)
+    |> List.of_seq |> List.to_seq
+  in
   close_in ic;
-  Printf.eprintf ".messages: parsed %d messages"
-    (List.length blocks);
-  List.iter begin fun { sentence_pre_comments; sentences; message_pre_comments; message } ->
-    Printf.eprintf "{ sentence_pre_comments=[";
-    List.iter (Printf.eprintf "\n    %S") sentence_pre_comments;
-    Printf.eprintf "];\n\
-                   \  sentences=[";
-    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) sentences;
-    Printf.eprintf "];\n\
-                   \  message_pre_comments=[";
-    List.iter (Printf.eprintf "\n    %S") message_pre_comments;
-    Printf.eprintf "];\n\
-                   \  message=[";
-    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
-    Printf.eprintf "] }\n";
-  end blocks;
-  let _blocks = List.map parse_message blocks in
-  ()
+  let oc = open_out_bin !opt_import_output in
+  Seq.iter
+    (fun line -> output_string oc line; output_char oc '\n')
+    (Message_file.blocks_to_file !!grammar blocks);
+  close_out oc
 
 (* Argument parser *)
 let commands =
