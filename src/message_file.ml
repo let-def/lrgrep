@@ -155,30 +155,33 @@ let parse_sentence (type g) (g : g grammar) =
   (* Memoize actions *)
   let action_table : (g lr1 index * g terminal index, _) Hashtbl.t = Hashtbl.create 7 in
   let get_action state terminal =
-    let key = (state, terminal) in
-    match Hashtbl.find_opt action_table key with
-    | Some action -> action
+    match Lr1.default_reduction g state with
+    | Some prod -> `Reduce prod
     | None ->
-      let action =
-        match
-          IndexSet.find
-            (fun red -> IndexSet.mem terminal (Reduction.lookaheads g red))
-            (Reduction.from_lr1 g state)
-        with
-        | red -> `Reduce (Reduction.production g red)
-        | exception Not_found ->
-          let sym = Symbol.inj_t g terminal in
+      let key = (state, terminal) in
+      match Hashtbl.find_opt action_table key with
+      | Some action -> action
+      | None ->
+        let action =
           match
             IndexSet.find
-              (fun tr -> Index.equal sym (Transition.symbol g tr))
-              (Transition.successors g state)
+              (fun red -> IndexSet.mem terminal (Reduction.lookaheads g red))
+              (Reduction.from_lr1 g state)
           with
-          | tr -> `Shift (Transition.target g tr)
+          | red -> `Reduce (Reduction.production g red)
           | exception Not_found ->
-            `Reject
-      in
-      Hashtbl.add action_table key action;
-      action
+            let sym = Symbol.inj_t g terminal in
+            match
+              IndexSet.find
+                (fun tr -> Index.equal sym (Transition.symbol g tr))
+                (Transition.successors g state)
+            with
+            | tr -> `Shift (Transition.target g tr)
+            | exception Not_found ->
+              `Reject
+        in
+        Hashtbl.add action_table key action;
+        action
   in
   (* Process a sentence *)
   fun {entrypoint; symbols} ->
