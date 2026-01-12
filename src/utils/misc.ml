@@ -583,11 +583,14 @@ module Damerau_levenshtein = struct
 
     c.prev.(l1)
 
-  let filter_approx seq ~max name =
+  let filter_approx ~dist name seq =
     let cache = make_cache () in
-    Seq.filter_map begin fun (k, v) ->
-      match distance cache ~max name k with
+    let filter (k, v) =
+      match distance cache ~max:dist name k with
       | dist -> Some (dist, k, v)
 	  | exception Exit -> None
-    end seq
+    in
+    Seq.filter_map filter seq
+    |> List.of_seq
+    |> List.sort (fun (d1,_,_) (d2,_,_) -> Int.compare d1 d2)
 end

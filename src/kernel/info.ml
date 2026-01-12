@@ -515,17 +515,14 @@ module Terminal = struct
         (fun t -> Hashtbl.add g.terminal_table (to_string g t) t);
     g.terminal_table
 
-  let find g ?(approx=0) name =
+  let find g ?(approx=3) name =
     let table = terminal_table g in
     match Hashtbl.find_opt table name, approx with
     | Some t, _ -> Result.Ok t
     | None, 0 -> Result.Error []
-    | None, max ->
-      Result.Error (
-        Damerau_levenshtein.filter_approx
-          (Hashtbl.to_seq table) ~max name
-        |> List.of_seq
-      )
+    | None, dist ->
+      Result.Error
+        (Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table))
 end
 
 module Nonterminal = struct
@@ -565,16 +562,14 @@ module Nonterminal = struct
         (fun t -> Hashtbl.add g.nonterminal_table (to_string g t) t);
     g.nonterminal_table
 
-  let find g ?(approx=0) name =
+  let find g ?(approx=3) name =
     let table = nonterminal_table g in
     match Hashtbl.find_opt table name, approx with
     | Some t, _ -> Result.Ok t
     | None, 0 -> Result.Error []
-    | None, max ->
+    | None, dist ->
       Result.Error (
-        Damerau_levenshtein.filter_approx
-          (Hashtbl.to_seq table) ~max name
-        |> List.of_seq
+        Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table)
       )
 end
 
@@ -618,7 +613,7 @@ module Symbol = struct
   let inj_t _ t = Sum.inj_l t
   let inj_n g n = Sum.inj_r g.terminal_n n
 
-  let find g ?(approx=0) name =
+  let find g ?(approx=3) name =
     let ttable = Terminal.terminal_table g in
     match Hashtbl.find_opt ttable name with
     | Some t -> Result.Ok (inj_t g t)
@@ -627,16 +622,12 @@ module Symbol = struct
       match Hashtbl.find_opt ntable name, approx with
       | Some n, _ -> Result.Ok (inj_n g n)
       | None, 0 -> Result.Error []
-      | None, max ->
+      | None, dist ->
         Result.Error (
-          Seq.append
-            (Damerau_levenshtein.filter_approx
-               (Hashtbl.to_seq ttable) ~max name
-             |> Seq.map (fun (d,s,t) -> (d, s, inj_t g t)))
-            (Damerau_levenshtein.filter_approx
-               (Hashtbl.to_seq ntable) ~max name
-             |> Seq.map (fun (d,s,n) -> (d, s, inj_n g n)))
-          |> List.of_seq
+          Damerau_levenshtein.filter_approx ~dist name
+            (Seq.append
+               (Seq.map (fun (s,t) -> (s, inj_t g t)) (Hashtbl.to_seq ttable))
+               (Seq.map (fun (s,n) -> (s, inj_n g n)) (Hashtbl.to_seq ntable)))
         )
 end
 
