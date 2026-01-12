@@ -647,6 +647,76 @@ let set_import_message_file path =
       path !opt_import_file;
   opt_import_file := path
 
+let get_action =
+  let table : (g lr1 index * g terminal index, _) Hashtbl.t = Hashtbl.create 7 in
+  fun state terminal ->
+    let key = (state, terminal) in
+    match Hashtbl.find_opt table key with
+    | Some action -> action
+    | None ->
+      let grammar = !!grammar in
+      let action =
+        match
+          IndexSet.find
+            (fun red -> IndexSet.mem terminal (Reduction.lookaheads grammar red))
+            (Reduction.from_lr1 grammar state)
+        with
+        | red -> `Reduce (Reduction.production grammar red)
+        | exception Not_found ->
+          let sym = Symbol.inj_t grammar terminal in
+          match
+            IndexSet.find
+              (fun tr -> Index.equal sym (Transition.symbol grammar tr))
+              (Transition.successors grammar state)
+          with
+          | tr -> `Shift (Transition.target grammar tr)
+          | exception Not_found ->
+            `Reject
+      in
+      Hashtbl.add table key action;
+      action
+
+let parse_sentence (lhs, rhs) =
+  let grammar = !!grammar in
+  let lhs = match lhs with
+    | None -> IndexSet.choose (Lr1.entrypoints grammar)
+    | Some lhs -> lhs
+  in
+  let rec consume_terminal stack (t, startp, endp as token) =
+    let (state, _, currp) = List.hd stack in
+    match get_action state t with
+    | `Reject -> Result.Error stack
+    | `Shift state -> Result.Ok ((state, startp, endp) :: stack)
+    | `Reduce prod ->
+      let (stack, startp', endp') =
+        match Production.length grammar prod with
+        | 0 -> (stack, currp, currp)
+        | n ->
+          let (_, _, endp) = List.hd stack in
+          let stack = list_drop (n - 1) stack in
+          let (_, startp, _) = List.hd stack in
+          let stack = List.tl stack in
+          (stack, startp, endp)
+      in
+      let (state, _, _) = List.hd stack in
+      let state' = Transition.find_goto_target grammar state (Production.lhs grammar prod) in
+      let stack = (state', startp', endp') :: stack in
+      consume_terminal stack token
+  in
+  let rec loop stack ts =
+    match ts () with
+    | Seq.Nil -> (stack, stack, Seq.empty)
+    | Seq.Cons (t, ts') as ts0 ->
+      match consume_terminal stack t with
+      | Result.Ok stack' -> loop stack' ts'
+      | Result.Error stack' -> (stack, stack', fun () -> ts0)
+  in
+  let _canonical_stack, intermediate_stack, _remainder =
+    loop [lhs, Lexing.dummy_pos, Lexing.dummy_pos] (List.to_seq rhs)
+  in
+  let state, _, _ = List.hd intermediate_stack in
+  state
+
 let import_command () =
   if !opt_import_file = "" then (
     prerr_endline "No .message file specified";
@@ -680,7 +750,7 @@ let import_command () =
     List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
     Printf.eprintf "] }\n";
   end blocks;
-  let _blocks = List.map parse_message blocks in
+  let blocks = List.map parse_message blocks in
   ()
 
 (* Argument parser *)
