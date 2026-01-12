@@ -58,17 +58,11 @@ module Indices = struct
   type 'g t = {
     all_symbols: 'g symbol indexset;
     by_incoming_symbol: ('g symbol, 'g lr1 indexset) vector;
-    linearized_symbols: (string, 'g symbol index) Hashtbl.t;
     prod_by_lhs: ('g nonterminal, 'g production indexset) vector;
     by_items: ('g item, 'g lr1 indexset) vector;
   }
 
   let make (type g) (g : g grammar) =
-    (* linearized_symbols *)
-    let linearized_symbols = Hashtbl.create 7 in
-    let name s = Symbol.name g ~mangled:false s in
-    let add_symbol s = Hashtbl.add linearized_symbols (name s) s in
-    Index.iter (Symbol.cardinal g) add_symbol;
     (* by_incoming_symbol *)
     let by_incoming_symbol = Vector.make (Symbol.cardinal g) IndexSet.empty in
     Index.iter (Lr1.cardinal g) (fun lr1 ->
@@ -135,26 +129,24 @@ module Indices = struct
         in
         IndexSet.iter kernel_item (Lr1.items g lr1)
       );
-    {all_symbols = Symbol.all g; by_incoming_symbol; linearized_symbols;
+    {all_symbols = Symbol.all g; by_incoming_symbol;
      prod_by_lhs; by_items}
 
-  let find_linearized_symbol indices name =
-    Hashtbl.find_opt indices.linearized_symbols name
-
-  let find_symbol indices name =
-    find_linearized_symbol indices (string_of_symbol name)
-
-  let find_symbols indices = function
-    | None -> indices.all_symbols
+  let find_symbols g indices = function
+    | None -> Result.Ok indices.all_symbols
     | Some name ->
-      match find_linearized_symbol indices (string_of_symbol name) with
-      | None -> IndexSet.empty
-      | Some sym -> IndexSet.singleton sym
+      Result.map IndexSet.singleton
+        (Symbol.find g (string_of_symbol name))
 
-  let get_symbol indices pos sym =
-    match find_symbol indices sym with
-    | None -> error pos "Unknown symbol %s" (string_of_symbol sym)
-    | Some sym -> sym
+  let get_symbol g pos sym =
+    let sym = string_of_symbol sym in
+    match Symbol.find g sym with
+    | Result.Error [] ->
+      error pos "Unknown symbol %s" sym
+    | Result.Error dym ->
+      error pos "Unknown symbol %s (did you mean %s?)" sym
+        (String.concat ", " (List.map (fun (_, s, _) -> s) (List.take 5 dym)))
+    | Result.Ok sym -> sym
 end
 
 let string_of_goto g gt =
@@ -185,20 +177,25 @@ module Globbing = struct
     in
     loop IntSet.empty [] 0 comp
 
-  let rec structure_filter indices = function
+  let rec structure_filter g indices = function
     | [] -> ([], [])
     | (Skip, _pos) :: rest ->
-      let last, tail = structure_filter indices rest in
+      let last, tail = structure_filter g indices rest in
       ([], parse_component last :: tail)
     | (Dot, _pos) :: rest ->
-      let last, tail = structure_filter indices rest in
+      let last, tail = structure_filter g indices rest in
       (`Dot :: last, tail)
     | (Find sym, pos) :: rest ->
-      let last, tail = structure_filter indices rest in
-      let set = Indices.find_symbols indices sym in
-      if IndexSet.is_empty set then
+      let last, tail = structure_filter g indices rest in
+      match Indices.find_symbols g indices sym with
+      | Result.Error [] ->
         error pos "Unknown symbol %s" (Indices.string_of_symbol (Option.get sym));
-      (`Find set :: last, tail)
+      | Result.Error dym ->
+        error pos "Unknown symbol %s (did you mean %s?)"
+          (Indices.string_of_symbol (Option.get sym))
+          (String.concat ", " (List.map (fun (_,s,_) -> s) (List.take 5 dym)))
+      | Result.Ok set ->
+        (`Find set :: last, tail)
 
   let normalize_filter = function
     | [] -> {dots=IntSet.empty; syms=[||]; skip=None; length=0}
@@ -221,8 +218,8 @@ module Globbing = struct
       in
       loop_skip dots syms rest
 
-  let parse indices filter =
-    let last, tail = structure_filter indices filter in
+  let parse g indices filter =
+    let last, tail = structure_filter g indices filter in
     let comp = parse_component last in
     normalize_filter (comp :: tail)
 
@@ -320,16 +317,16 @@ module Globbing = struct
 end
 
 let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
-  let transl_sym = Option.map (Indices.get_symbol indices position) in
+  let transl_sym = Option.map (Indices.get_symbol g position) in
   let lhs = transl_sym lhs in
   let prods = match lhs with
     | None -> Production.all g
     | Some lhs ->
       match Symbol.desc g lhs with
       | T _ -> error position "left-handside of a filter should be a non-terminal"
-      | N n -> indices.prod_by_lhs.:(n)
+      | N n -> indices.Indices.prod_by_lhs.:(n)
   in
-  let filter = Globbing.parse indices rhs in
+  let filter = Globbing.parse g indices rhs in
   let matching_dots prod = Globbing.extract (Production.rhs g prod) filter in
   let matching_states prod =
     IntSet.fold (fun pos acc ->
@@ -386,10 +383,10 @@ let transl (type g) (g : g grammar) rg indices trie ~capture re =
       let set = match symbol with
         | None -> Lr1.all g
         | Some sym ->
-          let sym = Indices.get_symbol indices re.position sym in
+          let sym = Indices.get_symbol g re.position sym in
           if for_reduction && Symbol.is_terminal g sym then
             warn re.position "A reduction can only match non-terminals";
-          indices.by_incoming_symbol.:(sym)
+          indices.Indices.by_incoming_symbol.:(sym)
       in
       let cap = match capture with
         | None -> IndexSet.empty

@@ -102,7 +102,7 @@ let import_rule (type g) (g : g grammar)
         let sym_pattern (sym, pos) =
           match sym with
           | Syntax.Apply ("first", [sym]) ->
-            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+            begin match Symbol.desc g (Transl.Indices.get_symbol g pos sym) with
               | T t ->
                 let t = Terminal.to_string g t in
                 failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
@@ -110,7 +110,7 @@ let import_rule (type g) (g : g grammar)
               | N n -> Nonterminal.first g n
             end
           | Syntax.Name _ ->
-            begin match Symbol.desc g (Transl.Indices.get_symbol indices pos sym) with
+            begin match Symbol.desc g (Transl.Indices.get_symbol g pos sym) with
               | N n ->
                 failwith (lookahead_msg ^ "; " ^
                           Nonterminal.to_string g n ^ " is a nonterminal")
