@@ -509,3 +509,72 @@ let list_is_empty = function
 
 let seq_singleton x () =
   Seq.Cons (x, Seq.empty)
+
+module Damerau_levenshtein = struct
+  type cache = {
+    mutable prev_prev: int array;
+    mutable prev: int array;
+    mutable curr: int array;
+  }
+
+  let make_cache () = {
+    prev_prev = [||];
+    prev = [||];
+    curr = [||];
+  }
+
+  let distance c (s1 : string) (s2 : string) : int =
+    let l1 = String.length s1 in
+    let l2 = String.length s2 in
+
+    (* Ensure s1 is the shorter string for better space usage *)
+    let (l1, s1, l2, s2) =
+      if l1 < l2 then (l1, s1, l2, s2)
+      else (l2, s2, l1, s1)
+    in
+
+    (* Ensure temp rows of size at least (l1 + 1) *)
+    let needed = l1 + 1 in
+    if Array.length c.prev < needed then (
+      c.prev_prev <- Array.make needed 0;
+      c.prev <- Array.make needed 0;
+      c.curr <- Array.make needed 0;
+    );
+
+    (* Initialize first row (prev) *)
+    for i = 0 to l1 do
+      c.prev.(i) <- i
+    done;
+
+    (* Fill the table row by row *)
+    for j = 1 to l2 do
+      let {prev_prev; prev; curr} = c in
+      curr.(0) <- j;  (* insertion cost *)
+
+      for i = 1 to l1 do
+        let c1 = s1.[i-1] in
+        let c2 = s2.[j-1] in
+        let cost = if c1 = c2 then 0 else 1 in
+        let delete_cost = prev.(i) + 1 in
+        let insert_cost = curr.(i-1) + 1 in
+        let substitute_cost = prev.(i-1) + cost in
+        let transpose_cost =
+          if i > 1 && j > 1 &&
+             (let c1' = s1.[i-2] and c2' = s2.[j-2] in
+              c1 = c2' && c2 = c1')
+          then prev_prev.(i-2) + 1
+          else max_int
+        in
+        curr.(i) <- Int.min
+            (Int.min delete_cost insert_cost)
+            (Int.min substitute_cost transpose_cost)
+      done;
+
+      (* Swap: curr becomes prev for next iteration *)
+      c.prev_prev <- prev;
+      c.prev <- curr;
+      c.curr <- prev_prev;
+    done;
+
+    c.prev.(l1)
+end
