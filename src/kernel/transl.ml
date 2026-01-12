@@ -144,8 +144,7 @@ module Indices = struct
     | Result.Error [] ->
       error pos "Unknown symbol %s" sym
     | Result.Error dym ->
-      error pos "Unknown symbol %s (did you mean %s?)" sym
-        (String.concat ", " (List.map (fun (_, s, _) -> s) (List.take 5 dym)))
+      error pos "Unknown symbol %s%a" sym (print_dym (fun (_,s,_) -> s)) dym
     | Result.Ok sym -> sym
 end
 
@@ -188,12 +187,10 @@ module Globbing = struct
     | (Find sym, pos) :: rest ->
       let last, tail = structure_filter g indices rest in
       match Indices.find_symbols g indices sym with
-      | Result.Error [] ->
-        error pos "Unknown symbol %s" (Indices.string_of_symbol (Option.get sym));
       | Result.Error dym ->
-        error pos "Unknown symbol %s (did you mean %s?)"
+        error pos "Unknown symbol %s%a"
           (Indices.string_of_symbol (Option.get sym))
-          (String.concat ", " (List.map (fun (_,s,_) -> s) (List.take 5 dym)))
+          (print_dym (fun (_,s,_) -> s)) dym
       | Result.Ok set ->
         (`Find set :: last, tail)
 

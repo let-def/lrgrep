@@ -555,4 +555,3 @@ let () =
     )
     usage_prompt
     ~no_subcommand:(fun () -> usage_error "expecting at least one command")
-(* Load and pre-process grammar *)

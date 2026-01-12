@@ -594,3 +594,16 @@ module Damerau_levenshtein = struct
     |> List.of_seq
     |> List.sort (fun (d1,_,_) (d2,_,_) -> Int.compare d1 d2)
 end
+
+let print_dym f oc = function
+  | [] -> ()
+  | x :: xs ->
+    let rec print_list oc = function
+      | [] -> assert false
+      | [x] -> Printf.fprintf oc " or %s" (f x)
+      | x :: xs ->
+        Printf.fprintf oc ", %s" (f x);
+        print_list oc xs
+    in
+    Printf.fprintf oc " (did you mean %s%a?)" (f x)
+      print_list (List.take 4 xs)
