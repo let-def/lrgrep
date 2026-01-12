@@ -33,15 +33,15 @@ type ('lr1, 'terminal) parser_output = {
 module Make(Grammar : Cmly_api.GRAMMAR)() : sig
   open Grammar
 
-  val parse_sentence
-    :  entrypoint:lr1
-    -> sentence:terminal with_position Seq.t
-    -> (lr1, terminal) parser_output
-
   val analyze_stack
     :  terminal config
     -> stack:lr1 with_position Seq.t
     -> unit
+
+  val parse_sentence
+    :  entrypoint:lr1
+    -> sentence:terminal with_position Seq.t
+    -> (lr1, terminal) parser_output
 
   val analyze_sentence
     :  terminal config
@@ -169,4 +169,13 @@ struct
       end;
       print_string "\x1b[0m";
     end stack
+
+  let parse_sentence ~entrypoint:_ ~sentence:_ =
+
+
+  val analyze_sentence
+    :  terminal config
+    -> entrypoint:lr1
+    -> sentence:terminal with_position Seq.t ->
+    unit
 end
