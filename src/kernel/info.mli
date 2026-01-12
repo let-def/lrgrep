@@ -89,6 +89,10 @@ module Terminal : sig
   val is_error : 'g grammar -> 'g n index -> bool
 
   val lookaheads_to_string : 'g grammar -> 'g n indexset -> string
+
+  val find
+    :  'g grammar -> ?approx:int -> string
+    -> ('g n index, (int * string * 'g n index) list) result
 end
 
 module Nonterminal : sig
@@ -99,6 +103,10 @@ module Nonterminal : sig
   val semantic_value : 'g grammar -> 'g n index -> string option
   val nullable : 'g grammar -> 'g n index -> bool
   val first : 'g grammar -> 'g n index -> 'g terminal indexset
+
+  val find
+    :  'g grammar -> ?approx:int -> string
+    -> ('g n index, (int * string * 'g n index) list) result
 end
 
 module Symbol : sig
@@ -120,6 +128,10 @@ module Symbol : sig
 
   val inj_t : 'g grammar -> 'g terminal index -> 'g symbol index
   val inj_n : 'g grammar -> 'g nonterminal index -> 'g symbol index
+
+  val find
+    :  'g grammar -> ?approx:int -> string
+    -> ('g n index, (int * string * 'g n index) list) result
 end
 
 module Production : sig
@@ -269,6 +281,8 @@ module Transition : sig
   val accepting : 'g grammar -> 'g goto_transition indexset
 
   val to_string : 'g grammar -> 'g transition index -> string
+
+  val find : 'g grammar -> 'g lr1 index -> 'g lr1 index -> 'g transition index option
 end
 
 module Reduction : sig
