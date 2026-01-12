@@ -610,19 +610,13 @@ let decompose_sentence sentence =
   let rhs = List.filter ((<>) "") (String.split_on_char ' ' rhs) in
   (lhs, rhs)
 
-let parse_terminal =
-  let terminals = Hashtbl.create 7 in
-  fun t ->
-    if Hashtbl.length terminals = 0 then (
-      let g = !!grammar in
-      Index.iter (Terminal.cardinal g)
-        (fun t -> Hashtbl.add terminals (Terminal.to_string g t) t)
-    );
-    match Hashtbl.find_opt terminals t with
-    | None ->
-      Printf.eprintf "Unknown terminal %S\n" t;
-      exit 1
-    | Some t -> t
+let parse_terminal t =
+  match Terminal.find !!grammar t with
+  | Result.Ok t -> t
+  | Result.Error dym ->
+    Printf.eprintf "Unknown terminal %S%a\n" t
+      (print_dym (fun (_,s,_) -> s)) dym;
+    exit 1
 
 let parse_message message =
   let parse_sentence (text, comments) =
@@ -737,4 +731,3 @@ let () =
     )
     usage_prompt
     ~no_subcommand:(fun () -> usage_error "expecting at least one command")
-(* Load and pre-process grammar *)

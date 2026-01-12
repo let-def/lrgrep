@@ -359,21 +359,18 @@ module Lift() = struct
       let predecessors = Vector.init n @@ fun lr1 ->
         IndexSet.map (fun tr -> Transition.sources.:(tr)) Transition.predecessors.:(lr1)
 
-      let entrypoint_table =
+      let entrypoints, entrypoint_table =
+        let set = ref IndexSet.empty in
         let table = Hashtbl.create 7 in
-        Index.iter n (fun lr1 ->
+        Index.rev_iter n (fun lr1 ->
           match Lr0.is_entrypoint.:(lr0.:(lr1)) with
           | None -> ()
           | Some prod ->
+            set := IndexSet.add lr1 !set;
             let sym, _, _ = (G.Production.rhs (Production.to_g prod)).(0) in
             Hashtbl.add table (G.Symbol.name sym) lr1
         );
-        table
-
-      let entrypoints =
-        Hashtbl.fold
-          (fun _ lr1 acc -> IndexSet.add lr1 acc)
-          entrypoint_table IndexSet.empty
+        (!set, table)
     end
 
     module Reduction = struct
@@ -568,9 +565,8 @@ module Nonterminal = struct
     | Some t, _ -> Result.Ok t
     | None, 0 -> Result.Error []
     | None, dist ->
-      Result.Error (
-        Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table)
-      )
+      Result.Error
+        (Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table))
 end
 
 module Symbol = struct
