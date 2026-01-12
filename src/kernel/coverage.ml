@@ -228,7 +228,7 @@ let coverage (type g r st tr lrc)
   ;
   {transitions; unhandled_initial; unhandled_predecessors}
 
-let print_pattern g lr0 =
+let string_of_items_for_filter g lr0 =
   let decompose item =
     let prod, pos = Item.desc g item in
     let rhs = Production.rhs g prod in
@@ -239,15 +239,21 @@ let print_pattern g lr0 =
   let lines = ref [] in
   let append item =
     let lhs, pre, post = decompose item in
-    match !lines with
-    | (lhs', pre', post) :: rest
-      when Index.equal lhs lhs' && array_equal Index.equal pre pre' ->
-      if Option.is_some post then
-        lines := (lhs', pre', None) :: rest
-    | lines' -> lines := (lhs, pre, post) :: lines'
+    match pre with
+    (* Optimization 1: skip items of the form symbol: symbol . ... *)
+    | [|first|] when Index.equal (Symbol.inj_n g lhs) first -> ()
+    | _ ->
+      match !lines with
+      | (lhs', pre', post) :: rest
+        when Index.equal lhs lhs' && array_equal Index.equal pre pre' ->
+        if Option.is_some post then
+          (* Optimization 2: group items of the form sym: α . β₁, sym: α . β₂, ...
+             as sym: α . _* *)
+          lines := (lhs', pre', None) :: rest
+      | lines' -> lines := (lhs, pre, post) :: lines'
   in
-  IndexSet.rev_iter append (Lr0.items g lr0);
-  let print_line (lhs, pre, post) =
+  IndexSet.iter append (Lr0.items g lr0);
+  let print_item (lhs, pre, post) =
     let syms syms = Array.to_list (Array.map (Symbol.name g) syms) in
     String.concat " " @@
     (Nonterminal.to_string g lhs ^ ":")
@@ -256,7 +262,7 @@ let print_pattern g lr0 =
     | None -> ["_*"]
     | Some post -> syms post
   in
-  string_concat_map "\n" print_line !lines
+  List.rev_map print_item !lines
 
 let report_coverage
   grammar rcs (stacks : _ Automata.stacks) positions
@@ -324,7 +330,7 @@ let report_coverage
       begin match !pattern with
         | None -> assert false
         | Some lr0 ->
-          print_endline (print_pattern grammar lr0)
+          List.iter print_endline (string_of_items_for_filter grammar lr0)
       end;
       Printf.printf "Unhandled suffix:\n  %s\n  %s\nwhen looking ahead at:\n  %s\n"
         (Lr1.list_to_string grammar lr1s)

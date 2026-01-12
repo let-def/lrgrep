@@ -533,28 +533,6 @@ let classify_line txt =
   ) else
     `Text
 
-(*let get_comments lines =
-  let rec aux comments = function
-    | Seq.Nil -> (comments, Seq.Nil)
-    | Seq.Cons (line, lines) as seq ->
-      match classify_line line with
-      | `Autocomment -> aux comments (lines ())
-      | `Comment -> aux (line :: comments) (lines ())
-      | _ -> comments, seq
-  in
-  let rev_comments, lines = aux [] (lines ()) in
-  (List.rev rev_comments, lines)
-
-let get_text lines =
-  let pre_comments, lines = get_comments lines in
-  match lines with
-  | Seq.Nil -> (pre_comments, None, Seq.Nil)
-  | Seq.Cons (line, lines) ->
-    match classify_line line with
-    | `Autocomment | `Comment -> assert false
-    | `Text text ->
-    | `Whitespace ws *)
-
 let group_lines lines =
   let texts = ref [] in
   let comments = ref [] in
@@ -579,11 +557,12 @@ let group_lines lines =
   in
   let lines = aux lines in
   let rec post_process acc comments = function
-    | [] -> (comments, acc, lines)
+    | [] -> (comments, acc)
     | (text, comments') :: rest ->
       post_process ((text, comments) :: acc) comments' rest
   in
-  post_process [] (List.rev !comments) !texts
+  let comments, texts = post_process [] (List.rev !comments) !texts in
+  (comments, texts, lines)
 
 type comment = string
 
@@ -607,8 +586,7 @@ let decompose_sentence sentence =
       in
       (Some lhs, rhs)
   in
-  let rhs = List.filter ((<>) "") (String.split_on_char ' ' rhs) in
-  (lhs, rhs)
+  (lhs, List.filter ((<>) "") (String.split_on_char ' ' rhs))
 
 let parse_terminal t =
   match Terminal.find !!grammar t with
@@ -618,12 +596,24 @@ let parse_terminal t =
       (print_dym (fun (_,s,_) -> s)) dym;
     exit 1
 
-let parse_message message =
-  let parse_sentence (text, comments) =
+let lex_message message =
+  let lex_sentence (text, comments) =
     let lhs, rhs = decompose_sentence text in
+    let entrypoints = Lr1.entrypoint_table !!grammar in
+    let lhs = lhs |> Option.map @@ fun lhs ->
+      match Hashtbl.find_opt entrypoints lhs  with
+      | None ->
+        Printf.eprintf "Unknown entrypoint %S%a\n"
+          lhs
+          (print_dym (fun (_,s,_) -> s))
+          (Damerau_levenshtein.filter_approx ~dist:3 lhs
+             (Hashtbl.to_seq entrypoints));
+        exit 1
+      | Some lhs -> lhs
+    in
     ((lhs, List.map parse_terminal rhs), comments)
   in
-  {message with sentences = List.map parse_sentence message.sentences}
+  {message with sentences = List.map lex_sentence message.sentences}
 
 let rec group_messages messages lines =
   match group_lines lines with
@@ -750,8 +740,44 @@ let import_command () =
     List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
     Printf.eprintf "] }\n";
   end blocks;
-  let blocks = List.map parse_message blocks in
-  ()
+  let blocks = List.map lex_message blocks in
+  List.iter begin fun block ->
+    let states =
+      List.map (fun ((lhs, rhs), _) ->
+          parse_sentence (lhs, List.map (fun x -> (x,Lexing.dummy_pos,Lexing.dummy_pos)) rhs)
+        ) block.sentences
+    in
+    List.iter (fun state ->
+        let items =
+          Coverage.string_of_items_for_filter
+            !!grammar (Lr1.to_lr0 !!grammar state)
+        in
+        match Lr1.incoming !!grammar state with
+        | Some sym when Symbol.is_nonterminal !!grammar sym ->
+          List.iteri (fun i item ->
+              if i = 0
+              then Printf.eprintf   "| [_* /%s" item
+              else Printf.eprintf "\n      /%s" item
+            ) items;
+          Printf.eprintf "]\n"
+        | _ ->
+          List.iteri (fun i item ->
+              if i = 0
+              then Printf.eprintf "| /%s\n" item
+              else Printf.eprintf "  /%s\n" item
+            ) items
+      ) states;
+    Printf.eprintf "  { \"";
+    List.iteri (fun i (str, _) ->
+        if i = 0 then
+          Printf.eprintf "%s" (String.escaped str)
+        else if str = "" || str.[0] <> ' ' then
+          Printf.eprintf "\\n\\\n     %s" (String.escaped str)
+        else
+          Printf.eprintf "\\n\\\n     \\%s" (String.escaped str)
+      ) block.message;
+    Printf.eprintf "\" }\n"
+  end blocks
 
 (* Argument parser *)
 let commands =
