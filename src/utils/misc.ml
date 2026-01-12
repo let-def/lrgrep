@@ -523,7 +523,7 @@ module Damerau_levenshtein = struct
     curr = [||];
   }
 
-  let distance c (s1 : string) (s2 : string) : int =
+  let distance c ?(max=max_int) (s1 : string) (s2 : string) : int =
     let l1 = String.length s1 in
     let l2 = String.length s2 in
 
@@ -565,9 +565,14 @@ module Damerau_levenshtein = struct
           then prev_prev.(i-2) + 1
           else max_int
         in
-        curr.(i) <- Int.min
+        let actual =
+          Int.min
             (Int.min delete_cost insert_cost)
             (Int.min substitute_cost transpose_cost)
+        in
+        if actual > max then
+          raise Exit;
+        curr.(i) <- actual
       done;
 
       (* Swap: curr becomes prev for next iteration *)
@@ -577,4 +582,12 @@ module Damerau_levenshtein = struct
     done;
 
     c.prev.(l1)
+
+  let filter_approx seq ~max name =
+    let cache = make_cache () in
+    Seq.filter_map begin fun (k, v) ->
+      match distance cache ~max name k with
+      | dist -> Some (dist, k, v)
+	  | exception Exit -> None
+    end seq
 end

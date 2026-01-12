@@ -61,8 +61,10 @@ type 'g grammar = {
   terminal_n : 'g terminal cardinal;
   terminal_all: 'g terminal indexset;
   terminal_regular: 'g terminal indexset;
+  terminal_table : (string, 'g terminal index) Hashtbl.t;
   nonterminal_n : 'g nonterminal cardinal;
   nonterminal_all: 'g nonterminal indexset;
+  nonterminal_table : (string, 'g nonterminal index) Hashtbl.t;
   symbol_all : 'g symbol indexset;
   production_lhs : ('g production, 'g nonterminal index) vector;
   production_rhs : ('g production, 'g symbol index array) vector;
@@ -425,8 +427,10 @@ module Lift() = struct
       terminal_n              = Terminal.n;
       terminal_all            = Terminal.all;
       terminal_regular        = Terminal.regular;
+      terminal_table          = Hashtbl.create 7;
       nonterminal_n           = Nonterminal.n;
       nonterminal_all         = Nonterminal.all;
+      nonterminal_table       = Hashtbl.create 7;
       symbol_all              = Symbol.all;
       production_lhs          = Production.lhs;
       production_rhs          = Production.rhs;
@@ -504,6 +508,24 @@ module Terminal = struct
     | n when n > 10 -> Printf.sprintf "<%d lookaheads>" n
     | _ -> string_concat_map ~wrap:("<",">") ","
              (to_string g) (IndexSet.elements la)
+
+  let terminal_table g =
+    if Hashtbl.length g.terminal_table = 0 then
+      Index.iter (cardinal g)
+        (fun t -> Hashtbl.add g.terminal_table (to_string g t) t);
+    g.terminal_table
+
+  let find g ?(approx=0) name =
+    let table = terminal_table g in
+    match Hashtbl.find_opt table name, approx with
+    | Some t, _ -> Result.Ok t
+    | None, 0 -> Result.Error []
+    | None, max ->
+      Result.Error (
+        Damerau_levenshtein.filter_approx
+          (Hashtbl.to_seq table) ~max name
+        |> List.of_seq
+      )
 end
 
 module Nonterminal = struct
@@ -536,6 +558,24 @@ module Nonterminal = struct
     |> Nonterminal.first
     |> List.map (fun t -> Index.of_int g.terminal_n (Terminal.to_int t))
     |> IndexSet.of_list
+
+  let nonterminal_table g =
+    if Hashtbl.length g.nonterminal_table = 0 then
+      Index.iter (cardinal g)
+        (fun t -> Hashtbl.add g.nonterminal_table (to_string g t) t);
+    g.nonterminal_table
+
+  let find g ?(approx=0) name =
+    let table = nonterminal_table g in
+    match Hashtbl.find_opt table name, approx with
+    | Some t, _ -> Result.Ok t
+    | None, 0 -> Result.Error []
+    | None, max ->
+      Result.Error (
+        Damerau_levenshtein.filter_approx
+          (Hashtbl.to_seq table) ~max name
+        |> List.of_seq
+      )
 end
 
 module Symbol = struct
@@ -577,6 +617,27 @@ module Symbol = struct
 
   let inj_t _ t = Sum.inj_l t
   let inj_n g n = Sum.inj_r g.terminal_n n
+
+  let find g ?(approx=0) name =
+    let ttable = Terminal.terminal_table g in
+    match Hashtbl.find_opt ttable name with
+    | Some t -> Result.Ok (inj_t g t)
+    | None ->
+      let ntable = Nonterminal.nonterminal_table g in
+      match Hashtbl.find_opt ntable name, approx with
+      | Some n, _ -> Result.Ok (inj_n g n)
+      | None, 0 -> Result.Error []
+      | None, max ->
+        Result.Error (
+          Seq.append
+            (Damerau_levenshtein.filter_approx
+               (Hashtbl.to_seq ttable) ~max name
+             |> Seq.map (fun (d,s,t) -> (d, s, inj_t g t)))
+            (Damerau_levenshtein.filter_approx
+               (Hashtbl.to_seq ntable) ~max name
+             |> Seq.map (fun (d,s,n) -> (d, s, inj_n g n)))
+          |> List.of_seq
+        )
 end
 
 module Production = struct
@@ -823,4 +884,9 @@ module Transition = struct
     Printf.sprintf "%s -> %s"
       (Lr1.to_string g (source g tr))
       (Lr1.to_string g (target g tr))
+
+  let find g src tgt =
+    let inter = IndexSet.inter (successors g src) (predecessors g tgt) in
+    assert (IndexSet.is_empty inter || IndexSet.is_singleton inter);
+    IndexSet.minimum inter
 end
