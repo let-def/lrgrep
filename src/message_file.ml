@@ -185,8 +185,10 @@ let parse_sentence (type g) (g : g grammar) =
   in
   (* Process a sentence *)
   fun {entrypoint; symbols} ->
+    let states = ref [] in
     let rec consume_terminal stack (t, startp, endp as token) =
       let (state, _, currp) = List.hd stack in
+      push states state;
       match get_action state t with
       | `Reject -> Result.Error stack
       | `Shift state -> Result.Ok ((state, startp, endp) :: stack)
@@ -223,7 +225,7 @@ let parse_sentence (type g) (g : g grammar) =
       loop [dummy_pos entrypoint] (Seq.map dummy_pos (List.to_seq symbols))
     in
     let state, _, _ = List.hd intermediate_stack in
-    state
+    (!states, state)
 
 let wrap_lines prefix newline mid_suffix suffix = function
   | [] -> []
@@ -235,7 +237,30 @@ let wrap_lines prefix newline mid_suffix suffix = function
       List.rev_map (fun mid -> newline ^ mid ^ mid_suffix) mid @
       [newline ^ last ^ suffix]
 
-let state_to_pattern g lr1 =
+let oc = open_out_bin "msg.dot"
+
+let p fmt =
+  Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt
+
+let () = at_exit (fun() -> p "}"; close_out_noerr oc)
+let () = p "digraph G {"
+let edge_table = Hashtbl.create 7
+let pedge x y =
+    let x = Index.to_int x and y = Index.to_int y in
+    if not (Hashtbl.mem edge_table (x,y)) then (
+      Hashtbl.add edge_table (x,y) ();
+      p "  _%d -> _%d;" x y;
+    )
+
+let state_to_pattern g (states, lr1) =
+  let rec loop = function
+    | x :: (y :: _ as rest) ->
+      pedge y x;
+      loop rest
+    | [] | [_] -> ()
+  in
+  loop states;
+  p "  _%d[shape=square];" (Index.to_int lr1);
   let items = Kernel.Coverage.string_of_items_for_filter g (Lr1.to_lr0 g lr1) in
   match Lr1.incoming g lr1 with
   | Some sym when Symbol.is_nonterminal g sym ->
