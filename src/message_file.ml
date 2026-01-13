@@ -212,6 +212,7 @@ let parse_sentence (type g) (g : g grammar) =
       match ts () with
       | Seq.Nil -> (stack, stack, Seq.empty)
       | Seq.Cons (t, ts') as ts0 ->
+        states := [];
         match consume_terminal stack t with
         | Result.Ok stack' -> loop stack' ts'
         | Result.Error stack' -> (stack, stack', fun () -> ts0)
@@ -252,15 +253,16 @@ let pedge x y =
       p "  _%d -> _%d;" x y;
     )
 
-let state_to_pattern g (states, lr1) =
+let state_to_pattern endpoints edges g (states, lr1) =
   let rec loop = function
     | x :: (y :: _ as rest) ->
+      edges.@(y) <- IndexSet.add x;
       pedge y x;
       loop rest
     | [] | [_] -> ()
   in
   loop states;
-  p "  _%d[shape=square];" (Index.to_int lr1);
+  Boolvector.set endpoints lr1;
   let items = Kernel.Coverage.string_of_items_for_filter g (Lr1.to_lr0 g lr1) in
   match Lr1.incoming g lr1 with
   | Some sym when Symbol.is_nonterminal g sym ->
@@ -289,14 +291,14 @@ let fold_consecutive ~comment ~text lines acc =
   | Text line :: rest ->
     texts acc [line] rest
 
-let block_to_lines g = function
+let block_to_lines endpoints edges g = function
   | Comments comments ->
     wrap_lines "(* " "   " "" " *)" comments
   | Mixed {sentences; comments; message} ->
     let sentences =
       fold_consecutive
         ~comment:(fun lines acc -> wrap_lines "  (* " "     " "" " *)" lines :: acc)
-        ~text:(fun states acc -> List.concat_map (state_to_pattern g) states :: acc)
+        ~text:(fun states acc -> List.concat_map (state_to_pattern endpoints edges g) states :: acc)
         sentences []
     in
     let comments =
@@ -323,10 +325,37 @@ let block_to_lines g = function
     List.concat (List.rev_append sentences (List.rev_append comments (List.rev message)))
 
 let blocks_to_file (type g) (g : g grammar) blocks () =
+  let endpoints = Boolvector.make (Lr1.cardinal g) false in
+  let edges = Vector.make (Lr1.cardinal g) IndexSet.empty in
+  let analyze_edges () =
+    let (module Scc) =
+      Tarjan.indexed_scc (Lr1.cardinal g)
+        ~succ:(fun f x -> IndexSet.iter f edges.:(x))
+    in
+    Vector.iteri (fun i states ->
+        if not (IndexSet.is_singleton states) then
+          p "subgraph cluster_%d {" (Index.to_int i);
+        IndexSet.iter (fun lr1 ->
+            if Boolvector.test endpoints lr1 then
+              p "  _%d[shape=square,label=\"%d\"];" (Index.to_int lr1)(Index.to_int lr1)
+            else
+              p "  _%d[label=\"%d\"];" (Index.to_int lr1)(Index.to_int lr1);
+          ) states;
+        if not (IndexSet.is_singleton states) then
+          p "}";
+        let states = IndexSet.filter (Boolvector.test endpoints) states in
+        match IndexSet.elements states with
+        | [] | [_] -> ()
+        | rest ->
+          Printf.eprintf "Overlapping critical states: %s\n"
+          (Lr1.list_to_string g rest)
+      ) Scc.nodes;
+  in
   let prepare i block =
-    let lines = block_to_lines g block in
+    let lines = block_to_lines endpoints edges g block in
     let lines = if i = 0 then lines else "" :: lines in
     List.to_seq lines
   in
   Seq.Cons ("rule error_messages = parse error",
-            Seq.concat (seq_mapi prepare blocks))
+            Seq.append (Seq.concat (seq_mapi prepare blocks))
+              (fun () -> analyze_edges (); Seq.Nil))
