@@ -287,13 +287,14 @@ let encode1 arr =
 let encode2 arr =
   let len = Array.length arr in
   let result = Bytes.create (len * 2) in
-  Array.iteri (fun i v -> Bytes.set_uint16_be result i v) arr;
+  Array.iteri (fun i v -> Bytes.set_uint16_be result (i * 2) v) arr;
   Bytes.unsafe_to_string result
 
 let encode3 arr =
   let len = Array.length arr in
   let result = Bytes.create (len * 3) in
   Array.iteri (fun i v ->
+      let i = i * 3 in
       Bytes.set_uint16_be result i (v land 0xFFFF);
       Bytes.set_uint8 result (i + 2) (v lsr 16)
     ) arr;
@@ -303,6 +304,7 @@ let encode4 arr =
   let len = Array.length arr in
   let result = Bytes.create (len * 4) in
   Array.iteri (fun i v ->
+      let i = i * 4 in
       Bytes.set_uint16_be result i (v land 0xFFFF);
       Bytes.set_uint16_be result (i + 2) (v lsr 16)
     ) arr;
