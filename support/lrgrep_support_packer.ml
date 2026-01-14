@@ -1,3 +1,5 @@
+let debug = false
+
 module Bit_packer : sig
   type row
   val import : (int * _) list -> row
@@ -247,16 +249,27 @@ let pack t f =
   (* Pack vectors *)
   let packer = Bit_packer.make () in
   let offsets =
-    List.map (fun (cells, _indices) ->
-        Bit_packer.add_row packer (Bit_packer.import cells))
-      cols
+    List.mapi (fun row (cells, _indices) ->
+        if debug then (
+          Printf.eprintf "row %03d, cells:" row;
+          List.iter (fun (k,v) ->
+              Printf.eprintf " %d -> 0x%04X;" k v)
+            cells;
+          Printf.eprintf "\n";
+        );
+        Bit_packer.add_row packer (Bit_packer.import cells)
+      ) cols
   in
   (* Construct displacement and data *)
   let displacement = Array.make t.cols 0 in
   let keys = Array.make (Bit_packer.length packer) 0 in
   let values = Array.make (Bit_packer.length packer) 0 in
   List.iter2 begin fun (cells, indices) offset ->
-    List.iter (fun i -> displacement.(i) <- offset) indices;
+    List.iter (fun i ->
+        if debug then
+          Printf.eprintf "displacement: % 4d -> % 4d\n" i offset;
+        displacement.(i) <- offset
+      ) indices;
     List.iter (fun (k, v) ->
         keys.(offset + k) <- k + 1;
         values.(offset + k) <- v;

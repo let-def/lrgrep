@@ -155,6 +155,8 @@ end = struct
     table.length
 end
 
+let debug = false
+
 module Code_emitter : sig
   type t
   val make : unit -> t
@@ -178,7 +180,20 @@ end = struct
 
   let position t = Buffer.length t.buffer
 
-  let emit t : RT.program_instruction -> _ = function
+  let emit t : RT.program_instruction -> _ = fun inst ->
+    if debug then
+      Printf.eprintf "0x%04X: %s\n" (position t) (match inst with
+          | RT.Store _             -> "Store"
+          | RT.Move (_, _)         -> "Move"
+          | RT.Swap (_, _)         -> "Swap"
+          | RT.Clear _             -> "Clear"
+          | RT.Yield _             -> "Yield"
+          | RT.Accept (_, _, _)    -> "Accept"
+          | RT.Match _             -> "Match"
+          | RT.Priority (_, _, _)  -> "Priority"
+          | RT.Halt                -> "Halt"
+        );
+    match inst with
     | Store i ->
       assert (i < 0xFF);
       Buffer.add_char t.buffer '\x01';
@@ -233,12 +248,16 @@ end = struct
       Buffer.add_char t.buffer '\x07'
 
   let emit_yield_reloc t reloc =
+    if debug then
+      Printf.eprintf "0x%04X: Yield\n" (position t);
     Buffer.add_char t.buffer '\x04';
     let pos = Buffer.length t.buffer in
     Buffer.add_string t.buffer "   ";
     t.reloc <- (pos, reloc) :: t.reloc
 
   let emit_match_reloc t promise =
+    if debug then
+      Printf.eprintf "0x%04X: Match\n" (position t);
     Buffer.add_char t.buffer '\x06';
     let pos = Buffer.length t.buffer in
     add_uint24_be t.buffer 0;
@@ -369,6 +388,8 @@ let compact (type dfa clause lr1)
       | Some r -> r
       | None ->
         let position = Code_emitter.position code in
+        if debug then
+          Printf.eprintf "Action at 0x%04X\n" position;
         emit_action action;
         let r = ref position in
         Hashtbl.add table action r;
@@ -437,6 +458,10 @@ let compact (type dfa clause lr1)
   Array.sort (fun (c1, _, _, _, _) (c2, _, _, _, _) -> Int.compare c2 c1)
     preparation;
   Array.iter process_state preparation;
+  if debug then
+    Vector.iteri (fun state pc ->
+        Printf.eprintf "state % 4d at 0x%04X\n" (Index.to_int state) !pc)
+      pcs;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
   let remap, table = Lrgrep_support_packer.pack packer (!) in

@@ -126,7 +126,8 @@ let program_step (t : program_code) (r : program_counter ref)
     Priority (String.get_uint16_be t (pc + 1),
               String.get_uint8 t (pc + 3),
               String.get_uint8 t (pc + 4))
-  | _ -> assert false
+  | x ->
+    Printf.ksprintf failwith "Invalid opcode: %02X at 0x%04X" (Char.code x) pc
 
 type program = {
   registers : int;
@@ -246,10 +247,12 @@ struct
         let state = P.current_state_number env in
         let () = match Sparse_table.lookup program.table index state with
           | Some pc' ->
-            if debug then eprintf "Match %d %d: success\n" index state;
+            if debug then
+              eprintf "Match %d %d: success, jump to 0x%04X\n" index state pc';
             pc := pc'
           | None ->
-            if debug then eprintf "Match %d %d: failure\n" index state
+            if debug then
+              eprintf "Match %d %d: failure\n" index state
         in
         loop ()
       | Halt ->
@@ -274,6 +277,11 @@ struct
         | None -> interpret_last program bank candidates (ref pc')
         | Some env -> loop env pc'
     in
-    loop env program.initial;
+    begin
+      try
+        loop env program.initial;
+      with exn ->
+        Printf.eprintf "LRgrep internal error: %s\n" (Printexc.to_string exn)
+    end;
     List.map (fun (k,_,v) -> (k, v)) !candidates
 end
