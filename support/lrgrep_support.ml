@@ -350,7 +350,7 @@ let compact (type dfa clause lr1)
   =
   let code = Code_emitter.make () in
   let packer = Lrgrep_support_packer.make () in
-  let halt_pc = ref (Code_emitter.position code) in
+  let halt_pc = Code_emitter.position code in
   Code_emitter.emit code Halt;
   let pcs = Vector.init dfa (fun _ -> ref (-1)) in
   let emit_action {move; store; clear; priority; target} =
@@ -360,7 +360,7 @@ let compact (type dfa clause lr1)
     List.iter (fun (c, i, j) ->
         Code_emitter.emit code (Priority ((c : _ index :> int), i, j))
       ) priority;
-    Code_emitter.emit_yield_reloc code (Vector.get pcs target);
+    Code_emitter.emit_yield_reloc code pcs.:(target);
   in
   let goto_action =
     let table = Hashtbl.create 7 in
@@ -370,9 +370,8 @@ let compact (type dfa clause lr1)
       | None ->
         let position = Code_emitter.position code in
         emit_action action;
-        let r = ref position in
-        Hashtbl.add table action r;
-        r
+        Hashtbl.add table action position;
+        position
   in
   let transition_count = ref 0 in
   let transition_dom = ref 0 in
@@ -439,7 +438,7 @@ let compact (type dfa clause lr1)
   Array.iter process_state preparation;
   Printf.eprintf "total transitions: %d (domain: %d), non-default: %d\n%!"
     !transition_count !transition_dom !cell_count;
-  let remap, table = Lrgrep_support_packer.pack packer (!) in
+  let remap, table = Lrgrep_support_packer.pack packer Fun.id in
   let code = Code_emitter.link code remap in
   let pcs = Vector.as_array (Vector.map (!) pcs) in
   (code, table, pcs)
