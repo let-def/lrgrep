@@ -336,10 +336,11 @@ module DFA = struct
       let (.*()) = IndexBuffer.Dyn.get
       let (.*()<-) = IndexBuffer.Dyn.set
 
+      let min_clause t = (Vector.as_array t.kernel).(0).branch
+
       let () =
         let accepting = Vector.make (branch_count branches) [] in
         let todo = ref [] in
-        let min_clause t = (Vector.as_array t.kernel).(0).branch in
         let schedule bound i set =
           let Prepacked t as packed = IndexBuffer.Gen.get prestates i in
           if min_clause t <= bound then
@@ -465,6 +466,7 @@ module Dataflow = struct
     classes : ('dfa, var_classes) vector;
     registers : ('dfa, Register.t Capture.map array) vector;
     register_count : int;
+    accepted_before : ('dfa, ('g, 'r) branch indexset) vector;
   }
 
   let liveness (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
@@ -945,6 +947,35 @@ module Dataflow = struct
     let get (type n) v (st : (_, _, _, n) DFA.state) : (n, Capture.set) vector =
       Vector.cast_array (Vector.length st.branches) v.:(st.index)
     in
+    (* Pass 6b: Accepted before, for pruning priority changes *)
+    let accepted_before =
+      Vector.map (fun xs -> IndexSet.of_list (List.map fst xs)) accepts
+    in
+    let () =
+      let propagate (Packed src) =
+        assert src.queued;
+        src.queued <- false;
+        let max_clause t =
+          let arr = Vector.as_array t.DFA.branches in
+          arr.(Array.length arr - 1)
+        in
+        let def_src = accepted_before.:(src.state.index) in
+        let def_min = Option.get (IndexSet.minimum def_src) in
+        List.iter begin fun (DFA.Transition {target; _}) ->
+          let max_clause = max_clause target in
+          let def_tgt = accepted_before.:(target.index) in
+          let def_tgt' =
+            IndexSet.fused_inter_union def_src (IndexSet.init_interval def_min max_clause) ~acc:def_tgt
+          in
+          if def_tgt' != def_tgt then (
+            accepted_before.:(target.index) <- def_tgt';
+            schedule (get_data target)
+          )
+        end src.state.transitions
+      in
+      fixpoint ~propagate todo;
+      stopwatch 3 "Computed accepted-before";
+    in
     let liveness, defined =
       (* Pass 7: Compute liveness of variables (Section 4.4.1, Definition 16) *)
       let liveness =
@@ -1119,7 +1150,8 @@ module Dataflow = struct
       !max_index + 1
     in
     (* Collect results *)
-    {pairings; accepts; register_count; liveness; defined; classes; registers}
+    {pairings; accepts; register_count; liveness; defined; classes; registers;
+     accepted_before}
 end
 
 module Machine = struct
@@ -1264,10 +1296,14 @@ module Machine = struct
           in
           Vector.iter2 process_mapping mapping tgt_regs;
           let captures = !captures and moves = !moves and clear = !clear in
-          let priority = List.concat_map (fun (clause, pairs) ->
-              List.map
-                (fun (p1, p2) -> clause, Order_chain.evaluate p1, Order_chain.evaluate p2)
-                pairs
+          let accepted_before = dataflow.accepted_before.:(source) in
+          let priority = List.concat_map (fun (branch, pairs) ->
+              if IndexSet.mem branch accepted_before then
+                List.map
+                  (fun (p1, p2) -> branch, Order_chain.evaluate p1, Order_chain.evaluate p2)
+                  pairs
+              else
+                []
             ) pairings
           in
           let label = {filter; captures; moves; clear; priority} in
