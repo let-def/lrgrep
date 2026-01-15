@@ -31,8 +31,14 @@ open Info
 type ('g, 'r) clause
 type ('g, 'r) branch
 
+type clause_def = {
+  new_group: bool;
+  shortest: bool;
+  syntax: Syntax.clause;
+}
+
 type ('g, 'r) clauses = {
-  syntax : (('g, 'r) clause, int * Syntax.clause) vector;
+  definitions : (('g, 'r) clause, clause_def) vector;
   captures : (('g, 'r) clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
 }
 
@@ -45,6 +51,7 @@ type ('g, 'r) branches = {
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
   is_total: ('g, 'r) branch Boolvector.t;
   is_partial: ('g, 'r) branch Boolvector.t;
+  priority: (('g, 'r) branch, ('g, 'r) branch opt index) vector;
 }
 
 val branch_count : ('g, 'r) branches -> ('g, 'r) branch cardinal

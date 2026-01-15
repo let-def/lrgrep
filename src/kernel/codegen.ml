@@ -265,8 +265,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
           end captures
         in
         let body =
-          let _group, syntax = clauses.syntax.:(clause) in
-          match syntax.action with
+          match clauses.definitions.:(clause).syntax.action with
           | Unreachable _ -> ""
           | Partial (loc, str) | Total (loc, str) ->
             Misc.rewrite_keywords begin fun pos kw var ->
@@ -310,8 +309,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
             )
           ) captures;
         begin
-          let _group, syntax = clauses.syntax.:(clause) in
-          match syntax.action with
+          match clauses.definitions.:(clause).syntax.action with
           | Unreachable _ ->
             Code_printer.print out "    failwith \"Should be unreachable\"\n"
           | Partial (loc, _) ->
