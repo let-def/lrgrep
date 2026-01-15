@@ -147,19 +147,19 @@ let import_rule (type g) (g : g grammar)
             begin match Symbol.desc g (Transl.Indices.get_symbol g pos sym) with
               | T t ->
                 let t = Terminal.to_string g t in
-                failwith (lookahead_msg ^ "; in first(" ^ t ^ "), " ^
-                          t ^ " is a terminal")
+                Syntax.error pos "%s; in first(%s), %s is a terminal"
+                  lookahead_msg t t
               | N n -> Nonterminal.first g n
             end
           | Syntax.Name _ ->
             begin match Symbol.desc g (Transl.Indices.get_symbol g pos sym) with
               | N n ->
-                failwith (lookahead_msg ^ "; " ^
-                          Nonterminal.to_string g n ^ " is a nonterminal")
+                Syntax.error pos "%s; %s is a nonterminal"
+                  lookahead_msg (Nonterminal.to_string g n)
               | T t -> IndexSet.singleton t
             end
           | _ ->
-            failwith lookahead_msg
+            Syntax.error pos "%s" lookahead_msg
         in
         Some (List.fold_left IndexSet.union IndexSet.empty (List.map sym_pattern symbols))
     end pattern
