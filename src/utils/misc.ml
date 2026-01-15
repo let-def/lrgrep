@@ -487,3 +487,8 @@ let iterate_vector v =
   iterate
     (IndexSet.singleton x)
     (fun xs -> IndexSet.bind xs (Vector.get v))
+
+let rec list_rev_mappend f xs acc =
+  match xs with
+  | [] -> acc
+  | x :: xs -> list_rev_mappend f xs (f x :: acc)

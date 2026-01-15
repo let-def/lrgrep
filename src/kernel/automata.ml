@@ -288,7 +288,7 @@ module DFA = struct
                   (fun i nfa acc ->
                      if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
                        accept := Some nfa.branch;
-                     List.rev_map (make i) nfa.transitions @ acc)
+                     list_rev_mappend (make i) nfa.transitions acc)
                   kernel []
               in
               let prepare_target_kernel (index, captures, lazy nfa) =
