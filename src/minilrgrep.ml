@@ -750,9 +750,13 @@ module Transl = struct
       | [] -> flatten_alternatives pattern.expr
       | (_, pos) :: _ -> error pos "lookahead constraints are not supported"
     in
-    let extract_clause (clause : clause) =
-      (List.hd clause.patterns).expr.position,
-      List.concat_map extract_pattern clause.patterns
+    let extract_clause = function
+      | [clause] ->
+        (List.hd clause.patterns).expr.position,
+        List.concat_map extract_pattern clause.patterns
+      | xs ->
+        error (List.hd (List.hd xs).patterns).expr.position
+          "%%shortest not supported"
     in
     List.map extract_clause rule.clauses
 

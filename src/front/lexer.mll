@@ -167,6 +167,8 @@ rule main st = parse
   { IDENT s }
 | "%partial"
   { PARTIAL }
+| "%shortest"
+  { SHORTEST }
 | '{' [' ' '\009']* '.' [' ' '\009']* '}' (* unreachable clause *)
   { UNREACHABLE }
 | '{'

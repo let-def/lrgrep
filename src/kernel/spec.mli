@@ -32,7 +32,7 @@ type ('g, 'r) clause
 type ('g, 'r) branch
 
 type ('g, 'r) clauses = {
-  syntax : (('g, 'r) clause, Syntax.clause) vector;
+  syntax : (('g, 'r) clause, int * Syntax.clause) vector;
   captures : (('g, 'r) clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
 }
 
