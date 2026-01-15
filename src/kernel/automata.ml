@@ -239,7 +239,7 @@ module DFA = struct
       type 'n prestate = {
         index: n index;
         kernel: ('n, (g, r) NFA.t) vector;
-        accept: (g, r) branch index option;
+        accept: (g, r) branch opt index option;
         mutable raw_transitions: (g lr1 indexset * 'n fwd_mapping lazy_t) list;
       }
 
@@ -288,7 +288,7 @@ module DFA = struct
                 kernel_fold
                   (fun i nfa acc ->
                      if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
-                       accept := Some nfa.branch;
+                       accept := Some branches.priority.:(nfa.branch);
                      list_rev_mappend (make i) nfa.transitions acc)
                   kernel []
               in
@@ -349,8 +349,11 @@ module DFA = struct
               if IndexSet.is_empty scheduled.*(i) then (
                 scheduled.*(i) <- set;
                 match t.accept with
-                | Some c when c < bound ->
-                  accepting.@(c) <- List.cons packed
+                | Some c when c < Opt.some bound ->
+                  begin match Opt.prj c with
+                    | Some c' -> accepting.@(c') <- List.cons packed
+                    | None -> ()
+                  end
                 | Some _ | None -> push todo packed
               ) else
                 scheduled.*(i) <- IndexSet.union scheduled.*(i) set

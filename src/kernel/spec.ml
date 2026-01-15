@@ -31,8 +31,14 @@ open Regexp
 module Clause = Unsafe_cardinal()
 type ('g, 'r) clause = ('g * 'r) Clause.t
 
+type clause_def = {
+  new_group: bool;
+  shortest: bool;
+  syntax: Syntax.clause;
+}
+
 type ('g, 'r) clauses = {
-  syntax : (('g, 'r) clause, int * Syntax.clause) vector;
+  definitions : (('g, 'r) clause, clause_def) vector;
   captures : (('g, 'r) clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
 }
 
@@ -48,6 +54,7 @@ type ('g, 'r) branches = {
   br_captures : (('g, 'r) branch, Capture.n indexset) vector;
   is_total: ('g, 'r) branch Boolvector.t;
   is_partial: ('g, 'r) branch Boolvector.t;
+  priority: (('g, 'r) branch, ('g, 'r) branch opt index) vector;
 }
 
 type 'g _rule = Rule : ('g, 'r) clauses * ('g, 'r) branches -> 'g _rule
@@ -60,18 +67,13 @@ let import_rule (type g) (g : g grammar)
   =
   let open struct type r end in
   let module Clauses = Vector.Of_array(struct
-      type a = int * Syntax.clause
+      type a = clause_def
       let array =
-        let group = ref 0 in
-        let index clauses =
-          let group' = !group in
-          incr group;
-          match clauses with
+        let index = function
           | [] -> []
-          | [clause] ->
-            [group', clause]
+          | [clause] -> [{new_group = true; shortest = false; syntax=clause}]
           | clauses ->
-            List.map begin fun (clause : Syntax.clause) ->
+            List.mapi begin fun i (clause : Syntax.clause) ->
               begin match clause.action with
                 | Syntax.Total _ -> ()
                 | Syntax.Partial (pos, _) ->
@@ -88,19 +90,19 @@ let import_rule (type g) (g : g grammar)
                   Syntax.error pos
                     "lookahead constraints are not supported in a %%shortest group"
               end clause.patterns;
-              (group', clause)
+              {new_group = (i = 0); shortest = true; syntax=clause}
             end clauses
         in
         Array.of_list (List.concat_map index rule.clauses)
     end)
   in
   let module Branches = Vector.Of_array(struct
-      type a = Clauses.n index * Syntax.pattern
+      type a = Clauses.n index * Syntax.pattern * bool * bool
       let array =
-        Vector.mapi (fun clause (_group, syntax) ->
-            List.map (fun pattern -> (clause, pattern))
-              syntax.Syntax.patterns
-          ) Clauses.vector
+        Vector.mapi begin fun clause def ->
+          List.mapi (fun i pattern -> (clause, pattern, i = 0 && def.new_group, def.shortest))
+            def.syntax.patterns
+        end Clauses.vector
         |> Vector.to_list
         |> List.flatten
         |> Array.of_list
@@ -108,12 +110,22 @@ let import_rule (type g) (g : g grammar)
   in
   (* Branch definitions *)
   let branch_count = Vector.length Branches.vector in
-  let clause = Vector.map fst Branches.vector in
-  let pattern = Vector.map snd Branches.vector in
+  let clause = Vector.map (fun (c,_,_,_) -> c) Branches.vector in
+  let pattern = Vector.map (fun (_,p,_,_) -> p) Branches.vector in
+  let priority =
+    let last = ref Opt.none in
+    Vector.mapi begin fun index (_,_,ng,sh) ->
+      if ng then
+        last := Opt.some index;
+      if sh
+      then Option.get (Index.pred !last)
+      else !last
+    end Branches.vector
+  in
   let of_clause =
     let index = ref 0 in
-    let import (_group, clause) =
-      let count = List.length clause.Syntax.patterns in
+    let import clause =
+      let count = List.length clause.syntax.patterns in
       let first = Index.of_int branch_count !index in
       index := !index + count;
       let last = Index.of_int branch_count (!index - 1) in
@@ -154,8 +166,7 @@ let import_rule (type g) (g : g grammar)
   in
   let is_partial =
     Boolvector.init branch_count begin fun br ->
-      let _, syntax = Clauses.vector.:(clause.:(br)) in
-      match syntax.action with
+      match Clauses.vector.:(clause.:(br)).syntax.action with
       | Syntax.Partial _ -> true
       | Syntax.Total _ | Syntax.Unreachable _ -> false
     end
@@ -206,9 +217,9 @@ let import_rule (type g) (g : g grammar)
       let n = Vector.length Branches.vector
     end) in
   let Refl = Branches_def.eq in
-  let clauses = {syntax = Clauses.vector; captures} in
+  let clauses = {definitions = Clauses.vector; captures} in
   let branches = {clause; pattern; expr; of_clause; lookaheads;
-                  br_captures; is_total; is_partial} in
+                  br_captures; is_total; is_partial; priority} in
   Rule (clauses, branches)
 
 let branch_count branches = Vector.length branches.expr
