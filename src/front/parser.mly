@@ -40,6 +40,7 @@ let mk_re desc position = {desc; position}
        SEMI        ";"
        COLON       ":"
        PARTIAL     "%partial"
+       SHORTEST    "%shortest"
        SLASH       "/"
        AT          "@"
        EOF
@@ -79,7 +80,7 @@ startsymbols:
 
 rule:
 | "rule" name=ident args=ident* "=" "parse" error=positioned(boption("error")) startsymbols=startsymbols
-  clauses=clause*
+  clauses=clause_group*
   { {startsymbols; error; name; args; clauses} }
 ;
 
@@ -89,6 +90,11 @@ case_patterns:
 | regexp lookaheads "|" case_patterns { { expr=$1; lookaheads=$2 } :: $4 }
 ;
 
+clause_group:
+| clause { [$1] }
+| "%shortest" "[" clause* "]" { $3 }
+;
+
 clause:
 | "|" case_patterns case_action { {patterns=$2; action=$3} }
 ;
@@ -96,7 +102,7 @@ clause:
 case_action:
 | ACTION            { Total $1    }
 | "%partial" ACTION { Partial $2  }
-| UNREACHABLE       { Unreachable }
+| UNREACHABLE       { Unreachable $startpos }
 
 
 positioned(X):

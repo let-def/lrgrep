@@ -32,7 +32,7 @@ module Clause = Unsafe_cardinal()
 type ('g, 'r) clause = ('g * 'r) Clause.t
 
 type ('g, 'r) clauses = {
-  syntax : (('g, 'r) clause, Syntax.clause) vector;
+  syntax : (('g, 'r) clause, int * Syntax.clause) vector;
   captures : (('g, 'r) clause, (Capture.n, Syntax.capture_kind * string) indexmap) vector;
 }
 
@@ -60,14 +60,44 @@ let import_rule (type g) (g : g grammar)
   =
   let open struct type r end in
   let module Clauses = Vector.Of_array(struct
-      type a = Syntax.clause
-      let array = Array.of_list rule.clauses
+      type a = int * Syntax.clause
+      let array =
+        let group = ref 0 in
+        let index clauses =
+          let group' = !group in
+          incr group;
+          match clauses with
+          | [] -> []
+          | [clause] ->
+            [group', clause]
+          | clauses ->
+            List.map begin fun (clause : Syntax.clause) ->
+              begin match clause.action with
+                | Syntax.Total _ -> ()
+                | Syntax.Partial (pos, _) ->
+                  Syntax.error pos
+                    "%%partial clauses are not supported in a %%shortest group"
+                | Syntax.Unreachable pos ->
+                  Syntax.error pos
+                    "unreachable \".\" clauses are not supported in a %%shortest group"
+              end;
+              List.iter begin fun pat ->
+                match pat.Syntax.lookaheads with
+                | [] -> ()
+                | (_, pos) :: _ ->
+                  Syntax.error pos
+                    "lookahead constraints are not supported in a %%shortest group"
+              end clause.patterns;
+              (group', clause)
+            end clauses
+        in
+        Array.of_list (List.concat_map index rule.clauses)
     end)
   in
   let module Branches = Vector.Of_array(struct
       type a = Clauses.n index * Syntax.pattern
       let array =
-        Vector.mapi (fun clause syntax ->
+        Vector.mapi (fun clause (_group, syntax) ->
             List.map (fun pattern -> (clause, pattern))
               syntax.Syntax.patterns
           ) Clauses.vector
@@ -82,7 +112,7 @@ let import_rule (type g) (g : g grammar)
   let pattern = Vector.map snd Branches.vector in
   let of_clause =
     let index = ref 0 in
-    let import clause =
+    let import (_group, clause) =
       let count = List.length clause.Syntax.patterns in
       let first = Index.of_int branch_count !index in
       index := !index + count;
@@ -124,13 +154,12 @@ let import_rule (type g) (g : g grammar)
   in
   let is_partial =
     Boolvector.init branch_count begin fun br ->
-      match Clauses.vector.:(clause.:(br)).action with
+      let _, syntax = Clauses.vector.:(clause.:(br)) in
+      match syntax.action with
       | Syntax.Partial _ -> true
       | Syntax.Total _ -> false
-      | Syntax.Unreachable ->
-        Syntax.warn
-          (List.hd Clauses.vector.:(clause.:(br)).patterns).expr.position
-          "unreachable clauses \"{.}\" are not yet supported";
+      | Syntax.Unreachable pos ->
+        Syntax.warn pos "unreachable clauses \"{.}\" are not yet supported";
         false
     end
   in

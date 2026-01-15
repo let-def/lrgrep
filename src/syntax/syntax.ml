@@ -102,7 +102,7 @@ type clause_action =
   | Total of ocaml_code   (** ... { code }, normal semantic action **)
   | Partial of ocaml_code (** ... partial { ... }, a semantic action that can
                               return [None] to continue matching *)
-  | Unreachable           (** [... { . }] the pattern should never match *)
+  | Unreachable of position (** [... { . }] the pattern should never match *)
 
 (** A pattern is a combination of a regular expression and an optional list
     of lookahead constraints. *)
@@ -116,6 +116,8 @@ type clause = {
   patterns: pattern list;
   action: clause_action; (** the semantic action *)
 }
+
+type clause_group = clause list
 
 (** A rule in .mlyl file is represented by the [rule] type. *)
 type rule = {
@@ -132,7 +134,7 @@ type rule = {
   args    : string list;
   (** The list of OCaml arguments to abstract over,
       e.g the [x y] in [rule foo x y = ...] *)
-  clauses : clause list;
+  clauses : clause_group list;
   (** The list of clauses to match *)
 }
 
@@ -233,7 +235,7 @@ and cmon_regular_expression re =
 
 (** Convert a clause action to a Cmon value. *)
 let cmon_clause_action = function
-  | Unreachable -> Cmon.constant "Unreachable"
+  | Unreachable pos -> Cmon.constructor "Unreachable" (cmon_position pos)
   | Total code -> Cmon.constructor "Total" (cmon_ocamlcode code)
   | Partial code -> Cmon.constructor "Partial" (cmon_ocamlcode code)
 
@@ -246,7 +248,7 @@ let cmon_pattern {expr; lookaheads} =
 
 (** Convert a clause to a Cmon value. *)
 let cmon_clause {patterns; action} =
-  Cmon.record [
+  Cmon.crecord "Clause" [
     "patterns", Cmon.list_map cmon_pattern patterns;
     "action", cmon_clause_action action;
   ]
@@ -258,7 +260,7 @@ let cmon_rule {error; startsymbols; name; args; clauses} =
     "error", cmon_positioned Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list_map Cmon.string args;
-    "clauses", Cmon.list_map cmon_clause clauses;
+    "clauses", Cmon.list_map (Cmon.list_map cmon_clause) clauses;
   ]
 
 (** Convert a lexer definition to a Cmon value. *)
