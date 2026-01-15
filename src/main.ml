@@ -537,6 +537,7 @@ let import_command () =
     | exception End_of_file -> Seq.Nil
     | line -> Seq.Cons (line, lines)
   in
+  let edges = Vector.make (Lr1.cardinal !!grammar) IndexSet.empty in
   let parser = Message_file.parse_sentence !!grammar in
   let blocks =
     lines
@@ -544,7 +545,7 @@ let import_command () =
     |> Message_file.extract_block
     |> Seq.map (Message_file.map_block (fun block ->
         let sentences = List.map (Message_file.map_line (fun sentence ->
-            parser (Message_file.lift_sentence !!grammar sentence)
+            parser edges (Message_file.lift_sentence !!grammar sentence)
           )) block.Message_file.sentences
         in
         {block with sentences}
@@ -556,7 +557,7 @@ let import_command () =
   let oc = open_out_bin !opt_import_output in
   Seq.iter
     (fun line -> output_string oc line; output_char oc '\n')
-    (Message_file.blocks_to_file !!grammar blocks);
+    (Message_file.blocks_to_file !!grammar edges blocks);
   close_out oc
 
 (* Argument parser *)

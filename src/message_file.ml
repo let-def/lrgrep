@@ -184,7 +184,7 @@ let parse_sentence (type g) (g : g grammar) =
         action
   in
   (* Process a sentence *)
-  fun {entrypoint; symbols} ->
+  fun edges {entrypoint; symbols} ->
     let states = ref [] in
     let rec consume_terminal stack (t, startp, endp as token) =
       let (state, _, currp) = List.hd stack in
@@ -226,7 +226,14 @@ let parse_sentence (type g) (g : g grammar) =
       loop [dummy_pos entrypoint] (Seq.map dummy_pos (List.to_seq symbols))
     in
     let state, _, _ = List.hd intermediate_stack in
-    (!states, state)
+    let rec loop = function
+      | x :: (y :: _ as rest) ->
+        edges.@(y) <- IndexSet.add x;
+        loop rest
+      | [] | [_] -> ()
+    in
+    loop !states;
+    state
 
 let wrap_lines prefix newline mid_suffix suffix = function
   | [] -> []
@@ -253,16 +260,7 @@ let pedge x y =
       p "  _%d -> _%d;" x y;
     )
 
-let state_to_pattern endpoints edges g (states, lr1) =
-  let rec loop = function
-    | x :: (y :: _ as rest) ->
-      edges.@(y) <- IndexSet.add x;
-      pedge y x;
-      loop rest
-    | [] | [_] -> ()
-  in
-  loop states;
-  Boolvector.set endpoints lr1;
+let state_to_pattern g lr1 =
   let items = Kernel.Coverage.string_of_items_for_filter g (Lr1.to_lr0 g lr1) in
   match Lr1.incoming g lr1 with
   | Some sym when Symbol.is_nonterminal g sym ->
@@ -291,14 +289,14 @@ let fold_consecutive ~comment ~text lines acc =
   | Text line :: rest ->
     texts acc [line] rest
 
-let block_to_lines endpoints edges g = function
-  | Comments comments ->
+let block_to_lines g = function
+  (*| Comments comments ->
     wrap_lines "(* " "   " "" " *)" comments
-  | Mixed {sentences; comments; message} ->
+    | Mixed*) {sentences; comments; message} ->
     let sentences =
       fold_consecutive
         ~comment:(fun lines acc -> wrap_lines "  (* " "     " "" " *)" lines :: acc)
-        ~text:(fun states acc -> List.concat_map (state_to_pattern endpoints edges g) states :: acc)
+        ~text:(fun states acc -> List.concat_map (state_to_pattern g) states :: acc)
         sentences []
     in
     let comments =
@@ -307,55 +305,58 @@ let block_to_lines endpoints edges g = function
         comments
     in
     let message =
-      fold_consecutive
+      fold_consecutive message []
         ~comment:(fun lines acc -> wrap_lines "  (* " "     " "" " *)" lines :: acc)
-        ~text:(fun lines acc ->
-            let lines = List.mapi (fun i line ->
-                let line = String.escaped line in
-                if i = 0
-                then line
-                else if line <> "" && line.[0] = ' '
-                then "\\" ^ line
-                else " " ^ line
-              ) lines in
-            wrap_lines "  { \"" "    " "\\n\\" "\" }" lines :: acc
-          )
-        message []
+        ~text:begin fun lines acc ->
+          let lines = List.mapi (fun i line ->
+              let line = String.escaped line in
+              if i = 0
+              then line
+              else if line <> "" && line.[0] = ' '
+              then "\\" ^ line
+              else " " ^ line
+            ) lines in
+          wrap_lines "  { \"" "    " "\\n\\" "\" }" lines :: acc
+        end
     in
     List.concat (List.rev_append sentences (List.rev_append comments (List.rev message)))
 
-let blocks_to_file (type g) (g : g grammar) blocks () =
-  let endpoints = Boolvector.make (Lr1.cardinal g) false in
-  let edges = Vector.make (Lr1.cardinal g) IndexSet.empty in
-  let analyze_edges () =
-    let (module Scc) =
-      Tarjan.indexed_scc (Lr1.cardinal g)
-        ~succ:(fun f x -> IndexSet.iter f edges.:(x))
-    in
-    Vector.iteri (fun i states ->
-        if not (IndexSet.is_singleton states) then
-          p "subgraph cluster_%d {" (Index.to_int i);
-        IndexSet.iter (fun lr1 ->
-            if Boolvector.test endpoints lr1 then
-              p "  _%d[shape=square,label=\"%d\"];" (Index.to_int lr1)(Index.to_int lr1)
-            else
-              p "  _%d[label=\"%d\"];" (Index.to_int lr1)(Index.to_int lr1);
-          ) states;
-        if not (IndexSet.is_singleton states) then
-          p "}";
-        let states = IndexSet.filter (Boolvector.test endpoints) states in
-        match IndexSet.elements states with
-        | [] | [_] -> ()
-        | rest ->
-          Printf.eprintf "Overlapping critical states: %s\n"
-          (Lr1.list_to_string g rest)
-      ) Scc.nodes;
+let blocks_to_file (type g) (g : g grammar) edges blocks ()=
+  let message = Vector.make (Lr1.cardinal g) None in
+  let blocks = Seq.filter_map (function
+      | Comments _ -> None
+      | Mixed x -> Some x
+    ) blocks in
+  let blocks = Array.of_seq (Seq.mapi (fun i block ->
+      {block with sentences =
+                    List.fold_right (fun line acc ->
+                        match line with
+                        | Comment _ as cmt -> cmt :: acc
+                        | Text state ->
+                          message.:(state) <- Some (i, acc);
+                          []
+                      ) block.sentences []
+      }
+    ) blocks)
   in
+  let (module Scc) =
+    Tarjan.indexed_scc (Lr1.cardinal g)
+      ~succ:(fun f x -> IndexSet.iter f edges.:(x))
+  in
+  let ordered = ref [] in
+  Vector.rev_iteri begin fun _ ->
+    IndexSet.iter begin fun state ->
+      match message.:(state) with
+      | None -> ()
+      | Some (i, acc) ->
+        let block = blocks.(i) in
+        push ordered {block with sentences = block.sentences @ (Text state :: acc)}
+    end;
+  end Scc.nodes;
   let prepare i block =
-    let lines = block_to_lines endpoints edges g block in
+    let lines = block_to_lines g block in
     let lines = if i = 0 then lines else "" :: lines in
     List.to_seq lines
   in
   Seq.Cons ("rule error_messages = parse error",
-            Seq.append (Seq.concat (seq_mapi prepare blocks))
-              (fun () -> analyze_edges (); Seq.Nil))
+            Seq.concat (seq_mapi prepare (List.to_seq !ordered)))
