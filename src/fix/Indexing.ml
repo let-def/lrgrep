@@ -277,13 +277,27 @@ module Index = struct
       yield i
     done
 
+  let seq_init n f =
+    if n < 0 then
+      invalid_arg "seq_init: n < 0"
+    else if n = 0 then
+      Seq.empty
+    else
+      let j = n - 1 in
+      let rec aux i () =
+        if i = j
+        then Seq.Cons (f i, Seq.empty)
+        else Seq.Cons (f i, aux (i + 1))
+      in
+      aux 0
+
   let init_seq (n : 'n cardinal) f =
-    Seq.init (cardinal n) f
+    seq_init (cardinal n) f
 
   let rev_init_seq (n : 'n cardinal) f =
     let n = cardinal n in
     let n' = n - 1 in
-    Seq.init n (fun i -> f (n' - i))
+    seq_init n (fun i -> f (n' - i))
 
   exception End_of_set
 
