@@ -529,6 +529,15 @@ let rec seq_memoize s =
         cache := Some s;
         s
 
+let seq_mapi f s () =
+  let rec seq_mapi f i s () =
+    match s () with
+    | Seq.Nil -> Seq.Nil
+    | Seq.Cons (x, xs) ->
+      Seq.Cons (f i x, seq_mapi f (i + 1) xs)
+  in
+  seq_mapi f 0 s ()
+
 module Damerau_levenshtein = struct
   type cache = {
     mutable prev_prev: int array;
