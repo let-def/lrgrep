@@ -514,6 +514,21 @@ let list_is_empty = function
 let seq_singleton x () =
   Seq.Cons (x, Seq.empty)
 
+let rec seq_memoize s =
+  let cache = ref None in
+  fun () ->
+    match !cache with
+    | Some r -> r
+    | None ->
+      match s () with
+      | Seq.Nil ->
+        cache := Some Seq.Nil;
+        Seq.Nil
+      | Seq.Cons (x, xs) ->
+        let s = Seq.Cons (x, seq_memoize xs) in
+        cache := Some s;
+        s
+
 module Damerau_levenshtein = struct
   type cache = {
     mutable prev_prev: int array;

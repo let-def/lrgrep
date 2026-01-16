@@ -274,7 +274,7 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_cover
       productive node || List.exists (fun edge -> productive edge.source) edges
     )
   |> Seq.map make_failing_sentence
-  |> Seq.memoize
+  |> seq_memoize
 
 (* Strategy for enumeration
 
