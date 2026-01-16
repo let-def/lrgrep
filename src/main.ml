@@ -484,7 +484,7 @@ let enumerate_command () =
           Printf.printf
             "\n```\n\
              \n";
-          if not (List.is_empty sentence.edges) then (
+          if not (list_is_empty sentence.edges) then (
             Printf.printf
               "It is also covered by these intermediate patterns:\n\
                ```\n";
@@ -564,7 +564,7 @@ let group_lines lines =
     | Seq.Cons (line, lines) ->
       match classify_line line with
       | `Whitespace ->
-        if List.is_empty !texts
+        if list_is_empty !texts
         then aux lines
         else lines
       | `Autocomment ->
@@ -631,7 +631,7 @@ let rec group_messages messages lines =
     (List.rev messages, last_comments)
   | sentence_pre_comments, sentences, lines ->
     let message_pre_comments, message, lines = group_lines lines in
-    if List.is_empty message then
+    if list_is_empty message then
       Printf.eprintf "warning: last sentences without message in .messages file\n";
     let message = {
       sentence_pre_comments;

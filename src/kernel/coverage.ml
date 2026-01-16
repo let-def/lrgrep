@@ -183,7 +183,7 @@ let coverage (type g r st tr lrc)
             end lrcs
           in
           let unhandled = IndexSet.fold process trs lrcs in
-          if not (List.is_empty unhandled) then
+          if not (list_is_empty unhandled) then
             unhandled_predecessors.@(st) <-
               List.cons (lp, collect_unhandled_lrc unhandled, la)
   in

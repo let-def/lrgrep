@@ -191,10 +191,10 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_cover
     let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
     begin match dir with
       | `Prefix ->
-        if List.is_empty shortest_prefix.:(node) then
+        if list_is_empty shortest_prefix.:(node) then
           shortest_prefix.:(node) <- path
       | `Suffix ->
-        if List.is_empty shortest_suffix.:(node) then
+        if list_is_empty shortest_suffix.:(node) then
           shortest_suffix.:(node) <- path
     end;
     let fallible' = IndexSet.union failing fallible.:(node) in
@@ -221,9 +221,9 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_cover
     );
   in
   Index.iter n begin fun node ->
-    if List.is_empty gr.bkd.:(node) then
+    if list_is_empty gr.bkd.:(node) then
       propagate (`Suffix, node, [], IndexSet.empty)
-    else if List.is_empty gr.fwd.:(node) then
+    else if list_is_empty gr.fwd.:(node) then
       propagate (`Prefix, node, [], IndexSet.empty)
   end;
   fixpoint ~propagate todo;
