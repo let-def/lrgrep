@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <caml/mlvalues.h>
+#include <limits.h>
 
 static inline uintptr_t pop_count(uintptr_t x)
 {
