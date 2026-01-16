@@ -126,7 +126,12 @@ let import_rule (type g) (g : g grammar)
     Boolvector.init branch_count begin fun br ->
       match Clauses.vector.:(clause.:(br)).action with
       | Syntax.Partial _ -> true
-      | Syntax.Total _ | Syntax.Unreachable -> false
+      | Syntax.Total _ -> false
+      | Syntax.Unreachable ->
+        Syntax.warn
+          (List.hd Clauses.vector.:(clause.:(br)).patterns).expr.position
+          "unreachable clauses \"{.}\" are not yet supported";
+        false
     end
   in
   let is_total =
