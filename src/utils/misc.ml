@@ -326,6 +326,10 @@ let rec list_drop n = function
   | _ :: xs when n > 0 -> list_drop (n - 1) xs
   | xs -> xs
 
+let rec list_take n = function
+  | x :: xs when n > 0 -> x :: list_take (n - 1) xs
+  | _ -> []
+
 let rec fixpoint ?counter ~propagate todo = match !todo with
   | [] -> ()
   | todo' ->
@@ -606,4 +610,4 @@ let print_dym f oc = function
         print_list oc xs
     in
     Printf.fprintf oc " (did you mean %s%a?)" (f x)
-      print_list (List.take 4 xs)
+      print_list (list_take 4 xs)
