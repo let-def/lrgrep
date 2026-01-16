@@ -484,7 +484,7 @@ let enumerate_command () =
           Printf.printf
             "\n```\n\
              \n";
-          if not (List.is_empty sentence.edges) then (
+          if not (list_is_empty sentence.edges) then (
             Printf.printf
               "It is also covered by these intermediate patterns:\n\
                ```\n";
