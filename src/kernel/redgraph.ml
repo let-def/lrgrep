@@ -129,7 +129,7 @@ let rec merge_reduction_step map acc = function
   | [] -> (map, acc)
   | [] :: _ -> assert false
   | (r :: rs) :: rrs ->
-    let acc = if List.is_empty rs then acc else rs :: acc in
+    let acc = if list_is_empty rs then acc else rs :: acc in
     let augment _ a b = Some (IndexSet.union a b) in
     let map = IndexMap.union augment r map in
     merge_reduction_step map acc rrs
@@ -200,8 +200,8 @@ let close_goto_reductions (type g) (g : g grammar) rcs
 let dump_closure ?(failing=false) g print_label vector =
   Vector.iteri begin fun st def ->
     let has_failing = failing && not (IndexSet.is_empty def.failing) in
-    let has_reductions = not (List.is_empty def.reductions) in
-    let has_stacks = not (List.is_empty def.stacks) in
+    let has_reductions = not (list_is_empty def.reductions) in
+    let has_stacks = not (list_is_empty def.stacks) in
     if has_failing || has_reductions || has_stacks then
       Printf.fprintf stdout "%s:\n" (print_label st);
     if has_failing then
@@ -260,7 +260,7 @@ let index_targets (type g) (g : g grammar) rc
       include Gen
     end) in
   let Refl = eq in
-  (* Targets by goto transition *) 
+  (* Targets by goto transition *)
   let by_goto = Vector.make (Transition.goto g) IndexMap.empty in
   (* Manage trie nodes *)
   let fresh_node () = {
@@ -270,8 +270,8 @@ let index_targets (type g) (g : g grammar) rc
   } in
   let get_child (node, lr1) =
     match IndexMap.find_opt lr1 node.sub with
-    | Some node' -> node' 
-    | None -> 
+    | Some node' -> node'
+    | None ->
       let node' = fresh_node () in
       node.sub <- IndexMap.add lr1 node' node.sub;
       node'

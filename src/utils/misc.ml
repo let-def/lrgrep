@@ -492,3 +492,7 @@ let rec list_rev_mappend f xs acc =
   match xs with
   | [] -> acc
   | x :: xs -> list_rev_mappend f xs (f x :: acc)
+
+let list_is_empty = function
+  | [] -> true
+  | _ :: _ -> false

@@ -885,7 +885,7 @@ module Dataflow = struct
               []
             )
           in
-          if not (List.is_empty pairing) then
+          if not (list_is_empty pairing) then
             incr transitions_with_pairing;
           pairing
         in

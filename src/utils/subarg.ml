@@ -1,6 +1,7 @@
 (* An extension of Arg with sub-command support *)
 
 open Arg
+open Misc
 
 type spec = (Arg.key * Arg.spec * Arg.doc)
 
@@ -33,7 +34,7 @@ let usage_subcommands ?(current="") commands =
     ::
     List.filter_map
       (fun cmd ->
-         if List.is_empty cmd.specs then
+         if list_is_empty cmd.specs then
            None
          else
            let msg = Arg.usage_string cmd.specs (cmd.name ^ " options:") in

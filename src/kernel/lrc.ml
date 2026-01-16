@@ -249,11 +249,11 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
 let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let prefix = Vector.make (Lr1.cardinal g) [] in
   let rec loop next = function
-    | [] -> if not (List.is_empty next) then loop [] next
+    | [] -> if not (list_is_empty next) then loop [] next
     | xs :: xxs ->
       let x = List.hd xs in
       let next =
-        if List.is_empty prefix.:(x)
+        if list_is_empty prefix.:(x)
         then (
           prefix.:(x) <- xs;
           IndexSet.fold
@@ -512,11 +512,11 @@ let transitions_of_states t ss =
 let some_prefix g t =
   let prefix = Vector.make (count t) [] in
   let rec loop next = function
-    | [] -> if not (List.is_empty next) then loop [] next
+    | [] -> if not (list_is_empty next) then loop [] next
     | xs :: xxs ->
       let x = List.hd xs in
       let next =
-        if List.is_empty prefix.:(x)
+        if list_is_empty prefix.:(x)
         then (
           prefix.:(x) <- xs;
           IndexSet.fold (fun x' next -> (x' :: xs) :: next)
@@ -538,15 +538,15 @@ let check_prefix g t1 p1 t2 p2 =
   let l2 = Vector.make (Lr1.cardinal g) [] in
   Vector.iteri (fun x p ->
       let lr1 = t1.lr1_of.:(x) in
-      if List.is_empty l1.:(lr1) then l1.:(lr1) <- p
+      if list_is_empty l1.:(lr1) then l1.:(lr1) <- p
     ) p1;
   Vector.iteri (fun x p ->
       let lr1 = t2.lr1_of.:(x) in
-      if List.is_empty l2.:(lr1) then l2.:(lr1) <- p
+      if list_is_empty l2.:(lr1) then l2.:(lr1) <- p
     ) p2;
   Index.iter (Lr1.cardinal g) (fun lr1 ->
-      let e1 = List.is_empty l1.:(lr1) in
-      let e2 = List.is_empty l2.:(lr1) in
+      let e1 = list_is_empty l1.:(lr1) in
+      let e2 = list_is_empty l2.:(lr1) in
       if e1 <> e2 then
         Printf.eprintf "state %s is unreachable only on %s side\n"
           (Lr1.to_string g lr1) (if e1 then "left" else "right")
