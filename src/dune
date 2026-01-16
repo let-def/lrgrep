@@ -1,7 +1,7 @@
 (executable
  (name main)
  (public_name lrgrep)
- (modules main)
+ (modules main message_file)
  (libraries cmon fix front kernel menhirSdk support utils valmari perfctl))
 
 (executable

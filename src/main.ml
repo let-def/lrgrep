@@ -516,196 +516,11 @@ let enumerate_command () =
 let opt_import_file = ref ""
 let opt_import_output = ref ""
 
-let classify_line txt =
-  let is_whitespace = function ' ' | '\t' -> true | _ -> false in
-  let l = String.length txt in
-  let i = ref 0 in
-  while !i < l && is_whitespace txt.[!i] do
-    incr i
-  done;
-  if !i = l then
-    `Whitespace
-  else if txt.[!i] = '#' then (
-    if !i + 1 < l && txt.[!i+1] = '#' then
-      `Autocomment
-    else
-      `Comment
-  ) else
-    `Text
-
-let group_lines lines =
-  let texts = ref [] in
-  let comments = ref [] in
-  let rec aux lines =
-    match lines () with
-    | Seq.Nil -> Seq.empty
-    | Seq.Cons (line, lines) ->
-      match classify_line line with
-      | `Whitespace ->
-        if list_is_empty !texts
-        then aux lines
-        else lines
-      | `Autocomment ->
-        aux lines
-      | `Comment ->
-        push comments (String.sub line 1 (String.length line - 1));
-        aux lines
-      | `Text ->
-        push texts (line, List.rev !comments);
-        comments := [];
-        aux lines
-  in
-  let lines = aux lines in
-  let rec post_process acc comments = function
-    | [] -> (comments, acc)
-    | (text, comments') :: rest ->
-      post_process ((text, comments) :: acc) comments' rest
-  in
-  let comments, texts = post_process [] (List.rev !comments) !texts in
-  (comments, texts, lines)
-
-type comment = string
-
-type 'sentence message_block = {
-  sentence_pre_comments: comment list;
-  sentences: ('sentence * comment list) list;
-  message_pre_comments: comment list;
-  message: (string * comment list) list;
-}
-
-let decompose_sentence sentence =
-  let lhs, rhs =
-    match String.index_opt sentence ':' with
-    | None -> None, sentence
-    | Some colon ->
-      let lhs = String.trim (String.sub sentence 0 colon) in
-      let rhs =
-        String.sub sentence
-          (colon + 1)
-          (String.length sentence - colon - 1)
-      in
-      (Some lhs, rhs)
-  in
-  (lhs, List.filter ((<>) "") (String.split_on_char ' ' rhs))
-
-let parse_terminal t =
-  match Terminal.find !!grammar t with
-  | Result.Ok t -> t
-  | Result.Error dym ->
-    Printf.eprintf "Unknown terminal %S%a\n" t
-      (print_dym (fun (_,s,_) -> s)) dym;
-    exit 1
-
-let lex_message message =
-  let lex_sentence (text, comments) =
-    let lhs, rhs = decompose_sentence text in
-    let entrypoints = Lr1.entrypoint_table !!grammar in
-    let lhs = lhs |> Option.map @@ fun lhs ->
-      match Hashtbl.find_opt entrypoints lhs  with
-      | None ->
-        Printf.eprintf "Unknown entrypoint %S%a\n"
-          lhs
-          (print_dym (fun (_,s,_) -> s))
-          (Damerau_levenshtein.filter_approx ~dist:3 lhs
-             (Hashtbl.to_seq entrypoints));
-        exit 1
-      | Some lhs -> lhs
-    in
-    ((lhs, List.map parse_terminal rhs), comments)
-  in
-  {message with sentences = List.map lex_sentence message.sentences}
-
-let rec group_messages messages lines =
-  match group_lines lines with
-  | last_comments, [], _lines ->
-    (List.rev messages, last_comments)
-  | sentence_pre_comments, sentences, lines ->
-    let message_pre_comments, message, lines = group_lines lines in
-    if list_is_empty message then
-      Printf.eprintf "warning: last sentences without message in .messages file\n";
-    let message = {
-      sentence_pre_comments;
-      sentences;
-      message_pre_comments;
-      message;
-    } in
-    group_messages (message :: messages) lines
-
 let set_import_message_file path =
   if !opt_import_file <> "" then
     Printf.eprintf "unexpected argument %S: message file already set to %S\n"
       path !opt_import_file;
   opt_import_file := path
-
-let get_action =
-  let table : (g lr1 index * g terminal index, _) Hashtbl.t = Hashtbl.create 7 in
-  fun state terminal ->
-    let key = (state, terminal) in
-    match Hashtbl.find_opt table key with
-    | Some action -> action
-    | None ->
-      let grammar = !!grammar in
-      let action =
-        match
-          IndexSet.find
-            (fun red -> IndexSet.mem terminal (Reduction.lookaheads grammar red))
-            (Reduction.from_lr1 grammar state)
-        with
-        | red -> `Reduce (Reduction.production grammar red)
-        | exception Not_found ->
-          let sym = Symbol.inj_t grammar terminal in
-          match
-            IndexSet.find
-              (fun tr -> Index.equal sym (Transition.symbol grammar tr))
-              (Transition.successors grammar state)
-          with
-          | tr -> `Shift (Transition.target grammar tr)
-          | exception Not_found ->
-            `Reject
-      in
-      Hashtbl.add table key action;
-      action
-
-let parse_sentence (lhs, rhs) =
-  let grammar = !!grammar in
-  let lhs = match lhs with
-    | None -> IndexSet.choose (Lr1.entrypoints grammar)
-    | Some lhs -> lhs
-  in
-  let rec consume_terminal stack (t, startp, endp as token) =
-    let (state, _, currp) = List.hd stack in
-    match get_action state t with
-    | `Reject -> Result.Error stack
-    | `Shift state -> Result.Ok ((state, startp, endp) :: stack)
-    | `Reduce prod ->
-      let (stack, startp', endp') =
-        match Production.length grammar prod with
-        | 0 -> (stack, currp, currp)
-        | n ->
-          let (_, _, endp) = List.hd stack in
-          let stack = list_drop (n - 1) stack in
-          let (_, startp, _) = List.hd stack in
-          let stack = List.tl stack in
-          (stack, startp, endp)
-      in
-      let (state, _, _) = List.hd stack in
-      let state' = Transition.find_goto_target grammar state (Production.lhs grammar prod) in
-      let stack = (state', startp', endp') :: stack in
-      consume_terminal stack token
-  in
-  let rec loop stack ts =
-    match ts () with
-    | Seq.Nil -> (stack, stack, Seq.empty)
-    | Seq.Cons (t, ts') as ts0 ->
-      match consume_terminal stack t with
-      | Result.Ok stack' -> loop stack' ts'
-      | Result.Error stack' -> (stack, stack', fun () -> ts0)
-  in
-  let _canonical_stack, intermediate_stack, _remainder =
-    loop [lhs, Lexing.dummy_pos, Lexing.dummy_pos] (List.to_seq rhs)
-  in
-  let state, _, _ = List.hd intermediate_stack in
-  state
 
 let import_command () =
   if !opt_import_file = "" then (
@@ -722,62 +537,27 @@ let import_command () =
     | exception End_of_file -> Seq.Nil
     | line -> Seq.Cons (line, lines)
   in
-  let blocks, _comments = group_messages [] lines in
-  close_in ic;
-  Printf.eprintf ".messages: parsed %d messages"
-    (List.length blocks);
-  List.iter begin fun { sentence_pre_comments; sentences; message_pre_comments; message } ->
-    Printf.eprintf "{ sentence_pre_comments=[";
-    List.iter (Printf.eprintf "\n    %S") sentence_pre_comments;
-    Printf.eprintf "];\n\
-                   \  sentences=[";
-    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) sentences;
-    Printf.eprintf "];\n\
-                   \  message_pre_comments=[";
-    List.iter (Printf.eprintf "\n    %S") message_pre_comments;
-    Printf.eprintf "];\n\
-                   \  message=[";
-    List.iter (fun (a,_) -> Printf.eprintf "\n    %S" a) message;
-    Printf.eprintf "] }\n";
-  end blocks;
-  let blocks = List.map lex_message blocks in
-  List.iter begin fun block ->
-    let states =
-      List.map (fun ((lhs, rhs), _) ->
-          parse_sentence (lhs, List.map (fun x -> (x,Lexing.dummy_pos,Lexing.dummy_pos)) rhs)
-        ) block.sentences
-    in
-    List.iter (fun state ->
-        let items =
-          Coverage.string_of_items_for_filter
-            !!grammar (Lr1.to_lr0 !!grammar state)
+  let parser = Message_file.parse_sentence !!grammar in
+  let blocks =
+    lines
+    |> Message_file.extract_pre_block
+    |> Message_file.extract_block
+    |> Seq.map (Message_file.map_block (fun block ->
+        let sentences = List.map (Message_file.map_line (fun sentence ->
+            parser (Message_file.lift_sentence !!grammar sentence)
+          )) block.Message_file.sentences
         in
-        match Lr1.incoming !!grammar state with
-        | Some sym when Symbol.is_nonterminal !!grammar sym ->
-          List.iteri (fun i item ->
-              if i = 0
-              then Printf.eprintf   "| [_* /%s" item
-              else Printf.eprintf "\n      /%s" item
-            ) items;
-          Printf.eprintf "]\n"
-        | _ ->
-          List.iteri (fun i item ->
-              if i = 0
-              then Printf.eprintf "| /%s\n" item
-              else Printf.eprintf "  /%s\n" item
-            ) items
-      ) states;
-    Printf.eprintf "  { \"";
-    List.iteri (fun i (str, _) ->
-        if i = 0 then
-          Printf.eprintf "%s" (String.escaped str)
-        else if str = "" || str.[0] <> ' ' then
-          Printf.eprintf "\\n\\\n     %s" (String.escaped str)
-        else
-          Printf.eprintf "\\n\\\n     \\%s" (String.escaped str)
-      ) block.message;
-    Printf.eprintf "\" }\n"
-  end blocks
+        {block with sentences}
+      ))
+    (* Force any error *)
+    |> List.of_seq |> List.to_seq
+  in
+  close_in ic;
+  let oc = open_out_bin !opt_import_output in
+  Seq.iter
+    (fun line -> output_string oc line; output_char oc '\n')
+    (Message_file.blocks_to_file !!grammar blocks);
+  close_out oc
 
 (* Argument parser *)
 let commands =
