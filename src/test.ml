@@ -53,7 +53,14 @@ let () =
     run_tests (1 lsl i);
   done
 
+let random_bits64 () =
+  let x = Int64.of_int (Random.bits ()) in
+  let y = Int64.of_int (Random.bits ()) in
+  let z = Int64.of_int (Random.bits ()) in
+  Int64.logor (Int64.shift_left z 60)
+    (Int64.logor (Int64.shift_left y 30) x)
+
 let () =
   while true do
-    run_tests (Int64.to_int (Random.bits64 ()))
+    run_tests (Int64.to_int (random_bits64 ()))
   done
