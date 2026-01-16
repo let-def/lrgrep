@@ -1234,53 +1234,53 @@ module Machine = struct
         target: dfa index;
         label: (g, r) label;
       }
-      include Vector.Of_array(struct
-          type a = t
-          let array =
-            let dyn = Dynarray.create () in
-            let process_transition source src_regs
-                (DFA.Transition {label=filter; mapping; target; _}) pairings =
-              let tgt_regs = Dataflow.registers dataflow target in
-              let captures = ref [] in
-              let moves = ref IndexMap.empty in
-              let clear = ref IndexSet.empty in
-              let process_mapping (src_i, (captured, _usage)) tgt_bank =
-                let src_bank = src_regs.:(src_i) in
-                let process_tgt_reg capture tgt_reg =
-                  if IndexSet.mem capture captured then
-                    push captures (capture, tgt_reg)
-                  else
-                    match IndexMap.find_opt capture src_bank with
-                    | Some src_reg ->
-                      if src_reg <> tgt_reg then
-                        moves := IndexMap.add src_reg tgt_reg !moves
-                    | None ->
-                      partial_captures := IndexSet.add capture !partial_captures;
-                      clear := IndexSet.add tgt_reg !clear
-                in
-                IndexMap.iter process_tgt_reg tgt_bank
-              in
-              Vector.iter2 process_mapping mapping tgt_regs;
-              let captures = !captures and moves = !moves and clear = !clear in
-              let priority = List.concat_map (fun (clause, pairs) ->
-                  List.map
-                    (fun (p1, p2) -> clause, Order_chain.evaluate p1, Order_chain.evaluate p2)
-                    pairs
-                ) pairings
-              in
-              let label = {filter; captures; moves; clear; priority} in
-              Dynarray.add_last dyn {source; target = target.index; label};
+
+      open IndexBuffer
+      include Gen.Make()
+
+      let vector =
+        let gen = get_generator () in
+        let process_transition source src_regs
+            (DFA.Transition {label=filter; mapping; target; _}) pairings =
+          let tgt_regs = Dataflow.registers dataflow target in
+          let captures = ref [] in
+          let moves = ref IndexMap.empty in
+          let clear = ref IndexSet.empty in
+          let process_mapping (src_i, (captured, _usage)) tgt_bank =
+            let src_bank = src_regs.:(src_i) in
+            let process_tgt_reg capture tgt_reg =
+              if IndexSet.mem capture captured then
+                push captures (capture, tgt_reg)
+              else
+                match IndexMap.find_opt capture src_bank with
+                | Some src_reg ->
+                  if src_reg <> tgt_reg then
+                    moves := IndexMap.add src_reg tgt_reg !moves
+                | None ->
+                  partial_captures := IndexSet.add capture !partial_captures;
+                  clear := IndexSet.add tgt_reg !clear
             in
-            let process_state (DFA.Packed source) pairings =
-              List.iter2
-                (process_transition source.index
-                   (Dataflow.registers dataflow source))
-                source.transitions pairings
-            in
-            Vector.iter2 process_state dfa.states dataflow.pairings;
-            Dynarray.to_array dyn
-        end)
-      let n = Vector.length vector
+            IndexMap.iter process_tgt_reg tgt_bank
+          in
+          Vector.iter2 process_mapping mapping tgt_regs;
+          let captures = !captures and moves = !moves and clear = !clear in
+          let priority = List.concat_map (fun (clause, pairs) ->
+              List.map
+                (fun (p1, p2) -> clause, Order_chain.evaluate p1, Order_chain.evaluate p2)
+                pairs
+            ) pairings
+          in
+          let label = {filter; captures; moves; clear; priority} in
+          ignore (Gen.add gen {source; target = target.index; label})
+        in
+        let process_state (DFA.Packed source) pairings =
+          List.iter2
+            (process_transition source.index
+               (Dataflow.registers dataflow source))
+            source.transitions pairings
+        in
+        Vector.iter2 process_state dfa.states dataflow.pairings;
+        Gen.freeze gen
     end in
     let partial_captures =
       let acc = !partial_captures in
