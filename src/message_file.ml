@@ -304,4 +304,4 @@ let blocks_to_file (type g) (g : g grammar) blocks () =
     List.to_seq lines
   in
   Seq.Cons ("rule error_messages = parse error",
-            Seq.concat (Seq.mapi prepare blocks))
+            Seq.concat (seq_mapi prepare blocks))
