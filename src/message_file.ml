@@ -297,7 +297,7 @@ let block_to_lines g = function
     in
     List.concat (List.rev_append sentences (List.rev_append comments (List.rev message)))
 
-let blocks_to_file g blocks ()=
+let blocks_to_file (type g) (g : g grammar) blocks () =
   let prepare i block =
     let lines = block_to_lines g block in
     let lines = if i = 0 then lines else "" :: lines in
