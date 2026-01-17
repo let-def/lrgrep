@@ -33,14 +33,15 @@ type ('lrc, 'n) edge = {
   target: 'n index;
 }
 
-type ('g, 'lrc, 'n) _graph = {
-  ker : ('n, ('g, 'lrc) kernel) vector;
-  fwd : ('n, ('lrc, 'n) edge list) vector;
-  bkd : ('n, ('lrc, 'n) edge list) vector;
-  entries : 'n index list;
+type ('g, 'lrc, 'e, 'n) _graph = {
+  entries : 'e cardinal;
+  ker : (('e, 'n) Sum.n, ('g, 'lrc) kernel) vector;
+  fwd : (('e, 'n) Sum.n, ('lrc, ('e, 'n) Sum.n) edge list) vector;
+  bkd : (('e, 'n) Sum.n, ('lrc, ('e, 'n) Sum.n) edge list) vector;
 }
 
-type ('g, 'lrc) graph = Graph : ('g, 'lrc, 'n) _graph -> ('g, 'lrc) graph
+type ('g, 'lrc, 'entry) graph =
+    Graph : ('g, 'lrc, 'entry, 'n) _graph -> ('g, 'lrc, 'entry) graph
 
 (* Staged and cached lazy computation for construction the graph of failure nodes:
    1. [let finder = free_failures grammar stacks rcs]
@@ -58,18 +59,19 @@ let rec fold_expand expand env f acc = function
     let env = expand env in
     fold_expand expand env f acc xs
 
-let make_graph (type g lrc)
+let make_graph (type g lrc entry)
     (grammar : g grammar)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
     (stacks : (g, lrc) Automata.stacks)
-    (entries : (g, lrc) kernel list)
+    (entries : (entry, (g, lrc) kernel) vector)
   =
   let open IndexBuffer in
-  let module Nodes = Gen.Make() in
-  let nodes = Nodes.get_generator () in
+  let module Nodes = Gensym() in
+  let nodes = Dyn.make (Vector.as_array entries).(0) in
   let fwd = Dyn.make [] in
   let table = Hashtbl.create 500 in
-  let rec synthesize node ker =
+  let entry_count = Vector.length entries in
+  let rec synthesize (node : (entry, Nodes.n) Sum.n index) ker =
     let paths, tgt =
       let lr1 = stacks.label ker.lrc in
       match Opt.prj ker.nto with
@@ -108,18 +110,23 @@ let make_graph (type g lrc)
     match Hashtbl.find_opt table ker with
     | Some node -> node
     | None ->
-      let node = Gen.add nodes ker in
+      let node = Sum.inj_r entry_count (Nodes.fresh ()) in
+      Dyn.set nodes node ker;
       Hashtbl.add table ker node;
       synthesize node ker;
       node
   in
-  let entry_nodes = List.map (Gen.add nodes) entries in
-  List.iter2 synthesize entry_nodes entries;
-  let ker = Gen.freeze nodes in
-  let fwd = Dyn.contents fwd Nodes.n in
-  let bkd = Vector.make Nodes.n [] in
+  Vector.iteri begin fun i ker ->
+    let i = Sum.inj_l i in
+    Dyn.set nodes i ker;
+    synthesize i ker
+  end entries;
+  let total = Sum.cardinal entry_count Nodes.n in
+  let ker = Dyn.contents nodes total in
+  let fwd = Dyn.contents fwd total in
+  let bkd = Vector.make total [] in
   Vector.iter (List.iter (fun edge -> bkd.@(edge.target) <- List.cons edge)) fwd;
-  Graph {ker; fwd; bkd; entries = entry_nodes}
+  Graph {entries=entry_count; ker; fwd; bkd}
 
 let get_lr1_state grammar (stacks : _ Automata.stacks) ker =
   let lr1 = stacks.label ker.lrc in
@@ -135,20 +142,26 @@ let get_lr0_state grammar (stacks : _ Automata.stacks) ker =
 let get_failing grammar stacks rcs ker =
   rcs.:(get_lr1_state grammar stacks ker).Redgraph.failing
 
-type ('g, 'lrc, 'n) failing_sentence = {
+type ('g, 'lrc, 'e, 'n) failing_sentence = {
   first: 'n index;
   edges: ('lrc, 'n) edge list;
   failing: 'g terminal indexset;
-  entry: int;
+  entry: 'e index;
 }
 
-let make_failing_sentence (first, edges, failing) =
+let make_failing_sentence gr (first, edges, failing) =
   let entry = List.fold_left (fun _ edge -> edge.source) first edges in
-  {first; edges; failing; entry = Index.to_int entry}
+  match Sum.prj gr.entries entry with
+  | L entry -> {first; edges; failing; entry}
+  | R _ -> assert false
 
 let cover_with_maximal_patterns grammar rcs stacks gr =
   let results = ref [] in
-  let todo = ref (List.map (fun node -> node, [], IndexSet.empty) gr.entries) in
+  let todo = ref (
+      Index.init_seq gr.entries (fun node -> Sum.inj_l node, [], IndexSet.empty)
+      |> List.of_seq
+    )
+  in
   let marked = Boolvector.make (Vector.length gr.ker) false in
   let visited = Vector.make (Vector.length gr.ker) IndexSet.empty in
   let propagate (node, path, failing) =
@@ -159,7 +172,7 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
       match gr.fwd.:(node) with
       | [] ->
         if IndexSet.is_not_empty failing then
-          push results (make_failing_sentence (node, path, failing))
+          push results (make_failing_sentence gr (node, path, failing))
       | edges ->
         List.iter begin fun edge ->
           push todo (edge.target, edge :: path, failing)
@@ -169,7 +182,7 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_covered=ignore) (gr : (_, _, n) _graph) =
+let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_covered=ignore) (gr : (_, _, _, n) _graph) =
   let n = Vector.length gr.ker in
   let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
   let cover lr0 set = fallible0.@(lr0) <- IndexSet.union set in
@@ -273,7 +286,7 @@ let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_cover
       in
       productive node || List.exists (fun edge -> productive edge.source) edges
     )
-  |> Seq.map make_failing_sentence
+  |> Seq.map (make_failing_sentence gr)
   |> seq_memoize
 
 (* Strategy for enumeration
