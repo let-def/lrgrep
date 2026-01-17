@@ -65,6 +65,8 @@ module Opt = struct
     | 0 -> None
     | i -> Some (i - 1)
 
+  let is_none x = x = none
+
   let cardinal (type n) (Cardinal n : n cardinal) =
     if Lazy.is_val n then
       let n = 1 + Lazy.force_val n in

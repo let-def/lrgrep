@@ -192,6 +192,8 @@ module type S1 = sig
 
   (* [fused_inter_union a b ~acc] is [union (inter a b) acc] *)
   val fused_inter_union : 'a t -> 'a t -> acc:'a t -> 'a t
+
+  val rev_map_elements: 'a t -> ('a element -> 'b) -> 'b list
 end
 
 module type S0 = sig

@@ -96,6 +96,8 @@ module Opt: sig
   val none : 'n n index
   val some : 'n index -> 'n n index
 
+  val is_none : 'n n index -> bool
+
   val prj : 'n n index -> 'n index option
   val cardinal : 'n cardinal -> 'n n cardinal
 end
