@@ -199,6 +199,9 @@ let cardinal qs = cardinal 0 qs
 let elements s =
   fold_right (fun tl hd -> hd :: tl) [] s
 
+let rev_map_elements t f =
+  fold_right (fun tl hd -> f hd :: tl) [] t
+
 let rec subset s1 s2 =
   match s1, s2 with
   | N, _ ->
