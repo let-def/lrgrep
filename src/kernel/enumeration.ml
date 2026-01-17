@@ -33,14 +33,15 @@ type ('lrc, 'n) edge = {
   target: 'n index;
 }
 
-type ('g, 'lrc, 'n) _graph = {
+type ('g, 'lrc, 'a, 'n) _graph = {
   ker : ('n, ('g, 'lrc) kernel) vector;
   fwd : ('n, ('lrc, 'n) edge list) vector;
   bkd : ('n, ('lrc, 'n) edge list) vector;
-  entries : 'n index list;
+  entries: 'a array;
 }
 
-type ('g, 'lrc) graph = Graph : ('g, 'lrc, 'n) _graph -> ('g, 'lrc) graph
+type ('g, 'lrc, 'a) graph =
+    Graph : ('g, 'lrc, 'a, 'n) _graph -> ('g, 'lrc, 'a) graph
 
 (* Staged and cached lazy computation for construction the graph of failure nodes:
    1. [let finder = free_failures grammar stacks rcs]
@@ -58,18 +59,18 @@ let rec fold_expand expand env f acc = function
     let env = expand env in
     fold_expand expand env f acc xs
 
-let make_graph (type g lrc)
+let make_graph (type g lrc a)
     (grammar : g grammar)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
     (stacks : (g, lrc) Automata.stacks)
-    (entries : (g, lrc) kernel list)
+    (entries : ((g, lrc) kernel * a) list)
   =
   let open IndexBuffer in
   let module Nodes = Gen.Make() in
   let nodes = Nodes.get_generator () in
   let fwd = Dyn.make [] in
   let table = Hashtbl.create 500 in
-  let rec synthesize node ker =
+  let rec synthesize (node : Nodes.n index) ker =
     let paths, tgt =
       let lr1 = stacks.label ker.lrc in
       match Opt.prj ker.nto with
@@ -113,13 +114,13 @@ let make_graph (type g lrc)
       synthesize node ker;
       node
   in
-  let entry_nodes = List.map (Gen.add nodes) entries in
-  List.iter2 synthesize entry_nodes entries;
+  let entry_nodes = List.map (fun (ker, _) -> Gen.add nodes ker) entries in
+  List.iter (fun i -> synthesize i (Gen.get nodes i)) entry_nodes;
   let ker = Gen.freeze nodes in
   let fwd = Dyn.contents fwd Nodes.n in
   let bkd = Vector.make Nodes.n [] in
   Vector.iter (List.iter (fun edge -> bkd.@(edge.target) <- List.cons edge)) fwd;
-  Graph {ker; fwd; bkd; entries = entry_nodes}
+  Graph {entries=Array.of_list (List.map snd entries); ker; fwd; bkd}
 
 let get_lr1_state grammar (stacks : _ Automata.stacks) ker =
   let lr1 = stacks.label ker.lrc in
@@ -135,20 +136,25 @@ let get_lr0_state grammar (stacks : _ Automata.stacks) ker =
 let get_failing grammar stacks rcs ker =
   rcs.:(get_lr1_state grammar stacks ker).Redgraph.failing
 
-type ('g, 'lrc, 'n) failing_sentence = {
+type ('g, 'lrc, 'a, 'n) failing_sentence = {
   first: 'n index;
   edges: ('lrc, 'n) edge list;
   failing: 'g terminal indexset;
-  entry: int;
+  entry: 'a;
 }
 
-let make_failing_sentence (first, edges, failing) =
-  let entry = List.fold_left (fun _ edge -> edge.source) first edges in
-  {first; edges; failing; entry = Index.to_int entry}
+let make_failing_sentence gr (first, edges, failing) =
+  let index = Index.to_int (List.fold_left (fun _ edge -> edge.source) first edges) in
+  assert (index < Array.length gr.entries);
+  {first; edges; failing; entry = gr.entries.(index)}
 
 let cover_with_maximal_patterns grammar rcs stacks gr =
   let results = ref [] in
-  let todo = ref (List.map (fun node -> node, [], IndexSet.empty) gr.entries) in
+  let todo = ref (
+      List.init (Array.length gr.entries)
+        (fun i -> (Index.of_int (Vector.length gr.ker) i, [], IndexSet.empty))
+    )
+  in
   let marked = Boolvector.make (Vector.length gr.ker) false in
   let visited = Vector.make (Vector.length gr.ker) IndexSet.empty in
   let propagate (node, path, failing) =
@@ -159,7 +165,7 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
       match gr.fwd.:(node) with
       | [] ->
         if IndexSet.is_not_empty failing then
-          push results (make_failing_sentence (node, path, failing))
+          push results (make_failing_sentence gr (node, path, failing))
       | edges ->
         List.iter begin fun edge ->
           push todo (edge.target, edge :: path, failing)
@@ -169,112 +175,133 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
   fixpoint ~propagate todo;
   !results
 
-let cover_all (type n) grammar rcs stacks ?(already_covered=[]) ?(manually_covered=ignore) (gr : (_, _, n) _graph) =
-  let n = Vector.length gr.ker in
-  let fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
-  let cover lr0 set = fallible0.@(lr0) <- IndexSet.union set in
-  List.iter begin fun {first; edges; failing; _} ->
-    let mark node = cover (get_lr0_state grammar stacks gr.ker.:(node)) failing in
-    mark first;
-    List.iter (fun edge -> mark edge.source) edges
-  end already_covered;
-  manually_covered cover;
-  let visited = Boolvector.make n false in
-  let fallible = Vector.make n IndexSet.empty in
-  let prefixes = Vector.make n [] in
-  let suffixes = Vector.make n [] in
-  let shortest_prefix = Vector.make n [] in
-  let shortest_suffix = Vector.make n [] in
-  let todo = ref [] in
-  let propagate (dir, node, path, failing) =
-    let ker = gr.ker.:(node) in
-    let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
-    begin match dir with
-      | `Prefix ->
-        if list_is_empty shortest_prefix.:(node) then
-          shortest_prefix.:(node) <- path
-      | `Suffix ->
-        if list_is_empty shortest_suffix.:(node) then
-          shortest_suffix.:(node) <- path
-    end;
-    let fallible' = IndexSet.union failing fallible.:(node) in
-    if not (Boolvector.test visited node) || fallible' != fallible.:(node) then (
-      Boolvector.set visited node;
-      fallible.:(node) <- fallible';
-      let lr0 = get_lr0_state grammar stacks ker in
-      let fallible0' = IndexSet.diff failing fallible0.:(lr0) in
-      (* Save path if it is the first to cover some lookahead *)
-      if IndexSet.is_not_empty fallible0' then (
-        fallible0.@(lr0) <- IndexSet.union fallible0';
-        let sentences = match dir with
-          | `Prefix -> prefixes
-          | `Suffix -> suffixes
-        in
-        sentences.@(node) <- List.cons (path, failing);
-      );
-      (* Extend path with successors *)
-      let succ f = match dir with
-        | `Prefix -> List.iter (fun edge -> f edge edge.source) gr.bkd.:(node)
-        | `Suffix -> List.iter (fun edge -> f edge edge.target) gr.fwd.:(node)
-      in
-      succ (fun edge node' -> push todo (dir, node', edge :: path, failing))
-    );
+type ('g, 'a) dispenser = {
+  fallible0: ('g lr0, 'g terminal indexset) vector;
+  mutable next : 'a Seq.t;
+}
+
+let mark_covered disp lr0 la =
+  disp.fallible0.@(lr0) <- IndexSet.union la
+
+let mark_sentence_covered g stacks gr disp {first; edges; failing; _} =
+  let mark node = mark_covered disp (get_lr0_state g stacks gr.ker.:(node)) failing in
+  mark first;
+  List.iter (fun edge -> mark edge.source) edges
+
+let next disp =
+  let result, next = match disp.next () with
+    | Seq.Nil -> (None, Seq.empty)
+    | Seq.Cons (x, xs) -> (Some x, xs)
   in
-  Index.iter n begin fun node ->
-    if list_is_empty gr.bkd.:(node) then
-      propagate (`Suffix, node, [], IndexSet.empty)
-    else if list_is_empty gr.fwd.:(node) then
-      propagate (`Prefix, node, [], IndexSet.empty)
+  disp.next <- next;
+  result
+
+let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
+  let disp = {
+    fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty;
+    next = Seq.empty;
+  } in
+  disp.next <- begin fun () ->
+    let n = Vector.length gr.ker in
+    let visited = Boolvector.make n false in
+    let fallible = Vector.make n IndexSet.empty in
+    let prefixes = Vector.make n [] in
+    let suffixes = Vector.make n [] in
+    let shortest_prefix = Vector.make n [] in
+    let shortest_suffix = Vector.make n [] in
+    let todo = ref [] in
+    let propagate (dir, node, path, failing) =
+      let ker = gr.ker.:(node) in
+      let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
+      begin match dir with
+        | `Prefix ->
+          if list_is_empty shortest_prefix.:(node) then
+            shortest_prefix.:(node) <- path
+        | `Suffix ->
+          if list_is_empty shortest_suffix.:(node) then
+            shortest_suffix.:(node) <- path
+      end;
+      let fallible' = IndexSet.union failing fallible.:(node) in
+      if not (Boolvector.test visited node) || fallible' != fallible.:(node) then (
+        Boolvector.set visited node;
+        fallible.:(node) <- fallible';
+        let lr0 = get_lr0_state grammar stacks ker in
+        let fallible0' = IndexSet.diff failing disp.fallible0.:(lr0) in
+        (* Save path if it is the first to cover some lookahead *)
+        if IndexSet.is_not_empty fallible0' then (
+          disp.fallible0.@(lr0) <- IndexSet.union fallible0';
+          let sentences = match dir with
+            | `Prefix -> prefixes
+            | `Suffix -> suffixes
+          in
+          sentences.@(node) <- List.cons (path, failing);
+        );
+        (* Extend path with successors *)
+        let succ f = match dir with
+          | `Prefix -> List.iter (fun edge -> f edge edge.source) gr.bkd.:(node)
+          | `Suffix -> List.iter (fun edge -> f edge edge.target) gr.fwd.:(node)
+        in
+        succ (fun edge node' -> push todo (dir, node', edge :: path, failing))
+      );
+    in
+    Index.iter n begin fun node ->
+      if list_is_empty gr.bkd.:(node) then
+        propagate (`Suffix, node, [], IndexSet.empty)
+      else if list_is_empty gr.fwd.:(node) then
+        propagate (`Prefix, node, [], IndexSet.empty)
+    end;
+    fixpoint ~propagate todo;
+    let seq_apply seq = seq () in
+    Index.init_seq n begin fun node () ->
+      let output (prefix, pfail) (suffix, sfail) =
+        let failing = IndexSet.union pfail sfail in
+        let sentence = List.rev_append prefix suffix in
+        let first = match sentence with
+          | [] -> node
+          | x :: _ -> x.target
+        in
+        (first, sentence, failing)
+      in
+      let sprefix = shortest_prefix.:(node) in
+      let ssuffix = shortest_suffix.:(node) in
+      let output_prefixes prefixes =
+        List.to_seq prefixes
+        |> Seq.map (fun prefix' -> output prefix' (ssuffix, IndexSet.empty))
+      in
+      let output_suffixes suffixes =
+        List.to_seq suffixes
+        |> Seq.map (fun suffix' -> output (sprefix, IndexSet.empty) suffix')
+      in
+      let output_prefixes_suffixes prefixes suffixes () =
+        Seq.Cons (output_prefixes prefixes,
+                  fun () -> Seq.Cons (output_suffixes suffixes, Seq.empty))
+      in
+      match List.rev prefixes.:(node), suffixes.:(node) with
+      | prefix0 :: prefixes, suffix0 :: suffixes ->
+        Seq.Cons (seq_singleton (output prefix0 suffix0),
+                  output_prefixes_suffixes prefixes suffixes)
+      | prefixes, suffixes ->
+        output_prefixes_suffixes prefixes suffixes ()
+    end
+    |> Seq.concat
+    |> Seq.concat
+    |> Seq.filter (fun (node, edges, failing) ->
+        let productive node =
+          let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
+          let fallible = disp.fallible0.:(lr0) in
+          let fallible' = IndexSet.diff fallible failing in
+          if not (IndexSet.equal fallible fallible') then (
+            disp.fallible0.:(lr0) <- fallible';
+            true
+          ) else
+            false
+        in
+        productive node || List.exists (fun edge -> productive edge.source) edges
+      )
+    |> Seq.map (make_failing_sentence gr)
+    |> seq_apply
   end;
-  fixpoint ~propagate todo;
-  Index.init_seq n begin fun node () ->
-    let output (prefix, pfail) (suffix, sfail) =
-      let failing = IndexSet.union pfail sfail in
-      let sentence = List.rev_append prefix suffix in
-      let first = match sentence with
-        | [] -> node
-        | x :: _ -> x.target
-      in
-      (first, sentence, failing)
-    in
-    let sprefix = shortest_prefix.:(node) in
-    let ssuffix = shortest_suffix.:(node) in
-    let output_prefixes prefixes =
-      List.to_seq prefixes
-      |> Seq.map (fun prefix' -> output prefix' (ssuffix, IndexSet.empty))
-    in
-    let output_suffixes suffixes =
-      List.to_seq suffixes
-      |> Seq.map (fun suffix' -> output (sprefix, IndexSet.empty) suffix')
-    in
-    let output_prefixes_suffixes prefixes suffixes () =
-      Seq.Cons (output_prefixes prefixes,
-                fun () -> Seq.Cons (output_suffixes suffixes, Seq.empty))
-    in
-    match List.rev prefixes.:(node), suffixes.:(node) with
-    | prefix0 :: prefixes, suffix0 :: suffixes ->
-      Seq.Cons (seq_singleton (output prefix0 suffix0),
-                output_prefixes_suffixes prefixes suffixes)
-    | prefixes, suffixes ->
-      output_prefixes_suffixes prefixes suffixes ()
-  end
-  |> Seq.concat
-  |> Seq.concat
-  |> Seq.filter (fun (node, edges, failing) ->
-      let productive node =
-        let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
-        let fallible = fallible0.:(lr0) in
-        let fallible' = IndexSet.diff fallible failing in
-        if not (IndexSet.equal fallible fallible') then (
-          fallible0.:(lr0) <- fallible';
-          true
-        ) else
-          false
-      in
-      productive node || List.exists (fun edge -> productive edge.source) edges
-    )
-  |> Seq.map make_failing_sentence
-  |> seq_memoize
+  disp
 
 (* Strategy for enumeration
 
