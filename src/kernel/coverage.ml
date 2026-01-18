@@ -314,7 +314,7 @@ let report_coverage
               (IndexSet.rev_map_elements lrcs (fun lrc -> (lrc, []))) (dot - 1)
           in
           let enum = list_rev_mappend
-              (fun (lrc, compl) -> Enumeration.kernel lrc ~goto la, compl, suffix)
+              (fun (lrc, compl) -> Enumeration.kernel lrc ~goto la, (compl, suffix))
               completions enum
           in
           (free, enum)
@@ -325,7 +325,7 @@ let report_coverage
   let enum_initials =
     let la = Terminal.regular grammar in
     IndexSet.rev_map_elements unhandled_initial
-      (fun lrc -> Enumeration.kernel lrc la, [], lazy [])
+      (fun lrc -> Enumeration.kernel lrc la, ([], lazy []))
   in
   let Enumeration.Graph graph =
     Enumeration.make_graph grammar rcs stacks
@@ -344,7 +344,7 @@ let report_coverage
               | Either.Right _ -> ()
             end suffix
           end suffixes
-        end suffixes
+        end free_predecessors
       end
   in
   (* FIXME: Report all sentences with a uniform presentation *)
