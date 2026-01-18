@@ -144,11 +144,69 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
     print_string "\x1b[0m";
   end stack
 
-(*let parse_sentence ~entrypoint:_ ~sentence:_ =
-
-
-  val analyze_sentence
-  :  terminal config
-  -> entrypoint:lr1
-  -> sentence:terminal with_position Seq.t ->
-  unit*)
+let sentence_parser (type g) (g : g grammar) =
+  (* Memoize actions *)
+  let action_table : (g lr1 index * g terminal index, _) Hashtbl.t = Hashtbl.create 7 in
+  let get_action state terminal =
+    match Lr1.default_reduction g state with
+    | Some prod -> `Reduce prod
+    | None ->
+      let key = (state, terminal) in
+      match Hashtbl.find_opt action_table key with
+      | Some action -> action
+      | None ->
+        let action =
+          match
+            IndexSet.find
+              (fun red -> IndexSet.mem terminal (Reduction.lookaheads g red))
+              (Reduction.from_lr1 g state)
+          with
+          | red -> `Reduce (Reduction.production g red)
+          | exception Not_found ->
+            let sym = Symbol.inj_t g terminal in
+            match
+              IndexSet.find
+                (fun tr -> Index.equal sym (Transition.symbol g tr))
+                (Transition.successors g state)
+            with
+            | tr -> `Shift (Transition.target g tr)
+            | exception Not_found ->
+              `Reject
+        in
+        Hashtbl.add action_table key action;
+        action
+  in
+  (* Process a sentence *)
+  fun
+    (entrypoint : g lr1 index with_position)
+    (symbols : g terminal index with_position Seq.t) ->
+    let rec consume_terminal stack (t, startp, endp as token) =
+      let (state, _, currp) = List.hd stack in
+      match get_action state t with
+      | `Reject -> Result.Error stack
+      | `Shift state -> Result.Ok ((state, startp, endp) :: stack)
+      | `Reduce prod ->
+        let (stack, startp', endp') =
+          match Production.length g prod with
+          | 0 -> (stack, currp, currp)
+          | n ->
+            let (_, _, endp) = List.hd stack in
+            let stack = list_drop (n - 1) stack in
+            let (_, startp, _) = List.hd stack in
+            let stack = List.tl stack in
+            (stack, startp, endp)
+        in
+        let (state, _, _) = List.hd stack in
+        let state' = Transition.find_goto_target g state (Production.lhs g prod) in
+        let stack = (state', startp', endp') :: stack in
+        consume_terminal stack token
+    in
+    let rec loop stack ts =
+      match ts () with
+      | Seq.Nil -> (stack, stack, Seq.empty)
+      | Seq.Cons (t, ts') as ts0 ->
+        match consume_terminal stack t with
+        | Result.Ok stack' -> loop stack' ts'
+        | Result.Error stack' -> (stack, stack', fun () -> ts0)
+    in
+    loop [entrypoint] symbols
