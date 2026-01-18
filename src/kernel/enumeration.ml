@@ -196,6 +196,8 @@ let next disp =
   disp.next <- next;
   result
 
+let to_seq disp = disp.next
+
 let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
   let disp = {
     fallible0 = Vector.make (Lr0.cardinal grammar) IndexSet.empty;

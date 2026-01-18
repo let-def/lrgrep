@@ -315,11 +315,8 @@ let do_compile spec (cp : Code_printer.t option) =
   let grammar = !!grammar in
   Codegen.output_header grammar spec cp;
   List.iter begin fun (rule : Syntax.rule) ->
-    let stacks =
-      make_stacks
-        (lrc_from_entrypoints (translate_entrypoints rule.startsymbols))
-        ~error_only:(fst rule.error)
-    in
+    let entrypoints = lrc_from_entrypoints (translate_entrypoints rule.startsymbols) in
+    let stacks = make_stacks entrypoints ~error_only:(fst rule.error) in
     let Spec.Rule (clauses, branches) =
       Spec.import_rule grammar !!red_graph !!indices !!red_trie rule
     in
@@ -367,6 +364,7 @@ let do_compile spec (cp : Code_printer.t option) =
       in
       Coverage.report_coverage grammar !!red_closure stacks cposition
         !!reachability coverage
+        ~get_prefix:entrypoints.some_prefix
     end machine.initial;
     stopwatch 1 "coverage check";
   end spec.lexer_definition.rules;
@@ -401,7 +399,7 @@ let enumerate_command () =
   let stacks = make_stacks subset ~error_only:true in
   let initial_enum =
     let lookahead = Terminal.regular grammar in
-    let add lrc = List.cons (Enumeration.kernel lrc lookahead) in
+    let add lrc acc = (Enumeration.kernel lrc lookahead, ()) :: acc in
     IndexSet.fold add stacks.tops []
   in
   let Enumeration.Graph graph =
@@ -504,12 +502,10 @@ let enumerate_command () =
   Printf.printf "# Maximal patterns\n\n";
   report_sentences (List.to_seq sentences);
   if !opt_enum_all then
-    let sentences =
-      Enumeration.cover_all grammar !!red_closure stacks graph
-        ~already_covered:sentences
-    in
+    let cover = Enumeration.cover_all grammar !!red_closure stacks graph in
+    List.iter (Enumeration.mark_sentence_covered grammar stacks graph cover) sentences;
     Printf.printf "# Exhaustive coverage\n\n";
-    report_sentences sentences
+    report_sentences (Enumeration.to_seq cover)
 
 (* Command import *)
 

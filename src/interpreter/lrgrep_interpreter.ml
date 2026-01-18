@@ -1,3 +1,4 @@
+(*
 open MenhirSdk
 open Fix.Indexing
 open Utils
@@ -179,3 +180,4 @@ struct
     -> sentence:terminal with_position Seq.t ->
     unit
 end
+*)
