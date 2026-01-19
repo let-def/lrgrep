@@ -22,7 +22,7 @@
 *)
 
 (** This module defines the shallow abstract syntax for an error specification
-    file (.mlyl). It includes types for representing locations, symbols, regular
+    file (.lrgrep). It includes types for representing locations, symbols, regular
     expressions, semantic actions, and the overall structure of a lexer
     definition. *)
 open Utils
@@ -117,7 +117,7 @@ type clause = {
   action: clause_action; (** the semantic action *)
 }
 
-(** A rule in .mlyl file is represented by the [rule] type. *)
+(** A rule in .lrgrep file is represented by the [rule] type. *)
 type rule = {
   name    : string;
   (** Name of the rule *)
@@ -136,7 +136,7 @@ type rule = {
   (** The list of clauses to match *)
 }
 
-(** An .mlyl file is an header containing some OCaml code, one or more entries,
+(** An .lrgrep file is an header containing some OCaml code, one or more entries,
     and a trailer with some other OCaml code. *)
 type lexer_definition = {
   header  : ocaml_code;

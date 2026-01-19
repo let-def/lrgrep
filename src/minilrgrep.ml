@@ -12,9 +12,9 @@ let usage () =
     "MiniLRGrep\n\
      \n\
      Usage:\n\
-     %s compile <grammar.cmly> <spec.mlyl>\n\
+     %s compile <grammar.cmly> <spec.lrgrep>\n\
      %s enumerate <grammar.cmly>\n\
-     %s coverage <grammar.cmly> <spec.mlyl>\n\
+     %s coverage <grammar.cmly> <spec.lrgrep>\n\
     "
     Sys.argv.(0)
     Sys.argv.(0)

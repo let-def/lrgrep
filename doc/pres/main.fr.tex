@@ -165,12 +165,12 @@ This '(' might be unmatched
     \item Fichiers :
       \begin{itemize}
       \item Grammaire, extension \texttt{.mly}
-      \item<2-> Spécification des erreurs, \texttt{.mlyl}
+      \item<2-> Spécification des erreurs, \texttt{.lrgrep}
       \end{itemize}
     \item Compilation :
       \begin{itemize}
         \item Menhir traite le \texttt{.mly} et produit un analyseur syntaxique
-        \item<2-> LRgrep traite le \texttt{.mlyl} et produit un analyseur d'erreur
+        \item<2-> LRgrep traite le \texttt{.lrgrep} et produit un analyseur d'erreur
       \end{itemize}
     \item Exécution :
       \begin{itemize}
@@ -188,7 +188,7 @@ This '(' might be unmatched
 \end{frame}
 
 % \begin{frame}[fragile]{Spécification des erreurs}
-%   Le fichier \texttt{.mlyl} a la même structure qu'un fichier \texttt{ocamllex} : \\
+%   Le fichier \texttt{.lrgrep} a la même structure qu'un fichier \texttt{ocamllex} : \\
 %   \begin{itemize}
 %     \item une ou plusieurs règles composées d'une liste de clauses
 %     \item chaque clause est un motif accompagné d'une action sémantique.

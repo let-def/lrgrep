@@ -6,18 +6,18 @@ All commands require a grammar (`-g`/`--grammar`), and some accept an error spec
 
 ```
   -g/--grammar <parser.cmly>   Grammar file (mandatory for all commands)
-  -s/--spec <spec.mlyl>        Error specification (optional, used by some commands)
+  -s/--spec <spec.lrgrep>        Error specification (optional, used by some commands)
 ```
 
 > Global flags:
 > 
 > ```
 >   -g/--grammar <parser.cmly>  Parser/grammar to work with
->   -s/--spec <spec.mlyl>  Error specification to process
+>   -s/--spec <spec.lrgrep>  Error specification to process
 > ```
 > 
 > LRgrep can achieve many different tasks related to grammars and error specifications. All of them need at least a grammar as input, so it is mandatory to pass the `-g <parser.cmly>`.
-> Some of them also depend on an error specification, specified with the `-s <spec.mlyl>` flag.
+> Some of them also depend on an error specification, specified with the `-s <spec.lrgrep>` flag.
 > 
 > The other arguments determine transformations and analysis that are applied to the grammar and the (optional) specification. They are better understood but looking at the different workflows in which LRgrep can be used.
 > 
@@ -36,7 +36,7 @@ Produces a parser module from the specification file.
 
 > ## Compile
 > 
-> The main purpose of LRgrep is to generate a program realizing an error specification. This is done by the `compile` command which generate an OCaml module `<spec>.ml` from the mandatory `-s <spec.mlyl>`. `-o <output.ml>` can be used to customize the name of the generated file.
+> The main purpose of LRgrep is to generate a program realizing an error specification. This is done by the `compile` command which generate an OCaml module `<spec>.ml` from the mandatory `-s <spec.lrgrep>`. `-o <output.ml>` can be used to customize the name of the generated file.
 
 ---
 

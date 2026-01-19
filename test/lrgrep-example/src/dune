@@ -17,9 +17,9 @@
 
 (rule
   (targets errors.ml)
-  (deps    parser.cmly errors.mlyl)
+  (deps    parser.cmly errors.lrgrep)
   (action
-     (run lrgrep compile -s errors.mlyl -g parser.cmly -o errors.ml)))
+     (run lrgrep compile -s errors.lrgrep -g parser.cmly -o errors.ml)))
 
 ;; This is the executable file for this demo.
 

@@ -29,11 +29,11 @@ open Kernel
 
 (*
 let usage = "
-Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.mlyl] <commands>...
+Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.lrgrep] <commands>...
 
 Global options:
   -g, --grammar <parser.cmly> Grammar/automaton to work on
-  -s, --spec    <spec.mlyl>   Specification to process
+  -s, --spec    <spec.lrgrep>   Specification to process
   -v, --verbose      Increase verbosity
   -h, --help         Show this help messages
   -V, --version      Display version information and exit
@@ -67,8 +67,8 @@ let usage_prompt =
 
 let usage_examples = "\
 Examples:
-  lrgrep -v -g grammar.cmly -s error.mlyl compile -o error.ml
-  lrgrep -g grammar.cmly -s error.mlyl interpret -i \"invalid sentence\"
+  lrgrep -v -g grammar.cmly -s error.lrgrep compile -o error.ml
+  lrgrep -g grammar.cmly -s error.lrgrep interpret -i \"invalid sentence\"
   "
 
 
@@ -115,7 +115,7 @@ let set_spec_file name =
 let get_spec_file () =
   match !opt_spec_file with
   | None ->
-    usage_error "no specification file has been set (pass -s <spec.mlyl>)";
+    usage_error "no specification file has been set (pass -s <spec.lrgrep>)";
     exit 1
   | Some fname -> fname
 
@@ -153,7 +153,7 @@ let global_specs = [
   "-g", Arg.String set_grammar_file,
   " <file.cmly>  Path to the compiled Menhir grammar to analyse";
   "-s", Arg.String set_spec_file,
-  " <file.mlyl>  Path to the error specification to process";
+  " <file.lrgrep>  Path to the error specification to process";
   "-v", Arg.Unit (fun () -> incr Misc.verbosity_level),
   " Increase output verbosity (for debugging/profiling)";
   "-version", Arg.Unit print_version_string,
