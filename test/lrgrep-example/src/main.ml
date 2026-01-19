@@ -9,7 +9,7 @@ type 'a checkpoint = 'a I.checkpoint
 
 (* [print_syntax_error content triple env] constructs and prints a syntax
    error message. The message is constructed according to the rules in the
-   file [errors.mlyl].
+   file [errors.lrgrep].
 
    [content] is the content of the file that we are currently reading.
 

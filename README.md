@@ -5,7 +5,7 @@ This repository provides different tools to work on the error messages of a menh
 The main tool is `lrgrep`. It takes:
 
 - a compiled Menhir grammar (a .cmly file, produced by passing `--cmly` flag to Menhir) 
-- a list of rules (usually a .mlyl file).
+- a list of rules (usually a .lrgrep file).
 
 If the list of rule is well-formed, it produces an OCaml module that can match
 the rules against the state of a parser at runtime.
