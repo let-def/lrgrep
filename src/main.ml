@@ -454,37 +454,44 @@ let enumerate_command () =
         Printf.printf "```\n\n";
         List.iteri begin fun i (sentence : _ Enumeration.failing_sentence) ->
           Printf.printf
-            "### Sample sentence %d\n\
-             \n\
-             Here is a sample sentence prefix covered this pattern:\n\
-             ```\n" (i + 1);
+            "### Sample %d\n\
+             \n"
+            (i + 1);
           let lrc = graph.ker.:(sentence.first).lrc in
           let suffix =
-            List.concat_map
-              (fun edge -> edge.Enumeration.path)
+            List.fold_right
+              (fun edge acc -> edge.Enumeration.path @ acc)
               sentence.edges
-            @ [sentence.entry]
+              [sentence.entry]
           in
-          let prefix = subset.some_prefix lrc in
-          let lrcs = List.rev_append prefix suffix in
-          List.iter (fun lrc ->
-              Printf.printf " %s"
-                (Lr1.symbol_to_string grammar (stacks.label lrc))
-            ) lrcs;
+          let lrcs = List.rev_append (subset.some_prefix lrc) suffix in
+          let lr1s = List.map stacks.label lrcs in
+          let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
           Printf.printf
-            "\n```\n\
-             \n\
-             It is rejected when looking ahead at:\n\
-             ```\n";
-          IndexSet.rev_iter (fun t ->
-              Printf.printf " %s" (Terminal.to_string grammar t)
-            ) (IndexSet.inter regular_terminals sentence.failing);
+            "Sentence:\n\
+             ```\n\
+             %s\n\
+             ```\n"
+            (string_concat_map " " (Terminal.to_string grammar) terms);
           Printf.printf
-            "\n```\n\
-             \n";
+            "Stack:\n\
+             ```\n\
+             %s\n\
+             ```\n"
+            (string_concat_map " " (Lr1.symbol_to_string grammar) lr1s);
+          Printf.printf
+            "Rejected when looking ahead at:\n\
+             ```\n\
+             %s\n\
+             ```\n\
+             \n"
+            (String.concat " "
+               (List.rev_map (Terminal.to_string grammar)
+                  (IndexSet.elements
+                     (IndexSet.inter regular_terminals sentence.failing))));
           if not (list_is_empty sentence.edges) then (
             Printf.printf
-              "It is also covered by these intermediate patterns:\n\
+              "Also covered by these intermediate patterns:\n\
                ```\n";
             List.iter (fun edge ->
                 let node = edge.Enumeration.source in
