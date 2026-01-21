@@ -88,8 +88,8 @@ let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
     sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
 let print_items grammar indent suffix items =
-  Printf.printf "\t\t%s\x1b[0;32m  [%s" (String.make indent ' ') suffix;
-  let pad = String.make (indent + 3 + String.length suffix) ' ' in
+  Printf.printf "\t\t%s\x1b[0;32m[%s" (String.make indent ' ') suffix;
+  let pad = String.make (indent + 1 + String.length suffix) ' ' in
   let first = ref true in
   IndexSet.iter (fun item ->
       if !first then first := false else
@@ -108,11 +108,13 @@ let print_stack grammar config ~is_goto stack =
   let stack = List.rev stack in
   let stack = if is_goto then stack else List.tl stack in
   let stack = List.filter_map (Lr1.incoming grammar) stack in
-  Printf.printf "\t\t\x1b[1;33m↱ %s\n"
-    (string_concat_map " " (Symbol.name grammar) stack);
-  if config.print_reduce_filter then begin
-    print_items grammar 0 "_*" (Lr1.items grammar top);
-  end
+  if config.print_reduce_filter then
+    print_items grammar
+      (if is_goto then 2 else 0)
+      "_*" (Lr1.items grammar top);
+  if is_goto then
+    Printf.printf "\t\t\x1b[1;33m↱ %s\n"
+      (string_concat_map " " (Symbol.name grammar) stack)
 
 let rec filter_reductions la = function
   | [] -> []
@@ -134,20 +136,22 @@ let rec merge_reductions = function
     let xys = merge_reductions (xs, ys) in
     xy :: xys
 
-let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector) config ~stack =
+let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector)
+    config ~stack ~remainder
+  =
   Format.printf "Parser stack (most recent first):\n%!";
   let failing = ref IndexSet.empty in
   let outer = ref [] in
+  let reached_state ~is_goto lookaheads state =
+    let rc = rcs.:(state) in
+    outer := merge_reductions (!outer, filter_reductions lookaheads rc.reductions);
+    failing := IndexSet.fused_inter_union rc.failing lookaheads ~acc:!failing;
+    List.iter begin fun (stack, lookaheads') ->
+      if not (IndexSet.disjoint lookaheads lookaheads') then
+        print_stack grammar config ~is_goto stack
+    end (([state], lookaheads) :: rc.stacks)
+  in
   List.iteri begin fun i (state, start, stop) ->
-    let reached_state ~is_goto lookaheads state =
-      let rc = rcs.:(state) in
-      outer := merge_reductions (!outer, filter_reductions lookaheads rc.reductions);
-      failing := IndexSet.fused_inter_union rc.failing lookaheads ~acc:!failing;
-      List.iter begin fun (stack, lookaheads') ->
-        if not (IndexSet.disjoint lookaheads lookaheads') then
-          print_stack grammar config ~is_goto stack
-      end rc.stacks
-    in
     let simulate_gotos nts =
       IndexMap.iter begin fun nt lookaheads ->
         reached_state ~is_goto:true lookaheads
@@ -169,12 +173,10 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
     else
       simulate_reductions ();
     let items = Lr1.items grammar state in
-    if (i = 0 && config.print_reduce_filter) then (
-      print_items grammar 0 "" items;
-    ) else if config.print_stack_items then (
+    if config.print_stack_items then (
       print_string "\x1b[0;36m";
       IndexSet.iter
-        (fun item -> print_endline ("\t\t  [" ^ Item.to_string grammar item ^ "]"))
+        (fun item -> print_endline ("\t\t[" ^ Item.to_string grammar item ^ "]"))
         items;
     );
     print_string "\x1b[0m- ";
@@ -187,7 +189,14 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
       | Some sym -> print_endline sym
     end;
     print_string "\x1b[0m";
-  end stack
+  end stack;
+  if not (List.is_empty remainder) then
+    Printf.printf "Remaining input:\n  %s\n"
+      (string_concat_map " " (Terminal.to_string grammar) remainder);
+  if IndexSet.is_not_empty !failing then
+    Printf.printf "Rejected lookahead symbols:\n  %s\n"
+      (string_concat_map ", " (Terminal.to_string grammar)
+         (List.rev (IndexSet.elements !failing)))
 
 type 'g parser = {
   grammar: 'g grammar;

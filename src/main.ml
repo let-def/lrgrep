@@ -566,8 +566,17 @@ let import_command () =
 
 (* Interpret *)
 
+let opt_interpret_patterns = ref true
+let opt_interpret_items = ref false
+
 let interpret_command () =
   let parser = Lrgrep_interpreter.make_parser !!grammar in
+  let config =
+    Lrgrep_interpreter.config
+      ~print_reduce_filter:!opt_interpret_patterns
+      ~print_stack_items:!opt_interpret_items
+      ()
+  in
   let rec loop () =
     match input_line stdin with
     | exception End_of_file -> ()
@@ -582,12 +591,15 @@ let interpret_command () =
           | None -> Option.get (IndexSet.minimum (Lr1.entrypoints !!grammar))
           | Some ep -> ep
         in
-        let _offer_stack, _final_stack, _remainder =
+        let stack, _final_stack, remainder =
           Lrgrep_interpreter.parse_sentence parser
-            (entrypoint, (), ())
+            (entrypoint, Lexing.dummy_pos, Lexing.dummy_pos)
             (List.to_seq sentence.symbols |>
-             Seq.map (fun x -> x, (), ()))
+             Seq.map (fun x -> x, Lexing.dummy_pos, Lexing.dummy_pos))
         in
+        let remainder = List.map (fun (x, _, _) -> x) (List.of_seq remainder) in
+        Lrgrep_interpreter.analyze_stack ~stack ~remainder
+          !!grammar !!red_closure config;
         loop ()
   in
   loop ()
@@ -599,7 +611,10 @@ let commands =
       "-o", Arg.String (fun x -> opt_output_name := Some x),
       "<file.ml> Set output file name to <file> (defaults to <spec>.ml)";
     ] ~commit:compile_command;
-    command "interpret" "Parse a sentence and suggest patterns that can match it" []
+    command "interpret" "Parse a sentence and suggest patterns that can match it" [
+      "-no-patterns", Arg.Clear opt_interpret_patterns, " Do not suggest patterns";
+      "-items", Arg.Set opt_interpret_items," Annotate each state with its items";
+    ]
       ~commit:interpret_command;
     (* command "recover" "Generate an error-resilient parser for the grammar" []
          ~commit:(not_implemented "recover");
