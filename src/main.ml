@@ -578,6 +578,8 @@ let interpret_command () =
       ()
   in
   let rec loop () =
+    output_string stdout "$ ";
+    flush stdout;
     match input_line stdin with
     | exception End_of_file -> ()
     | line ->
