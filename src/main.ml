@@ -445,11 +445,11 @@ let enumerate_command () =
     Vector.iteri begin fun lr0 -> function
       | [] -> ()
       | sentences ->
+        incr cases;
         Printf.printf
           "## Pattern %d\n\
            \n\
            ```\n" !cases;
-        incr cases;
         output_pattern lr0;
         Printf.printf "```\n\n";
         List.iteri begin fun i sentence ->
@@ -457,7 +457,7 @@ let enumerate_command () =
             "### Sample sentence %d\n\
              \n\
              Here is a sample sentence prefix covered this pattern:\n\
-             ```\n" i;
+             ```\n" (i + 1);
           let lrc = graph.ker.:(sentence.Enumeration.first).lrc in
           let suffix =
             lrc ::
