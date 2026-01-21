@@ -401,7 +401,7 @@ let enumerate_command () =
   let stacks = make_stacks subset ~error_only:true in
   let initial_enum =
     let lookahead = Terminal.regular grammar in
-    let add lrc = List.cons (Enumeration.kernel lrc lookahead) in
+    let add lrc acc = (Enumeration.kernel lrc lookahead, ()) :: acc in
     IndexSet.fold add stacks.tops []
   in
   let Enumeration.Graph graph =
@@ -504,12 +504,10 @@ let enumerate_command () =
   Printf.printf "# Maximal patterns\n\n";
   report_sentences (List.to_seq sentences);
   if !opt_enum_all then
-    let sentences =
-      Enumeration.cover_all grammar !!red_closure stacks graph
-        ~already_covered:sentences
-    in
+    let cover = Enumeration.cover_all grammar !!red_closure stacks graph in
+    List.iter (Enumeration.mark_sentence_covered grammar stacks graph cover) sentences;
     Printf.printf "# Exhaustive coverage\n\n";
-    report_sentences sentences
+    report_sentences (Enumeration.to_seq cover)
 
 (* Command import *)
 
