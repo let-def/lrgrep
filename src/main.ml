@@ -570,13 +570,12 @@ let commands =
     ] ~commit:compile_command;
     command "interpret" "Parse a sentence and suggest patterns that can match it" []
       ~commit:(not_implemented "interpret");
-    command "cover" "Check that the error specification cover all possible failures" []
-      ~commit:(not_implemented "cover");
-    command "recover" "Generate an error-resilient parser for the grammar" []
-      ~commit:(not_implemented "recover");
-    command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
-      ~commit:(not_implemented "complete");
-    command "enumerate" "Generate sentences to cover possible failures" [
+    (* command "recover" "Generate an error-resilient parser for the grammar" []
+         ~commit:(not_implemented "recover");
+       command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
+         ~commit:(not_implemented "complete");
+    *)
+    command "enumerate" "Generate a negative testsuite (sentences that cover possible failures)" [
       "-a", Arg.Set opt_enum_all, " Cover all filter-reduce patterns";
       "-e", Arg.String (push opt_enum_entrypoints),
       " <entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
