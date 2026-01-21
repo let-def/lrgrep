@@ -264,8 +264,8 @@ let string_of_items_for_filter g lr0 =
   in
   List.rev_map print_item !lines
 
-let report_coverage
-  grammar rcs (stacks : _ Automata.stacks) positions reachability
+let report_coverage (type lrc)
+  grammar rcs (stacks : (_, lrc) Automata.stacks) positions reachability
   ~get_prefix
   {transitions; unhandled_initial; unhandled_predecessors}
   =
@@ -337,6 +337,44 @@ let report_coverage
     Enumeration.make_graph grammar rcs stacks
       (enum_initials @ enum_predecessors)
   in
+  let cases = ref 0 in
+  let report_case pattern prefix suffixes =
+    incr cases;
+    let p fmt = Printf.printf fmt in
+    p "## Uncovered case %d\n" !cases;
+    p "Some uncovered stacks can be caught by this pattern:\n\
+       ```\n\
+       %s\n\
+       ```\n\n"
+      (String.concat "\n" (string_of_items_for_filter grammar pattern));
+    List.iteri begin fun i (suffix, lookaheads) ->
+      p "### Sample %d\n" (i + 1);
+      p "Stacks ending in:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (string_concat_map " " (Lr1.symbol_to_string grammar) suffix);
+      p "are rejected without an error message when looking ahead at:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (String.concat " ," (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
+      if not (List.is_empty prefix) then
+        p "Sample prefix:\n\
+           ```\n\
+           %s\n\
+           ```\n"
+          (string_concat_map " " (Lr1.symbol_to_string grammar) prefix);
+      let sentence =
+        Sentence_generation.sentence_of_stack grammar reachability (prefix @ suffix)
+      in
+      p "Sample sentence:\n\
+         ```\n\
+         %s\n\
+         ```\n\n"
+        (string_concat_map " " (Terminal.to_string grammar) sentence);
+    end suffixes
+  in
   let cover = Enumeration.cover_all grammar rcs stacks graph in
   List.iter begin fun (_lrcs, suffixes) ->
     List.iter begin fun (suffix, la) ->
@@ -349,106 +387,56 @@ let report_coverage
         | Either.Right _ -> ()
       end suffix;
       let pattern = ref None in
-      let lr1s =
-        List.fold_left (fun acc (_, lp) ->
-            let pos, lrc = unpack_position positions lp in
-            match previous_position positions pos with
-            | Either.Left nt ->
-              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-              pattern := Some (Lr1.to_lr0 grammar lr1);
-              acc
-            | Either.Right _ ->
-              stacks.label lrc :: acc
-          ) [] suffix
+      let suffix =
+        List.fold_left begin fun acc (_, lp) ->
+          let pos, lrc = unpack_position positions lp in
+          match previous_position positions pos with
+          | Either.Left nt ->
+            let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+            pattern := Some (Lr1.to_lr0 grammar lr1);
+            acc
+          | Either.Right _ -> lrc :: acc
+        end [] suffix
       in
-      begin match !pattern with
-        | None -> assert false
-        | Some lr0 ->
-          List.iter print_endline (string_of_items_for_filter grammar lr0)
-      end;
-      Printf.printf "Unhandled suffix:\n  %s\n  %s\nwhen looking ahead at:\n  %s\n"
-        (Lr1.list_to_string grammar lr1s)
-        (string_concat_map " "
-           (Terminal.to_string grammar)
-           (Sentence_generation.sentence_of_stack grammar reachability lr1s))
-        (Terminal.lookaheads_to_string grammar la)
+      report_case (Option.get !pattern)
+        (List.rev_map stacks.label (get_prefix (List.hd suffix)))
+        [List.map stacks.label suffix, la]
     end suffixes
   end free_predecessors;
   while match Enumeration.next cover with
     | None -> false
     | Some {first; edges; failing; entry = (suffix0, lazy suffixes)} ->
-      (*List.iter begin fun (suffix, _) ->
-        List.iter begin fun (_, lp) ->
-          let pos, lrc = unpack_position positions lp in
-          match previous_position positions pos with
-          | Either.Left nt ->
-            let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-            Enumeration.mark_covered cover (Lr1.to_lr0 grammar lr1) failing
-          | Either.Right _ -> ()
-        end suffix
-        end suffixes;*)
-      let ker = graph.ker.:(first) in
-      let lr0 = Enumeration.get_lr0_state grammar stacks ker in
-      Printf.printf "Uncovered sentences with pattern:\n";
-      List.iter print_endline (string_of_items_for_filter grammar lr0);
-      let prefix = List.rev_map stacks.label (get_prefix ker.lrc) in
-      let middle = List.concat_map
-          (fun edge -> List.rev_map stacks.label edge.Enumeration.path)
-          edges
+      let suffixes =
+        List.filter_map begin fun (suffix, la) ->
+          let la' = IndexSet.inter failing la in
+          if IndexSet.is_empty la' then None else
+            let suffix = List.fold_left begin fun acc (_, lp) ->
+                let pos, lrc = unpack_position positions lp in
+                let lr1 = stacks.label lrc in
+                match previous_position positions pos with
+                | Either.Left nt ->
+                  let goto = Transition.find_goto_target grammar lr1 nt in
+                  Enumeration.mark_covered cover (Lr1.to_lr0 grammar goto) la;
+                  acc
+                | Either.Right _ ->
+                  stacks.label lrc :: acc
+              end [] suffix
+            in
+            Some (suffix, la')
+        end suffixes
       in
-      let lr1s = prefix @ middle @ (List.map stacks.label suffix0) in
-      List.iter begin fun (suffix, la) ->
-        let la = IndexSet.inter failing la in
-        if IndexSet.is_not_empty la then (
-          let suffix = List.fold_left begin fun acc (_, lp) ->
-              let pos, lrc = unpack_position positions lp in
-              let lr1 = stacks.label lrc in
-              match previous_position positions pos with
-              | Either.Left nt ->
-                let goto = Transition.find_goto_target grammar lr1 nt in
-                Enumeration.mark_covered cover (Lr1.to_lr0 grammar goto) la;
-                acc
-              | Either.Right _ ->
-                stacks.label lrc :: acc
-            end [] suffix
-          in
-          let lr1s = lr1s @ suffix in
-          Printf.printf "Unhandled sentence:\n  %s\n  %s\nwhen looking ahead at:\n  %s\n"
-            (Lr1.list_to_string grammar lr1s)
-            (string_concat_map " "
-               (Terminal.to_string grammar)
-               (Sentence_generation.sentence_of_stack grammar reachability lr1s))
-            (Terminal.lookaheads_to_string grammar la)
-        )
-      end suffixes;
+      if not (List.is_empty suffixes) then (
+        let ker = graph.ker.:(first) in
+        let lr0 = Enumeration.get_lr0_state grammar stacks ker in
+        let middle =
+          List.concat_map (fun edge -> List.rev edge.Enumeration.path) edges
+        in
+        let middle = middle @ suffix0 in
+        let prefix =
+          list_rev_mappend stacks.label (get_prefix (List.hd middle))
+            (List.map stacks.label middle)
+        in
+        report_case lr0 prefix suffixes
+      );
       true
   do () done
-
-(*List.iter begin fun (_lrcs, suffixes) ->
-  List.iter begin fun (suffix, la) ->
-  let pattern = ref None in
-  let lr1s =
-    List.fold_left (fun acc (_, lp) ->
-        let pos, lrc = unpack_position positions lp in
-        match previous_position positions pos with
-        | Either.Left nt ->
-          let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-          pattern := Some (Lr1.to_lr0 grammar lr1);
-          acc
-        | Either.Right _ ->
-          stacks.label lrc :: acc
-      ) [] suffix
-  in
-  begin match !pattern with
-    | None -> assert false
-    | Some lr0 ->
-      print_endline (print_pattern grammar lr0)
-  end;
-  Printf.printf "Unhandled suffix:\n  %s\n  %s\nwhen looking ahead at:\n  %s\n"
-    (Lr1.list_to_string grammar lr1s)
-    (string_concat_map " "
-       (Terminal.to_string grammar)
-       (Sentence_generation.sentence_of_stack grammar reachability lr1s))
-    (Terminal.lookaheads_to_string grammar la)
-  end suffixes;
-  end suffixes;*)
