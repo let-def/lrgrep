@@ -548,7 +548,7 @@ let import_command () =
     |> Message_file.extract_block
     |> Seq.map (Message_file.map_block (fun block ->
         let sentences = List.map (Message_file.map_line (fun sentence ->
-            parser (Message_file.lift_sentence !!grammar sentence)
+            parser (Lrgrep_interpreter.lift_sentence !!grammar sentence)
           )) block.Message_file.sentences
         in
         {block with sentences}

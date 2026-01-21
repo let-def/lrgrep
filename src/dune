@@ -2,7 +2,7 @@
  (name main)
  (public_name lrgrep)
  (modules main message_file)
- (libraries cmon fix front kernel menhirSdk support utils valmari perfctl))
+ (libraries lrgrep_interpreter cmon fix front kernel menhirSdk support utils valmari perfctl))
 
 (executable
  (name minilrgrep)

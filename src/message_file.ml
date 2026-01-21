@@ -2,6 +2,7 @@ open Fix.Indexing
 open Utils
 open Misc
 open Kernel.Info
+open Lrgrep_interpreter
 
 let classify_line txt =
   let is_whitespace = function ' ' | '\t' -> true | _ -> false in
@@ -105,51 +106,6 @@ let map_block f = function
 let map_line f = function
   | Comment _ as cmt -> cmt
   | Text txt -> Text (f txt)
-
-type 'g sentence = {
-  entrypoint: 'g lr1 index option;
-  symbols: 'g terminal index list;
-}
-
-let lift_sentence g sentence =
-  (* Step 1: extract optional entrypoint and symbols *)
-  let entrypoint, symbols =
-    match String.index_opt sentence ':' with
-    | None -> None, sentence
-    | Some colon ->
-      let lhs = String.trim (String.sub sentence 0 colon) in
-      let rhs =
-        String.sub sentence
-          (colon + 1)
-          (String.length sentence - colon - 1)
-      in
-      (Some lhs, rhs)
-  in
-  let symbols = List.filter ((<>) "") (String.split_on_char ' ' symbols) in
-  (* Step 2: lift to grammatical entities *)
-  let lift_entrypoint sym =
-    let entrypoints = Lr1.entrypoint_table g in
-    match Hashtbl.find_opt entrypoints sym  with
-    | None ->
-      Printf.eprintf "Unknown entrypoint %S%a\n"
-        sym
-        (print_dym (fun (_,s,_) -> s))
-        (Damerau_levenshtein.filter_approx ~dist:3 sym
-           (Hashtbl.to_seq entrypoints));
-      exit 1
-    | Some sym -> sym
-  in
-  let lift_terminal sym =
-    match Terminal.find g sym with
-    | Result.Ok t -> t
-    | Result.Error dym ->
-      Printf.eprintf "Unknown terminal %S%a\n" sym
-        (print_dym (fun (_,s,_) -> s)) dym;
-      exit 1
-  in
-  let entrypoint = Option.map lift_entrypoint entrypoint in
-  let symbols = List.map lift_terminal symbols in
-  { entrypoint; symbols }
 
 let parse_sentence (type g) (g : g grammar) =
   (* Memoize actions *)
