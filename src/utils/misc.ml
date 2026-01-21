@@ -598,8 +598,9 @@ module Damerau_levenshtein = struct
             (Int.min delete_cost insert_cost)
             (Int.min substitute_cost transpose_cost)
         in
-        if actual > max then
-          raise Exit;
+        ignore max;
+        (*if actual > max then raise Exit;
+          FIXME: implement early exit *)
         curr.(i) <- actual
       done;
 
@@ -627,7 +628,7 @@ let print_dym f oc = function
   | [] -> ()
   | x :: xs ->
     let rec print_list oc = function
-      | [] -> assert false
+      | [] -> ()
       | [x] -> Printf.fprintf oc " or %s" (f x)
       | x :: xs ->
         Printf.fprintf oc ", %s" (f x);
