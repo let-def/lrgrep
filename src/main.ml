@@ -400,7 +400,7 @@ let enumerate_command () =
   let regular_terminals = Terminal.regular grammar in
   let initial_enum =
     IndexSet.rev_map_elements stacks.tops
-      (fun lrc -> Enumeration.kernel lrc regular_terminals, ())
+      (fun lrc -> Enumeration.kernel lrc regular_terminals, lrc)
   in
   let Enumeration.Graph graph =
     Enumeration.make_graph
@@ -452,18 +452,18 @@ let enumerate_command () =
            ```\n" !cases;
         output_pattern lr0;
         Printf.printf "```\n\n";
-        List.iteri begin fun i sentence ->
+        List.iteri begin fun i (sentence : _ Enumeration.failing_sentence) ->
           Printf.printf
             "### Sample sentence %d\n\
              \n\
              Here is a sample sentence prefix covered this pattern:\n\
              ```\n" (i + 1);
-          let lrc = graph.ker.:(sentence.Enumeration.first).lrc in
+          let lrc = graph.ker.:(sentence.first).lrc in
           let suffix =
-            lrc ::
             List.concat_map
               (fun edge -> edge.Enumeration.path)
               sentence.edges
+            @ [sentence.entry]
           in
           let prefix = subset.some_prefix lrc in
           let lrcs = List.rev_append prefix suffix in
