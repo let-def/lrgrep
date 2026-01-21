@@ -498,8 +498,9 @@ let enumerate_command () =
                 let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
                 output_pattern lr0
               ) sentence.edges;
-            Printf.printf "```\n\n"
-          )
+            Printf.printf "```\n"
+          );
+          Printf.printf "\n"
         end sentences
     end by_lr0;
   in

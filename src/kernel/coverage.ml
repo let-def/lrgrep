@@ -338,17 +338,17 @@ let report_coverage (type lrc)
       (enum_initials @ enum_predecessors)
   in
   let cases = ref 0 in
-  let report_case pattern prefix suffixes =
+  let report_case pattern patterns prefix suffixes =
     incr cases;
     let p fmt = Printf.printf fmt in
-    p "## Uncovered case %d\n" !cases;
+    p "## Uncovered case %d\n\n" !cases;
     p "Some uncovered stacks can be caught by this pattern:\n\
        ```\n\
        %s\n\
        ```\n\n"
       (String.concat "\n" (string_of_items_for_filter grammar pattern));
-    List.iteri begin fun i (suffix, lookaheads) ->
-      p "### Sample %d\n" (i + 1);
+    List.iteri begin fun i (suffix, lookaheads, patterns') ->
+      p "### Sample %d\n\n" (i + 1);
       p "Stacks ending in:\n\
          ```\n\
          %s\n\
@@ -371,8 +371,19 @@ let report_coverage (type lrc)
       p "Sample sentence:\n\
          ```\n\
          %s\n\
-         ```\n\n"
+         ```\n"
         (string_concat_map " " (Terminal.to_string grammar) sentence);
+      let patterns = IndexSet.remove pattern (IndexSet.union patterns patterns') in
+      if IndexSet.is_not_empty patterns then (
+        p "Also covered by these intermediate patterns:\n\
+           ```\n";
+        IndexSet.iter (fun pattern ->
+            p "%s\n"
+              (String.concat "\n" (string_of_items_for_filter grammar pattern))
+          ) patterns;
+        p "```\n"
+      );
+      p "\n"
     end suffixes
   in
   let cover = Enumeration.cover_all grammar rcs stacks graph in
@@ -398,9 +409,9 @@ let report_coverage (type lrc)
           | Either.Right _ -> lrc :: acc
         end [] suffix
       in
-      report_case (Option.get !pattern)
+      report_case (Option.get !pattern) IndexSet.empty
         (List.rev_map stacks.label (get_prefix (List.hd suffix)))
-        [List.map stacks.label suffix, la]
+        [List.map stacks.label suffix, la, IndexSet.empty]
     end suffixes
   end free_predecessors;
   while match Enumeration.next cover with
@@ -410,33 +421,39 @@ let report_coverage (type lrc)
         List.filter_map begin fun (suffix, la) ->
           let la' = IndexSet.inter failing la in
           if IndexSet.is_empty la' then None else
-            let suffix = List.fold_left begin fun acc (_, lp) ->
+            let suffix, patterns = List.fold_left begin fun (acc, patterns) (_, lp) ->
                 let pos, lrc = unpack_position positions lp in
                 let lr1 = stacks.label lrc in
                 match previous_position positions pos with
                 | Either.Left nt ->
                   let goto = Transition.find_goto_target grammar lr1 nt in
-                  Enumeration.mark_covered cover (Lr1.to_lr0 grammar goto) la;
-                  acc
+                  let lr0 = Lr1.to_lr0 grammar goto in
+                  Enumeration.mark_covered cover lr0 la;
+                  (acc, IndexSet.add lr0 patterns)
                 | Either.Right _ ->
-                  stacks.label lrc :: acc
-              end [] suffix
+                  (stacks.label lrc :: acc, patterns)
+              end ([], IndexSet.empty) suffix
             in
-            Some (suffix, la')
+            Some (suffix, la', patterns)
         end suffixes
       in
       if not (List.is_empty suffixes) then (
         let ker = graph.ker.:(first) in
         let lr0 = Enumeration.get_lr0_state grammar stacks ker in
+        let patterns = ref IndexSet.empty in
         let middle =
-          List.concat_map (fun edge -> List.rev edge.Enumeration.path) edges
+          List.concat_map (fun (edge : _ Enumeration.edge) ->
+              let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(edge.source) in
+              patterns := IndexSet.add lr0 !patterns;
+              List.rev edge.path
+            ) edges
         in
         let middle = middle @ suffix0 in
         let prefix =
           list_rev_mappend stacks.label (get_prefix (List.hd middle))
             (List.map stacks.label middle)
         in
-        report_case lr0 prefix suffixes
+        report_case lr0 !patterns prefix suffixes
       );
       true
   do () done
