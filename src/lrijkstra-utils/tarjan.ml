@@ -249,6 +249,15 @@ end
 
 open Fix.Indexing
 
+module type SCC = sig
+  type node
+  type n
+  val n : n cardinal
+  val representatives : (n, node index) vector
+  val nodes : (n, node Utils.IndexSet.t) vector
+  val component : (node, n index) vector
+end
+
 module IndexedSCC (G : sig
   include CARDINAL
   val successors : (n index -> unit) -> n index -> unit
@@ -266,6 +275,7 @@ end) = struct
       let array = SCC.representatives
     end)
 
+  type node = G.n
   type n = Repr.n
   let n = Vector.length Repr.vector
 
@@ -288,21 +298,26 @@ end
 open Utils
 open Misc
 
+type 'n scc = (module SCC with type node = 'n)
+
+let indexed_scc (type n) (n : n cardinal) ~succ : n scc =
+  let module Scc = IndexedSCC(struct
+      type nonrec n = n
+      let n = n
+      let successors = succ
+    end)
+  in
+  (module Scc)
+
 let indexset_bind : 'a indexset -> ('a index -> 'b indexset) -> 'b indexset =
   fun s f ->
   IndexSet.fold_right (fun acc lr1 -> IndexSet.union (f lr1) acc) IndexSet.empty s
 
-let close_relation
-    (type n a)
-    (succ : (n index -> unit) -> n index -> unit)
-    (rel : (n, a indexset) vector)
+let close_forward (type a n)
+    ((module Scc) : n scc)
+    ~(succ:(n index -> unit) -> n index -> unit)
+    (rel: (n, a indexset) vector)
   =
-  let module Scc = IndexedSCC(struct
-                     type nonrec n = n
-                     let n = Vector.length rel
-                     let successors = succ
-                   end)
-  in
   Vector.rev_iteri begin fun _scc nodes ->
     let sccs = ref IndexSet.empty in
     IndexSet.rev_iter begin fun i ->
@@ -313,3 +328,26 @@ let close_relation
     let set = IndexSet.union (indexset_bind nodes (Vector.get rel)) set in
     IndexSet.iter (fun i -> rel.:(i) <- set) nodes
   end Scc.nodes
+
+let close_backward (type a n)
+    ((module Scc) : n scc)
+    ~(pred:(n index -> unit) -> n index -> unit)
+    (rel: (n, a indexset) vector)
+  =
+  Vector.iteri begin fun _scc nodes ->
+    let sccs = ref IndexSet.empty in
+    IndexSet.rev_iter begin fun i ->
+      pred (fun j -> sccs := IndexSet.add Scc.component.:(j) !sccs) i
+    end nodes;
+    let sccs = !sccs in
+    let set = indexset_bind sccs (fun scc -> rel.:(Scc.representatives.:(scc))) in
+    let set = IndexSet.union (indexset_bind nodes (Vector.get rel)) set in
+    IndexSet.iter (fun i -> rel.:(i) <- set) nodes
+  end Scc.nodes
+
+let close_relation
+    (type n a)
+    (succ : (n index -> unit) -> n index -> unit)
+    (rel : (n, a indexset) vector)
+  =
+  close_forward (indexed_scc (Vector.length rel) ~succ) ~succ rel
