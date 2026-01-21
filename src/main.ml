@@ -397,10 +397,10 @@ let enumerate_command () =
   in
   let subset = lrc_from_entrypoints initial_states in
   let stacks = make_stacks subset ~error_only:true in
+  let regular_terminals = Terminal.regular grammar in
   let initial_enum =
-    let lookahead = Terminal.regular grammar in
-    let add lrc acc = (Enumeration.kernel lrc lookahead, ()) :: acc in
-    IndexSet.fold add stacks.tops []
+    IndexSet.rev_map_elements stacks.tops
+      (fun lrc -> Enumeration.kernel lrc regular_terminals, ())
   in
   let Enumeration.Graph graph =
     Enumeration.make_graph
@@ -478,7 +478,7 @@ let enumerate_command () =
              ```\n";
           IndexSet.rev_iter (fun t ->
               Printf.printf " %s" (Terminal.to_string grammar t)
-            ) sentence.failing;
+            ) (IndexSet.inter regular_terminals sentence.failing);
           Printf.printf
             "\n```\n\
              \n";
