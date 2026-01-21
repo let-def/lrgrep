@@ -171,12 +171,11 @@ let parse_sentence (type g) (g : g grammar) =
         | Result.Error stack' -> (stack, stack', fun () -> ts0)
     in
     let entrypoint = match entrypoint with
-      | None -> IndexSet.choose (Lr1.entrypoints g)
+      | None -> (IndexSet.choose (Lr1.entrypoints g), Lexing.dummy_pos, Lexing.dummy_pos)
       | Some lhs -> lhs
     in
     let _canonical_stack, intermediate_stack, _remainder =
-      let dummy_pos x = (x, Lexing.dummy_pos, Lexing.dummy_pos) in
-      loop [dummy_pos entrypoint] (Seq.map dummy_pos (List.to_seq symbols))
+      loop [entrypoint] (List.to_seq symbols)
     in
     let state, _, _ = List.hd intermediate_stack in
     state

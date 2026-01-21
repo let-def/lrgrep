@@ -22,3 +22,7 @@ val prepare_lexbuf : lexer_state -> Lexing.lexbuf -> Lexing.lexbuf
 val main : lexer_state -> Lexing.lexbuf -> Parser.token
 
 exception Error of {msg: string; pos: Lexing.position}
+
+val sentence_interpreter
+  :  Lexing.lexbuf
+  -> [`IDENT of string | `COLON | `EOF | `UNEXPECTED of char]

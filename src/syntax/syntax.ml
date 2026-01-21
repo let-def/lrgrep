@@ -295,3 +295,7 @@ let warn (pos : Lexing.position) fmt =
 let error (pos : Lexing.position) fmt =
   Printf.eprintf "%s: error: " (gnu_position pos);
   Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc; exit 1) stderr fmt
+
+let nonfatal_error (pos : Lexing.position) fmt =
+  Printf.eprintf "%s: error: " (gnu_position pos);
+  Printf.kfprintf (fun oc -> output_char oc '\n'; flush oc) stderr fmt

@@ -32,43 +32,56 @@ type ('lr1, 'terminal, 'p) parser_output = {
 open Kernel.Info
 
 type 'g sentence = {
-  entrypoint: 'g lr1 index option;
-  symbols: 'g terminal index list;
+  entrypoint: ('g lr1 index, Lexing.position) with_position option;
+  symbols: ('g terminal index, Lexing.position) with_position list;
 }
 
 let lift_sentence g sentence =
   (* Step 1: extract optional entrypoint and symbols *)
-  let entrypoint, symbols =
-    match String.index_opt sentence ':' with
-    | None -> None, sentence
-    | Some colon ->
-      let lhs = String.trim (String.sub sentence 0 colon) in
-      let rhs =
-        String.sub sentence
-          (colon + 1)
-          (String.length sentence - colon - 1)
-      in
-      (Some lhs, rhs)
+  let lexbuf = Lexing.from_string ~with_positions:true sentence in
+  Lexing.set_filename lexbuf "input";
+  let symbol tok =
+    let text = match tok with
+      | `IDENT x -> x
+      | _ ->
+        Syntax.nonfatal_error lexbuf.lex_start_p "expecting a symbol";
+        raise Exit
+    in
+    (text, lexbuf.lex_start_p, lexbuf.lex_curr_p)
   in
-  let symbols = List.filter ((<>) "") (String.split_on_char ' ' symbols) in
+  let rec symbols acc =
+    match Front.Lexer.sentence_interpreter lexbuf with
+    | `EOF -> List.rev acc
+    | other -> symbols (symbol other :: acc)
+  in
+  let entrypoint, symbols =
+    let candidate = symbol (Front.Lexer.sentence_interpreter lexbuf) in
+    match Front.Lexer.sentence_interpreter lexbuf with
+    | `EOF   -> None, [candidate]
+    | `COLON -> (Some candidate, symbols [])
+    | other  -> (None, symbols [symbol other; candidate])
+  in
   (* Step 2: lift to grammatical entities *)
-  let lift_entrypoint sym =
+  let lift_entrypoint (sym, startp, endp) =
     let entrypoints = Lr1.entrypoint_table g in
     match Hashtbl.find_opt entrypoints sym  with
     | None ->
-      Printf.eprintf "Unknown entrypoint %S%a\n"
+      Syntax.nonfatal_error
+        startp
+        "unknown entrypoint %S%a\n"
         sym
         (print_dym (fun (_,s,_) -> s))
         (Damerau_levenshtein.filter_approx ~dist:10 sym
            (Hashtbl.to_seq entrypoints));
       raise Exit
-    | Some sym -> sym
+    | Some sym -> (sym, startp, endp)
   in
-  let lift_terminal sym =
+  let lift_terminal (sym, startp, endp) =
     match Terminal.find g sym with
-    | Result.Ok t -> t
+    | Result.Ok t -> (t, startp, endp)
     | Result.Error dym ->
-      Printf.eprintf "Unknown terminal %S%a\n" sym
+      Syntax.nonfatal_error startp
+        "unknown terminal %S%a\n" sym
         (print_dym (fun (_,s,_) -> s)) dym;
       raise Exit
   in
@@ -77,15 +90,18 @@ let lift_sentence g sentence =
   { entrypoint; symbols }
 
 let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =
-  let sprintf = Printf.sprintf in
-  let sline = loc_start.pos_lnum in
-  let scol  = loc_start.pos_cnum - loc_start.pos_bol in
-  let eline = loc_end.pos_lnum in
-  let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
-  if sline = eline then
-    sprintf "line %d:%d-%d\t" sline scol ecol
+  if loc_start = Lexing.dummy_pos then
+    "             \t"
   else
-    sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
+    let sprintf = Printf.sprintf in
+    let sline = loc_start.pos_lnum in
+    let scol  = loc_start.pos_cnum - loc_start.pos_bol in
+    let eline = loc_end.pos_lnum in
+    let ecol  = loc_end.pos_cnum - loc_end.pos_bol in
+    if sline = eline then
+      sprintf "line %d:%d-%d\t" sline scol ecol
+    else
+      sprintf "from %d:%d to %d:%d\t" sline scol eline ecol
 
 let print_items grammar indent suffix items =
   Printf.printf "\t\t%s\x1b[0;32m[%s" (String.make indent ' ') suffix;

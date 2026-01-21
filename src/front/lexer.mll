@@ -338,3 +338,14 @@ and skip_char = parse
 
 (* Perilous *)
   | "" {()}
+
+and sentence_interpreter = parse
+  | [' ' '\r' '\009' '\012' ] +
+    { sentence_interpreter lexbuf }
+  | '\n'
+    { incr_loc lexbuf 0;
+      sentence_interpreter lexbuf }
+  | ident as s { `IDENT s }
+  | ':'    { `COLON }
+  | eof    { `EOF }
+  | _ as c { `UNEXPECTED c }

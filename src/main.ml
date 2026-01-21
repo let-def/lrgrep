@@ -591,13 +591,12 @@ let interpret_command () =
         let entrypoint =
           match sentence.entrypoint with
           | None -> Option.get (IndexSet.minimum (Lr1.entrypoints !!grammar))
-          | Some ep -> ep
+          | Some (ep, _, _) -> ep
         in
         let stack, _final_stack, remainder =
           Lrgrep_interpreter.parse_sentence parser
             (entrypoint, Lexing.dummy_pos, Lexing.dummy_pos)
-            (List.to_seq sentence.symbols |>
-             Seq.map (fun x -> x, Lexing.dummy_pos, Lexing.dummy_pos))
+            (List.to_seq sentence.symbols)
         in
         let remainder = List.map (fun (x, _, _) -> x) (List.of_seq remainder) in
         Lrgrep_interpreter.analyze_stack ~stack ~remainder

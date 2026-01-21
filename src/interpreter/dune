@@ -1,5 +1,5 @@
 (library
  (name lrgrep_interpreter)
  (wrapped false)
- (libraries kernel fix utils menhirSdk)
+ (libraries kernel front fix utils menhirSdk)
  (public_name lrgrep.interpreter))
