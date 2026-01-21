@@ -297,11 +297,17 @@ let block_to_lines g = function
     in
     List.concat (List.rev_append sentences (List.rev_append comments (List.rev message)))
 
-let blocks_to_file g blocks ()=
+let blocks_to_file g ~shortest blocks ()=
   let prepare i block =
     let lines = block_to_lines g block in
     let lines = if i = 0 then lines else "" :: lines in
     List.to_seq lines
   in
-  Seq.Cons ("rule error_messages = parse error",
-            Seq.concat (seq_mapi prepare blocks))
+  let body = Seq.concat (seq_mapi prepare blocks) in
+  let body =
+    if shortest then
+      fun () -> Seq.Cons ("%shortest [", Seq.append body (Seq.singleton "]"))
+    else
+      body
+  in
+    Seq.Cons ("rule error_messages = parse error", body)

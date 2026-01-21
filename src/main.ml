@@ -511,6 +511,7 @@ let enumerate_command () =
 
 let opt_import_file = ref ""
 let opt_import_output = ref ""
+let opt_import_shortest = ref false
 
 let set_import_message_file path =
   if !opt_import_file <> "" then
@@ -552,7 +553,8 @@ let import_command () =
   let oc = open_out_bin !opt_import_output in
   Seq.iter
     (fun line -> output_string oc line; output_char oc '\n')
-    (Message_file.blocks_to_file !!grammar blocks);
+    (Message_file.blocks_to_file
+       !!grammar ~shortest:!opt_import_shortest blocks);
   close_out oc
 
 (* Argument parser *)
@@ -579,8 +581,9 @@ let commands =
       "-e", Arg.String (push opt_enum_entrypoints),
       " <entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
     ] ~commit:enumerate_command;
-    command "import-messages" "" [
-      "-o", Arg.Set_string opt_import_output, "";
+    command "import-messages" "<file.messages> Generate a .lrgrep file from a .messages file" [
+      "-o", Arg.Set_string opt_import_output, "<file.lrgrep> Output destination";
+      "--shortest", Arg.Set opt_import_shortest, " Shortest matching strategy";
     ] ~anon:set_import_message_file ~commit:import_command;
 ]
 
