@@ -22,11 +22,11 @@ let config
   =
   {print_reduce_filter; print_stack_items; (*pretty_printer*)}
 
-type 'a with_position = 'a * Lexing.position * Lexing.position
+type ('a, 'p) with_position = 'a * 'p * 'p
 
-type ('lr1, 'terminal) parser_output = {
-  stack: 'lr1 with_position list;
-  remainder: 'terminal with_position Seq.node;
+type ('lr1, 'terminal, 'p) parser_output = {
+  stack: ('lr1, 'p) with_position list;
+  remainder: ('terminal, 'p) with_position Seq.node;
 }
 
 open Kernel.Info
@@ -189,50 +189,65 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
     print_string "\x1b[0m";
   end stack
 
-let sentence_parser (type g) (g : g grammar) =
-  (* Memoize actions *)
-  let action_table : (g lr1 index * g terminal index, _) Hashtbl.t = Hashtbl.create 7 in
-  let get_action state terminal =
-    match Lr1.default_reduction g state with
-    | Some prod -> `Reduce prod
+type 'g parser = {
+  grammar: 'g grammar;
+  table: ('g lr1 index * 'g terminal index,
+          [ `Reduce of 'g production index
+          | `Reject
+          | `Shift of 'g lr1 index ]) Hashtbl.t
+}
+
+(* A parser for [grammar] with a lazily populated action table *)
+let make_parser (type g) (grammar : g grammar) : g parser =
+  { grammar; table = Hashtbl.create 7 }
+
+(* Lookup and memoize parser actions *)
+let get_action parser state terminal =
+  let g = parser.grammar in
+  match Lr1.default_reduction g state with
+  | Some prod -> `Reduce prod
+  | None ->
+    let key = (state, terminal) in
+    match Hashtbl.find_opt parser.table key with
+    | Some action -> action
     | None ->
-      let key = (state, terminal) in
-      match Hashtbl.find_opt action_table key with
-      | Some action -> action
-      | None ->
-        let action =
+      let action =
+        match
+          IndexSet.find
+            (fun red ->
+               let la = Reduction.lookaheads g red in
+               IndexSet.mem terminal la)
+            (Reduction.from_lr1 g state)
+        with
+        | red -> `Reduce (Reduction.production g red)
+        | exception Not_found ->
+          let sym = Symbol.inj_t g terminal in
           match
             IndexSet.find
-              (fun red -> IndexSet.mem terminal (Reduction.lookaheads g red))
-              (Reduction.from_lr1 g state)
+              (fun tr -> Index.equal sym (Transition.symbol g tr))
+              (Transition.successors g state)
           with
-          | red -> `Reduce (Reduction.production g red)
+          | tr -> `Shift (Transition.target g tr)
           | exception Not_found ->
-            let sym = Symbol.inj_t g terminal in
-            match
-              IndexSet.find
-                (fun tr -> Index.equal sym (Transition.symbol g tr))
-                (Transition.successors g state)
-            with
-            | tr -> `Shift (Transition.target g tr)
-            | exception Not_found ->
-              `Reject
-        in
-        Hashtbl.add action_table key action;
-        action
-  in
+            `Reject
+      in
+      Hashtbl.add parser.table key action;
+      action
+
+let parse_sentence (type g p)
+    (parser : g parser)
+    (entrypoint : (g lr1 index, p) with_position)
+    (symbols : (g terminal index, p) with_position Seq.t)
+  =
   (* Process a sentence *)
-  fun
-    (entrypoint : g lr1 index with_position)
-    (symbols : g terminal index with_position Seq.t) ->
     let rec consume_terminal stack (t, startp, endp as token) =
       let (state, _, currp) = List.hd stack in
-      match get_action state t with
+      match get_action parser state t with
       | `Reject -> Result.Error stack
       | `Shift state -> Result.Ok ((state, startp, endp) :: stack)
       | `Reduce prod ->
         let (stack, startp', endp') =
-          match Production.length g prod with
+          match Production.length parser.grammar prod with
           | 0 -> (stack, currp, currp)
           | n ->
             let (_, _, endp) = List.hd stack in
@@ -242,7 +257,10 @@ let sentence_parser (type g) (g : g grammar) =
             (stack, startp, endp)
         in
         let (state, _, _) = List.hd stack in
-        let state' = Transition.find_goto_target g state (Production.lhs g prod) in
+        let state' =
+          Transition.find_goto_target parser.grammar state
+            (Production.lhs parser.grammar prod)
+        in
         let stack = (state', startp', endp') :: stack in
         consume_terminal stack token
     in

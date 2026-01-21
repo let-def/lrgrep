@@ -564,19 +564,43 @@ let import_command () =
        !!grammar ~shortest:!opt_import_shortest blocks);
   close_out oc
 
+(* Interpret *)
+
+let interpret_command () =
+  let parser = Lrgrep_interpreter.make_parser !!grammar in
+  let rec loop () =
+    match input_line stdin with
+    | exception End_of_file -> ()
+    | line ->
+      match Lrgrep_interpreter.lift_sentence !!grammar line with
+      | exception Exit ->
+        flush_all ();
+        loop ()
+      | sentence ->
+        let entrypoint =
+          match sentence.entrypoint with
+          | None -> Option.get (IndexSet.minimum (Lr1.entrypoints !!grammar))
+          | Some ep -> ep
+        in
+        let _offer_stack, _final_stack, _remainder =
+          Lrgrep_interpreter.parse_sentence parser
+            (entrypoint, (), ())
+            (List.to_seq sentence.symbols |>
+             Seq.map (fun x -> x, (), ()))
+        in
+        loop ()
+  in
+  loop ()
+
 (* Argument parser *)
 let commands =
-  let not_implemented command () =
-    prerr_endline (command ^ " not implemented.");
-    exit 1
-  in
   Subarg.[
     command "compile" "Translate a specification to an OCaml module" [
       "-o", Arg.String (fun x -> opt_output_name := Some x),
-      " <file.ml>  Set output file name to <file> (defaults to <spec>.ml)";
+      "<file.ml> Set output file name to <file> (defaults to <spec>.ml)";
     ] ~commit:compile_command;
     command "interpret" "Parse a sentence and suggest patterns that can match it" []
-      ~commit:(not_implemented "interpret");
+      ~commit:interpret_command;
     (* command "recover" "Generate an error-resilient parser for the grammar" []
          ~commit:(not_implemented "recover");
        command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
@@ -585,7 +609,7 @@ let commands =
     command "enumerate" "Generate a negative testsuite (sentences that cover possible failures)" [
       "-a", Arg.Set opt_enum_all, " Cover all filter-reduce patterns";
       "-e", Arg.String (push opt_enum_entrypoints),
-      " <entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
+      "<entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
     ] ~commit:enumerate_command;
     command "import-messages" "<file.messages> Generate a .lrgrep file from a .messages file" [
       "-o", Arg.Set_string opt_import_output, "<file.lrgrep> Output destination";
