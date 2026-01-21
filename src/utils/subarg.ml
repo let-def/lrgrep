@@ -27,8 +27,8 @@ let usage_subcommands ?(current="") commands =
       |> String.concat "\n"
   in
   ignore current;
-  String.concat "\n" (
-    Printf.sprintf "Commands:\n%s\n"
+  String.concat "" (
+    Printf.sprintf "Commands:\n%s\n\n"
       (String.concat "\n"
          (List.map (fun cmd -> "  " ^ cmd.name ^ "  " ^ cmd.help) commands))
     ::
