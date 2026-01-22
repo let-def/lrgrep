@@ -334,14 +334,14 @@ let report_coverage (type lrc)
   let enum_initials =
     let la = Terminal.regular grammar in
     IndexSet.rev_map_elements unhandled_initial
-      (fun lrc -> Enumeration.kernel lrc la, ([], lazy []))
+      (fun lrc -> Enumeration.kernel lrc la, ([lrc], lazy [([], la)]))
   in
   let Enumeration.Graph graph =
     Enumeration.make_graph grammar rcs stacks
       (enum_initials @ enum_predecessors)
   in
   let cases = ref 0 in
-  let report_case pattern patterns prefix suffixes =
+  let report_case pattern patterns middle suffixes =
     incr cases;
     let p fmt = Printf.printf fmt in
     p "## Uncovered case %d\n\n" !cases;
@@ -350,7 +350,18 @@ let report_coverage (type lrc)
        %s\n\
        ```\n\n"
       (String.concat "\n" (string_of_items_for_filter grammar pattern));
-    List.iteri begin fun i (suffix, lookaheads, patterns') ->
+    let middle = match middle with
+      | [] -> []
+      | lrc :: _ ->
+        list_rev_mappend stacks.label (get_prefix lrc)
+          (List.map stacks.label middle)
+    in
+    let prefix_shared =
+      not (List.is_empty middle) &&
+      (List.compare_length_with suffixes 1 > 0)
+    in
+    List.iteri begin fun i (suffix0, lookaheads, patterns') ->
+      let suffix = List.map stacks.label suffix0 in
       p "### Sample %d\n\n" (i + 1);
       p "Stacks ending in:\n\
          ```\n\
@@ -361,12 +372,22 @@ let report_coverage (type lrc)
          ```\n\
          %s\n\
          ```\n"
-        (String.concat " ," (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
-      if not (List.is_empty prefix) then
-        p "Sample prefix:\n\
+        (String.concat ", " (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
+      let prefix =
+        if List.is_empty middle then
+          match suffix0 with
+          | [] -> []
+          | hd :: _ -> List.rev_map stacks.label (get_prefix hd)
+        else middle
+      in
+      if (not prefix_shared || i = 0) && not (List.is_empty prefix) then
+        p "Sample prefix%s:\n\
            ```\n\
            %s\n\
            ```\n"
+          (if prefix_shared
+           then " (shared with the next samples)"
+           else "")
           (string_concat_map " " (Lr1.symbol_to_string grammar) prefix);
       let sentence =
         Sentence_generation.sentence_of_stack grammar reachability (prefix @ suffix)
@@ -413,8 +434,8 @@ let report_coverage (type lrc)
         end [] suffix
       in
       report_case (Option.get !pattern) IndexSet.empty
-        (List.rev_map stacks.label (get_prefix (List.hd suffix)))
-        [List.map stacks.label suffix, la, IndexSet.empty]
+        []
+        [suffix, la, IndexSet.empty]
     end suffixes
   end free_predecessors;
   while match Enumeration.next cover with
@@ -426,15 +447,14 @@ let report_coverage (type lrc)
           if IndexSet.is_empty la' then None else
             let suffix, patterns = List.fold_left begin fun (acc, patterns) (_, lp) ->
                 let pos, lrc = unpack_position positions lp in
-                let lr1 = stacks.label lrc in
                 match previous_position positions pos with
                 | Either.Left nt ->
-                  let goto = Transition.find_goto_target grammar lr1 nt in
+                  let goto = Transition.find_goto_target grammar (stacks.label lrc) nt in
                   let lr0 = Lr1.to_lr0 grammar goto in
                   Enumeration.mark_covered cover lr0 la;
                   (acc, IndexSet.add lr0 patterns)
                 | Either.Right _ ->
-                  (stacks.label lrc :: acc, patterns)
+                  (lrc :: acc, patterns)
               end ([], IndexSet.empty) suffix
             in
             Some (suffix, la', patterns)
@@ -448,15 +468,13 @@ let report_coverage (type lrc)
           List.concat_map (fun (edge : _ Enumeration.edge) ->
               let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(edge.source) in
               patterns := IndexSet.add lr0 !patterns;
-              List.rev edge.path
+              edge.path
             ) edges
         in
         let middle = middle @ suffix0 in
-        let prefix =
-          list_rev_mappend stacks.label (get_prefix (List.hd middle))
-            (List.map stacks.label middle)
-        in
-        report_case lr0 !patterns prefix suffixes
+        match suffixes with
+        | [[], la, lr0s] -> report_case lr0 !patterns [] [middle, la, lr0s]
+        | _ -> report_case lr0 !patterns middle suffixes
       );
       true
   do () done
