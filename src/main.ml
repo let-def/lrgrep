@@ -457,29 +457,6 @@ let enumerate_command () =
       in
       by_lr0.@(lr0) <- List.cons sentence
     end sentences;
-    let output_pattern lr0 =
-      let lhs =
-        match Lr0.incoming grammar lr0 with
-        | Some sym when Symbol.is_nonterminal grammar sym ->
-          Symbol.to_string grammar sym ^ " "
-        | _ -> ""
-      in
-      let pad = String.make (String.length lhs + 1) ' ' in
-      let first = ref true in
-      let items = Lr0.items grammar lr0 in
-      if IndexSet.is_empty items then
-        Printf.printf "[]\n"
-      else (
-        IndexSet.iter begin fun item ->
-          Printf.printf "%c%s/%s"
-            (if !first then '[' else '\n')
-            (if !first then lhs else pad)
-            (Item.to_string grammar item);
-          first := false
-        end items;
-        Printf.printf "]\n";
-      )
-    in
     Vector.iteri begin fun lr0 -> function
       | [] -> ()
       | sentences ->
@@ -488,7 +465,7 @@ let enumerate_command () =
           "## Pattern %d\n\
            \n\
            ```\n" !cases;
-        output_pattern lr0;
+        List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0);
         Printf.printf "```\n\n";
         List.iteri begin fun i (sentence : _ Enumeration.failing_sentence) ->
           Printf.printf
@@ -534,7 +511,7 @@ let enumerate_command () =
             List.iter (fun edge ->
                 let node = edge.Enumeration.source in
                 let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
-                output_pattern lr0
+                List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0)
               ) sentence.edges;
             Printf.printf "```\n"
           );
