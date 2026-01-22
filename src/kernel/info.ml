@@ -594,7 +594,7 @@ module Symbol = struct
     | L _ -> false
     | R _ -> true
 
-  let name g ?mangled t =
+  let to_string g ?mangled t =
     let open (val g.raw) in
     match prj g t with
     | L t -> symbol_name ?mangled (T (Terminal.of_int (Index.to_int t)))
@@ -684,7 +684,7 @@ module Item = struct
     let rhs = Production.rhs g prod in
     let add_sym sym =
       Buffer.add_char b ' ';
-      Buffer.add_string b (Symbol.name g sym);
+      Buffer.add_string b (Symbol.to_string g sym);
     in
     for i = 0 to pos - 1
     do add_sym rhs.(i) done;
@@ -746,10 +746,10 @@ module Lr1 = struct
 
   let symbol_to_string g lr1 =
     match incoming g lr1 with
-    | Some sym -> Symbol.name g sym
+    | Some sym -> Symbol.to_string g sym
     | None ->
       let entrypoint = Option.get (is_entrypoint g lr1) in
-      (Symbol.name g (Production.rhs g entrypoint).(0) ^ ":")
+      (Symbol.to_string g (Production.rhs g entrypoint).(0) ^ ":")
 
   let to_string g lr1 =
     string_of_index lr1 ^ ":" ^ symbol_to_string g lr1

@@ -161,7 +161,7 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
     in
     let symbol_matcher s =
       (if Symbol.is_terminal g s then "T T_" else "N N_") ^
-      Symbol.name g ~mangled:true s
+      Symbol.to_string g ~mangled:true s
     in
     let bind_capture out ~offset index (def, name, (_startpos, _endpos, positions)) =
       (* FIXME: variables should be introduced only if the relevant keyword appear in the action *)

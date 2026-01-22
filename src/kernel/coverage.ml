@@ -257,7 +257,7 @@ let string_of_items_for_filter g lr0 =
   in
   IndexSet.iter append (Lr0.items g lr0);
   let print_item (lhs, pre, post) =
-    let syms syms = Array.to_list (Array.map (Symbol.name g) syms) in
+    let syms syms = Array.to_list (Array.map (Symbol.to_string g) syms) in
     String.concat " " @@
     (Nonterminal.to_string g lhs ^ ":")
     :: syms pre

@@ -461,7 +461,7 @@ let enumerate_command () =
       let lhs =
         match Lr0.incoming grammar lr0 with
         | Some sym when Symbol.is_nonterminal grammar sym ->
-          Symbol.name grammar sym ^ " "
+          Symbol.to_string grammar sym ^ " "
         | _ -> ""
       in
       let pad = String.make (String.length lhs + 1) ' ' in

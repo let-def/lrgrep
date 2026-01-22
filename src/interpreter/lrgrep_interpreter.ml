@@ -117,7 +117,7 @@ let print_items grammar indent suffix items =
 let print_lr1 grammar state =
   match Lr1.incoming grammar state with
   | None -> None
-  | Some sym -> Some (Symbol.name grammar sym)
+  | Some sym -> Some (Symbol.to_string grammar sym)
 
 let print_stack grammar config ~is_goto stack =
   let top = List.hd stack in
@@ -130,7 +130,7 @@ let print_stack grammar config ~is_goto stack =
       "_*" (Lr1.items grammar top);
   if is_goto then
     Printf.printf "\t\t\x1b[1;33m↱ %s\n"
-      (string_concat_map " " (Symbol.name grammar) stack)
+      (string_concat_map " " (Symbol.to_string grammar) stack)
 
 let rec filter_reductions la = function
   | [] -> []
@@ -201,7 +201,7 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
     begin match print_lr1 grammar state with
       | None ->
         let prod = Option.get (Lr1.is_entrypoint grammar state) in
-        print_endline (Symbol.name grammar (Production.rhs grammar prod).(0))
+        print_endline (Symbol.to_string grammar (Production.rhs grammar prod).(0))
       | Some sym -> print_endline sym
     end;
     print_string "\x1b[0m";

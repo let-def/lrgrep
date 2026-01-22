@@ -121,7 +121,7 @@ module Symbol : sig
   val is_terminal : 'g grammar -> 'g n index -> bool
   val is_nonterminal : 'g grammar -> 'g n index -> bool
 
-  val name : 'g grammar -> ?mangled:bool -> 'g n index -> string
+  val to_string : 'g grammar -> ?mangled:bool -> 'g n index -> string
   val semantic_value : 'g grammar -> 'g n index -> string option
 
   val all : 'g grammar -> 'g n indexset

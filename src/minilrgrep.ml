@@ -70,11 +70,11 @@ let item_to_string (prod, pos) =
   let comps = ref [] in
   let rhs = Production.rhs grammar prod in
   for i = Array.length rhs - 1 downto pos do
-    comps := Symbol.name grammar rhs.(i) :: !comps
+    comps := Symbol.to_string grammar rhs.(i) :: !comps
   done;
   comps := "." :: !comps;
   for i = pos - 1 downto 0 do
-    comps := Symbol.name grammar rhs.(i) :: !comps
+    comps := Symbol.to_string grammar rhs.(i) :: !comps
   done;
   Nonterminal.to_string grammar (Production.lhs grammar prod) ^ ": " ^ String.concat " " !comps
 
@@ -612,7 +612,7 @@ module Transl = struct
       user-provided ones by serializing them first. *)
   let parse_symbol =
     let table = Hashtbl.create 7 in
-    let add_symbol s = Hashtbl.add table (Symbol.name grammar ~mangled:false s) s in
+    let add_symbol s = Hashtbl.add table (Symbol.to_string grammar ~mangled:false s) s in
     Index.iter (Symbol.cardinal grammar) add_symbol;
     fun pos sym ->
       let sym = string_of_symbol sym in
@@ -1332,14 +1332,14 @@ module Enum = struct
     List.iteri (fun i sym ->
         Printf.eprintf "%s%s"
           (if i = 0 then "" else ", ")
-          (Symbol.name grammar sym)
+          (Symbol.to_string grammar sym)
       ) (List.rev (IndexSet.elements totally_uncovered_lookaheads));
     Printf.eprintf "\n";
     Printf.eprintf "Partially uncovered expected symbols:\n";
     List.iteri (fun i sym ->
         Printf.eprintf "%s%s"
           (if i = 0 then "" else ", ")
-          (Symbol.name grammar sym)
+          (Symbol.to_string grammar sym)
       ) (List.rev (IndexSet.elements partially_uncovered_lookaheads));
     Printf.eprintf "\n"
 
@@ -1354,7 +1354,7 @@ module Enum = struct
                 (Item.to_string grammar item)
             ) filter
         | _ ->
-          let reduce = Misc.string_concat_map "; " (Symbol.name grammar) reduce in
+          let reduce = Misc.string_concat_map "; " (Symbol.to_string grammar) reduce in
           let padding = String.make (String.length reduce) ' ' in
           List.iteri (fun i item ->
               if i = 0 then
@@ -1369,7 +1369,7 @@ module Enum = struct
         let print_lr1_seq path =
           let symbols = List.filter_map (Lr1.incoming grammar) path in
           let symbols = List.filter non_nullable_symbol symbols in
-          Misc.string_concat_map " " (Symbol.name grammar) symbols
+          Misc.string_concat_map " " (Symbol.to_string grammar) symbols
         in
         Printf.eprintf "  (* %s *)\n  { failwith \"TODO\" }\n\n" (print_lr1_seq stack)
       ) generalized_patterns
