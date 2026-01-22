@@ -15,7 +15,7 @@ let find_transition (type g) (g : g grammar) x y =
            (Transition.predecessors g y))
 
 let to_transitions g = function
-  | [] -> assert false
+  | [] -> invalid_arg "Sentence_generation.to_transitions: empty list"
   | initial :: rest ->
     let follow x y = (y, find_transition g x y) in
     let _, trs = List.fold_left_map follow initial rest in
