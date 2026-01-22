@@ -394,6 +394,161 @@ let compile_command () =
     do_compile {parser_name = !!parser_name; lexer_definition= !!spec} (Some cp);
     close_out oc
 
+let pretty = function
+  | "AMPERAMPER"             -> "&&"
+  | "AMPERSAND"              -> "&"
+  | "AND"                    -> "and"
+  | "AS"                     -> "as"
+  | "ASSERT"                 -> "assert"
+  | "BACKQUOTE"              -> "`"
+  | "BANG"                   -> "!"
+  | "BAR"                    -> "|"
+  | "BARBAR"                 -> "||"
+  | "BARRBRACKET"            -> "|]"
+  | "BEGIN"                  -> "begin"
+  | "CHAR"                   -> "'a'"
+  | "CLASS"                  -> "class"
+  | "COLON"                  -> ":"
+  | "COLONCOLON"             -> "::"
+  | "COLONEQUAL"             -> ":="
+  | "COLONGREATER"           -> ":>"
+  | "COMMA"                  -> ","
+  | "CONSTRAINT"             -> "constraint"
+  | "DO"                     -> "do"
+  | "DONE"                   -> "done"
+  | "DOT"                    -> "."
+  | "DOTDOT"                 -> ".."
+  | "DOWNTO"                 -> "downto"
+  | "EFFECT"                 -> "effect"
+  | "ELSE"                   -> "else"
+  | "END"                    -> "end"
+  | "EOF"                    -> ""
+  | "EQUAL"                  -> "="
+  | "EXCEPTION"              -> "exception"
+  | "EXTERNAL"               -> "external"
+  | "FALSE"                  -> "false"
+  | "FLOAT"                  -> "1.0"
+  | "FOR"                    -> "for"
+  | "FUN"                    -> "fun"
+  | "FUNCTION"               -> "function"
+  | "FUNCTOR"                -> "functor"
+  | "GREATER"                -> ">"
+  | "GREATERRBRACE"          -> ">}"
+  | "GREATERRBRACKET"        -> ">]"
+  | "IF"                     -> "if"
+  | "IN"                     -> "in"
+  | "INCLUDE"                -> "include"
+  | "INFIXOP0"               -> "!="
+  | "INFIXOP1"               -> "^"
+  | "INFIXOP2"               -> "+!"
+  | "INFIXOP3"               -> "land"
+  | "INFIXOP4"               -> "**"
+  | "DOLLAR"                 -> "$"
+  | "LESSLBRACKET"           -> "<["
+  | "RBRACKETGREATER"        -> "]>"
+  | "DOTOP"                  -> ".+"
+  | "LETOP"                  -> "let*"
+  | "ANDOP"                  -> "and*"
+  | "INHERIT"                -> "inherit"
+  | "INITIALIZER"            -> "initializer"
+  | "INT"                    -> "1"
+  | "LABEL"                  -> "~label:"
+  | "LAZY"                   -> "lazy"
+  | "LBRACE"                 -> "{"
+  | "LBRACELESS"             -> "{<"
+  | "LBRACKET"               -> "["
+  | "LBRACKETBAR"            -> "[|"
+  | "LBRACKETLESS"           -> "[<"
+  | "LBRACKETGREATER"        -> "[>"
+  | "LBRACKETPERCENT"        -> "[%"
+  | "LBRACKETPERCENTPERCENT" -> "[%%"
+  | "LESS"                   -> "<"
+  | "LESSMINUS"              -> "<-"
+  | "LET"                    -> "let"
+  | "LIDENT"                 -> "x"
+  | "LPAREN"                 -> "("
+  | "LBRACKETAT"             -> "[@"
+  | "LBRACKETATAT"           -> "[@@"
+  | "LBRACKETATATAT"         -> "[@@@"
+  | "MATCH"                  -> "match"
+  | "METHOD"                 -> "method"
+  | "MINUS"                  -> "-"
+  | "MINUSDOT"               -> "-."
+  | "MINUSGREATER"           -> "->"
+  | "MODULE"                 -> "module"
+  | "MUTABLE"                -> "mutable"
+  | "NEW"                    -> "new"
+  | "NONREC"                 -> "nonrec"
+  | "OBJECT"                 -> "object"
+  | "OF"                     -> "of"
+  | "OPEN"                   -> "open"
+  | "OPTLABEL"               -> "?label:"
+  | "OR"                     -> "or"
+  | "PARSER"                 -> "parser"
+  | "PERCENT"                -> "%"
+  | "PLUS"                   -> "+"
+  | "PLUSDOT"                -> "+."
+  | "PLUSEQ"                 -> "+="
+  | "PREFIXOP"               -> "!+"
+  | "PRIVATE"                -> "private"
+  | "QUESTION"               -> "?"
+  | "QUOTE"                  -> "'"
+  | "RBRACE"                 -> "}"
+  | "RBRACKET"               -> "]"
+  | "REC"                    -> "rec"
+  | "RPAREN"                 -> ")"
+  | "SEMI"                   -> ";"
+  | "SEMISEMI"               -> ";;"
+  | "HASH"                   -> "#"
+  | "HASHOP"                 -> "##"
+  | "SIG"                    -> "sig"
+  | "STAR"                   -> "*"
+  | "STRING"                 -> "\"s\""
+  | "QUOTED_STRING_EXPR"     -> "{%%ext|s|}"
+  | "QUOTED_STRING_ITEM"     -> "{%%%%ext|s|}"
+  | "STRUCT"                 -> "struct"
+  | "THEN"                   -> "then"
+  | "TILDE"                  -> "~"
+  | "TO"                     -> "to"
+  | "TRUE"                   -> "true"
+  | "TRY"                    -> "try"
+  | "TYPE"                   -> "type"
+  | "UIDENT"                 -> "X"
+  | "UNDERSCORE"             -> "_"
+  | "VAL"                    -> "val"
+  | "VIRTUAL"                -> "virtual"
+  | "WHEN"                   -> "when"
+  | "WHILE"                  -> "while"
+  | "WITH"                   -> "with"
+  | "COMMENT"                -> "(*comment*)"
+  | "DOCSTRING"              -> "(**documentation *)"
+  | "EOL"                    -> "\n"
+  | "METAOCAML_ESCAPE"       -> ".~"
+  | "METAOCAML_BRACKET_OPEN" -> ".<"
+  | "METAOCAML_BRACKET_CLOSE" -> ">."
+  | "MOD"           -> "mod"
+  | "EXCLAVE"       -> "exclave_"
+  | "GLOBAL"        -> "global_"
+  | "KIND_ABBREV"   -> "kind_abbrev_"
+  | "KIND_OF"       -> "kind_of_"
+  | "LOCAL"         -> "local_"
+  | "ONCE"          -> "once_"
+  | "OVERWRITE"     -> "overwrite_"
+  | "STACK"         -> "stack_"
+  | "UNIQUE"        -> "unique_"
+  | "LBRACKETCOLON" -> "[:"
+  | "HASH_SUFFIX"   -> "#"
+  | "HASH_INT"      -> "#1l"
+  | "HASH_FLOAT"    -> "#1.0"
+  | "HASHLPAREN"    -> "#("
+  | "AT"            -> "@"
+  | "ATAT"          -> "@@"
+  | "COLONRBRACKET" -> ":]"
+  | "DOTHASH"       -> ".#"
+  | "HASHLBRACE"    -> "#{"
+  | "error" | "#" as x       -> x ^ "(*FIXME: Should not happen)"
+  | _ -> raise Not_found
+
 (* Enumeration command *)
 
 let opt_enum_all = ref false
@@ -451,12 +606,18 @@ let enumerate_command () =
           let lrcs = List.rev_append (subset.some_prefix lrc) suffix in
           let lr1s = List.map stacks.label lrcs in
           let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
+          let ppt t =
+            let s = Terminal.to_string grammar t in
+            match pretty s with
+            | s -> s
+            | exception Not_found -> s
+          in
           Printf.printf
             "Sentence:\n\
              ```\n\
              %s\n\
              ```\n"
-            (string_concat_map " " (Terminal.to_string grammar) terms);
+            (string_concat_map " " ppt terms);
           Printf.printf
             "Stack:\n\
              ```\n\
@@ -464,13 +625,13 @@ let enumerate_command () =
              ```\n"
             (string_concat_map " " (Lr1.symbol_to_string grammar) lr1s);
           Printf.printf
-            "Rejected when looking ahead at:\n\
+            "Rejected when looking ahead at any of the terminals in:\n\
              ```\n\
              %s\n\
              ```\n\
              \n"
             (String.concat " "
-               (List.rev_map (Terminal.to_string grammar)
+               (List.rev_map ppt
                   (IndexSet.elements
                      (IndexSet.inter regular_terminals sentence.failing))));
           if not (list_is_empty sentence.edges) then (
