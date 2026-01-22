@@ -355,17 +355,15 @@ let do_compile spec (cp : Code_printer.t option) =
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
-    Option.iter begin fun initial ->
-      let cposition = Coverage.make_positions grammar in
-      let coverage =
-        Coverage.coverage
-          grammar branches machine stacks
-          !!red_closure cposition initial
-      in
-      Coverage.report_coverage grammar !!red_closure stacks cposition
-        !!reachability coverage
-        ~get_prefix:entrypoints.some_prefix
-    end machine.initial;
+    let cposition = Coverage.make_positions grammar in
+    let coverage =
+      Coverage.coverage
+        grammar branches machine stacks
+        !!red_closure cposition machine.initial
+    in
+    Coverage.report_coverage grammar !!red_closure stacks cposition
+      !!reachability coverage
+      ~get_prefix:entrypoints.some_prefix;
     stopwatch 1 "coverage check";
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp

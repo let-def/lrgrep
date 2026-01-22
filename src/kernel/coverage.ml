@@ -192,29 +192,32 @@ let coverage (type g r st tr lrc)
     todo.:(st) <- IndexMap.empty;
     IndexMap.iter (fun lp set -> propagate_position st lp !set) map
   in
-  let lrcs = IndexSet.split_by_run stacks.label stacks.tops in
-  let trs = machine.outgoing.:(initial) in
-  let process_initial tr lrcs =
-    let st = machine.target.:(tr) in
-    let filter = machine.label.:(tr).filter in
-    List.filter begin fun (lr1, lrcs) ->
-      if IndexSet.mem lr1 filter then begin
-        List.iteri begin fun pos nts ->
-          IndexMap.iter begin fun nt la ->
-            let pos = inject_position positions nt (pos + 1) in
-            IndexSet.iter begin fun lrc ->
-              let lp = pack_position positions pos lrc in
-              schedule st lp st lp la
-            end lrcs
-          end nts
-        end rcs.:(lr1).reductions;
-        false
-      end else
-        true
-    end lrcs
-  in
   let counter = ref 0 in
   let unhandled_initial =
+    let lrcs = IndexSet.split_by_run stacks.label stacks.tops in
+    let process_initial tr lrcs =
+      let st = machine.target.:(tr) in
+      let filter = machine.label.:(tr).filter in
+      List.filter begin fun (lr1, lrcs) ->
+        if IndexSet.mem lr1 filter then begin
+          List.iteri begin fun pos nts ->
+            IndexMap.iter begin fun nt la ->
+              let pos = inject_position positions nt (pos + 1) in
+              IndexSet.iter begin fun lrc ->
+                let lp = pack_position positions pos lrc in
+                schedule st lp st lp la
+              end lrcs
+            end nts
+          end rcs.:(lr1).reductions;
+          false
+        end else
+          true
+      end lrcs
+    in
+    let trs =
+      Option.fold ~none:IndexSet.empty
+        ~some:(Vector.get machine.outgoing) initial
+    in
     collect_unhandled_lrc (IndexSet.fold process_initial trs lrcs)
   in
   let total_list_elements v = Vector.fold_left (fun acc xs -> acc + List.length xs) 0 v in
