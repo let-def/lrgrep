@@ -156,11 +156,11 @@ let global_specs = [
   " <file.lrgrep>  Path to the error specification to process";
   "-v", Arg.Unit (fun () -> incr Misc.verbosity_level),
   " Increase output verbosity (for debugging/profiling)";
-  "-version", Arg.Unit print_version_string,
+  "--version", Arg.Unit print_version_string,
   " Print version and exit";
-  "-vnum", Arg.Unit print_version_num,
+  "--vnum", Arg.Unit print_version_num,
   " Print version number and exit";
-  "-dump-dot", Arg.Set opt_dump_dot,
+  "--dump-dot", Arg.Set opt_dump_dot,
   " debug: Dump internal automata to Graphviz .dot files";
 ]
 
@@ -309,7 +309,21 @@ let make_stacks (subset : _ Lrc.entrypoints) ~error_only =
 
 (* Compile command *)
 
-let opt_output_name = ref None
+let opt_compile_output = ref None
+let opt_compile_cover_report = ref ""
+let opt_compile_cover_error = ref false
+
+let compiler_cover_output = lazy (
+  if !opt_compile_cover_report = "" then
+    None
+  else
+    try Some (open_out_bin !opt_compile_cover_report)
+    with exn ->
+      Syntax.error Lexing.dummy_pos
+        "cannot open %S for reporting coverage: %S"
+        !opt_compile_cover_report
+        (Printexc.to_string exn)
+)
 
 let do_compile spec (cp : Code_printer.t option) =
   let grammar = !!grammar in
@@ -355,21 +369,47 @@ let do_compile spec (cp : Code_printer.t option) =
         (Automata.Machine.dump grammar machine);
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
-    let cposition = Coverage.make_positions grammar in
-    let coverage =
-      Coverage.coverage
-        grammar branches machine stacks
-        !!red_closure cposition machine.initial
-    in
-    Coverage.report_coverage grammar !!red_closure stacks cposition
-      !!reachability coverage
-      ~get_prefix:entrypoints.some_prefix;
-    stopwatch 1 "coverage check";
+    if fst rule.error then (
+      let cposition = Coverage.make_positions grammar in
+      let coverage =
+        Coverage.coverage
+          grammar branches machine stacks
+          !!red_closure cposition machine.initial
+      in
+      let uncovered =
+        Coverage.uncovered_cases grammar !!red_closure stacks
+          cposition coverage
+      in
+      let seq = uncovered () in
+      stopwatch 1 "coverage check";
+      match seq with
+      | Seq.Nil -> ()
+      | Seq.Cons (x, xs) ->
+        begin match compiler_cover_output with
+          | lazy None -> ()
+          | lazy (Some oc) ->
+            Printf.fprintf oc "# Rule %s\n" rule.name;
+            let report case =
+              output_char oc '\n';
+              Coverage.report_case grammar stacks !!reachability
+                ~output:(output_string oc)
+                ~get_prefix:entrypoints.some_prefix
+                case
+            in
+            report x;
+            Seq.iter report xs
+        end;
+        stopwatch 1 "coverage report";
+        Syntax.nonfatal_error Lexing.dummy_pos
+          "rule %s has only partial coverage" rule.name;
+        if !opt_compile_cover_error then
+          exit 1
+    )
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
 
 let compile_command () =
-  let output_file = match !opt_output_name with
+  let output_file = match !opt_compile_output with
     | Some o -> o
     | None -> Filename.remove_extension (get_spec_file ()) ^ ".ml"
   in
@@ -608,12 +648,16 @@ let interpret_command () =
 let commands =
   Subarg.[
     command "compile" "Translate a specification to an OCaml module" [
-      "-o", Arg.String (fun x -> opt_output_name := Some x),
+      "-o", Arg.String (fun x -> opt_compile_output := Some x),
       "<file.ml> Set output file name to <file> (defaults to <spec>.ml)";
+      "--cover-all", Arg.Set opt_compile_cover_error,
+      " Exit with a failure if coverage of errors is not exhaustive";
+      "--cover-report", Arg.Set_string opt_compile_cover_report,
+      "<report.md> Write a detailed report of uncovered cases (if any)"
     ] ~commit:compile_command;
     command "interpret" "Parse a sentence and suggest patterns that can match it" [
-      "-no-patterns", Arg.Clear opt_interpret_patterns, " Do not suggest patterns";
-      "-items", Arg.Set opt_interpret_items," Annotate each state with its items";
+      "--no-patterns", Arg.Clear opt_interpret_patterns, " Do not suggest patterns";
+      "--items", Arg.Set opt_interpret_items," Annotate each state with its items";
     ]
       ~commit:interpret_command;
     (* command "recover" "Generate an error-resilient parser for the grammar" []

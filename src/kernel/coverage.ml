@@ -267,9 +267,15 @@ let string_of_items_for_filter g lr0 =
   in
   List.rev_map print_item !lines
 
-let report_coverage (type lrc)
-  grammar rcs (stacks : (_, lrc) Automata.stacks) positions reachability
-  ~get_prefix
+type ('g, 'lrc) uncovered_case = {
+  main_pattern: 'g lr0 index;
+  shared_patterns: 'g lr0 indexset;
+  shared_prefix: 'lrc index list;
+  suffixes: ('lrc index list * 'g terminal indexset * 'g lr0 indexset) list;
+}
+
+let uncovered_cases (type lrc)
+  grammar rcs (stacks : (_, lrc) Automata.stacks) positions
   {transitions; unhandled_initial; unhandled_predecessors}
   =
   let synthesize_suffix =
@@ -305,7 +311,7 @@ let report_coverage (type lrc)
       List.fold_left begin fun (free, enum) (lp, lrcs, la) ->
         let pos, _ = unpack_position positions lp in
         match Opt.prj pos with
-        | None -> ((lrcs, synthesize_suffix st lp la) :: free, enum)
+        | None -> ((lrcs, lazy (synthesize_suffix st lp la)) :: free, enum)
         | Some pos ->
           let rec complete_suffixes acc = function
             | 0 -> acc
@@ -340,107 +346,42 @@ let report_coverage (type lrc)
     Enumeration.make_graph grammar rcs stacks
       (enum_initials @ enum_predecessors)
   in
-  let cases = ref 0 in
-  let report_case pattern patterns middle suffixes =
-    incr cases;
-    let p fmt = Printf.printf fmt in
-    p "## Uncovered case %d\n\n" !cases;
-    p "Some uncovered stacks can be caught by this pattern:\n\
-       ```\n\
-       %s\n\
-       ```\n\n"
-      (String.concat "\n" (string_of_items_for_filter grammar pattern));
-    let middle = match middle with
-      | [] -> []
-      | lrc :: _ ->
-        list_rev_mappend stacks.label (get_prefix lrc)
-          (List.map stacks.label middle)
-    in
-    let prefix_shared =
-      not (list_is_empty middle) &&
-      (List.compare_length_with suffixes 1 > 0)
-    in
-    List.iteri begin fun i (suffix0, lookaheads, patterns') ->
-      let suffix = List.map stacks.label suffix0 in
-      p "### Sample %d\n\n" (i + 1);
-      p "Stacks ending in:\n\
-         ```\n\
-         %s\n\
-         ```\n"
-        (string_concat_map " " (Lr1.symbol_to_string grammar) suffix);
-      p "are rejected without an error message when looking ahead at:\n\
-         ```\n\
-         %s\n\
-         ```\n"
-        (String.concat ", " (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
-      let prefix =
-        if list_is_empty middle then
-          match suffix0 with
-          | [] -> []
-          | hd :: _ -> List.rev_map stacks.label (get_prefix hd)
-        else middle
-      in
-      if (not prefix_shared || i = 0) && not (list_is_empty prefix) then
-        p "Sample prefix%s:\n\
-           ```\n\
-           %s\n\
-           ```\n"
-          (if prefix_shared
-           then " (shared with the next samples)"
-           else "")
-          (string_concat_map " " (Lr1.symbol_to_string grammar) prefix);
-      let sentence =
-        Sentence_generation.sentence_of_stack grammar reachability (prefix @ suffix)
-      in
-      p "Sample sentence:\n\
-         ```\n\
-         %s\n\
-         ```\n"
-        (string_concat_map " " (Terminal.to_string grammar) sentence);
-      let patterns = IndexSet.remove pattern (IndexSet.union patterns patterns') in
-      if IndexSet.is_not_empty patterns then (
-        p "Also covered by these intermediate patterns:\n\
-           ```\n";
-        IndexSet.iter (fun pattern ->
-            p "%s\n"
-              (String.concat "\n" (string_of_items_for_filter grammar pattern))
-          ) patterns;
-        p "```\n"
-      );
-      p "\n"
-    end suffixes
-  in
   let cover = Enumeration.cover_all grammar rcs stacks graph in
-  List.iter begin fun (_lrcs, suffixes) ->
-    List.iter begin fun (suffix, la) ->
-      List.iter begin fun (_, lp) ->
-        let pos, lrc = unpack_position positions lp in
-        match previous_position positions pos with
-        | Either.Left nt ->
-          let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-          Enumeration.mark_covered cover (Lr1.to_lr0 grammar lr1) la
-        | Either.Right _ -> ()
-      end suffix;
-      let pattern = ref None in
-      let suffix =
-        List.fold_left begin fun acc (_, lp) ->
+  let direct =
+    Seq.concat_map begin fun (_lrcs, lazy suffixes) ->
+      Seq.map begin fun (suffix, la) ->
+        List.iter begin fun (_, lp) ->
           let pos, lrc = unpack_position positions lp in
           match previous_position positions pos with
           | Either.Left nt ->
             let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-            pattern := Some (Lr1.to_lr0 grammar lr1);
-            acc
-          | Either.Right _ -> lrc :: acc
-        end [] suffix
-      in
-      report_case (Option.get !pattern) IndexSet.empty
-        []
-        [suffix, la, IndexSet.empty]
-    end suffixes
-  end free_predecessors;
-  while match Enumeration.next cover with
-    | None -> false
-    | Some {first; edges; failing; entry = (suffix0, lazy suffixes)} ->
+            Enumeration.mark_covered cover (Lr1.to_lr0 grammar lr1) la
+          | Either.Right _ -> ()
+        end suffix;
+        let pattern = ref None in
+        let suffix =
+          List.fold_left begin fun acc (_, lp) ->
+            let pos, lrc = unpack_position positions lp in
+            match previous_position positions pos with
+            | Either.Left nt ->
+              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+              pattern := Some (Lr1.to_lr0 grammar lr1);
+              acc
+            | Either.Right _ -> lrc :: acc
+          end [] suffix
+        in
+        {
+          main_pattern = Option.get !pattern;
+          shared_patterns = IndexSet.empty;
+          shared_prefix = [];
+          suffixes = [suffix, la, IndexSet.empty];
+        }
+      end (List.to_seq suffixes)
+    end (List.to_seq free_predecessors)
+  in
+  let enumerated =
+    Seq.filter_map begin fun {Enumeration. first; edges; failing; entry} ->
+      let (suffix0, lazy suffixes) = entry in
       let suffixes =
         List.filter_map begin fun (suffix, la) ->
           let la' = IndexSet.inter failing la in
@@ -460,21 +401,95 @@ let report_coverage (type lrc)
             Some (suffix, la', patterns)
         end suffixes
       in
-      if not (list_is_empty suffixes) then (
-        let ker = graph.ker.:(first) in
-        let lr0 = Enumeration.get_lr0_state grammar stacks ker in
-        let patterns = ref IndexSet.empty in
-        let middle =
-          List.concat_map (fun (edge : _ Enumeration.edge) ->
-              let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(edge.source) in
-              patterns := IndexSet.add lr0 !patterns;
-              edge.path
-            ) edges
-        in
-        let middle = middle @ suffix0 in
-        match suffixes with
-        | [[], la, lr0s] -> report_case lr0 !patterns [] [middle, la, lr0s]
-        | _ -> report_case lr0 !patterns middle suffixes
-      );
-      true
-  do () done
+      if list_is_empty suffixes then None
+      else Some (
+          let ker = graph.ker.:(first) in
+          let main_pattern = Enumeration.get_lr0_state grammar stacks ker in
+          let patterns = ref IndexSet.empty in
+          let middle =
+            List.concat_map (fun (edge : _ Enumeration.edge) ->
+                let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(edge.source) in
+                patterns := IndexSet.add lr0 !patterns;
+                edge.path
+              ) edges
+          in
+          let shared_patterns = !patterns in
+          let middle = middle @ suffix0 in
+          let shared_prefix, suffixes =
+            match suffixes with
+            | [[], la, lr0s] -> ([], [middle, la, lr0s])
+            | _ -> (middle, suffixes)
+          in
+          {main_pattern; shared_patterns; shared_prefix; suffixes}
+        )
+    end (Enumeration.to_seq cover)
+  in
+  Seq.memoize (Seq.append direct enumerated)
+
+let report_case grammar (stacks : _ Automata.stacks) reachability
+    ~output ~get_prefix case =
+  let p fmt = Printf.ksprintf output fmt in
+  p "Some uncovered stacks can be caught by this pattern:\n\
+     ```\n\
+     %s\n\
+     ```\n\n"
+    (String.concat "\n" (string_of_items_for_filter grammar case.main_pattern));
+  let prefix = match case.shared_prefix with
+    | [] -> []
+    | lrc :: _ as prefix ->
+      list_rev_mappend stacks.label (get_prefix lrc)
+        (List.map stacks.label prefix)
+  in
+  let prefix_shared =
+    not (list_is_empty prefix) &&
+    (List.compare_length_with case.suffixes 1 > 0)
+  in
+  List.iteri begin fun i (suffix0, lookaheads, patterns') ->
+    let suffix = List.map stacks.label suffix0 in
+    p "### Sample %d\n\n" (i + 1);
+    p "Stacks ending in:\n\
+       ```\n\
+       %s\n\
+       ```\n"
+      (string_concat_map " " (Lr1.symbol_to_string grammar) suffix);
+    p "are rejected without an error message when looking ahead at:\n\
+       ```\n\
+       %s\n\
+       ```\n"
+      (String.concat ", " (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
+    let prefix =
+      if list_is_empty prefix then
+        match suffix0 with
+        | [] -> []
+        | hd :: _ -> List.rev_map stacks.label (get_prefix hd)
+      else prefix
+    in
+    if (not prefix_shared || i = 0) && not (list_is_empty prefix) then
+      p "Sample prefix%s:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (if prefix_shared
+         then " (shared with the next samples)"
+         else "")
+        (string_concat_map " " (Lr1.symbol_to_string grammar) prefix);
+    let sentence =
+      Sentence_generation.sentence_of_stack grammar reachability (prefix @ suffix)
+    in
+    p "Sample sentence:\n\
+       ```\n\
+       %s\n\
+       ```\n"
+      (string_concat_map " " (Terminal.to_string grammar) sentence);
+    let patterns = IndexSet.remove case.main_pattern (IndexSet.union case.shared_patterns patterns') in
+    if IndexSet.is_not_empty patterns then (
+      p "Also covered by these intermediate patterns:\n\
+         ```\n";
+      IndexSet.iter (fun pattern ->
+          p "%s\n"
+            (String.concat "\n" (string_of_items_for_filter grammar pattern))
+        ) patterns;
+      p "```\n"
+    );
+    p "\n"
+  end case.suffixes
