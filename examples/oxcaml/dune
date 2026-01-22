@@ -1,0 +1,15 @@
+(rule
+  (targets parser_raw_lr1.cmly parser_raw_lr1.ml parser_raw_lr1.mli)
+  (deps parser_raw.mly)
+  (action
+   (progn
+    (copy parser_raw.mly parser_raw_lr1.mly)
+    (run menhir --table --cmly parser_raw_lr1.mly))))
+
+(rule
+  (targets parser_raw_lalr.cmly parser_raw_lalr.ml parser_raw_lalr.mli)
+  (deps parser_raw.mly)
+  (action
+   (progn
+    (copy parser_raw.mly parser_raw_lalr.mly)
+    (run menhir --table --cmly --lalr parser_raw_lalr.mly))))
