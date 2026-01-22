@@ -357,7 +357,7 @@ let report_coverage (type lrc)
           (List.map stacks.label middle)
     in
     let prefix_shared =
-      not (List.is_empty middle) &&
+      not (list_is_empty middle) &&
       (List.compare_length_with suffixes 1 > 0)
     in
     List.iteri begin fun i (suffix0, lookaheads, patterns') ->
@@ -374,13 +374,13 @@ let report_coverage (type lrc)
          ```\n"
         (String.concat ", " (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
       let prefix =
-        if List.is_empty middle then
+        if list_is_empty middle then
           match suffix0 with
           | [] -> []
           | hd :: _ -> List.rev_map stacks.label (get_prefix hd)
         else middle
       in
-      if (not prefix_shared || i = 0) && not (List.is_empty prefix) then
+      if (not prefix_shared || i = 0) && not (list_is_empty prefix) then
         p "Sample prefix%s:\n\
            ```\n\
            %s\n\
@@ -460,7 +460,7 @@ let report_coverage (type lrc)
             Some (suffix, la', patterns)
         end suffixes
       in
-      if not (List.is_empty suffixes) then (
+      if not (list_is_empty suffixes) then (
         let ker = graph.ker.:(first) in
         let lr0 = Enumeration.get_lr0_state grammar stacks ker in
         let patterns = ref IndexSet.empty in

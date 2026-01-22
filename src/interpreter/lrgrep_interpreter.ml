@@ -206,7 +206,7 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
     end;
     print_string "\x1b[0m";
   end stack;
-  if not (List.is_empty remainder) then
+  if not (list_is_empty remainder) then
     Printf.printf "Remaining input:\n  %s\n"
       (string_concat_map " " (Terminal.to_string grammar) remainder);
   if IndexSet.is_not_empty !failing then
