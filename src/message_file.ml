@@ -261,7 +261,7 @@ let blocks_to_file g ~shortest blocks ()=
   let body = Seq.concat (seq_mapi prepare blocks) in
   let body =
     if shortest then
-      fun () -> Seq.Cons ("%shortest [", Seq.append body (Seq.singleton "]"))
+      fun () -> Seq.Cons ("| %shortest [", Seq.append body (seq_singleton "]"))
     else
       body
   in
