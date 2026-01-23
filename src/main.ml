@@ -27,41 +27,6 @@ open Misc
 open Fix.Indexing
 open Kernel
 
-(*
-let usage = "
-Usage: lrgrep [options] [ [-g] parser.cmly] [ [-s] spec.lrgrep] <commands>...
-
-Global options:
-  -g, --grammar <parser.cmly> Grammar/automaton to work on
-  -s, --spec    <spec.lrgrep>   Specification to process
-  -v, --verbose      Increase verbosity
-  -h, --help         Show this help messages
-  -V, --version      Display version information and exit
-
-Commands:
-  compile    Generate an error classifier from an error specification.
-    -o <file>            Output file for the classifier source code.
-                         Defaults to <error-spec>.ml
-
-  interpret  Annotate invalid sentences.
-    -i <sentence>        Invalid sentence to annotate.
-    -f <-|file>          Read invalid sentences from a file.
-
-    A sentence is specified as a list of terminals.
-    By default the sentence is parsed using the first entry point of the grammar
-    To specify another entrypoint, write its name followed by ':'.
-
-  cover      Analyses to cover all errors.
-    -o <-|file>          Output file for the invalid sentences.
-
-  recover    Generate an error-resilient parser.
-    -o <file.ml>            Output file for the total parser source code.
-
-  complete   Generate code for completing an input prefix.
-    -o <file.ml>            Output file for the completion source code.
-"
-*)
-
 let usage_prompt =
   "Usage: lrgrep <global-options> [ command <command-options> ]..."
 
