@@ -141,9 +141,11 @@ module Indices = struct
   let get_symbol g pos sym =
     let sym = string_of_symbol sym in
     match Symbol.find g sym with
-    | Result.Error [] ->
-      error pos "Unknown symbol %s" sym
-    | Result.Error dym ->
+    | Result.Error (`Mangled nt) ->
+      warn pos "symbol %s is mangled, please write %s"
+        sym (Nonterminal.to_string g nt);
+      Symbol.inj_n g nt
+    | Result.Error (`Dym dym) ->
       error pos "Unknown symbol %s%a" sym (print_dym (fun (_,s,_) -> s)) dym
     | Result.Ok sym -> sym
 end
@@ -187,7 +189,12 @@ module Globbing = struct
     | (Find sym, pos) :: rest ->
       let last, tail = structure_filter g indices rest in
       match Indices.find_symbols g indices sym with
-      | Result.Error dym ->
+      | Result.Error (`Mangled n) ->
+        warn pos "symbol %s is mangled, please write %s"
+          (Indices.string_of_symbol (Option.get sym))
+          (Nonterminal.to_string g n);
+        (`Find (IndexSet.singleton (Symbol.inj_n g n)) :: last, tail)
+      | Result.Error (`Dym dym) ->
         error pos "Unknown symbol %s%a"
           (Indices.string_of_symbol (Option.get sym))
           (print_dym (fun (_,s,_) -> s)) dym

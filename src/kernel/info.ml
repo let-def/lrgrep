@@ -534,6 +534,23 @@ module Nonterminal = struct
     let open (val g.raw) in
     Nonterminal.name (Nonterminal.of_int (Index.to_int i))
 
+  let to_mangled_string g i =
+    let open (val g.raw) in
+    Nonterminal.mangled_name (Nonterminal.of_int (Index.to_int i))
+
+  let find_mangled g str =
+    let enum = Index.enumerate (cardinal g) in
+    let rec loop () =
+      let i = enum () in
+      if to_mangled_string g i = str then
+        i
+      else
+        loop ()
+    in
+    match loop () with
+    | i -> Some i
+    | exception Index.End_of_set -> None
+
   let kind g i =
     let open (val g.raw) in
     Nonterminal.kind (Nonterminal.of_int (Index.to_int i))
@@ -563,10 +580,16 @@ module Nonterminal = struct
     let table = nonterminal_table g in
     match Hashtbl.find_opt table name, approx with
     | Some t, _ -> Result.Ok t
-    | None, 0 -> Result.Error []
+    | None, 0 -> Result.Error (`Dym [])
     | None, dist ->
-      Result.Error
-        (Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table))
+      match find_mangled g name with
+      | Some i ->
+        Result.Error (`Mangled i)
+      | None ->
+        let candidates =
+          Damerau_levenshtein.filter_approx ~dist name (Hashtbl.to_seq table)
+        in
+        Result.Error (`Dym candidates)
 end
 
 module Symbol = struct
@@ -617,14 +640,19 @@ module Symbol = struct
       let ntable = Nonterminal.nonterminal_table g in
       match Hashtbl.find_opt ntable name, approx with
       | Some n, _ -> Result.Ok (inj_n g n)
-      | None, 0 -> Result.Error []
+      | None, 0 -> Result.Error (`Dym [])
       | None, dist ->
-        Result.Error (
-          Damerau_levenshtein.filter_approx ~dist name
-            (Seq.append
-               (Seq.map (fun (s,t) -> (s, inj_t g t)) (Hashtbl.to_seq ttable))
-               (Seq.map (fun (s,n) -> (s, inj_n g n)) (Hashtbl.to_seq ntable)))
-        )
+        match Nonterminal.find_mangled g name with
+        | Some i ->
+          Result.Error (`Mangled i)
+        | None ->
+          let candidates =
+            Damerau_levenshtein.filter_approx ~dist name
+              (Seq.append
+                 (Seq.map (fun (s,t) -> (s, inj_t g t)) (Hashtbl.to_seq ttable))
+                 (Seq.map (fun (s,n) -> (s, inj_n g n)) (Hashtbl.to_seq ntable)))
+          in
+          Result.Error (`Dym candidates)
 end
 
 module Production = struct

@@ -401,7 +401,9 @@ let do_compile spec (cp : Code_printer.t option) =
         end;
         stopwatch 1 "coverage report";
         Syntax.nonfatal_error Lexing.dummy_pos
-          "rule %s has only partial coverage" rule.name;
+          "rule %s has only partial coverage%s" rule.name
+          (if !opt_compile_cover_report <> "" then ""
+           else " (use --cover-report <file> to get more information)");
         if !opt_compile_cover_error then
           exit 1
     )

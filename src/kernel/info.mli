@@ -106,7 +106,8 @@ module Nonterminal : sig
 
   val find
     :  'g grammar -> ?approx:int -> string
-    -> ('g n index, (int * string * 'g n index) list) result
+    -> ('g n index, [ `Mangled of 'g n index
+                    | `Dym of (int * string * 'g n index) list ]) result
 end
 
 module Symbol : sig
@@ -130,8 +131,11 @@ module Symbol : sig
   val inj_n : 'g grammar -> 'g nonterminal index -> 'g symbol index
 
   val find
-    :  'g grammar -> ?approx:int -> string
-    -> ('g n index, (int * string * 'g n index) list) result
+    :  'g grammar
+    -> ?approx:int
+    -> string
+    -> ('g n index, [ `Mangled of 'g nonterminal index
+                    | `Dym of (int * string * 'g n index) list]) result
 end
 
 module Production : sig
