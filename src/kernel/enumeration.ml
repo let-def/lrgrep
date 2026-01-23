@@ -244,11 +244,11 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
           sentences.@(node) <- List.cons (path, failing);
         );
         (* Extend path with successors *)
-        let succ f = match dir with
-          | `Prefix -> List.iter (fun edge -> f edge edge.source) gr.bkd.:(node)
-          | `Suffix -> List.iter (fun edge -> f edge edge.target) gr.fwd.:(node)
+        let prj, list = match dir with
+          | `Prefix -> ((fun edge -> edge.source), gr.bkd.:(node))
+          | `Suffix -> ((fun edge -> edge.target), gr.fwd.:(node))
         in
-        succ (fun edge node' -> push todo (dir, node', edge :: path, failing))
+        List.iter (fun edge -> push todo (dir, prj edge, edge :: path, failing)) list
       );
     in
     Index.iter n begin fun node ->
@@ -258,7 +258,12 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
         propagate (`Prefix, node, [], IndexSet.empty)
     end;
     fixpoint ~propagate todo;
-    let seq_apply seq = seq () in
+    Index.iter n begin fun node ->
+      if not (list_is_empty gr.bkd.:(node)) then
+        assert (not (list_is_empty shortest_suffix.:(node)));
+      if not (list_is_empty gr.fwd.:(node)) then
+        assert (not (list_is_empty shortest_prefix.:(node)));
+    end;
     Index.init_seq n begin fun node () ->
       let output (prefix, pfail) (suffix, sfail) =
         let failing = IndexSet.union pfail sfail in
@@ -279,34 +284,33 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
         List.to_seq suffixes
         |> Seq.map (fun suffix' -> output (sprefix, IndexSet.empty) suffix')
       in
-      let output_prefixes_suffixes prefixes suffixes () =
-        Seq.Cons (output_prefixes prefixes,
-                  fun () -> Seq.Cons (output_suffixes suffixes, Seq.empty))
-      in
       match List.rev prefixes.:(node), suffixes.:(node) with
       | prefix0 :: prefixes, suffix0 :: suffixes ->
-        Seq.Cons (seq_singleton (output prefix0 suffix0),
-                  output_prefixes_suffixes prefixes suffixes)
+        Seq.Cons (output prefix0 suffix0,
+                  Seq.append
+                    (output_prefixes prefixes)
+                    (output_suffixes suffixes))
       | prefixes, suffixes ->
-        output_prefixes_suffixes prefixes suffixes ()
+        Seq.append (output_prefixes prefixes) (output_suffixes suffixes) ()
     end
     |> Seq.concat
-    |> Seq.concat
     |> Seq.filter (fun (node, edges, failing) ->
-        let productive node =
+        let productive = ref false in
+        let check node =
           let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
           let fallible = disp.fallible0.:(lr0) in
           let fallible' = IndexSet.diff fallible failing in
-          if not (IndexSet.equal fallible fallible') then (
+          if fallible != fallible' then (
             disp.fallible0.:(lr0) <- fallible';
-            true
-          ) else
-            false
+            productive := true;
+          )
         in
-        productive node || List.exists (fun edge -> productive edge.source) edges
+        check node;
+        List.iter (fun edge -> check edge.source) edges;
+        !productive
       )
     |> Seq.map (make_failing_sentence gr)
-    |> seq_apply
+    |> (fun seq -> seq ())
   end;
   disp
 
