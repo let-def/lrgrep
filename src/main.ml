@@ -400,12 +400,16 @@ let do_compile spec (cp : Code_printer.t option) =
             Seq.iter report xs
         end;
         stopwatch 1 "coverage report";
-        Syntax.nonfatal_error Lexing.dummy_pos
+        let report =
+          if !opt_compile_cover_error then
+            Syntax.error
+          else
+            Syntax.warn
+        in
+        report Lexing.dummy_pos
           "rule %s has only partial coverage%s" rule.name
           (if !opt_compile_cover_report <> "" then ""
            else " (use --cover-report <file> to get more information)");
-        if !opt_compile_cover_error then
-          exit 1
     )
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
