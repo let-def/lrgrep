@@ -286,6 +286,7 @@ let index_targets (type g) (g : g grammar) rc
       node'
   in
   let root = fresh_node () in
+  root.immediates <- Lr1.all g;
   let rec follow_path = function
     | [] -> assert false
     | [lr1] -> (root, lr1)
