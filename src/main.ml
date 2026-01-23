@@ -354,8 +354,10 @@ let do_compile spec (cp : Code_printer.t option) =
           | lazy None -> ()
           | lazy (Some oc) ->
             Printf.fprintf oc "# Rule %s\n" rule.name;
+            let cases = ref 0 in
             let report case =
-              output_char oc '\n';
+              incr cases;
+              Printf.fprintf oc "\n# Uncovered case %d\n" !cases;
               Coverage.report_case grammar stacks !!reachability
                 ~output:(output_string oc)
                 ~get_prefix:entrypoints.some_prefix
