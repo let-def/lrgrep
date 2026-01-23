@@ -326,7 +326,7 @@ let uncovered_cases (type lrc)
           let goto, dot = project_position positions pos in
           let completions =
             complete_suffixes
-              (IndexSet.rev_map_elements lrcs (fun lrc -> (lrc, []))) (dot - 1)
+              (IndexSet.rev_map_elements lrcs (fun lrc -> (lrc, [lrc]))) (dot - 1)
           in
           let enum = list_rev_mappend
               (fun (lrc, compl) -> Enumeration.kernel lrc ~goto la, (compl, suffix))
