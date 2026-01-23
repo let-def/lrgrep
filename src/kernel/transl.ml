@@ -396,7 +396,10 @@ let transl (type g) (g : g grammar) rg indices trie ~capture re =
         | None -> IndexSet.empty
         | Some name -> mk_capture Value name
       in
-      Expr.Set (set, cap, Usage.singleton mark)
+      Expr.Seq [
+        Expr.make re.position (Expr.Set (set, cap));
+        Expr.make re.position (Expr.Usage (Usage.singleton mark));
+      ]
     | Alternative res ->
       Expr.Alt (List.map (transl ~for_reduction) res)
     | Repetition {expr; policy} ->
@@ -419,14 +422,19 @@ let transl (type g) (g : g grammar) rg indices trie ~capture re =
           let capture_end = mk_capture End_loc name in
           (capture_start, capture_end)
       in
-      let usage = Usage.singleton mark in
-      let r = Expr.Reduce (capture_end, {capture; pattern; policy; usage}) in
-      if IndexSet.is_empty immediate then
-        r
-      else if immediate == Lr1.all g then
-        Expr.Alt [Expr.make re.position r; Expr.make re.position (Expr.Seq [])]
-      else
-        Expr.Alt [Expr.make re.position r; Expr.make re.position (Expr.Filter immediate)]
+      let r = Expr.Reduce (capture_end, {capture; pattern; policy}) in
+      let core =
+        if IndexSet.is_empty immediate then
+          r
+        else if immediate == Lr1.all g then
+          Expr.Alt [Expr.make re.position r; Expr.make re.position (Expr.Seq [])]
+        else
+          Expr.Alt [Expr.make re.position r; Expr.make re.position (Expr.Filter immediate)]
+      in
+      Expr.Seq [
+        Expr.make re.position core;
+        Expr.make re.position (Expr.Usage (Usage.singleton mark));
+      ]
     | Concat res ->
       Expr.Seq (List.rev_map (transl ~for_reduction) res)
     | Filter {lhs; rhs} ->

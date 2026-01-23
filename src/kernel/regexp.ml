@@ -63,7 +63,6 @@ module Reductions = struct
   type 'g t = {
     pattern: 'g Redgraph.target indexset;
     capture: Capture.set;
-    usage: Usage.set;
     policy: Syntax.quantifier_kind;
   }
 
@@ -74,11 +73,10 @@ module Reductions = struct
         let c = IndexSet.compare r1.capture r2.capture in
         c
 
-  let cmon {capture=_; pattern; usage=_; policy} =
+  let cmon {capture=_; pattern; policy} =
     Cmon.record [
       (*"capture", cmon_indexset capture;*)
       "pattern_domain", cmon_set_cardinal (*cmon_indexset*) pattern;
-      (*"usage", Usage.cmon_set usage;*)
       "policy", Syntax.cmon_quantifier_kind policy;
     ]
 end
@@ -102,7 +100,7 @@ module Expr = struct
 
   (** The different constructors of regular expressions*)
   and 'g desc =
-    | Set of 'g lr1 indexset * Capture.set * Usage.set
+    | Set of 'g lr1 indexset * Capture.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of 'g t list
@@ -116,6 +114,7 @@ module Expr = struct
     | Filter of 'g lr1 indexset
     | Reduce of Capture.set * 'g Reductions.t
     (** The reduction operator *)
+    | Usage of Usage.set
 
   (** A regular expression term with its unique ID, its description and its
       position. *)
@@ -132,12 +131,8 @@ module Expr = struct
   let cmon ?(lr1=cmon_index) t =
     let rec aux t =
       match t.desc with
-      | Set (lr1s, _var, _usage) ->
-        Cmon.construct "Set" [
-          cmon_indexset ~index:lr1 lr1s;
-          (*cmon_indexset var;
-            Usage.cmon_set usage;*)
-        ]
+      | Set (lr1s, _var) ->
+        Cmon.construct "Set" [cmon_indexset ~index:lr1 lr1s]
       | Alt ts -> Cmon.constructor "Alt" (Cmon.list_map aux ts)
       | Seq ts -> Cmon.constructor "Seq" (Cmon.list_map aux ts)
       | Star (t, qk) -> Cmon.construct "Star" [aux t; Syntax.cmon_quantifier_kind qk]
@@ -145,6 +140,8 @@ module Expr = struct
         Cmon.constructor "Filter" (cmon_indexset ~index:lr1 lr1s)
       | Reduce (_var, r) ->
         Cmon.construct "Reduce" [(*cmon_indexset var;*) Reductions.cmon r]
+      | Usage _ ->
+        Cmon.constant "Usage"
     in
     aux t
 end
@@ -289,7 +286,6 @@ module K = struct
         let push_matching () =
           if IndexSet.is_not_empty !matching then (
             let label = {label with filter = !matching} in
-            let label = Label.capture label IndexSet.empty reduction.usage in
             process_k label next
           )
         in
@@ -318,11 +314,11 @@ module K = struct
         end
 
     and process_re label self next = function
-      | Set (s, var, usage) ->
+      | Set (s, var) ->
         begin match Label.filter label s with
           | None -> ()
           | Some label ->
-            continue ks (Label.capture label var usage) next
+            continue ks (Label.capture label var Usage.empty) next
         end
 
       | Alt es ->
@@ -368,6 +364,10 @@ module K = struct
             let filter = IndexSet.of_list filter in
             continue ks {label with filter} (Reducing {reduction; steps; next})
           ) next_steps;
+
+        | Usage set ->
+          let label = Label.capture label IndexSet.empty set in
+          process_k label next
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
     process_k label k;

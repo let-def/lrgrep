@@ -55,7 +55,6 @@ module Reductions : sig
   type 'g t = {
     pattern: 'g Redgraph.target indexset;
     capture: Capture.set;
-    usage: Usage.set;
     policy: Syntax.quantifier_kind;
   }
 
@@ -79,7 +78,7 @@ module Expr : sig
 
   (** The different constructors of regular expressions*)
   and 'g desc =
-    | Set of 'g lr1 indexset * Capture.set * Usage.set
+    | Set of 'g lr1 indexset * Capture.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of 'g t list
@@ -93,6 +92,7 @@ module Expr : sig
     | Filter of 'g lr1 indexset
     | Reduce of Capture.set * 'g Reductions.t
     (** The reduction operator *)
+    | Usage of Usage.set
 
   (** A regular expression term with its unique ID, its description and its
       position. *)
