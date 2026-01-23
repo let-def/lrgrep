@@ -205,7 +205,8 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
   } in
   disp.next <- begin fun () ->
     let n = Vector.length gr.ker in
-    let visited = Boolvector.make n false in
+    let visited_prefix = Boolvector.make n false in
+    let visited_suffix = Boolvector.make n false in
     let fallible = Vector.make n IndexSet.empty in
     let prefixes = Vector.make n [] in
     let suffixes = Vector.make n [] in
@@ -215,14 +216,18 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
     let propagate (dir, node, path, failing) =
       let ker = gr.ker.:(node) in
       let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
-      begin match dir with
+      (* Remember the shortest paths, find where to mark the visit status *)
+      let visited =
+        match dir with
         | `Prefix ->
           if list_is_empty shortest_prefix.:(node) then
-            shortest_prefix.:(node) <- path
+            shortest_prefix.:(node) <- path;
+          visited_prefix
         | `Suffix ->
           if list_is_empty shortest_suffix.:(node) then
-            shortest_suffix.:(node) <- path
-      end;
+            shortest_suffix.:(node) <- path;
+          visited_suffix
+      in
       let fallible' = IndexSet.union failing fallible.:(node) in
       if not (Boolvector.test visited node) || fallible' != fallible.:(node) then (
         Boolvector.set visited node;
