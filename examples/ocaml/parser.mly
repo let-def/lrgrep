@@ -2478,12 +2478,8 @@ fun_expr:
     { mk_indexop_expr user_indexing_operators ~loc:$sloc $1 }
   | fun_expr attribute
       { Exp.attr $1 $2 }
-/* BEGIN AVOID */
-  | UNDERSCORE
-     { not_expecting $loc($1) "wildcard \"_\"" }
-/* END AVOID */
 ;
-%inline expr:
+expr:
   | or_function(fun_expr) { $1 }
 ;
 %inline fun_expr_attrs:
@@ -4175,9 +4171,6 @@ rec_flag:
 ;
 %inline no_nonrec_flag:
     /* empty */ { Recursive }
-/* BEGIN AVOID */
-  | NONREC      { not_expecting $loc "nonrec flag" }
-/* END AVOID */
 ;
 direction_flag:
     TO                                          { Upto }
@@ -4342,9 +4335,6 @@ ext:
 ;
 %inline no_ext:
   | /* empty */     { None }
-/* BEGIN AVOID */
-  | PERCENT attr_id { not_expecting $loc "extension" }
-/* END AVOID */
 ;
 %inline ext_attributes:
   ext attributes    { $1, $2 }
