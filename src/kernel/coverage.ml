@@ -237,7 +237,7 @@ let string_of_items_for_filter g lr0 =
     let rhs = Production.rhs g prod in
     (Production.lhs g prod,
      Array.sub rhs 0 pos,
-     Some (Array.sub rhs pos (Array.length rhs - pos)))
+     Array.sub rhs pos (Array.length rhs - pos))
   in
   let lines = ref [] in
   let append item =
@@ -246,14 +246,23 @@ let string_of_items_for_filter g lr0 =
     (* Optimization 1: skip items of the form symbol: symbol . ... *)
     | [|first|] when Index.equal (Symbol.inj_n g lhs) first -> ()
     | _ ->
+      (* Optimization 2: group items of the form
+         sym: α . x . β₁, sym: α . x.β₂, ...
+         as sym: α . x _* *)
       match !lines with
-      | (lhs', pre', post) :: rest
+      | (lhs', pre', post') :: rest
         when Index.equal lhs lhs' && array_equal Index.equal pre pre' ->
-        if Option.is_some post then
-          (* Optimization 2: group items of the form sym: α . β₁, sym: α . β₂, ...
-             as sym: α . _* *)
-          lines := (lhs', pre', None) :: rest
-      | lines' -> lines := (lhs, pre, post) :: lines'
+        begin match post', post with
+          | `Suffix [||], _ | _, [||] ->
+            push lines (lhs, pre, `Suffix post)
+          | `Suffix post', post when Index.equal post'.(0) post.(0) ->
+            lines := (lhs', pre', `Wild post.(0)) :: rest
+          | `Wild post0, post when Index.equal post0 post.(0) ->
+            ()
+          | _ ->
+            push lines (lhs, pre, `Suffix post)
+        end
+      | _ -> push lines (lhs, pre, `Suffix post)
   in
   IndexSet.iter append (Lr0.items g lr0);
   let print_item (lhs, pre, post) =
@@ -262,8 +271,8 @@ let string_of_items_for_filter g lr0 =
     (Nonterminal.to_string g lhs ^ ":")
     :: syms pre
     @ "." :: match post with
-    | None -> ["_*"]
-    | Some post -> syms post
+    | `Suffix post -> syms post
+    | `Wild sym -> [Symbol.to_string g sym; "_*"]
   in
   List.rev_map print_item !lines
 
