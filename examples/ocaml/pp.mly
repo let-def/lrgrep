@@ -1,18 +1,18 @@
-%start<unit> implementation
-%start<unit> interface
-%start<unit> parse_any_longident
-%start<unit> parse_constr_longident
-%start<unit> parse_core_type
-%start<unit> parse_expression
-%start<unit> parse_mod_ext_longident
-%start<unit> parse_mod_longident
-%start<unit> parse_module_expr
-%start<unit> parse_module_type
-%start<unit> parse_mty_longident
-%start<unit> parse_pattern
-%start<unit> parse_val_longident
-%start<unit> toplevel_phrase
-%start<unit> use_file
+%start implementation
+%start interface
+%start parse_any_longident
+%start parse_constr_longident
+%start parse_core_type
+%start parse_expression
+%start parse_mod_ext_longident
+%start parse_mod_longident
+%start parse_module_expr
+%start parse_module_type
+%start parse_mty_longident
+%start parse_pattern
+%start parse_val_longident
+%start toplevel_phrase
+%start use_file
 %token AMPERAMPER
 %token AMPERSAND
 %token AND
@@ -176,260 +176,271 @@
 %nonassoc below_DOT
 %nonassoc DOT DOTOP
 %nonassoc BACKQUOTE BANG BEGIN CHAR FALSE FLOAT INT LBRACE LBRACELESS LBRACKET LBRACKETBAR LBRACKETPERCENT LIDENT LPAREN METAOCAML_BRACKET_OPEN METAOCAML_ESCAPE NEW OBJECT PREFIXOP QUOTED_STRING_EXPR STRING TRUE UIDENT
+%type <unit> implementation
+%type <unit> interface
+%type <unit> parse_any_longident
+%type <unit> parse_constr_longident
+%type <unit> parse_core_type
+%type <unit> parse_expression
+%type <unit> parse_mod_ext_longident
+%type <unit> parse_mod_longident
+%type <unit> parse_module_expr
+%type <unit> parse_module_type
+%type <unit> parse_mty_longident
+%type <unit> parse_pattern
+%type <unit> parse_val_longident
+%type <unit> toplevel_phrase
+%type <unit> use_file
 %%
 
 option_BAR_:
-| 
+|
 | BAR
-  {}
+    {}
 
 option_SEMI_:
-| 
+|
 | SEMI
-  {}
+    {}
 
 option_preceded_AS_mkrhs_LIDENT___:
-| 
+|
 | AS LIDENT
-  {}
+    {}
 
 option_preceded_COLON_atomic_type__:
-| 
+|
 | COLON atomic_type
-  {}
+    {}
 
 option_preceded_COLON_core_type__:
-| 
+|
 | COLON core_type
-  {}
+    {}
 
 option_preceded_EQUAL_expr__:
-| 
-| EQUAL fun_expr
-| EQUAL FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-  {}
+|
+| EQUAL expr
+    {}
 
 option_preceded_EQUAL_module_type__:
-| 
+|
 | EQUAL module_type
-  {}
+    {}
 
 option_preceded_EQUAL_pattern__:
-| 
+|
 | EQUAL pattern
-  {}
+    {}
 
 option_preceded_EQUAL_seq_expr__:
-| 
+|
 | EQUAL seq_expr
-  {}
+    {}
 
 option_type_constraint_:
-| 
+|
 | type_constraint
-  {}
+    {}
 
 list_and_class_declaration_:
-| 
+|
 | AND list_attribute_ virtual_flag formal_class_parameters LIDENT class_fun_binding list_post_item_attribute_ list_and_class_declaration_
-  {}
+    {}
 
 list_and_class_description_:
-| 
+|
 | AND list_attribute_ virtual_flag formal_class_parameters LIDENT COLON class_type list_post_item_attribute_ list_and_class_description_
-  {}
+    {}
 
 list_and_class_type_declaration_:
-| 
+|
 | AND list_attribute_ virtual_flag formal_class_parameters LIDENT EQUAL class_signature list_post_item_attribute_ list_and_class_type_declaration_
-  {}
+    {}
 
 list_and_module_binding_:
-| 
+|
 | AND list_attribute_ module_name module_binding_body list_post_item_attribute_ list_and_module_binding_
-  {}
+    {}
 
 list_and_module_declaration_:
-| 
+|
 | AND list_attribute_ module_name COLON module_type list_post_item_attribute_ list_and_module_declaration_
-  {}
+    {}
 
 list_attribute_:
-| 
+|
 | attribute list_attribute_
-  {}
+    {}
 
 list_generic_and_type_declaration_type_kind__:
-| 
+|
 | AND list_attribute_ type_parameters LIDENT type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_ list_generic_and_type_declaration_type_kind__
-  {}
+    {}
 
 list_generic_and_type_declaration_type_subst_kind__:
-| 
+|
 | AND list_attribute_ type_parameters LIDENT COLONEQUAL nonempty_type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_ list_generic_and_type_declaration_type_subst_kind__
-  {}
+    {}
 
 list_post_item_attribute_:
-| 
+|
 | post_item_attribute list_post_item_attribute_
-  {}
+    {}
 
 list_signature_element_:
-| 
+|
 | SEMISEMI list_signature_element_
 | signature_item list_signature_element_
-  {}
+    {}
 
 list_structure_element_:
-| 
+|
 | SEMISEMI list_structure_element_
 | SEMISEMI seq_expr list_post_item_attribute_ list_structure_element_
 | structure_item list_structure_element_
-  {}
+    {}
 
 list_text_csig_class_sig_field__:
-| 
+|
 | class_sig_field list_text_csig_class_sig_field__
-  {}
+    {}
 
 list_text_cstr_class_field__:
-| 
+|
 | class_field list_text_cstr_class_field__
-  {}
+    {}
 
 list_text_str_structure_item__:
-| 
+|
 | structure_item list_text_str_structure_item__
-  {}
+    {}
 
 list_use_file_element_:
-| 
+|
 | SEMISEMI list_use_file_element_
 | SEMISEMI seq_expr list_post_item_attribute_ list_use_file_element_
 | structure_item list_use_file_element_
 | toplevel_directive list_use_file_element_
-  {}
+    {}
 
 nonempty_list_mkrhs_LIDENT__:
 | LIDENT
 | LIDENT nonempty_list_mkrhs_LIDENT__
-  {}
+    {}
 
 nonempty_list_raw_string_:
 | STRING
 | STRING nonempty_list_raw_string_
-  {}
+    {}
 
 reversed_llist_preceded_CONSTRAINT_constrain__:
-| 
+|
 | reversed_llist_preceded_CONSTRAINT_constrain__ CONSTRAINT core_type EQUAL core_type
-  {}
+    {}
 
 reversed_nonempty_llist_functor_arg_:
 | functor_arg
 | reversed_nonempty_llist_functor_arg_ functor_arg
-  {}
+    {}
 
 reversed_nonempty_llist_labeled_simple_expr_:
 | labeled_simple_expr
 | reversed_nonempty_llist_labeled_simple_expr_ labeled_simple_expr
-  {}
+    {}
 
 reversed_nonempty_llist_name_tag_:
 | name_tag
 | reversed_nonempty_llist_name_tag_ name_tag
-  {}
+    {}
 
 reversed_nonempty_llist_typevar_:
 | QUOTE ident
 | reversed_nonempty_llist_typevar_ QUOTE ident
-  {}
+    {}
 
 reversed_nonempty_concat_fun_param_as_list_:
 | fun_param_as_list
 | reversed_nonempty_concat_fun_param_as_list_ fun_param_as_list
-  {}
+    {}
 
 reversed_separated_nonempty_llist_AMPERSAND_core_type_no_attr_:
 | alias_type
 | reversed_separated_nonempty_llist_AMPERSAND_core_type_no_attr_ AMPERSAND alias_type
-  {}
+    {}
 
 reversed_separated_nonempty_llist_AND_with_constraint_:
 | with_constraint
 | reversed_separated_nonempty_llist_AND_with_constraint_ AND with_constraint
-  {}
+    {}
 
 reversed_separated_nonempty_llist_BAR_row_field_:
 | row_field
 | reversed_separated_nonempty_llist_BAR_row_field_ BAR row_field
-  {}
+    {}
 
 reversed_separated_nonempty_llist_COMMA_core_type_:
 | core_type
 | reversed_separated_nonempty_llist_COMMA_core_type_ COMMA core_type
-  {}
+    {}
 
 reversed_separated_nonempty_llist_COMMA_type_parameter_:
 | type_parameter
 | reversed_separated_nonempty_llist_COMMA_type_parameter_ COMMA type_parameter
-  {}
+    {}
 
 reversed_separated_nonempty_llist_STAR_atomic_type_:
 | atomic_type
 | reversed_separated_nonempty_llist_STAR_atomic_type_ STAR atomic_type
-  {}
+    {}
 
 reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_:
 | atomic_type %prec STAR
 | LIDENT COLON atomic_type %prec STAR
 | reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_ STAR atomic_type %prec STAR
 | reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_ STAR LIDENT COLON atomic_type %prec STAR
-  {}
+    {}
 
 reversed_separated_nontrivial_llist_COMMA_core_type_:
 | reversed_separated_nontrivial_llist_COMMA_core_type_ COMMA core_type
 | core_type COMMA core_type
-  {}
+    {}
 
 separated_or_terminated_nonempty_list_SEMI_expr_:
-| fun_expr
-| fun_expr SEMI
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ SEMI
-| fun_expr SEMI separated_or_terminated_nonempty_list_SEMI_expr_
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ SEMI separated_or_terminated_nonempty_list_SEMI_expr_
-  {}
+| expr
+| expr SEMI
+| expr SEMI separated_or_terminated_nonempty_list_SEMI_expr_
+    {}
 
 separated_or_terminated_nonempty_list_SEMI_object_expr_field_:
 | LIDENT option_preceded_EQUAL_expr__
 | LIDENT option_preceded_EQUAL_expr__ SEMI
 | LIDENT option_preceded_EQUAL_expr__ SEMI separated_or_terminated_nonempty_list_SEMI_object_expr_field_
-  {}
+    {}
 
 separated_or_terminated_nonempty_list_SEMI_pattern_:
 | pattern
 | pattern SEMI
 | pattern SEMI separated_or_terminated_nonempty_list_SEMI_pattern_
-  {}
+    {}
 
 separated_or_terminated_nonempty_list_SEMI_record_expr_field_:
 | label_longident option_type_constraint_ option_preceded_EQUAL_expr__
 | label_longident option_type_constraint_ option_preceded_EQUAL_expr__ SEMI
 | label_longident option_type_constraint_ option_preceded_EQUAL_expr__ SEMI separated_or_terminated_nonempty_list_SEMI_record_expr_field_
-  {}
+    {}
 
 reversed_preceded_or_separated_nonempty_llist_BAR_match_case_:
 | match_case
 | BAR match_case
 | reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ BAR match_case
-  {}
+    {}
 
 reversed_bar_llist_constructor_declaration_:
 | generic_constructor_declaration_epsilon_
 | generic_constructor_declaration_BAR_
 | reversed_bar_llist_constructor_declaration_ generic_constructor_declaration_BAR_
-  {}
+    {}
 
 reversed_bar_llist_extension_constructor_:
 | generic_constructor_declaration_epsilon_
@@ -438,94 +449,94 @@ reversed_bar_llist_extension_constructor_:
 | extension_constructor_rebind_BAR_
 | reversed_bar_llist_extension_constructor_ generic_constructor_declaration_BAR_
 | reversed_bar_llist_extension_constructor_ extension_constructor_rebind_BAR_
-  {}
+    {}
 
 reversed_bar_llist_extension_constructor_declaration_:
 | generic_constructor_declaration_epsilon_
 | generic_constructor_declaration_BAR_
 | reversed_bar_llist_extension_constructor_declaration_ generic_constructor_declaration_BAR_
-  {}
+    {}
 
 listx_SEMI_record_pat_field_UNDERSCORE_:
 | label_longident option_preceded_COLON_core_type__ option_preceded_EQUAL_pattern__
 | label_longident option_preceded_COLON_core_type__ option_preceded_EQUAL_pattern__ SEMI
 | label_longident option_preceded_COLON_core_type__ option_preceded_EQUAL_pattern__ SEMI UNDERSCORE option_SEMI_
 | label_longident option_preceded_COLON_core_type__ option_preceded_EQUAL_pattern__ SEMI listx_SEMI_record_pat_field_UNDERSCORE_
-  {}
+    {}
 
 implementation:
 | structure EOF
-  {}
+    {}
 
 interface:
 | signature EOF
-  {}
+    {}
 
 toplevel_phrase:
 | seq_expr list_post_item_attribute_ SEMISEMI
 | list_text_str_structure_item__ SEMISEMI
 | toplevel_directive SEMISEMI
 | EOF
-  {}
+    {}
 
 use_file:
 | list_use_file_element_ EOF
 | seq_expr list_post_item_attribute_ list_use_file_element_ EOF
-  {}
+    {}
 
 parse_module_type:
 | module_type EOF
-  {}
+    {}
 
 parse_module_expr:
 | module_expr EOF
-  {}
+    {}
 
 parse_core_type:
 | core_type EOF
-  {}
+    {}
 
 parse_expression:
 | seq_expr EOF
-  {}
+    {}
 
 parse_pattern:
 | pattern EOF
-  {}
+    {}
 
 parse_mty_longident:
 | mty_longident EOF
-  {}
+    {}
 
 parse_val_longident:
 | val_longident EOF
-  {}
+    {}
 
 parse_constr_longident:
 | constr_longident EOF
-  {}
+    {}
 
 parse_mod_ext_longident:
 | mod_ext_longident EOF
-  {}
+    {}
 
 parse_mod_longident:
 | mod_longident EOF
-  {}
+    {}
 
 parse_any_longident:
 | any_longident EOF
-  {}
+    {}
 
 functor_arg:
 | LPAREN RPAREN
 | LPAREN module_name COLON module_type RPAREN
-  {}
+    {}
 
 module_name:
 | UIDENT
 | UNDERSCORE
-  {}
+    {}
 
 module_expr:
 | STRUCT list_attribute_ structure END
@@ -536,35 +547,31 @@ module_expr:
 | module_expr paren_module_expr
 | module_expr LPAREN RPAREN
 | extension
-  {}
+    {}
 
 paren_module_expr:
 | LPAREN module_expr COLON module_type RPAREN
 | LPAREN module_expr RPAREN
 | LPAREN VAL list_attribute_ expr_colon_package_type RPAREN
-  {}
+    {}
 
 expr_colon_package_type:
-| fun_expr
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr COLON module_type
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COLON module_type
-| fun_expr COLON module_type COLONGREATER module_type
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COLON module_type COLONGREATER module_type
-| fun_expr COLONGREATER module_type
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COLONGREATER module_type
-  {}
+| expr
+| expr COLON module_type
+| expr COLON module_type COLONGREATER module_type
+| expr COLONGREATER module_type
+    {}
 
 structure:
 | list_structure_element_
 | seq_expr list_post_item_attribute_ list_structure_element_
-  {}
+    {}
 
 structure_item:
 | let_bindings_ext_
 | INCLUDE ext list_attribute_ module_expr list_post_item_attribute_
 | local_structure_item
-  {}
+    {}
 
 local_structure_item:
 | item_extension list_post_item_attribute_
@@ -573,7 +580,6 @@ local_structure_item:
 | value_description
 | generic_type_declaration_nonrec_flag_type_kind_ list_generic_and_type_declaration_type_kind__
 | TYPE ext list_attribute_ type_parameters type_longident PLUSEQ private_flag reversed_bar_llist_extension_constructor_ list_post_item_attribute_
-| TYPE ext list_attribute_ NONREC type_parameters type_longident PLUSEQ private_flag reversed_bar_llist_extension_constructor_ list_post_item_attribute_
 | str_exception_declaration
 | MODULE ext list_attribute_ REC module_name module_binding_body list_post_item_attribute_ list_and_module_binding_
 | module_type_declaration
@@ -582,27 +588,27 @@ local_structure_item:
 | sig_exception_declaration
 | MODULE ext list_attribute_ module_name module_binding_body list_post_item_attribute_
 | open_declaration
-  {}
+    {}
 
 module_binding_body:
 | EQUAL module_expr
 | COLON module_type EQUAL module_expr
 | functor_arg module_binding_body
-  {}
+    {}
 
 module_type_declaration:
 | MODULE TYPE ext list_attribute_ ident option_preceded_EQUAL_module_type__ list_post_item_attribute_
-  {}
+    {}
 
 open_declaration:
 | OPEN ext list_attribute_ module_expr list_post_item_attribute_
 | OPEN BANG ext list_attribute_ module_expr list_post_item_attribute_
-  {}
+    {}
 
 open_description:
 | OPEN ext list_attribute_ mod_ext_longident list_post_item_attribute_
 | OPEN BANG ext list_attribute_ mod_ext_longident list_post_item_attribute_
-  {}
+    {}
 
 module_type:
 | SIG list_attribute_ signature END
@@ -615,11 +621,11 @@ module_type:
 | module_type MINUSGREATER module_type %prec below_WITH
 | module_type WITH reversed_separated_nonempty_llist_AND_with_constraint_
 | extension
-  {}
+    {}
 
 signature:
 | list_signature_element_
-  {}
+    {}
 
 signature_item:
 | item_extension list_post_item_attribute_
@@ -629,7 +635,6 @@ signature_item:
 | generic_type_declaration_nonrec_flag_type_kind_ list_generic_and_type_declaration_type_kind__
 | generic_type_declaration_no_nonrec_flag_type_subst_kind_ list_generic_and_type_declaration_type_subst_kind__
 | TYPE ext list_attribute_ type_parameters type_longident PLUSEQ private_flag reversed_bar_llist_extension_constructor_declaration_ list_post_item_attribute_
-| TYPE ext list_attribute_ NONREC type_parameters type_longident PLUSEQ private_flag reversed_bar_llist_extension_constructor_declaration_ list_post_item_attribute_
 | sig_exception_declaration
 | MODULE ext list_attribute_ module_name module_declaration_body list_post_item_attribute_
 | MODULE ext list_attribute_ module_name EQUAL mod_longident list_post_item_attribute_
@@ -641,31 +646,31 @@ signature_item:
 | INCLUDE ext list_attribute_ module_type list_post_item_attribute_
 | CLASS ext list_attribute_ virtual_flag formal_class_parameters LIDENT COLON class_type list_post_item_attribute_ list_and_class_description_
 | class_type_declarations
-  {}
+    {}
 
 module_declaration_body:
 | COLON module_type
 | functor_arg module_declaration_body
-  {}
+    {}
 
 module_subst:
 | MODULE ext list_attribute_ UIDENT COLONEQUAL mod_ext_longident list_post_item_attribute_
-  {}
+    {}
 
 module_type_subst:
 | MODULE TYPE ext list_attribute_ ident COLONEQUAL module_type list_post_item_attribute_
-  {}
+    {}
 
 class_fun_binding:
 | EQUAL class_expr
 | COLON class_type EQUAL class_expr
 | simple_param_pattern class_fun_binding
-  {}
+    {}
 
 formal_class_parameters:
-| 
+|
 | LBRACKET reversed_separated_nonempty_llist_COMMA_type_parameter_ RBRACKET
-  {}
+    {}
 
 class_expr:
 | class_simple_expr
@@ -676,7 +681,7 @@ class_expr:
 | class_expr attribute
 | class_simple_expr reversed_nonempty_llist_labeled_simple_expr_
 | extension
-  {}
+    {}
 
 class_simple_expr:
 | LPAREN class_expr RPAREN
@@ -684,18 +689,18 @@ class_simple_expr:
 | LBRACKET reversed_separated_nonempty_llist_COMMA_core_type_ RBRACKET class_longident
 | LPAREN class_expr COLON class_type RPAREN
 | OBJECT list_attribute_ class_self_pattern list_text_cstr_class_field__ END
-  {}
+    {}
 
 class_fun_def:
 | simple_param_pattern MINUSGREATER class_expr
 | simple_param_pattern class_fun_def
-  {}
+    {}
 
 class_self_pattern:
 | LPAREN pattern RPAREN
 | LPAREN pattern COLON core_type RPAREN
-| 
-  {}
+|
+    {}
 
 class_field:
 | INHERIT list_attribute_ class_expr option_preceded_AS_mkrhs_LIDENT___ list_post_item_attribute_
@@ -706,7 +711,7 @@ class_field:
 | INITIALIZER list_attribute_ seq_expr list_post_item_attribute_
 | item_extension list_post_item_attribute_
 | floating_attribute
-  {}
+    {}
 
 value:
 | list_attribute_ virtual_with_mutable_flag LIDENT COLON core_type
@@ -714,7 +719,7 @@ value:
 | BANG list_attribute_ mutable_flag LIDENT EQUAL seq_expr
 | list_attribute_ mutable_flag LIDENT type_constraint EQUAL seq_expr
 | BANG list_attribute_ mutable_flag LIDENT type_constraint EQUAL seq_expr
-  {}
+    {}
 
 method_:
 | list_attribute_ virtual_with_private_flag LIDENT COLON possibly_poly_core_type_
@@ -724,14 +729,14 @@ method_:
 | BANG list_attribute_ private_flag LIDENT COLON possibly_poly_core_type_ EQUAL seq_expr
 | list_attribute_ private_flag LIDENT COLON TYPE nonempty_list_mkrhs_LIDENT__ DOT core_type EQUAL seq_expr
 | BANG list_attribute_ private_flag LIDENT COLON TYPE nonempty_list_mkrhs_LIDENT__ DOT core_type EQUAL seq_expr
-  {}
+    {}
 
 class_type:
 | class_signature
 | optlabel tuple_type MINUSGREATER class_type
 | LIDENT COLON tuple_type MINUSGREATER class_type
 | tuple_type MINUSGREATER class_type
-  {}
+    {}
 
 class_signature:
 | clty_longident
@@ -741,12 +746,12 @@ class_signature:
 | class_signature attribute
 | LET OPEN list_attribute_ mod_longident IN class_signature
 | LET OPEN BANG list_attribute_ mod_longident IN class_signature
-  {}
+    {}
 
 class_self_type:
 | LPAREN core_type RPAREN
-| 
-  {}
+|
+    {}
 
 class_sig_field:
 | INHERIT list_attribute_ class_signature list_post_item_attribute_
@@ -755,27 +760,27 @@ class_sig_field:
 | CONSTRAINT list_attribute_ constrain_field list_post_item_attribute_
 | item_extension list_post_item_attribute_
 | floating_attribute
-  {}
+    {}
 
 constrain_field:
 | core_type EQUAL core_type
-  {}
+    {}
 
 class_type_declarations:
 | CLASS TYPE ext list_attribute_ virtual_flag formal_class_parameters LIDENT EQUAL class_signature list_post_item_attribute_ list_and_class_type_declaration_
-  {}
+    {}
 
 fun_seq_expr:
 | fun_expr %prec below_SEMI
 | fun_expr SEMI
 | fun_expr SEMI seq_expr
 | fun_expr SEMI PERCENT attr_id seq_expr
-  {}
+    {}
 
 seq_expr:
 | fun_seq_expr
 | FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-  {}
+    {}
 
 simple_param_pattern:
 | QUESTION LPAREN label_let_pattern option_preceded_EQUAL_seq_expr__ RPAREN
@@ -788,22 +793,22 @@ simple_param_pattern:
 | simple_pattern
 | LABEL LPAREN pattern COLON reversed_nonempty_llist_typevar_ DOT core_type RPAREN
 | LPAREN pattern COLON reversed_nonempty_llist_typevar_ DOT core_type RPAREN
-  {}
+    {}
 
 pattern_var:
 | LIDENT
 | UNDERSCORE
-  {}
+    {}
 
 label_let_pattern:
 | LIDENT
 | LIDENT COLON possibly_poly_core_type_
-  {}
+    {}
 
 let_pattern:
 | pattern
 | pattern COLON possibly_poly_core_type_
-  {}
+    {}
 
 fun_expr:
 | simple_expr %prec below_HASH
@@ -811,12 +816,8 @@ fun_expr:
 | FUN ext list_attribute_ fun_params option_preceded_COLON_atomic_type__ MINUSGREATER fun_body
 | MATCH ext list_attribute_ seq_expr WITH reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
 | TRY ext list_attribute_ seq_expr WITH reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| IF ext list_attribute_ seq_expr THEN fun_expr ELSE fun_expr
-| IF ext list_attribute_ seq_expr THEN fun_expr ELSE FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| IF ext list_attribute_ seq_expr THEN FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ ELSE fun_expr
-| IF ext list_attribute_ seq_expr THEN FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ ELSE FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| IF ext list_attribute_ seq_expr THEN fun_expr
-| IF ext list_attribute_ seq_expr THEN FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| IF ext list_attribute_ seq_expr THEN expr ELSE expr
+| IF ext list_attribute_ seq_expr THEN expr
 | WHILE ext list_attribute_ seq_expr DO seq_expr DONE
 | FOR ext list_attribute_ pattern EQUAL seq_expr direction_flag seq_expr DO seq_expr DONE
 | ASSERT ext list_attribute_ simple_expr %prec below_HASH
@@ -825,79 +826,49 @@ fun_expr:
 | reversed_labeled_tuple_body %prec below_COMMA
 | constr_longident simple_expr %prec below_HASH
 | name_tag simple_expr %prec below_HASH
-| fun_expr INFIXOP0 fun_expr
-| fun_expr INFIXOP0 FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr INFIXOP1 fun_expr
-| fun_expr INFIXOP1 FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr INFIXOP2 fun_expr
-| fun_expr INFIXOP2 FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr INFIXOP3 fun_expr
-| fun_expr INFIXOP3 FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr INFIXOP4 fun_expr
-| fun_expr INFIXOP4 FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr PLUS fun_expr
-| fun_expr PLUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr PLUSDOT fun_expr
-| fun_expr PLUSDOT FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr PLUSEQ fun_expr
-| fun_expr PLUSEQ FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr MINUS fun_expr
-| fun_expr MINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr MINUSDOT fun_expr
-| fun_expr MINUSDOT FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr STAR fun_expr
-| fun_expr STAR FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr PERCENT fun_expr
-| fun_expr PERCENT FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr EQUAL fun_expr
-| fun_expr EQUAL FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr LESS fun_expr
-| fun_expr LESS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr GREATER fun_expr
-| fun_expr GREATER FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr OR fun_expr
-| fun_expr OR FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr BARBAR fun_expr
-| fun_expr BARBAR FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr AMPERSAND fun_expr
-| fun_expr AMPERSAND FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr AMPERAMPER fun_expr
-| fun_expr AMPERAMPER FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr COLONEQUAL fun_expr
-| fun_expr COLONEQUAL FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| subtractive fun_expr %prec prec_unary_minus
-| subtractive FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ %prec prec_unary_minus
-| additive fun_expr %prec prec_unary_plus
-| additive FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ %prec prec_unary_plus
+| fun_expr INFIXOP0 expr
+| fun_expr INFIXOP1 expr
+| fun_expr INFIXOP2 expr
+| fun_expr INFIXOP3 expr
+| fun_expr INFIXOP4 expr
+| fun_expr PLUS expr
+| fun_expr PLUSDOT expr
+| fun_expr PLUSEQ expr
+| fun_expr MINUS expr
+| fun_expr MINUSDOT expr
+| fun_expr STAR expr
+| fun_expr PERCENT expr
+| fun_expr EQUAL expr
+| fun_expr LESS expr
+| fun_expr GREATER expr
+| fun_expr OR expr
+| fun_expr BARBAR expr
+| fun_expr AMPERSAND expr
+| fun_expr AMPERAMPER expr
+| fun_expr COLONEQUAL expr
+| subtractive expr %prec prec_unary_minus
+| additive expr %prec prec_unary_plus
 | let_bindings_ext_ IN seq_expr
 | LETOP letop_bindings IN seq_expr
-| fun_expr COLONCOLON fun_expr
-| fun_expr COLONCOLON FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| LIDENT LESSMINUS fun_expr
-| LIDENT LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT label_longident LESSMINUS fun_expr
-| simple_expr DOT label_longident LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT LPAREN seq_expr RPAREN LESSMINUS fun_expr
-| simple_expr DOT LPAREN seq_expr RPAREN LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT LBRACE seq_expr RBRACE LESSMINUS fun_expr
-| simple_expr DOT LBRACE seq_expr RBRACE LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT LBRACKET seq_expr RBRACKET LESSMINUS fun_expr
-| simple_expr DOT LBRACKET seq_expr RBRACKET LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS fun_expr
-| simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT mod_longident DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS fun_expr
-| simple_expr DOT mod_longident DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS fun_expr
-| simple_expr DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT mod_longident DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS fun_expr
-| simple_expr DOT mod_longident DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS fun_expr
-| simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| simple_expr DOT mod_longident DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS fun_expr
-| simple_expr DOT mod_longident DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| fun_expr COLONCOLON expr
+| LIDENT LESSMINUS expr
+| simple_expr DOT label_longident LESSMINUS expr
+| simple_expr DOT LPAREN seq_expr RPAREN LESSMINUS expr
+| simple_expr DOT LBRACE seq_expr RBRACE LESSMINUS expr
+| simple_expr DOT LBRACKET seq_expr RBRACKET LESSMINUS expr
+| simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS expr
+| simple_expr DOT mod_longident DOTOP LPAREN separated_or_terminated_nonempty_list_SEMI_expr_ RPAREN LESSMINUS expr
+| simple_expr DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS expr
+| simple_expr DOT mod_longident DOTOP LBRACE separated_or_terminated_nonempty_list_SEMI_expr_ RBRACE LESSMINUS expr
+| simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS expr
+| simple_expr DOT mod_longident DOTOP LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET LESSMINUS expr
 | fun_expr attribute
-| UNDERSCORE
-  {}
+    {}
+
+expr:
+| fun_expr
+| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+    {}
 
 simple_expr:
 | LPAREN seq_expr RPAREN
@@ -944,7 +915,7 @@ simple_expr:
 | mod_longident DOT LBRACKET separated_or_terminated_nonempty_list_SEMI_expr_ RBRACKET
 | mod_longident DOT LBRACKET RBRACKET
 | mod_longident DOT LPAREN MODULE ext list_attribute_ module_expr COLON module_type RPAREN
-  {}
+    {}
 
 labeled_simple_expr:
 | simple_expr %prec below_HASH
@@ -953,7 +924,7 @@ labeled_simple_expr:
 | TILDE LPAREN LIDENT type_constraint RPAREN
 | QUESTION LIDENT
 | OPTLABEL simple_expr %prec below_HASH
-  {}
+    {}
 
 let_binding_body_no_punning:
 | val_ident strict_binding
@@ -962,108 +933,97 @@ let_binding_body_no_punning:
 | val_ident COLON TYPE nonempty_list_mkrhs_LIDENT__ DOT core_type EQUAL seq_expr
 | pattern_no_exn EQUAL seq_expr
 | simple_pattern_not_ident COLON core_type EQUAL seq_expr
-  {}
+    {}
 
 let_binding_body:
 | let_binding_body_no_punning
 | val_ident %prec below_HASH
-  {}
+    {}
 
 let_bindings_ext_:
 | LET ext list_attribute_ rec_flag let_binding_body list_post_item_attribute_
 | let_bindings_ext_ and_let_binding
-  {}
+    {}
 
 let_bindings_no_ext_:
 | LET list_attribute_ rec_flag let_binding_body list_post_item_attribute_
-| LET PERCENT attr_id list_attribute_ rec_flag let_binding_body list_post_item_attribute_
 | let_bindings_no_ext_ and_let_binding
-  {}
+    {}
 
 and_let_binding:
 | AND list_attribute_ let_binding_body list_post_item_attribute_
-  {}
+    {}
 
 letop_binding_body:
 | val_ident strict_binding
 | val_ident
 | simple_pattern COLON core_type EQUAL seq_expr
 | pattern_no_exn EQUAL seq_expr
-  {}
+    {}
 
 letop_bindings:
 | letop_binding_body
 | letop_bindings ANDOP letop_binding_body
-  {}
+    {}
 
 strict_binding:
 | EQUAL seq_expr
 | fun_params option_type_constraint_ EQUAL fun_body
-  {}
+    {}
 
 fun_body:
 | FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
 | fun_seq_expr
-  {}
+    {}
 
 match_case:
 | pattern MINUSGREATER seq_expr
 | pattern WHEN seq_expr MINUSGREATER seq_expr
 | pattern MINUSGREATER DOT
-  {}
+    {}
 
 fun_param_as_list:
 | LPAREN TYPE nonempty_list_mkrhs_LIDENT__ RPAREN
 | simple_param_pattern
-  {}
+    {}
 
 fun_params:
 | reversed_nonempty_concat_fun_param_as_list_
-  {}
+    {}
 
 reversed_labeled_tuple_body:
-| reversed_labeled_tuple_body COMMA fun_expr
-| reversed_labeled_tuple_body COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| reversed_labeled_tuple_body COMMA expr
 | reversed_labeled_tuple_body COMMA LABEL simple_expr %prec below_HASH
 | reversed_labeled_tuple_body COMMA TILDE LIDENT
 | reversed_labeled_tuple_body COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-| fun_expr COMMA fun_expr
-| fun_expr COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| fun_expr COMMA LABEL simple_expr %prec below_HASH
-| fun_expr COMMA TILDE LIDENT
-| fun_expr COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COMMA fun_expr
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COMMA LABEL simple_expr %prec below_HASH
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COMMA TILDE LIDENT
-| FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_ COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-| LABEL simple_expr COMMA fun_expr
-| LABEL simple_expr COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| expr COMMA expr
+| expr COMMA LABEL simple_expr %prec below_HASH
+| expr COMMA TILDE LIDENT
+| expr COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
+| LABEL simple_expr COMMA expr
 | LABEL simple_expr COMMA LABEL simple_expr %prec below_HASH
 | LABEL simple_expr COMMA TILDE LIDENT
 | LABEL simple_expr COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-| TILDE LIDENT COMMA fun_expr
-| TILDE LIDENT COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| TILDE LIDENT COMMA expr
 | TILDE LIDENT COMMA LABEL simple_expr %prec below_HASH
 | TILDE LIDENT COMMA TILDE LIDENT
 | TILDE LIDENT COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-| TILDE LPAREN LIDENT type_constraint RPAREN COMMA fun_expr
-| TILDE LPAREN LIDENT type_constraint RPAREN COMMA FUNCTION ext list_attribute_ reversed_preceded_or_separated_nonempty_llist_BAR_match_case_
+| TILDE LPAREN LIDENT type_constraint RPAREN COMMA expr
 | TILDE LPAREN LIDENT type_constraint RPAREN COMMA LABEL simple_expr %prec below_HASH
 | TILDE LPAREN LIDENT type_constraint RPAREN COMMA TILDE LIDENT
 | TILDE LPAREN LIDENT type_constraint RPAREN COMMA TILDE LPAREN LIDENT type_constraint RPAREN %prec below_HASH
-  {}
+    {}
 
 record_expr_content:
 | separated_or_terminated_nonempty_list_SEMI_record_expr_field_
 | simple_expr WITH separated_or_terminated_nonempty_list_SEMI_record_expr_field_
-  {}
+    {}
 
 type_constraint:
 | COLON core_type
 | COLON core_type COLONGREATER core_type
 | COLONGREATER core_type
-  {}
+    {}
 
 pattern:
 | pattern COLONCOLON pattern
@@ -1074,7 +1034,7 @@ pattern:
 | pattern BAR pattern
 | EXCEPTION ext list_attribute_ pattern %prec prec_constr_appl
 | EFFECT pattern_gen COMMA simple_pattern
-  {}
+    {}
 
 pattern_no_exn:
 | pattern_no_exn COLONCOLON pattern
@@ -1083,7 +1043,7 @@ pattern_no_exn:
 | pattern_no_exn AS val_ident
 | labeled_tuple_pattern_pattern_no_exn_
 | pattern_no_exn BAR pattern
-  {}
+    {}
 
 pattern_gen:
 | simple_pattern
@@ -1091,12 +1051,12 @@ pattern_gen:
 | constr_longident LPAREN TYPE nonempty_list_mkrhs_LIDENT__ RPAREN simple_pattern
 | name_tag pattern %prec prec_constr_appl
 | LAZY ext list_attribute_ simple_pattern
-  {}
+    {}
 
 simple_pattern:
 | val_ident %prec below_EQUAL
 | simple_pattern_not_ident
-  {}
+    {}
 
 simple_pattern_not_ident:
 | LPAREN pattern RPAREN
@@ -1115,14 +1075,14 @@ simple_pattern_not_ident:
 | mod_longident DOT LPAREN pattern RPAREN
 | LPAREN pattern COLON core_type RPAREN
 | extension
-  {}
+    {}
 
 simple_delimited_pattern:
 | LBRACE listx_SEMI_record_pat_field_UNDERSCORE_ RBRACE
 | LBRACKET separated_or_terminated_nonempty_list_SEMI_pattern_ RBRACKET
 | LBRACKETBAR separated_or_terminated_nonempty_list_SEMI_pattern_ BARRBRACKET
 | LBRACKETBAR BARRBRACKET
-  {}
+    {}
 
 labeled_tuple_pat_element_list_pattern_:
 | labeled_tuple_pat_element_list_pattern_ COMMA pattern
@@ -1145,7 +1105,7 @@ labeled_tuple_pat_element_list_pattern_:
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA LABEL simple_pattern %prec COMMA
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA TILDE LIDENT
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA TILDE LPAREN LIDENT COLON core_type RPAREN %prec COMMA
-  {}
+    {}
 
 labeled_tuple_pat_element_list_pattern_no_exn_:
 | labeled_tuple_pat_element_list_pattern_no_exn_ COMMA pattern_no_exn
@@ -1168,7 +1128,7 @@ labeled_tuple_pat_element_list_pattern_no_exn_:
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA LABEL simple_pattern %prec COMMA
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA TILDE LIDENT
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA TILDE LPAREN LIDENT COLON core_type RPAREN %prec COMMA
-  {}
+    {}
 
 reversed_labeled_tuple_pattern_pattern_:
 | labeled_tuple_pat_element_list_pattern_ %prec below_COMMA
@@ -1177,7 +1137,7 @@ reversed_labeled_tuple_pattern_pattern_:
 | LABEL simple_pattern COMMA DOTDOT
 | TILDE LIDENT COMMA DOTDOT
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA DOTDOT
-  {}
+    {}
 
 reversed_labeled_tuple_pattern_pattern_no_exn_:
 | labeled_tuple_pat_element_list_pattern_no_exn_ %prec below_COMMA
@@ -1186,33 +1146,32 @@ reversed_labeled_tuple_pattern_pattern_no_exn_:
 | LABEL simple_pattern COMMA DOTDOT
 | TILDE LIDENT COMMA DOTDOT
 | TILDE LPAREN LIDENT COLON core_type RPAREN COMMA DOTDOT
-  {}
+    {}
 
 labeled_tuple_pattern_pattern_:
 | reversed_labeled_tuple_pattern_pattern_
-  {}
+    {}
 
 labeled_tuple_pattern_pattern_no_exn_:
 | reversed_labeled_tuple_pattern_pattern_no_exn_
-  {}
+    {}
 
 value_description:
 | VAL ext list_attribute_ val_ident COLON possibly_poly_core_type_ list_post_item_attribute_
-  {}
+    {}
 
 primitive_declaration:
 | EXTERNAL ext list_attribute_ val_ident COLON possibly_poly_core_type_ EQUAL nonempty_list_raw_string_ list_post_item_attribute_
-  {}
+    {}
 
 generic_type_declaration_no_nonrec_flag_type_subst_kind_:
 | TYPE ext list_attribute_ type_parameters LIDENT COLONEQUAL nonempty_type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_
-| TYPE ext list_attribute_ NONREC type_parameters LIDENT COLONEQUAL nonempty_type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_
-  {}
+    {}
 
 generic_type_declaration_nonrec_flag_type_kind_:
 | TYPE ext list_attribute_ type_parameters LIDENT type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_
 | TYPE ext list_attribute_ NONREC type_parameters LIDENT type_kind reversed_llist_preceded_CONSTRAINT_constrain__ list_post_item_attribute_
-  {}
+    {}
 
 nonempty_type_kind:
 | core_type
@@ -1230,30 +1189,30 @@ nonempty_type_kind:
 | core_type EQUAL LBRACE label_declarations RBRACE
 | core_type EQUAL PRIVATE LBRACE label_declarations RBRACE
 | EXTERNAL STRING
-  {}
+    {}
 
 type_kind:
-| 
+|
 | EQUAL nonempty_type_kind
-  {}
+    {}
 
 type_parameters:
-| 
+|
 | type_parameter
 | LPAREN reversed_separated_nonempty_llist_COMMA_type_parameter_ RPAREN
-  {}
+    {}
 
 type_parameter:
 | type_variance type_variable
-  {}
+    {}
 
 type_variable:
 | QUOTE ident
 | UNDERSCORE
-  {}
+    {}
 
 type_variance:
-| 
+|
 | PLUS
 | MINUS
 | BANG
@@ -1263,65 +1222,65 @@ type_variance:
 | BANG MINUS
 | INFIXOP2
 | PREFIXOP
-  {}
+    {}
 
 constructor_declarations:
 | BAR
 | reversed_bar_llist_constructor_declaration_
-  {}
+    {}
 
 generic_constructor_declaration_BAR_:
 | BAR constr_ident generalized_constructor_arguments list_attribute_
-  {}
+    {}
 
 generic_constructor_declaration_epsilon_:
 | constr_ident generalized_constructor_arguments list_attribute_
-  {}
+    {}
 
 str_exception_declaration:
 | EXCEPTION ext list_attribute_ constr_ident EQUAL constr_longident list_attribute_ list_post_item_attribute_
-  {}
+    {}
 
 sig_exception_declaration:
 | EXCEPTION ext list_attribute_ constr_ident generalized_constructor_arguments list_attribute_ list_post_item_attribute_
-  {}
+    {}
 
 generalized_constructor_arguments:
-| 
+|
 | OF constructor_arguments
 | COLON constructor_arguments MINUSGREATER atomic_type %prec below_HASH
 | COLON reversed_nonempty_llist_typevar_ DOT constructor_arguments MINUSGREATER atomic_type %prec below_HASH
 | COLON atomic_type %prec below_HASH
 | COLON reversed_nonempty_llist_typevar_ DOT atomic_type %prec below_HASH
-  {}
+    {}
 
 constructor_arguments:
 | atomic_type %prec below_HASH
 | reversed_separated_nonempty_llist_STAR_atomic_type_ STAR atomic_type %prec below_HASH
 | LBRACE label_declarations RBRACE
-  {}
+    {}
 
 label_declarations:
 | label_declaration
 | label_declaration_semi
 | label_declaration_semi label_declarations
-  {}
+    {}
 
 label_declaration:
 | mutable_flag LIDENT COLON possibly_poly_core_type_no_attr_ list_attribute_
-  {}
+    {}
 
 label_declaration_semi:
 | mutable_flag LIDENT COLON possibly_poly_core_type_no_attr_ list_attribute_ SEMI list_attribute_
-  {}
+    {}
 
 extension_constructor_rebind_BAR_:
 | BAR constr_ident EQUAL constr_longident list_attribute_
-  {}
+    {}
 
 extension_constructor_rebind_epsilon_:
 | constr_ident EQUAL constr_longident list_attribute_
-  {}
+    {}
 
 with_constraint:
 | TYPE type_parameters label_longident with_type_binder alias_type reversed_llist_preceded_CONSTRAINT_constrain__
@@ -1330,32 +1289,32 @@ with_constraint:
 | MODULE mod_longident COLONEQUAL mod_ext_longident
 | MODULE TYPE mty_longident EQUAL module_type
 | MODULE TYPE mty_longident COLONEQUAL module_type
-  {}
+    {}
 
 with_type_binder:
 | EQUAL
 | EQUAL PRIVATE
-  {}
+    {}
 
 possibly_poly_core_type_:
 | core_type
 | reversed_nonempty_llist_typevar_ DOT core_type
-  {}
+    {}
 
 possibly_poly_core_type_no_attr_:
 | alias_type
 | reversed_nonempty_llist_typevar_ DOT alias_type
-  {}
+    {}
 
 core_type:
 | alias_type
 | core_type attribute
-  {}
+    {}
 
 alias_type:
 | function_type
 | alias_type AS QUOTE ident
-  {}
+    {}
 
 function_type:
 | tuple_type %prec MINUSGREATER
@@ -1367,12 +1326,12 @@ function_type:
 | tuple_type MINUSGREATER function_type
 | LIDENT COLON atomic_type STAR reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_ MINUSGREATER function_type
 | LIDENT COLON atomic_type STAR reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_ %prec MINUSGREATER
-  {}
+    {}
 
 tuple_type:
 | atomic_type %prec below_HASH
 | atomic_type STAR reversed_separated_nonempty_llist_STAR_labeled_tuple_typ_element_ %prec below_WITH
-  {}
+    {}
 
 delimited_type_supporting_local_open:
 | LPAREN core_type RPAREN
@@ -1384,22 +1343,22 @@ delimited_type_supporting_local_open:
 | LBRACKETGREATER RBRACKET
 | LBRACKETLESS option_BAR_ reversed_separated_nonempty_llist_BAR_row_field_ RBRACKET
 | LBRACKETLESS option_BAR_ reversed_separated_nonempty_llist_BAR_row_field_ GREATER reversed_nonempty_llist_name_tag_ RBRACKET
-  {}
+    {}
 
 object_type:
 | LESS meth_list GREATER
 | LESS GREATER
-  {}
+    {}
 
 extension_type:
 | extension
-  {}
+    {}
 
 delimited_type:
 | object_type
 | extension_type
 | delimited_type_supporting_local_open
-  {}
+    {}
 
 atomic_type:
 | delimited_type
@@ -1412,22 +1371,22 @@ atomic_type:
 | mod_ext_longident DOT delimited_type_supporting_local_open
 | QUOTE ident
 | UNDERSCORE
-  {}
+    {}
 
 row_field:
 | tag_field
 | core_type
-  {}
+    {}
 
 tag_field:
 | name_tag OF opt_ampersand reversed_separated_nonempty_llist_AMPERSAND_core_type_no_attr_ list_attribute_
 | name_tag list_attribute_
-  {}
+    {}
 
 opt_ampersand:
 | AMPERSAND
-| 
-  {}
+|
+    {}
 
 meth_list:
 | LIDENT COLON possibly_poly_core_type_no_attr_ list_attribute_ SEMI list_attribute_ meth_list
@@ -1437,14 +1396,14 @@ meth_list:
 | LIDENT COLON possibly_poly_core_type_no_attr_ list_attribute_
 | atomic_type
 | DOTDOT
-  {}
+    {}
 
 constant:
 | INT
 | CHAR
 | STRING
 | FLOAT
-  {}
+    {}
 
 signed_constant:
 | constant
@@ -1452,21 +1411,21 @@ signed_constant:
 | MINUS FLOAT
 | PLUS INT
 | PLUS FLOAT
-  {}
+    {}
 
 ident:
 | UIDENT
 | LIDENT
-  {}
+    {}
 
 val_extra_ident:
 | LPAREN operator RPAREN
-  {}
+    {}
 
 val_ident:
 | LIDENT
 | val_extra_ident
-  {}
+    {}
 
 operator:
 | PREFIXOP
@@ -1500,42 +1459,42 @@ operator:
 | AMPERSAND
 | AMPERAMPER
 | COLONEQUAL
-  {}
+    {}
 
 index_mod:
-| 
+|
 | SEMI DOTDOT
-  {}
+    {}
 
 constr_extra_nonprefix_ident:
 | LBRACKET RBRACKET
 | LPAREN RPAREN
 | FALSE
 | TRUE
-  {}
+    {}
 
 constr_ident:
 | UIDENT
 | LPAREN COLONCOLON RPAREN
 | constr_extra_nonprefix_ident
-  {}
+    {}
 
 constr_longident:
 | mod_longident %prec below_DOT
 | mod_longident DOT LPAREN COLONCOLON RPAREN
 | LPAREN COLONCOLON RPAREN
 | constr_extra_nonprefix_ident
-  {}
+    {}
 
 mk_longident_mod_ext_longident_LIDENT_:
 | LIDENT
 | mod_ext_longident DOT LIDENT
-  {}
+    {}
 
 mk_longident_mod_ext_longident_UIDENT_:
 | UIDENT
 | mod_ext_longident DOT UIDENT
-  {}
+    {}
 
 mk_longident_mod_ext_longident___anonymous_42_:
 | ident
@@ -1544,65 +1503,65 @@ mk_longident_mod_ext_longident___anonymous_42_:
 | mod_ext_longident DOT ident
 | mod_ext_longident DOT LPAREN COLONCOLON RPAREN
 | mod_ext_longident DOT val_extra_ident
-  {}
+    {}
 
 mk_longident_mod_ext_longident_ident_:
 | ident
 | mod_ext_longident DOT ident
-  {}
+    {}
 
 mk_longident_mod_longident_LIDENT_:
 | LIDENT
 | mod_longident DOT LIDENT
-  {}
+    {}
 
 mk_longident_mod_longident_UIDENT_:
 | UIDENT
 | mod_longident DOT UIDENT
-  {}
+    {}
 
 mk_longident_mod_longident_val_ident_:
 | val_ident
 | mod_longident DOT val_ident
-  {}
+    {}
 
 val_longident:
 | mk_longident_mod_longident_val_ident_
-  {}
+    {}
 
 label_longident:
 | mk_longident_mod_longident_LIDENT_
-  {}
+    {}
 
 type_longident:
 | mk_longident_mod_ext_longident_LIDENT_
-  {}
+    {}
 
 mod_longident:
 | mk_longident_mod_longident_UIDENT_
-  {}
+    {}
 
 mod_ext_longident:
 | mk_longident_mod_ext_longident_UIDENT_
 | mod_ext_longident LPAREN mod_ext_longident RPAREN
-  {}
+    {}
 
 mty_longident:
 | mk_longident_mod_ext_longident_ident_
-  {}
+    {}
 
 clty_longident:
 | mk_longident_mod_ext_longident_LIDENT_
-  {}
+    {}
 
 class_longident:
 | mk_longident_mod_longident_LIDENT_
-  {}
+    {}
 
 any_longident:
 | mk_longident_mod_ext_longident___anonymous_42_
 | constr_extra_nonprefix_ident
-  {}
+    {}
 
 toplevel_directive:
 | HASH ident
@@ -1612,79 +1571,79 @@ toplevel_directive:
 | HASH ident mod_longident
 | HASH ident FALSE
 | HASH ident TRUE
-  {}
+    {}
 
 name_tag:
 | BACKQUOTE ident
-  {}
+    {}
 
 rec_flag:
-| 
+|
 | REC
-  {}
+    {}
 
 direction_flag:
 | TO
 | DOWNTO
-  {}
+    {}
 
 private_flag:
-| 
+|
 | PRIVATE
-  {}
+    {}
 
 mutable_flag:
-| 
+|
 | MUTABLE
-  {}
+    {}
 
 virtual_flag:
-| 
+|
 | VIRTUAL
-  {}
+    {}
 
 mutable_virtual_flags:
-| 
+|
 | MUTABLE
 | VIRTUAL
 | MUTABLE VIRTUAL
 | VIRTUAL MUTABLE
-  {}
+    {}
 
 private_virtual_flags:
-| 
+|
 | PRIVATE
 | VIRTUAL
 | PRIVATE VIRTUAL
 | VIRTUAL PRIVATE
-  {}
+    {}
 
 virtual_with_mutable_flag:
 | VIRTUAL
 | MUTABLE VIRTUAL
 | VIRTUAL MUTABLE
-  {}
+    {}
 
 virtual_with_private_flag:
 | VIRTUAL
 | PRIVATE VIRTUAL
 | VIRTUAL PRIVATE
-  {}
+    {}
 
 subtractive:
 | MINUS
 | MINUSDOT
-  {}
+    {}
 
 additive:
 | PLUS
 | PLUSDOT
-  {}
+    {}
 
 optlabel:
 | OPTLABEL
 | QUESTION LIDENT COLON
-  {}
+    {}
 
 single_attr_id:
 | LIDENT
@@ -1739,39 +1698,39 @@ single_attr_id:
 | WHEN
 | WHILE
 | WITH
-  {}
+    {}
 
 attr_id:
 | single_attr_id
 | single_attr_id DOT attr_id
-  {}
+    {}
 
 attribute:
 | LBRACKETAT attr_id attr_payload RBRACKET
-  {}
+    {}
 
 post_item_attribute:
 | LBRACKETATAT attr_id attr_payload RBRACKET
-  {}
+    {}
 
 floating_attribute:
 | LBRACKETATATAT attr_id attr_payload RBRACKET
-  {}
+    {}
 
 ext:
-| 
+|
 | PERCENT attr_id
-  {}
+    {}
 
 extension:
 | LBRACKETPERCENT attr_id payload RBRACKET
 | QUOTED_STRING_EXPR
-  {}
+    {}
 
 item_extension:
 | LBRACKETPERCENTPERCENT attr_id payload RBRACKET
 | QUOTED_STRING_ITEM
-  {}
+    {}
 
 payload:
 | structure
@@ -1779,8 +1738,10 @@ payload:
 | COLON core_type
 | QUESTION pattern
 | QUESTION pattern WHEN seq_expr
-  {}
+    {}
 
 attr_payload:
 | payload
-  {}
+    {}
+
+%%
