@@ -34,7 +34,7 @@ open Utils
 open Misc
 open Info
 
-let printf_debug = false
+(*let printf_debug = false*)
 
 (* Step 1: pre-compute closure of ϵ-reductions *)
 
@@ -55,11 +55,15 @@ let group_reductions g = function
     in
     group 0 IndexMap.empty (List.sort compare_items items)
 
+type 'g stack_tree = {
+  subs: ('g lr1 index list * 'g terminal indexset * 'g stack_tree) list;
+} [@@ocaml.unboxed]
+
 type 'g reduction_closure = {
   accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
-  stacks: ('g lr1 index list * 'g terminal indexset) list;
+  stacks: 'g stack_tree;
 }
 
 type ('g, 'n) reduction_closures = ('n, 'g reduction_closure) vector
@@ -72,19 +76,19 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
   let accepting = ref IndexSet.empty in
   let failing = ref IndexSet.empty in
+  let items = ref [] in
   let rec pop lookahead acc (item : g item index) = function
     | [] ->
-      let items, stacks = acc in
-      ((item, lookahead) :: items, stacks)
+      push items (item, lookahead);
+      acc
     | hd :: tl as stack ->
       match Item.prev g item with
       | Some item' -> pop lookahead acc item' tl
       | None ->
         let lhs = Production.lhs g (Item.production g item) in
         let stack = Transition.find_goto_target g hd lhs :: stack in
-        let items, stacks = acc in
-        let acc = (items, (stack, lookahead) :: stacks) in
-        reduce lookahead acc stack
+        let subs = reduce lookahead [] stack in
+        (stack, lookahead, {subs}) :: acc
   and reduce lookahead acc stack =
     let lr1 = List.hd stack in
     add_subset g failing (Lr1.reject g lr1) lookahead;
@@ -96,13 +100,13 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
         pop la acc (Item.last g (Reduction.production g red)) stack
     end (Reduction.from_lr1 g lr1) acc
   in
-  let items, stacks = reduce (Terminal.all g) ([],[]) [lr1] in
-  let reductions = group_reductions g items in
+  let subs = reduce (Terminal.all g) [] [lr1] in
+  let reductions = group_reductions g !items in
   let failing = !failing in
   let accepting = !accepting in
-  {accepting; failing; reductions; stacks}
+  {accepting; failing; reductions; stacks = {subs}}
 
-let rec filter_reductions g la = function
+(*let rec filter_reductions g la = function
   | [] -> []
   | r :: rs as rrs ->
     let filtered = ref false in
@@ -142,14 +146,14 @@ let rec merge_reductions = function
   | [] -> []
   | rrs ->
     let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
-    r :: merge_reductions rrs'
+    r :: merge_reductions rrs'*)
 
 (* Close reductions of goto transitions *)
-let close_goto_reductions (type g) (g : g grammar) rcs
+(*let close_goto_reductions (type g) (g : g grammar) rcs
   : (g goto_transition, g reduction_closure) vector
   =
   let sentinel = {accepting = IndexSet.empty; failing = IndexSet.empty;
-                  reductions = []; stacks = []} in
+                  reductions = []; stacks = {sub=[]}} in
   let table = Vector.make (Transition.goto g) sentinel in
   Index.rev_iter (Transition.goto g) begin fun gt ->
     if printf_debug then
@@ -205,12 +209,13 @@ let close_goto_reductions (type g) (g : g grammar) rcs
   end;
   flush stdout;
   table
+*)
 
 let dump_closure ?(failing=false) g print_label vector =
   Vector.iteri begin fun st def ->
     let has_failing = failing && IndexSet.is_not_empty def.failing in
     let has_reductions = not (list_is_empty def.reductions) in
-    let has_stacks = not (list_is_empty def.stacks) in
+    let has_stacks = not (list_is_empty def.stacks.subs) in
     if has_failing || has_reductions || has_stacks then
       Printf.fprintf stdout "%s:\n" (print_label st);
     if has_failing then
@@ -231,14 +236,21 @@ let dump_closure ?(failing=false) g print_label vector =
             ) map
         ) def.reductions
     );
-    if has_stacks then (
-      Printf.fprintf stdout "- stacks:\n";
-      List.iter (fun (stack, la) ->
-          Printf.fprintf stdout "  - %s @ %s\n"
+    let rec print_stacks indent = function
+      | {subs = []} -> ()
+      | {subs} ->
+        let indent = "  " ^ indent in
+        List.iter begin fun (stack, la, sub') ->
+          Printf.fprintf stdout "%s- %s @ %s\n"
+            indent
             (Lr1.list_to_string g stack)
-            (Terminal.lookaheads_to_string g la)
-        ) def.stacks
-    );
+            (Terminal.lookaheads_to_string g la);
+          print_stacks indent sub'
+        end subs
+    in
+    if has_stacks then
+      Printf.fprintf stdout "- stacks:\n";
+    print_stacks "" def.stacks;
   end vector
 
 (* Reduction targets indexation *)
@@ -300,7 +312,13 @@ let index_targets (type g) (g : g grammar) rc
        - goto transitions reaching this target (found using the goto_sources)
        - composition of both
     *)
-    let roots = List.map (fun (stack, la) -> follow_path stack, la) rc.:(tgt).stacks in
+    let rec visit_stacks acc {subs} =
+      List.fold_left begin fun acc (stack, la, sub') ->
+        let acc = (follow_path stack, la) :: acc in
+        visit_stacks acc sub'
+      end acc subs
+    in
+    let roots = visit_stacks [] rc.:(tgt).stacks in
     (* 1. Register immediates *)
     List.iter
       (fun ((node, lr1), _) ->

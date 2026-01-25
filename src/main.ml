@@ -424,11 +424,7 @@ let enumerate_command () =
   let report_sentences sentences =
     let by_lr0 = Vector.make (Lr0.cardinal grammar) [] in
     Seq.iter begin fun sentence ->
-      let lr0 =
-        Enumeration.get_lr0_state grammar stacks
-          graph.ker.:(sentence.Enumeration.first)
-      in
-      by_lr0.@(lr0) <- List.cons sentence
+      by_lr0.@(sentence.Enumeration.pattern) <- List.cons sentence
     end sentences;
     Vector.iteri begin fun lr0 -> function
       | [] -> ()

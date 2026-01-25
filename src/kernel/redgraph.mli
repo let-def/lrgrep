@@ -27,21 +27,25 @@ open Utils
 open Misc
 open Info
 
+type 'g stack_tree = {
+  subs: ('g lr1 index list * 'g terminal indexset * 'g stack_tree) list;
+} [@@ocaml.unboxed]
+
 type 'g reduction_closure = {
   accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
-  stacks: ('g lr1 index list * 'g terminal indexset) list;
+  stacks: 'g stack_tree;
 }
 
 type ('g, 'n) reduction_closures = ('n, 'g reduction_closure) vector
 
 val close_lr1_reductions : 'g grammar -> ('g, 'g lr1) reduction_closures
 
-val close_goto_reductions
+(*val close_goto_reductions
   :  'g grammar
   -> ('g, 'g lr1) reduction_closures
-  -> ('g, 'g goto_transition) reduction_closures
+  -> ('g, 'g goto_transition) reduction_closures*)
 
 val dump_closure
   :  ?failing:bool

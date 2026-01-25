@@ -380,7 +380,7 @@ let uncovered_cases (type lrc)
     end (List.to_seq free_predecessors)
   in
   let enumerated =
-    Seq.filter_map begin fun {Enumeration. first; edges; failing; entry} ->
+    Seq.filter_map begin fun {Enumeration. first=_; pattern; edges; failing; entry} ->
       let (suffix0, lazy suffixes) = entry in
       let suffixes =
         List.filter_map begin fun (suffix, la) ->
@@ -403,8 +403,6 @@ let uncovered_cases (type lrc)
       in
       if list_is_empty suffixes then None
       else Some (
-          let ker = graph.ker.:(first) in
-          let main_pattern = Enumeration.get_lr0_state grammar stacks ker in
           let patterns = ref IndexSet.empty in
           let middle =
             List.concat_map (fun (edge : _ Enumeration.edge) ->
@@ -420,7 +418,7 @@ let uncovered_cases (type lrc)
             | [[], la, lr0s] -> ([], [middle, la, lr0s])
             | _ -> (middle, suffixes)
           in
-          {main_pattern; shared_patterns; shared_prefix; suffixes}
+          {main_pattern=pattern; shared_patterns; shared_prefix; suffixes}
         )
     end (Enumeration.to_seq cover)
   in

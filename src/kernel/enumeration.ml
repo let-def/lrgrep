@@ -138,15 +138,16 @@ let get_failing grammar stacks rcs ker =
 
 type ('g, 'lrc, 'a, 'n) failing_sentence = {
   first: 'n index;
+  pattern: 'g lr0 index;
   edges: ('lrc, 'n) edge list;
   failing: 'g terminal indexset;
   entry: 'a;
 }
 
-let make_failing_sentence gr (first, edges, failing) =
+let make_failing_sentence gr (first, pattern, edges, failing) =
   let index = Index.to_int (List.fold_left (fun _ edge -> edge.source) first edges) in
   assert (index < Array.length gr.entries);
-  {first; edges; failing; entry = gr.entries.(index)}
+  {first; pattern; edges; failing; entry = gr.entries.(index)}
 
 let cover_with_maximal_patterns grammar rcs stacks gr =
   let results = ref [] in
@@ -155,17 +156,39 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
         (fun i -> (Index.of_int (Vector.length gr.ker) i, [], IndexSet.empty))
     )
   in
+  let covered = Vector.make (Lr0.cardinal grammar) IndexSet.empty in
+  let emit node path failing =
+    let ker = gr.ker.:(node) in
+    let rec visit_stacks candidate = function
+      | {Redgraph. subs = []} ->
+        let lr0 = Lr1.to_lr0 grammar candidate in
+        let covered0 = covered.:(lr0) in
+        let covered' = IndexSet.union failing covered0 in
+        if covered' != covered0 then (
+          covered.:(lr0) <- covered';
+          push results (make_failing_sentence gr (node, lr0, path, failing))
+        )
+      | {Redgraph.subs} ->
+        List.iter (fun (stack, _la, subs) ->
+            visit_stacks (List.hd stack) subs
+          ) subs
+    in
+    let lr1 = get_lr1_state grammar stacks ker in
+    visit_stacks lr1 rcs.:(lr1).Redgraph.stacks
+  in
   let marked = Boolvector.make (Vector.length gr.ker) false in
   let visited = Vector.make (Vector.length gr.ker) IndexSet.empty in
+
   let propagate (node, path, failing) =
-    let failing = IndexSet.union (get_failing grammar stacks rcs gr.ker.:(node)) failing in
+    let ker = gr.ker.:(node) in
+    let failing = IndexSet.union (get_failing grammar stacks rcs ker) failing in
     if not (Boolvector.test marked node) || not (IndexSet.equal visited.:(node) failing) then (
       Boolvector.set marked node;
       visited.@(node) <- IndexSet.union failing;
       match gr.fwd.:(node) with
       | [] ->
         if IndexSet.is_not_empty failing then
-          push results (make_failing_sentence gr (node, path, failing))
+          emit node path failing
       | edges ->
         List.iter begin fun edge ->
           push todo (edge.target, edge :: path, failing)
@@ -294,7 +317,7 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
         Seq.append (output_prefixes prefixes) (output_suffixes suffixes) ()
     end
     |> Seq.concat
-    |> Seq.filter (fun (node, edges, failing) ->
+    |> Seq.filter_map (fun (node, edges, failing) ->
         let productive = ref false in
         let check node =
           let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
@@ -307,7 +330,10 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
         in
         check node;
         List.iter (fun edge -> check edge.source) edges;
-        !productive
+        if !productive then
+          Some (node, get_lr0_state grammar stacks gr.ker.:(node), edges, failing)
+        else
+          None
       )
     |> Seq.map (make_failing_sentence gr)
     |> (fun seq -> seq ())
