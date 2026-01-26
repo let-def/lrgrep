@@ -102,7 +102,7 @@ let make_graph (type g lrc a)
           (stacks.prev lrc0) acc
       end [] paths
     in
-    Dyn.set fwd node (fold_expand expand_paths paths explore_paths [] rc.reductions)
+    Dyn.set fwd node (fold_expand expand_paths paths explore_paths [] rc.all_reductions)
 
   and get_node ker =
     assert (IndexSet.is_not_empty ker.lookahead);
@@ -160,7 +160,7 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
   let emit node path failing =
     let ker = gr.ker.:(node) in
     let rec visit_stacks candidate = function
-      | {Redgraph. subs = []} ->
+      | {Redgraph. next = []; _} ->
         let lr0 = Lr1.to_lr0 grammar candidate in
         let covered0 = covered.:(lr0) in
         let covered' = IndexSet.union failing covered0 in
@@ -168,10 +168,10 @@ let cover_with_maximal_patterns grammar rcs stacks gr =
           covered.:(lr0) <- covered';
           push results (make_failing_sentence gr (node, lr0, path, failing))
         )
-      | {Redgraph.subs} ->
+      | {Redgraph. next; _} ->
         List.iter (fun (stack, _la, subs) ->
             visit_stacks (List.hd stack) subs
-          ) subs
+          ) next
     in
     let lr1 = get_lr1_state grammar stacks ker in
     visit_stacks lr1 rcs.:(lr1).Redgraph.stacks
