@@ -1,19 +1,19 @@
 opam-version: "2.0"
 maintainer: "Frederic Bour <frederic.bour@lakaban.net>"
 authors: "Frederic Bour <frederic.bour@lakaban.net>"
-homepage: "https://gitlab.inria.fr/fbour/lrgrep"
-bug-reports: "https://gitlab.inria.fr/fbour/lrgrep"
+homepage: "https://github.com/let-def/lrgrep"
+bug-reports: "https://github.com/let-def/lrgrep"
 license: "ISC"
-dev-repo: "git+https://gitlab.inria.fr/fbour/lrgrep.git"
+dev-repo: "git+https://github.com/let-def/lrgrep.git"
 build: [
   ["dune" "subst"] {dev}
   ["dune" "build" "-p" name "-j" jobs]
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
 depends: [
-  "ocaml" {>= "4.08"}
+  "ocaml" {>= "4.13.0"}
   "dune" {>= "2.0.0"}
-  "menhir" {>= "20211128"}
+  "menhir" {>= "20231231"}
   "cmon" {>= "0.2"}
 ]
 synopsis: "Analyse the stack of a Menhir-generated LR parser using regular expressions"
