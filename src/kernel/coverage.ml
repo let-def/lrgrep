@@ -154,7 +154,7 @@ let coverage (type g r st tr lrc)
             if IndexSet.is_not_empty la then
               schedule st lp st (pack_inject positions lrc nt' pos') la
           end nts
-        end rcs.:(tgt).reductions;
+        end rcs.:(tgt).all_reductions;
         let la = IndexSet.inter la rcs.:(tgt).failing in
         if IndexSet.is_not_empty la then
           schedule st lp st (pack_position positions Opt.none lrc) la
@@ -208,7 +208,7 @@ let coverage (type g r st tr lrc)
                 schedule st lp st lp la
               end lrcs
             end nts
-          end rcs.:(lr1).reductions;
+          end rcs.:(lr1).all_reductions;
           false
         end else
           true
