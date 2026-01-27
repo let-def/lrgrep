@@ -93,3 +93,22 @@ type 'g action =
 val initial : 'g graph -> 'g lr1 index -> 'g transition list
 
 val follow : 'g graph -> 'g step index -> 'g action
+
+val fold_stack_leaves
+  :  ('g lr1 index -> 'g terminal indexset -> 'a -> 'a)
+  -> 'g stack_tree
+  -> 'g lr1 index
+  -> 'g terminal indexset
+  -> 'a -> 'a
+
+val fold_stack_states
+  :  ('g lr1 index -> 'g terminal indexset -> 'a -> 'a)
+  -> 'g stack_tree
+  -> 'g terminal indexset
+  -> 'a -> 'a
+
+val filter_reductions
+  :  'g grammar
+  -> 'g terminal indexset
+  -> ('n, 'g terminal indexset) indexmap list
+  -> ('n, 'g terminal indexset) indexmap list

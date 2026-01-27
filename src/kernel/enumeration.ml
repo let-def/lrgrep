@@ -27,16 +27,17 @@ let kernel lrc ?goto lookahead =
   let nto = Opt.(Option.fold ~none ~some goto) in
   {lrc; nto; lookahead}
 
-type ('lrc, 'n) edge = {
+type ('g, 'lrc, 'n) edge = {
   path: 'lrc index list;
   source: 'n index;
   target: 'n index;
+  intermediate: 'g lr1 index list list;
 }
 
 type ('g, 'lrc, 'a, 'n) _graph = {
   ker : ('n, ('g, 'lrc) kernel) vector;
-  fwd : ('n, ('lrc, 'n) edge list) vector;
-  bkd : ('n, ('lrc, 'n) edge list) vector;
+  fwd : ('n, ('g, 'lrc, 'n) edge list) vector;
+  bkd : ('n, ('g, 'lrc, 'n) edge list) vector;
   entries: 'a array;
 }
 
@@ -51,13 +52,16 @@ type ('g, 'lrc, 'a) graph =
       described by [lrcs].
 *)
 
-let rec fold_expand expand env f acc = function
-  | [] -> acc
-  | [x] -> f env acc x
-  | x :: xs ->
-    let acc = f env acc x in
-    let env = expand env in
-    fold_expand expand env f acc xs
+let list_fold_left_filter_map f acc = function
+  | [] -> (acc, [])
+  | xs ->
+    let rec loop acc rev_ys = function
+      | [] -> (acc, List.rev rev_ys)
+      | x :: xs ->
+        let acc, y = f acc x in
+        loop acc (cons_option y rev_ys) xs
+    in
+    loop acc [] xs
 
 let make_graph (type g lrc a)
     (grammar : g grammar)
@@ -83,13 +87,26 @@ let make_graph (type g lrc a)
         ([ker.lrc, []], Transition.find_goto_target grammar lr1 nt)
     in
     let rc = rcs.:(tgt) in
-    let explore_paths paths acc nts =
+    let rec accumulate_stacks stacks la {Redgraph. next; reductions} result =
+      let result =
+        if list_is_empty reductions then result else
+          let reductions = Redgraph.filter_reductions grammar la reductions in
+          ((stacks, reductions) :: result)
+      in
+      List.fold_left begin fun result (stack, la', next) ->
+        let la = IndexSet.inter la' la in
+        if IndexSet.is_empty la
+        then result
+        else accumulate_stacks (stack :: stacks) la next result
+      end result next
+    in
+    let explore_step paths intermediate nts acc =
       IndexMap.fold begin fun nt lookahead' acc ->
         let lookahead = IndexSet.inter ker.lookahead lookahead' in
         if IndexSet.is_not_empty lookahead then
           List.fold_left begin fun acc (lrc', path) ->
             let target = get_node {lrc = lrc'; nto = Opt.some nt; lookahead} in
-            {source=node; target; path} :: acc
+            {source=node; intermediate; target; path} :: acc
           end acc paths
         else
           acc
@@ -102,7 +119,28 @@ let make_graph (type g lrc a)
           (stacks.prev lrc0) acc
       end [] paths
     in
-    Dyn.set fwd node (fold_expand expand_paths paths explore_paths [] rc.all_reductions)
+    let rec explore_steps paths acc = function
+      | [] -> acc
+      | continuations ->
+        let acc, continuations' =
+          list_fold_left_filter_map begin fun acc (intermediate, ntss) ->
+            match ntss with
+            | [] -> acc, None
+            | nts :: rest ->
+              let rest =
+                if list_is_empty rest
+                then None
+                else Some (intermediate, rest)
+              in
+              (explore_step paths intermediate nts acc, rest)
+          end acc continuations
+        in
+        if list_is_empty continuations'
+        then acc
+        else explore_steps (expand_paths paths) acc continuations'
+    in
+    let continuations = accumulate_stacks [] ker.lookahead rc.stacks [] in
+    Dyn.set fwd node (explore_steps paths [] continuations)
 
   and get_node ker =
     assert (IndexSet.is_not_empty ker.lookahead);
@@ -139,7 +177,7 @@ let get_failing grammar stacks rcs ker =
 type ('g, 'lrc, 'a, 'n) failing_sentence = {
   first: 'n index;
   pattern: 'g lr0 index;
-  edges: ('lrc, 'n) edge list;
+  edges: ('g, 'lrc, 'n) edge list;
   failing: 'g terminal indexset;
   entry: 'a;
 }

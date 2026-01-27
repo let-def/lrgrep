@@ -358,7 +358,7 @@ let uncovered_cases (type lrc)
   let cover = Enumeration.cover_all grammar rcs stacks graph in
   let direct =
     Seq.concat_map begin fun (_lrcs, lazy suffixes) ->
-      Seq.map begin fun (suffix, la) ->
+      Seq.concat_map begin fun (suffix, la) ->
         List.iter begin fun (_, lp) ->
           let pos, lrc = unpack_position positions lp in
           match previous_position positions pos with
@@ -373,18 +373,22 @@ let uncovered_cases (type lrc)
             let pos, lrc = unpack_position positions lp in
             match previous_position positions pos with
             | Either.Left nt ->
-              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-              pattern := Some (Lr1.to_lr0 grammar lr1);
+              pattern := Some (lrc, nt);
               acc
             | Either.Right _ -> lrc :: acc
           end [] suffix
         in
-        {
-          main_pattern = Option.get !pattern;
-          shared_patterns = IndexSet.empty;
-          shared_prefix = [];
-          suffixes = [suffix, la, IndexSet.empty];
-        }
+        let lrc, nt = Option.get !pattern in
+        let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+        Redgraph.fold_stack_leaves begin fun lr1 la acc ->
+          {
+            main_pattern = Lr1.to_lr0 grammar lr1;
+            shared_patterns = IndexSet.empty;
+            shared_prefix = [];
+            suffixes = [suffix, la, IndexSet.empty];
+          } :: acc
+        end rcs.:(lr1).stacks lr1 la []
+        |> List.to_seq
       end (List.to_seq suffixes)
     end (List.to_seq free_predecessors)
   in
@@ -400,9 +404,16 @@ let uncovered_cases (type lrc)
                 match previous_position positions pos with
                 | Either.Left nt ->
                   let goto = Transition.find_goto_target grammar (stacks.label lrc) nt in
-                  let lr0 = Lr1.to_lr0 grammar goto in
-                  Enumeration.mark_covered cover lr0 la;
-                  (acc, IndexSet.add lr0 patterns)
+                  let visit lr1 _ patterns =
+                    let lr0 = Lr1.to_lr0 grammar lr1 in
+                    Enumeration.mark_covered cover lr0 la;
+                    IndexSet.add lr0 patterns
+                  in
+                  let patterns =
+                    Redgraph.fold_stack_states visit
+                      rcs.:(goto).stacks la (visit goto la patterns)
+                  in
+                  (acc, patterns)
                 | Either.Right _ ->
                   (lrc :: acc, patterns)
               end ([], IndexSet.empty) suffix

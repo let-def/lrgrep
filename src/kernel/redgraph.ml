@@ -85,6 +85,36 @@ let fold_stack_reductions f stacks acc =
   in
   aux acc stacks
 
+let fold_stack_leaves f stacks candidate la acc =
+  let rec aux candidate la acc {next; reductions=_} =
+    match next with
+    | [] -> f candidate la acc
+    | next -> List.fold_left (aux_next la) acc next
+  and aux_next la acc (stack, la', stacks') =
+    let la = IndexSet.inter la' la in
+    if IndexSet.is_empty la
+    then acc
+    else aux (List.hd stack) la acc stacks'
+  in
+  if IndexSet.is_empty la
+  then acc
+  else aux candidate la acc stacks
+
+let fold_stack_states f stacks la acc =
+  let rec aux la acc {next; reductions=_} =
+    match next with
+    | [] -> acc
+    | next -> List.fold_left (aux_next la) acc next
+  and aux_next la acc (stack, la', stacks') =
+    let la = IndexSet.inter la' la in
+    if IndexSet.is_empty la
+    then acc
+    else aux la (f (List.hd stack) la acc) stacks'
+  in
+  if IndexSet.is_empty la
+  then acc
+  else aux la acc stacks
+
 type 'g reduction_closure = {
   accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
@@ -135,7 +165,7 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   in
   {accepting; failing; stacks; all_reductions}
 
-(*let rec filter_reductions g la = function
+let rec filter_reductions g la = function
   | [] -> []
   | r :: rs as rrs ->
     let filtered = ref false in
@@ -151,7 +181,7 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
     then rrs
     else r' :: rs'
 
-let rec filter_stacks g la acc = function
+(*let rec filter_stacks g la acc = function
   | [] -> acc
   | (x, la') :: xs ->
     let la' = Terminal.intersect g la la' in
