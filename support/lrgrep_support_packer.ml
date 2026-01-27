@@ -285,7 +285,7 @@ let int_size i =
     2
   else if i <= 0xFF_FFFF then
     3
-  else if (i <= 0xFFFF_FFFF) then
+  else if (i <= 0x3FFF_FFFF) then
     4
   else
     invalid_arg "Sparse_table_packer: int overflow"

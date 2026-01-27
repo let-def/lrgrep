@@ -431,7 +431,7 @@ let uncovered_cases (type lrc)
         )
     end (Enumeration.to_seq cover)
   in
-  Seq.memoize (Seq.append direct enumerated)
+  seq_memoize (Seq.append direct enumerated)
 
 let report_case grammar (stacks : _ Automata.stacks) reachability
     ~output ~get_prefix case =
