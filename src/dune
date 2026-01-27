@@ -11,4 +11,5 @@
 
 (executable
  (name test)
+ (modules test)
  (libraries bit_lib))
