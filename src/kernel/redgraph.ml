@@ -87,14 +87,18 @@ let fold_stack_reductions f stacks acc =
 
 let fold_stack_leaves f stacks candidate la acc =
   let rec aux candidate la acc {next; reductions=_} =
-    match next with
+    match
+      List.filter_map begin fun (stack, la', stacks) ->
+        let la = IndexSet.inter la' la in
+        if IndexSet.is_empty la
+        then None
+        else Some (stack, la, stacks)
+      end next
+    with
     | [] -> f candidate la acc
-    | next -> List.fold_left (aux_next la) acc next
-  and aux_next la acc (stack, la', stacks') =
-    let la = IndexSet.inter la' la in
-    if IndexSet.is_empty la
-    then acc
-    else aux (List.hd stack) la acc stacks'
+    | next -> List.fold_left aux_next acc next
+  and aux_next acc (stack, la', stacks') =
+    aux (List.hd stack) la' acc stacks'
   in
   if IndexSet.is_empty la
   then acc
@@ -119,6 +123,7 @@ type 'g reduction_closure = {
   accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
   stacks: 'g stack_tree;
+  all_stacks: ('g lr1 index list * 'g terminal indexset) list;
   all_reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
 }
 
@@ -160,10 +165,18 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   let stacks = group_stacks (reduce (Terminal.all g) ([],[]) [lr1]) in
   let failing = !failing in
   let accepting = !accepting in
+  let rec all_stacks la acc {next; _} =
+    List.fold_left (fun acc (stack,la',stacks) ->
+        let la = IndexSet.inter la la' in
+        if IndexSet.is_empty la then acc else
+          all_stacks la ((stack, la) :: acc) stacks
+      ) acc next
+  in
+  let all_stacks = all_stacks (Terminal.all g) [([lr1],Terminal.all g)] stacks in
   let all_reductions =
     merge_reductions (fold_stack_reductions List.cons stacks [])
   in
-  {accepting; failing; stacks; all_reductions}
+  {accepting; failing; stacks; all_stacks; all_reductions}
 
 let rec filter_reductions g la = function
   | [] -> []

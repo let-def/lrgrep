@@ -354,17 +354,21 @@ let do_compile spec (cp : Code_printer.t option) =
           | lazy None -> ()
           | lazy (Some oc) ->
             Printf.fprintf oc "# Rule %s\n" rule.name;
-            let cases = ref 0 in
-            let report case =
-              incr cases;
-              Printf.fprintf oc "\n# Uncovered case %d\n" !cases;
-              Coverage.report_case grammar stacks !!reachability
-                ~output:(output_string oc)
-                ~get_prefix:entrypoints.some_prefix
-                case
-            in
-            report x;
-            Seq.iter report xs
+            let count = ref 0 in
+            let table = Vector.make (Lr0.cardinal grammar) [] in
+            let store case = table.@(case.Coverage.main_pattern) <- List.cons case in
+            store x;
+            Seq.iter store xs;
+            Vector.iteri begin fun lr0 cases ->
+              if not (list_is_empty cases) then begin
+                incr count;
+                Printf.fprintf oc "\n## Uncovered case %d\n\n" !count;
+                Coverage.report_cases grammar stacks !!reachability
+                  ~output:(output_string oc)
+                  ~get_prefix:entrypoints.some_prefix
+                  lr0 cases
+              end
+            end table;
         end;
         stopwatch 1 "coverage report";
         let report =

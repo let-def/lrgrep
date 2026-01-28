@@ -244,10 +244,18 @@ type ('g, 'a) dispenser = {
 let mark_covered disp lr0 la =
   disp.fallible0.@(lr0) <- IndexSet.union la
 
-let mark_sentence_covered g stacks gr disp {first; edges; failing; _} =
-  let mark node = mark_covered disp (get_lr0_state g stacks gr.ker.:(node)) failing in
+let mark_sentence_covered g stacks gr disp {first; edges; failing; pattern; entry=_} =
+  let mark_lr0 lr0 = mark_covered disp lr0 failing in
+  let mark node = mark_lr0 (get_lr0_state g stacks gr.ker.:(node)) in
+  mark_lr0 pattern;
   mark first;
-  List.iter (fun edge -> mark edge.source) edges
+  List.iter begin fun edge ->
+    mark edge.source;
+    List.iter begin function
+      | top :: _ -> mark_lr0 (Lr1.to_lr0 g top)
+      | [] -> ()
+    end edge.intermediate
+  end edges
 
 let next disp =
   let result, next = match disp.next () with
@@ -274,7 +282,7 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
     let shortest_prefix = Vector.make n [] in
     let shortest_suffix = Vector.make n [] in
     let todo = ref [] in
-    let propagate (dir, node, path, failing) =
+    let propagate (dir, (node, intermediate), path, failing) =
       let ker = gr.ker.:(node) in
       let failing = IndexSet.union failing (get_failing grammar stacks rcs ker) in
       (* Remember the shortest paths, find where to mark the visit status *)
@@ -293,30 +301,40 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
       if not (Boolvector.test visited node) || fallible' != fallible.:(node) then (
         Boolvector.set visited node;
         fallible.:(node) <- fallible';
-        let lr0 = get_lr0_state grammar stacks ker in
-        let fallible0' = IndexSet.diff failing disp.fallible0.:(lr0) in
-        (* Save path if it is the first to cover some lookahead *)
-        if IndexSet.is_not_empty fallible0' then (
-          disp.fallible0.@(lr0) <- IndexSet.union fallible0';
+        let productive = ref false in
+        let mark_lr0 lr0 =
+          let fallible0' = IndexSet.diff failing disp.fallible0.:(lr0) in
+          (* Save path if it is the first to cover some lookahead *)
+          if IndexSet.is_not_empty fallible0' then (
+            disp.fallible0.@(lr0) <- IndexSet.union fallible0';
+            productive := true
+          )
+        in
+        mark_lr0 (get_lr0_state grammar stacks ker);
+        List.iter begin function
+          | [] -> ()
+          | top :: _ -> mark_lr0 (Lr1.to_lr0 grammar top)
+        end intermediate;
+        if !productive then begin
           let sentences = match dir with
             | `Prefix -> prefixes
             | `Suffix -> suffixes
           in
           sentences.@(node) <- List.cons (path, failing);
-        );
+        end;
         (* Extend path with successors *)
         let prj, list = match dir with
-          | `Prefix -> ((fun edge -> edge.source), gr.bkd.:(node))
-          | `Suffix -> ((fun edge -> edge.target), gr.fwd.:(node))
+          | `Prefix -> ((fun edge -> edge.source, edge.intermediate), gr.bkd.:(node))
+          | `Suffix -> ((fun edge -> edge.target, edge.intermediate), gr.fwd.:(node))
         in
         List.iter (fun edge -> push todo (dir, prj edge, edge :: path, failing)) list
       );
     in
     Index.iter n begin fun node ->
       if list_is_empty gr.bkd.:(node) then
-        propagate (`Suffix, node, [], IndexSet.empty)
+        propagate (`Suffix, (node, []), [], IndexSet.empty)
       else if list_is_empty gr.fwd.:(node) then
-        propagate (`Prefix, node, [], IndexSet.empty)
+        propagate (`Prefix, (node, []), [], IndexSet.empty)
     end;
     fixpoint ~propagate todo;
     Index.iter n begin fun node ->
@@ -355,25 +373,46 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
         Seq.append (output_prefixes prefixes) (output_suffixes suffixes) ()
     end
     |> Seq.concat
-    |> Seq.filter_map (fun (node, edges, failing) ->
-        let productive = ref false in
-        let check node =
-          let lr0 = get_lr0_state grammar stacks gr.ker.:(node) in
-          let fallible = disp.fallible0.:(lr0) in
-          let fallible' = IndexSet.diff fallible failing in
-          if fallible != fallible' then (
-            disp.fallible0.:(lr0) <- fallible';
-            productive := true;
-          )
+    |> Seq.filter_map begin fun (node, edges, failing) ->
+      let productive = ref false in
+      let mark_lr0 lr0 =
+        let fallible = disp.fallible0.:(lr0) in
+        let fallible' = IndexSet.diff fallible failing in
+        if fallible != fallible' then (
+          disp.fallible0.:(lr0) <- fallible';
+          productive := true;
+        )
+      in
+      let check_node node =
+        mark_lr0 (get_lr0_state grammar stacks gr.ker.:(node))
+      in
+      let check_edge edge =
+        check_node edge.source;
+        List.iter begin function
+          | [] -> ()
+          | top :: _ -> mark_lr0 (Lr1.to_lr0 grammar top)
+        end edge.intermediate
+      in
+      check_node node;
+      List.iter check_edge edges;
+      let lr1 = get_lr1_state grammar stacks gr.ker.:(node) in
+      let stacks = rcs.:(lr1).stacks in
+      Redgraph.fold_stack_states
+        (fun lr1 _ () -> mark_lr0 (Lr1.to_lr0 grammar lr1))
+        stacks failing ();
+      if !productive then
+        let pattern =
+          Redgraph.fold_stack_leaves (fun lr1 _ _ -> lr1)
+            stacks lr1 failing lr1
         in
-        check node;
-        List.iter (fun edge -> check edge.source) edges;
-        if !productive then
-          Some (node, get_lr0_state grammar stacks gr.ker.:(node), edges, failing)
-        else
-          None
-      )
-    |> Seq.map (make_failing_sentence gr)
+        assert (List.filter (fun (_,la',_) -> not (IndexSet.disjoint failing la'))
+                  rcs.:(pattern).stacks.next
+                |> list_is_empty);
+        Some (make_failing_sentence gr
+                (node, Lr1.to_lr0 grammar pattern, edges, failing))
+      else
+        None
+    end
     |> (fun seq -> seq ())
   end;
   disp
