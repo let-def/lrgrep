@@ -358,8 +358,9 @@ let uncovered_cases (type lrc)
   let cover = Enumeration.cover_all grammar rcs stacks graph in
   let mark lr1 la =
     let cover lr1 la = Enumeration.mark_covered cover (Lr1.to_lr0 grammar lr1) la in
-    cover lr1 la;
-    Redgraph.fold_stack_states (fun lr1 la () -> cover lr1 la) rcs.:(lr1).stacks la ()
+    List.iter begin fun (stack, _) ->
+      cover (List.hd stack) la
+    end rcs.:(lr1).all_stacks
   in
   let direct =
     Seq.concat_map begin fun (_lrcs, lazy suffixes) ->
@@ -385,12 +386,8 @@ let uncovered_cases (type lrc)
         let lrc, nt = Option.get !pattern in
         let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
         mark lr1 la;
-        let leaf =
-          Redgraph.fold_stack_leaves (fun lr1 _ _ -> lr1)
-            rcs.:(lr1).stacks lr1 la lr1
-        in
         {
-          main_pattern = Lr1.to_lr0 grammar leaf;
+          main_pattern = Lr1.to_lr0 grammar (List.hd (fst (List.hd rcs.:(lr1).all_stacks)));
           shared_patterns = IndexSet.empty;
           shared_prefix = [];
           suffixes = [suffix, la, IndexSet.empty];
@@ -411,14 +408,14 @@ let uncovered_cases (type lrc)
                 match previous_position positions pos with
                 | Either.Left nt ->
                   let goto = Transition.find_goto_target grammar (stacks.label lrc) nt in
-                  let visit lr1 _ patterns =
+                  let visit patterns (stack, _) =
+                    let lr1 = List.hd stack in
                     let lr0 = Lr1.to_lr0 grammar lr1 in
                     Enumeration.mark_covered cover lr0 la;
                     IndexSet.add lr0 patterns
                   in
                   let patterns =
-                    Redgraph.fold_stack_states visit
-                      rcs.:(goto).stacks la (visit goto la patterns)
+                    List.fold_left visit patterns rcs.:(goto).all_stacks
                   in
                   (acc, patterns)
                 | Either.Right _ ->
@@ -491,7 +488,7 @@ let report_cases grammar (stacks : _ Automata.stacks) reachability
          ```\n\
          %s\n\
          ```\n"
-        (String.concat ", " (IndexSet.rev_map_elements lookaheads (Terminal.to_string grammar)));
+        (String.concat ", " (List.rev_map (Terminal.to_string grammar) (IndexSet.elements lookaheads)));
       let prefix =
         if list_is_empty prefix then
           match suffix0 with

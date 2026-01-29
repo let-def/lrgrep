@@ -966,6 +966,8 @@ rule error_messages = parse error
 | [_* /parse_val_longident: val_longident . EOF]
   { "Expected end-of-input." }
 
+(* REVIEW *)
+
 | /parse_any_longident': . parse_any_longident
   { "Expected a path." }
 

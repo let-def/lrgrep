@@ -396,15 +396,18 @@ let cover_all (type g n) grammar rcs stacks (gr : (g, _, _, n) _graph) =
       check_node node;
       List.iter check_edge edges;
       let lr1 = get_lr1_state grammar stacks gr.ker.:(node) in
-      let stacks = rcs.:(lr1).stacks in
-      Redgraph.fold_stack_states
-        (fun lr1 _ () -> mark_lr0 (Lr1.to_lr0 grammar lr1))
-        stacks failing ();
+      let all_stacks = rcs.:(lr1).all_stacks in
+      List.iter begin fun (stack, la) ->
+        if not (IndexSet.subset la failing) then
+          mark_lr0 (Lr1.to_lr0 grammar (List.hd stack))
+      end all_stacks;
       if !productive then
-        let pattern =
-          Redgraph.fold_stack_leaves (fun lr1 _ _ -> lr1)
-            stacks lr1 failing lr1
+        let stack, _ =
+          List.find
+            (fun (_, la) -> not (IndexSet.subset la failing))
+            all_stacks
         in
+        let pattern = List.hd stack in
         assert (List.filter (fun (_,la',_) -> not (IndexSet.disjoint failing la'))
                   rcs.:(pattern).stacks.next
                 |> list_is_empty);

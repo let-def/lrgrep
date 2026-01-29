@@ -85,7 +85,7 @@ let fold_stack_reductions f stacks acc =
   in
   aux acc stacks
 
-let fold_stack_leaves f stacks candidate la acc =
+(*let fold_stack_leaves f stacks candidate la acc =
   let rec aux candidate la acc {next; reductions=_} =
     match
       List.filter_map begin fun (stack, la', stacks) ->
@@ -117,7 +117,7 @@ let fold_stack_states f stacks la acc =
   in
   if IndexSet.is_empty la
   then acc
-  else aux la acc stacks
+  else aux la acc stacks*)
 
 type 'g reduction_closure = {
   accepting: 'g terminal indexset;
