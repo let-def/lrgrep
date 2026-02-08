@@ -179,6 +179,12 @@ let exists f t =
   | () -> false
   | exception Found -> true
 
+let for_all f t =
+  let exception Found in
+  match fold (fun elt () -> if not (f elt) then raise Found) t () with
+  | () -> true
+  | exception Found -> false
+
 let is_singleton s =
   match s with
   | C (_, ss, N) ->

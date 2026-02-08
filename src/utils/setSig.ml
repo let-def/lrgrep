@@ -108,6 +108,7 @@ module type S1 = sig
   val map: ('a element -> 'b element) -> 'a t -> 'b t
 
   val exists: ('a element -> bool) -> 'a t -> bool
+  val for_all: ('a element -> bool) -> 'a t -> bool
 
   (* [elements s] is a list of all elements in the set [s]. *)
 
