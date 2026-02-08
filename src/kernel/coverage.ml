@@ -379,6 +379,9 @@ let uncovered_cases (type lrc)
             match previous_position positions pos with
             | Either.Left nt ->
               pattern := Some (lrc, nt);
+              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+              Printf.eprintf "goto: %s @ %s\n%s\n" (Lr1.to_string grammar lr1) (Terminal.lookaheads_to_string grammar la)
+                (string_concat_map "\n" (Item.to_string grammar) (IndexSet.elements (Lr1.items grammar lr1)));
               acc
             | Either.Right _ -> lrc :: acc
           end [] suffix
@@ -386,12 +389,10 @@ let uncovered_cases (type lrc)
         let lrc, nt = Option.get !pattern in
         let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
         mark lr1 la;
-        {
-          main_pattern = Lr1.to_lr0 grammar (List.hd (fst (List.hd rcs.:(lr1).all_stacks)));
-          shared_patterns = IndexSet.empty;
-          shared_prefix = [];
-          suffixes = [suffix, la, IndexSet.empty];
-        }
+        let main_pattern = Lr1.to_lr0 grammar (List.hd (fst (List.hd rcs.:(lr1).all_stacks))) in
+        assert (IndexSet.for_all (fun it -> not (Item.is_reducible grammar it)) (Lr0.items grammar main_pattern));
+        { main_pattern; shared_patterns = IndexSet.empty;
+          shared_prefix = []; suffixes = [suffix, la, IndexSet.empty] }
       end (List.to_seq suffixes)
     end (List.to_seq free_predecessors)
   in
@@ -445,6 +446,7 @@ let uncovered_cases (type lrc)
             | [[], la, lr0s] -> ([], [middle, la, lr0s])
             | _ -> (middle, suffixes)
           in
+          assert (IndexSet.for_all (fun it -> not (Item.is_reducible grammar it)) (Lr0.items grammar pattern));
           {main_pattern=pattern; shared_patterns; shared_prefix; suffixes}
         )
     end (Enumeration.to_seq cover)
