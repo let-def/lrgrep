@@ -283,8 +283,8 @@ type ('g, 'lrc) uncovered_case = {
   suffixes: ('lrc index list * 'g terminal indexset * 'g lr0 indexset) list;
 }
 
-let uncovered_cases (type lrc)
-  grammar rcs (stacks : (_, lrc) Automata.stacks) positions
+let uncovered_cases (type g lrc)
+  grammar rcs (stacks : (g, lrc) Automata.stacks) positions
   {transitions; unhandled_initial; unhandled_predecessors}
   =
   let synthesize_suffix =
@@ -315,13 +315,46 @@ let uncovered_cases (type lrc)
     in
     aux []
   in
+  let complete_suffix (steps, la) =
+    let rec advance r lrc pos =
+      assert (not (Opt.is_none pos));
+      match previous_position positions pos with
+      | Either.Left nt ->
+        r := pos;
+        let target = Transition.find_goto_target grammar (stacks.label lrc) nt in
+        let rec import_reductions acc n = function
+          | [] -> acc
+          | nts :: rest ->
+            let acc =
+              IndexMap.fold (fun nt _ acc -> inject_position positions nt n :: acc) nts acc
+            in
+            import_reductions acc (n + 1) rest
+        in
+        let poss = import_reductions [] 0 rcs.:(target).Redgraph.all_reductions in
+        List.concat_map (advance r lrc) poss
+      | Either.Right pos ->
+        [pos]
+    in
+    let rec aux = function
+      | [] -> ([], [])
+      | ((st, lp) :: rest) as suffix ->
+        let pos, lrc = unpack_position positions lp in
+        if not (Opt.is_none pos) then
+          (suffix, advance (ref pos) lrc pos)
+        else
+          let r = ref pos in
+          let rest, pos = aux rest in
+          let pos = List.concat_map (advance r lrc) pos in
+          ((st, pack_position positions !r lrc) :: rest, pos)
+    in
+    let steps, pos = aux steps in
+    ((steps, la), pos)
+  in
   let free_predecessors, enum_predecessors =
     Vector.fold_lefti begin fun acc st transitions ->
-      List.fold_left begin fun (free, enum) (lp, lrcs, la) ->
+      List.fold_left begin fun acc (lp, lrcs, la) ->
         let pos, _ = unpack_position positions lp in
-        match Opt.prj pos with
-        | None -> ((lrcs, lazy (synthesize_suffix st lp la)) :: free, enum)
-        | Some pos ->
+        let add_enum pos suffix (free, enum) =
           let rec complete_suffixes acc = function
             | 0 -> acc
             | pos ->
@@ -331,7 +364,6 @@ let uncovered_cases (type lrc)
               in
               complete_suffixes (List.concat_map extend_path acc) (pos - 1)
           in
-          let suffix = lazy (synthesize_suffix st lp la) in
           let goto, dot = project_position positions pos in
           let completions =
             complete_suffixes
@@ -342,6 +374,20 @@ let uncovered_cases (type lrc)
               completions enum
           in
           (free, enum)
+        in
+        match Opt.prj pos with
+        | Some pos -> add_enum pos (lazy (synthesize_suffix st lp la)) acc
+        | None ->
+          List.fold_left begin fun acc suffix ->
+            let suffix, pos = complete_suffix suffix in
+            begin match pos with
+              | [] -> ((lrcs, suffix) :: fst acc, snd acc)
+              | poss ->
+                List.fold_left begin fun acc pos ->
+                  add_enum (Option.get (Opt.prj pos)) (lazy [suffix]) acc
+                end acc poss
+            end
+          end acc (synthesize_suffix st lp la)
       end acc transitions
     end ([], []) unhandled_predecessors
   in
@@ -363,37 +409,35 @@ let uncovered_cases (type lrc)
     end rcs.:(lr1).all_stacks
   in
   let direct =
-    Seq.concat_map begin fun (_lrcs, lazy suffixes) ->
-      Seq.map begin fun (suffix, la) ->
-        List.iter begin fun (_, lp) ->
+    Seq.map begin fun (_lrcs, (suffix, la)) ->
+      List.iter begin fun (_, lp) ->
+        let pos, lrc = unpack_position positions lp in
+        match previous_position positions pos with
+        | Either.Left nt ->
+          mark (Transition.find_goto_target grammar (stacks.label lrc) nt) la
+        | Either.Right _ -> ()
+      end suffix;
+      let pattern = ref None in
+      let suffix =
+        List.fold_left begin fun acc (_, lp) ->
           let pos, lrc = unpack_position positions lp in
           match previous_position positions pos with
           | Either.Left nt ->
-            mark (Transition.find_goto_target grammar (stacks.label lrc) nt) la
-          | Either.Right _ -> ()
-        end suffix;
-        let pattern = ref None in
-        let suffix =
-          List.fold_left begin fun acc (_, lp) ->
-            let pos, lrc = unpack_position positions lp in
-            match previous_position positions pos with
-            | Either.Left nt ->
-              pattern := Some (lrc, nt);
-              let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-              Printf.eprintf "goto: %s @ %s\n%s\n" (Lr1.to_string grammar lr1) (Terminal.lookaheads_to_string grammar la)
-                (string_concat_map "\n" (Item.to_string grammar) (IndexSet.elements (Lr1.items grammar lr1)));
-              acc
-            | Either.Right _ -> lrc :: acc
-          end [] suffix
-        in
-        let lrc, nt = Option.get !pattern in
-        let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
-        mark lr1 la;
-        let main_pattern = Lr1.to_lr0 grammar (List.hd (fst (List.hd rcs.:(lr1).all_stacks))) in
-        assert (IndexSet.for_all (fun it -> not (Item.is_reducible grammar it)) (Lr0.items grammar main_pattern));
-        { main_pattern; shared_patterns = IndexSet.empty;
-          shared_prefix = []; suffixes = [suffix, la, IndexSet.empty] }
-      end (List.to_seq suffixes)
+            pattern := Some (lrc, nt);
+            let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+            Printf.eprintf "goto: %s @ %s\n%s\n" (Lr1.to_string grammar lr1) (Terminal.lookaheads_to_string grammar la)
+              (string_concat_map "\n" (Item.to_string grammar) (IndexSet.elements (Lr1.items grammar lr1)));
+            acc
+          | Either.Right _ -> lrc :: acc
+        end [] suffix
+      in
+      let lrc, nt = Option.get !pattern in
+      let lr1 = Transition.find_goto_target grammar (stacks.label lrc) nt in
+      mark lr1 la;
+      let main_pattern = Lr1.to_lr0 grammar (List.hd (fst (List.hd rcs.:(lr1).all_stacks))) in
+      assert (IndexSet.for_all (fun it -> not (Item.is_reducible grammar it)) (Lr0.items grammar main_pattern));
+      { main_pattern; shared_patterns = IndexSet.empty;
+        shared_prefix = []; suffixes = [suffix, la, IndexSet.empty] }
     end (List.to_seq free_predecessors)
   in
   let enumerated =
