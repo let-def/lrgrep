@@ -51,6 +51,11 @@ let rec merge_reductions rs1 rs2 =
     let r = IndexMap.union merge_lookaheads r1 r2 in
     r :: merge_reductions rs1 rs2
 
+type ('g, 'lrc) graph = Graph : {
+    initials: ('lrc, 'n index) indexmap;
+    states: ('n, ('g, 'lrc, 'n) state) vector;
+  } -> ('g, 'lrc) graph
+
 let enumerate (type g lrc)
     (g : g grammar)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
@@ -128,10 +133,10 @@ let enumerate (type g lrc)
       state'.predecessors <- edge :: state'.predecessors
   in
   let initials =
-    IndexSet.rev_map_elements stacks.tops begin fun lrc ->
+    IndexMap.inflate begin fun lrc ->
       let rc = rcs.:(stacks.label lrc) in
       visit lrc (rc.failing, rc.all_reductions)
-    end
+    end stacks.tops
   in
   let counter = ref 0 in
   fixpoint ~counter ~propagate:populate todo;
@@ -160,8 +165,9 @@ let enumerate (type g lrc)
   Printf.eprintf "deterministic enumeration: %d cycles, reached %d states, \
                   %d reduction patterns, %d initial patterns, \
                   %d initials without reductions\n"
-    !counter (Vector.length_as_int states) (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
-    (List.length (List.filter (fun ix -> List.is_empty states.:(ix).successors) initials))
+    !counter (Vector.length_as_int states)
+    (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
+    (IndexMap.cardinal (IndexMap.filter (fun _ ix -> List.is_empty states.:(ix).successors) initials))
   ;
   initial := IndexSet.diff !initial !reachable;
   IndexSet.iter begin fun lr0 ->
@@ -172,3 +178,4 @@ let enumerate (type g lrc)
     let items = Coverage.string_of_items_for_filter g lr0 in
     Printf.eprintf "| [_* /%s]\n  { ... }\n" (String.concat "\n      /" items)
   end !reachable;
+  Graph {initials; states}

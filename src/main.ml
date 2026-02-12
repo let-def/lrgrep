@@ -567,7 +567,7 @@ let enumerate_command () =
   in
   let subset = lrc_from_entrypoints initial_states in
   let stacks = make_stacks subset ~error_only:true in
-  Denumeration.enumerate grammar !!red_closure stacks;
+  let _ = Denumeration.enumerate grammar !!red_closure stacks in
   if false then
   let regular_terminals = Terminal.regular grammar in
   let initial_enum =
