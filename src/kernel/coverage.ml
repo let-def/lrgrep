@@ -3,7 +3,12 @@ open Misc
 open Fix.Indexing
 open Info
 
-(* Compact representation of a position in a rule *)
+(*
+  Compact representation of a position in a reduction
+  (a pair `(n, A)` interpreted as `pop n elements before
+  following the goto transition labelled `A`).
+*)
+
 module Position = Unsafe_cardinal()
 type 'g position = 'g Position.t
 
