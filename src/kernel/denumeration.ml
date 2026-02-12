@@ -87,6 +87,14 @@ let rec filter_reductions la = function
     then []
     else nts :: rest
 
+let filter_next_stacks la next =
+  List.filter_map begin fun (stack, la', tree) ->
+    let la = IndexSet.inter la la' in
+    if IndexSet.is_empty la
+    then None
+    else Some (stack, la, tree)
+  end next
+
 let rec merge_reductions rs1 rs2 =
   match rs1, rs2 with
   | [], rs | rs, [] -> rs
@@ -137,26 +145,34 @@ let enumerate (type g lrc)
       stacks.prev state.lrc |> IndexSet.iter @@ fun lrc ->
       let lr1 = stacks.label lrc in
       let reached = ref IndexSet.empty in
-      let rec explore nts acc =
-        IndexMap.fold begin fun nt lookaheads (failed, pending) ->
+      let failed = ref state.failed in
+      let pending = ref [pending] in
+      let rec explore nts =
+        IndexMap.iter begin fun nt lookaheads ->
           let target = Transition.find_goto_target g lr1 nt in
           let reductions = rcs.:(target) in
-          let failed =
-            IndexSet.fused_inter_union ~acc:failed
-              lookaheads reductions.failing
+          failed := IndexSet.fused_inter_union ~acc:!failed
+              lookaheads reductions.failing;
+          let rec visit_stacks candidate (stacks : g Redgraph.stack_tree) lookaheads =
+            let nexts = filter_next_stacks lookaheads stacks.next in
+            if List.is_empty nexts then
+                reached := IndexSet.add (Lr1.to_lr0 g candidate) !reached
+            else
+              List.iter (fun (stack, la, next) ->
+                  visit_stacks (List.hd stack) next la) nexts;
+            begin match filter_reductions lookaheads stacks.reductions with
+              | [] -> ()
+              | nts :: pending' ->
+                explore nts;
+                push pending pending'
+            end
           in
-          match filter_reductions lookaheads reductions.all_reductions with
-          | [] ->
-            reached := IndexSet.add (Lr1.to_lr0 g target) !reached;
-            (failed, pending)
-          | nts :: pending' ->
-            if IndexMap.is_empty nts then
-              reached := IndexSet.add (Lr1.to_lr0 g target) !reached;
-            explore nts (failed, merge_reductions pending' pending)
-        end nts acc
+          visit_stacks target reductions.stacks lookaheads
+        end nts
       in
-      let key = explore nts (state.failed, pending) in
-      let state' = visit lrc key in
+      explore nts;
+      let pending = List.fold_left merge_reductions [] !pending in
+      let state' = visit lrc (!failed, pending) in
       let reached = !reached in
       state.successors <- (reached, state') :: state.successors;
       state'.predecessors <- (reached, state) :: state'.predecessors
