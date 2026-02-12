@@ -315,25 +315,33 @@ let uncovered_cases (type g lrc)
     in
     aux []
   in
-  let complete_suffix (steps, la) =
-    let rec advance r lrc pos =
-      assert (not (Opt.is_none pos));
-      match previous_position positions pos with
-      | Either.Left nt ->
-        r := pos;
-        let target = Transition.find_goto_target grammar (stacks.label lrc) nt in
-        let rec import_reductions acc n = function
-          | [] -> acc
-          | nts :: rest ->
-            let acc =
-              IndexMap.fold (fun nt _ acc -> inject_position positions nt n :: acc) nts acc
-            in
-            import_reductions acc (n + 1) rest
-        in
-        let poss = import_reductions [] 0 rcs.:(target).Redgraph.all_reductions in
-        List.concat_map (advance r lrc) poss
-      | Either.Right pos ->
-        [pos]
+  let complete_suffix steps =
+    let advance r lrc pos =
+      let source = stacks.label lrc in
+      let rec loop (pos, la) =
+        assert (not (Opt.is_none pos));
+        match previous_position positions pos with
+        | Either.Left nt ->
+          r := pos;
+          let target = Transition.find_goto_target grammar source nt in
+          let rec import_reductions acc n = function
+            | [] -> acc
+            | nts :: rest ->
+              let acc =
+                IndexMap.fold (fun nt la' acc ->
+                    let la = IndexSet.inter la la' in
+                    if IndexSet.is_empty la then acc
+                    else (inject_position positions nt n, la) :: acc
+                  ) nts acc
+              in
+              import_reductions acc (n + 1) rest
+          in
+          let poss = import_reductions [] 0 rcs.:(target).Redgraph.all_reductions in
+          List.concat_map loop poss
+        | Either.Right pos ->
+          [pos]
+      in
+      loop (pos, Terminal.regular grammar)
     in
     let rec aux = function
       | [] -> ([], [])
@@ -347,13 +355,12 @@ let uncovered_cases (type g lrc)
           let pos = List.concat_map (advance r lrc) pos in
           ((st, pack_position positions !r lrc) :: rest, pos)
     in
-    let steps, pos = aux steps in
-    ((steps, la), pos)
+    aux steps
   in
   let free_predecessors, enum_predecessors =
     Vector.fold_lefti begin fun acc st transitions ->
       List.fold_left begin fun acc (lp, lrcs, la) ->
-        let pos, _ = unpack_position positions lp in
+        let pos, lrc = unpack_position positions lp in
         let add_enum pos suffix (free, enum) =
           let rec complete_suffixes acc = function
             | 0 -> acc
@@ -365,26 +372,32 @@ let uncovered_cases (type g lrc)
               complete_suffixes (List.concat_map extend_path acc) (pos - 1)
           in
           let goto, dot = project_position positions pos in
-          let completions =
-            complete_suffixes
-              (IndexSet.rev_map_elements lrcs (fun lrc -> (lrc, [lrc]))) (dot - 1)
-          in
-          let enum = list_rev_mappend
-              (fun (lrc, compl) -> Enumeration.kernel lrc ~goto la, (compl, suffix))
-              completions enum
-          in
-          (free, enum)
+          if dot > 0 then
+            let completions =
+              complete_suffixes
+                (IndexSet.rev_map_elements lrcs (fun lrc -> (lrc, [lrc]))) (dot - 1)
+            in
+            let enum = list_rev_mappend
+                (fun (lrc, compl) -> Enumeration.kernel lrc ~goto la, (compl, suffix))
+                completions enum
+            in
+            (free, enum)
+          else
+            let enum = (Enumeration.kernel lrc ~goto la, ([], suffix)) :: enum in
+            (free, enum)
         in
         match Opt.prj pos with
         | Some pos -> add_enum pos (lazy (synthesize_suffix st lp la)) acc
         | None ->
-          List.fold_left begin fun acc suffix ->
+          List.fold_left begin fun acc (suffix, la) ->
             let suffix, pos = complete_suffix suffix in
+            let suffix = (suffix, la) in
             begin match pos with
               | [] -> ((lrcs, suffix) :: fst acc, snd acc)
               | poss ->
+                let suffix = Lazy.from_val [suffix] in
                 List.fold_left begin fun acc pos ->
-                  add_enum (Option.get (Opt.prj pos)) (lazy [suffix]) acc
+                  add_enum (Option.get (Opt.prj pos)) suffix acc
                 end acc poss
             end
           end acc (synthesize_suffix st lp la)
