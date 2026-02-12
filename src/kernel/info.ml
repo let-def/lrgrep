@@ -860,7 +860,7 @@ module Transition = struct
     | Some gt -> gt
     | None ->
       Printf.ksprintf invalid_arg "find_goto(%s, %s)"
-        (Lr1.to_string g lr1) (Nonterminal.to_string g lr1)
+        (Lr1.to_string g lr1) (Nonterminal.to_string g nt)
 
   let find_goto_target g lr1 nt =
     g.transition_target.:(of_goto g (find_goto g lr1 nt))
