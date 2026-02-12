@@ -5,12 +5,18 @@ open Info
 
 type 'g pending_reductions = ('g nonterminal, 'g terminal indexset) indexmap list
 
-type ('g, 'lrc) state = {
+type ('g, 'n) edge = {
+  source: 'n index;
+  target: 'n index;
+  reached: 'g lr0 indexset;
+}
+
+type ('g, 'lrc, 'n) state = {
   lrc: 'lrc index;
   failed: 'g terminal indexset;
   pending: 'g pending_reductions;
-  mutable successors: ('g lr0 indexset * ('g, 'lrc) state) list;
-  mutable predecessors: ('g lr0 indexset * ('g, 'lrc) state) list;
+  mutable successors: ('g, 'n) edge list;
+  mutable predecessors: ('g, 'n) edge list;
 }
 
 let rec filter_reductions la = function
@@ -50,6 +56,9 @@ let enumerate (type g lrc)
     (rcs : (g lr1, g Redgraph.reduction_closure) vector)
     (stacks : (g, lrc) Automata.stacks)
   =
+  let open IndexBuffer in
+  let module States = Gen.Make() in
+  let states = States.get_generator () in
   let module Map = Map.Make(struct
       type t = g terminal indexset * g pending_reductions
       let compare (s1,l1) (s2,l2) =
@@ -61,25 +70,23 @@ let enumerate (type g lrc)
   in
   let table = Vector.make stacks.domain Map.empty in
   let todo = ref [] in
-  let states = ref 0 in
   let visit lrc key =
     let map = table.:(lrc) in
     match Map.find_opt key map with
     | Some result -> result
     | None ->
       let failed, pending = key in
-      let state = {
+      let index = Gen.add states {
         lrc; failed; pending;
         successors = [];
         predecessors = [];
-      }
-      in
-      push todo state;
-      incr states;
-      table.:(lrc) <- Map.add key state map;
-      state
+      } in
+      push todo index;
+      table.:(lrc) <- Map.add key index map;
+      index
   in
-  let populate state =
+  let populate source =
+    let state = Gen.get states source in
     assert (List.is_empty state.successors);
     match state.pending with
     | [] -> ()
@@ -113,10 +120,12 @@ let enumerate (type g lrc)
       in
       explore nts;
       let pending = List.fold_left merge_reductions [] !pending in
-      let state' = visit lrc (!failed, pending) in
-      let maximal = if List.is_empty pending then !maximal else IndexSet.empty in
-      state.successors <- (maximal, state') :: state.successors;
-      state'.predecessors <- (maximal, state) :: state'.predecessors
+      let target = visit lrc (!failed, pending) in
+      let state' = Gen.get states target in
+      let reached = if List.is_empty pending then !maximal else IndexSet.empty in
+      let edge = {source; target; reached} in
+      state.successors <- edge :: state.successors;
+      state'.predecessors <- edge :: state'.predecessors
   in
   let initials =
     IndexSet.rev_map_elements stacks.tops begin fun lrc ->
@@ -126,34 +135,33 @@ let enumerate (type g lrc)
   in
   let counter = ref 0 in
   fixpoint ~counter ~propagate:populate todo;
+  let states = Gen.freeze states in
   let reachable = ref IndexSet.empty in
   let initial = ref IndexSet.empty in
-  Vector.iter begin fun map ->
-    Map.iter begin fun _ state ->
-      match state.successors, state.predecessors with
-      | [], [] ->
-        let rec visit_stacks candidate (stacks : g Redgraph.stack_tree) lookaheads =
-          match filter_next_stacks lookaheads stacks.next with
-          | [] -> initial := IndexSet.add (Lr1.to_lr0 g candidate) !initial
-          | nexts ->
-            List.iter (fun (stack, la, next) ->
-                visit_stacks (List.hd stack) next la) nexts
-        in
-        let lr1 = stacks.label state.lrc in
-        visit_stacks lr1 rcs.:(lr1).stacks (Terminal.regular g)
-      | [], predecessors ->
-        List.iter begin fun (lr0s, _) ->
-          (*assert (IndexSet.is_not_empty lr0s);*)
-          reachable := IndexSet.union lr0s !reachable
-        end predecessors
-      | (_ :: _), _ -> ()
-    end map
-  end table;
+  Vector.iter begin fun state ->
+    match state.successors, state.predecessors with
+    | [], [] ->
+      let rec visit_stacks candidate (stacks : g Redgraph.stack_tree) lookaheads =
+        match filter_next_stacks lookaheads stacks.next with
+        | [] -> initial := IndexSet.add (Lr1.to_lr0 g candidate) !initial
+        | nexts ->
+          List.iter (fun (stack, la, next) ->
+              visit_stacks (List.hd stack) next la) nexts
+      in
+      let lr1 = stacks.label state.lrc in
+      visit_stacks lr1 rcs.:(lr1).stacks (Terminal.regular g)
+    | [], predecessors ->
+      List.iter begin fun edge ->
+        (*assert (IndexSet.is_not_empty lr0s);*)
+        reachable := IndexSet.union edge.reached !reachable
+      end predecessors
+    | (_ :: _), _ -> ()
+  end states;
   Printf.eprintf "deterministic enumeration: %d cycles, reached %d states, \
                   %d reduction patterns, %d initial patterns, \
                   %d initials without reductions\n"
-    !counter !states (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
-    (List.length (List.filter (fun st -> List.is_empty st.successors) initials))
+    !counter (Vector.length_as_int states) (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
+    (List.length (List.filter (fun ix -> List.is_empty states.:(ix).successors) initials))
   ;
   initial := IndexSet.diff !initial !reachable;
   IndexSet.iter begin fun lr0 ->
