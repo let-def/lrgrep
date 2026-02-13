@@ -11,7 +11,7 @@ type ('g, 'st, 'en) state = {
 
 let coverage (type g r st tr lrc en)
     (*(g : g grammar)*)
-    (*(branches : (g, r) Spec.branches)*)
+    (branches : (g, r) Spec.branches)
     (machine : (g, r, st, tr) Automata.Machine.t)
     (stacks : (g, lrc) Automata.stacks)
     (enum : (g, lrc, en) Denumeration._graph)
@@ -20,47 +20,61 @@ let coverage (type g r st tr lrc en)
   let todo = ref [] in
   (* Reached configuration `(mac,enu)` (mac a machine state, enu an enum state),
      while lookaheads `accepted` have already been accepted. *)
-  let schedule mac enu accepted =
-    let map = reachable.:(mac) in
-    match IndexMap.find_opt enu map with
-    | Some st ->
-      let accepted0 = st.accepted in
-      let accepted' = IndexSet.inter accepted st.accepted in
-      if accepted' != accepted0 then (
-        st.accepted <- accepted';
+  let reached mac enu accepted =
+    match
+      List.fold_left begin fun la (br, _, _) ->
+        if Boolvector.test branches.is_partial br
+        then la
+        else
+          (* FIXME: check for unreachable clauses *)
+          match branches.lookaheads.:(br) with
+          | None -> raise Exit
+          | Some la' -> IndexSet.union la' la
+      end accepted machine.accepting.:(mac)
+    with
+    | exception Exit -> ()
+    | accepted ->
+      let map = reachable.:(mac) in
+      match IndexMap.find_opt enu map with
+      | Some st ->
+        let accepted0 = st.accepted in
+        let accepted' = IndexSet.inter accepted st.accepted in
+        if accepted' != accepted0 then (
+          st.accepted <- accepted';
+          push todo st
+        )
+      | None ->
+        let st = {mac; enu; accepted} in
+        reachable.:(mac) <- IndexMap.add enu st map;
         push todo st
-      )
-    | None ->
-      let st = {mac; enu; accepted} in
-      reachable.:(mac) <- IndexMap.add enu st map;
-      push todo st
   in
-  let process_transition prj tr candidates =
+  let process_transition accepted prj tr candidates =
     let mac = machine.target.:(tr) in
     let filter = machine.label.:(tr).filter in
     List.filter begin fun cand ->
       let enu = prj cand in
       if IndexSet.mem (stacks.label enum.states.:(enu).lrc) filter then (
-        schedule mac enu IndexSet.empty;
+        reached mac enu accepted;
         false
       ) else
         true
     end candidates
   in
   let trs =
-    Option.fold ~none:IndexSet.empty
-      ~some:(Vector.get machine.outgoing) machine.initial
+    Option.fold machine.initial
+      ~none:IndexSet.empty
+      ~some:(Vector.get machine.outgoing)
   in
   let unhandled_initials =
-    IndexMap.fold (fun _ en acc -> en :: acc) enum.initials []
-    |> IndexSet.fold (process_transition Fun.id) trs
+    IndexSet.fold (process_transition IndexSet.empty Fun.id) trs
+      (IndexMap.fold (fun _ en acc -> en :: acc) enum.initials [])
   in
   let propagate cst =
     let trs = machine.outgoing.:(cst.mac) in
     let edges = enum.states.:(cst.enu).successors in
-    let unhandled =
-      IndexSet.fold (process_transition (fun edge -> edge.Denumeration.target)) trs edges
-    in
+    let prj_target edge = edge.Denumeration.target in
+    let process edge acc = process_transition cst.accepted prj_target edge acc in
+    let unhandled = IndexSet.fold process trs edges in
     ignore unhandled
   in
   fixpoint ~propagate todo;
