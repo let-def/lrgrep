@@ -51,10 +51,12 @@ let rec merge_reductions rs1 rs2 =
     let r = IndexMap.union merge_lookaheads r1 r2 in
     r :: merge_reductions rs1 rs2
 
-type ('g, 'lrc) graph = Graph : {
-    initials: ('lrc, 'n index) indexmap;
-    states: ('n, ('g, 'lrc, 'n) state) vector;
-  } -> ('g, 'lrc) graph
+type ('g, 'lrc, 'n) _graph = {
+  initials: ('lrc, 'n index) indexmap;
+  states: ('n, ('g, 'lrc, 'n) state) vector;
+}
+
+type ('g, 'lrc) graph = Graph : ('g, 'lrc, 'n) _graph -> ('g, 'lrc) graph
 
 let enumerate (type g lrc)
     (g : g grammar)
