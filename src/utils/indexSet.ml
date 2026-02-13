@@ -32,6 +32,8 @@ module CoerceSum(X : CARDINAL)(Y : CARDINAL) = struct
   let coerce : X.n t -> (X.n, Y.n) Sum.n t = unsafe_to_indexset
 end
 
+let lift_sum = unsafe_to_indexset
+
 let all n =
   let i = Fix.Indexing.cardinal n in
   if i = 0 then
