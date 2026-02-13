@@ -338,7 +338,7 @@ let do_compile spec (cp : Code_printer.t option) =
       let Denumeration.Graph enum =
         Denumeration.enumerate grammar !!red_closure stacks
       in
-      Dcoverage.coverage branches machine stacks enum;
+      Dcoverage.coverage grammar branches machine stacks enum;
       let cposition = Coverage.make_positions grammar in
       let coverage =
         Coverage.coverage
