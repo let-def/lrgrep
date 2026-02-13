@@ -164,20 +164,22 @@ let enumerate (type g lrc)
       end predecessors
     | (_ :: _), _ -> ()
   end states;
-  Printf.eprintf "deterministic enumeration: %d cycles, reached %d states, \
-                  %d reduction patterns, %d initial patterns, \
-                  %d initials without reductions\n"
+  stopwatch 1 "deterministic enumeration: %d steps, reached %d states, \
+               %d reduction patterns, %d initial patterns, \
+               %d initials without reductions"
     !counter (Vector.length_as_int states)
     (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
     (IndexMap.cardinal (IndexMap.filter (fun _ ix -> List.is_empty states.:(ix).successors) initials))
   ;
   initial := IndexSet.diff !initial !reachable;
-  IndexSet.iter begin fun lr0 ->
-    let items = Coverage.string_of_items_for_filter g lr0 in
-    Printf.eprintf "| /%s\n  { ... }\n" (String.concat "\n  /" items)
-  end !initial;
-  IndexSet.iter begin fun lr0 ->
-    let items = Coverage.string_of_items_for_filter g lr0 in
-    Printf.eprintf "| [_* /%s]\n  { ... }\n" (String.concat "\n      /" items)
-  end !reachable;
+  if false then (
+    IndexSet.iter begin fun lr0 ->
+      let items = Coverage.string_of_items_for_filter g lr0 in
+      Printf.eprintf "| /%s\n  { ... }\n" (String.concat "\n  /" items)
+    end !initial;
+    IndexSet.iter begin fun lr0 ->
+      let items = Coverage.string_of_items_for_filter g lr0 in
+      Printf.eprintf "| [_* /%s]\n  { ... }\n" (String.concat "\n      /" items)
+    end !reachable;
+  );
   Graph {initials; states}

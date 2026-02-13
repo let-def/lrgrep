@@ -335,6 +335,10 @@ let do_compile spec (cp : Code_printer.t option) =
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
     if fst rule.error then (
+      let Denumeration.Graph enum =
+        Denumeration.enumerate grammar !!red_closure stacks
+      in
+      Dcoverage.coverage branches machine stacks enum;
       let cposition = Coverage.make_positions grammar in
       let coverage =
         Coverage.coverage
