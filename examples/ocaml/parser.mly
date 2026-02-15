@@ -60,10 +60,6 @@ let mkclass ~loc ?attrs d = Cl.mk ~loc:(make_loc loc) ?attrs d
 let mkcty ~loc ?attrs d = Cty.mk ~loc:(make_loc loc) ?attrs d
 let mkconst ~loc c = Const.mk ~loc:(make_loc loc) c
 
-let pstr_extension body attrs =
-  (Pstr_extension (body, attrs), None)
-let pstr_attribute body =
-  (Pstr_attribute body, None)
 let pstr_typext (te, ext) =
   (Pstr_typext te, ext)
 let pstr_primitive (vd, ext) =
@@ -74,23 +70,9 @@ let pstr_exception (te, ext) =
   (Pstr_exception te, ext)
 let pstr_include (body, ext) =
   (Pstr_include body, ext)
-let pstr_module (body, ext) =
-  (Pstr_module body, ext)
 let pstr_recmodule (ext, bindings) =
   (Pstr_recmodule bindings, ext)
-let pstr_modtype (body, ext) =
-  (Pstr_modtype body, ext)
-let pstr_open (body, ext) =
-  (Pstr_open body, ext)
-let pstr_class (ext, l) =
-  (Pstr_class l, ext)
-let pstr_class_type (ext, l) =
-  (Pstr_class_type l, ext)
 
-let psig_extension body attrs =
-  (Psig_extension (body, attrs), None)
-let psig_attribute body =
-  (Psig_attribute body, None)
 let psig_typext (te, ext) =
   (Psig_typext te, ext)
 let psig_value (vd, ext) =
@@ -104,22 +86,6 @@ let psig_exception (te, ext) =
   (Psig_exception te, ext)
 let psig_include (body, ext) =
   (Psig_include body, ext)
-let psig_module (body, ext) =
-  (Psig_module body, ext)
-let psig_modsubst (body, ext) =
-  (Psig_modsubst body, ext)
-let psig_recmodule (ext, l) =
-  (Psig_recmodule l, ext)
-let psig_modtype (body, ext) =
-  (Psig_modtype body, ext)
-let psig_modtypesubst (body, ext) =
-  (Psig_modtypesubst body, ext)
-let psig_open (body, ext) =
-  (Psig_open body, ext)
-let psig_class (ext, l) =
-  (Psig_class l, ext)
-let psig_class_type (ext, l) =
-  (Psig_class_type l, ext)
 
 let mkctf ~loc ?attrs ?docs d =
   Ctf.mk ~loc:(make_loc loc) ?attrs ?docs d
@@ -142,7 +108,7 @@ let reloc_pat ~loc x =
 let reloc_exp ~loc x =
   { x with pexp_loc = make_loc loc;
            pexp_loc_stack = push_loc x.pexp_loc x.pexp_loc_stack }
-let reloc_typ ~loc x =
+let _reloc_typ ~loc x =
   { x with ptyp_loc = make_loc loc;
            ptyp_loc_stack = push_loc x.ptyp_loc x.ptyp_loc_stack }
 
@@ -700,7 +666,7 @@ let package_type_of_module_type pmty =
         let loc = ptyp.ptype_loc in
         if ptyp.ptype_params <> [] then
           err loc Syntaxerr.Parameterized_types;
-        if ptyp.ptype_constraints <> [] then
+        if ptyp.ptype_cstrs <> [] then
           err loc Syntaxerr.Constrained_types;
         if ptyp.ptype_private <> Public then
           err loc Syntaxerr.Private_types;
@@ -1041,6 +1007,10 @@ The precedences must be listed from low to high.
     { mkpat ~loc:$sloc $1 }
 %inline mktyp(symb): symb
     { mktyp ~loc:$sloc $1 }
+%inline mkstr(symb): symb
+    { mkstr ~loc:$sloc $1 }
+%inline mksig(symb): symb
+    { mksig ~loc:$sloc $1 }
 %inline mkmod(symb): symb
     { mkmod ~loc:$sloc $1 }
 %inline mkmty(symb): symb
@@ -1494,15 +1464,15 @@ paren_module_expr:
 
 (* The various ways of annotating a core language expression that
    produces a first-class module that we wish to unpack. *)
-expr_colon_package_type:
+%inline expr_colon_package_type:
     e = expr
       { e }
   | e = expr COLON ty = package_type
-      { mkexp ~loc:$loc (Pexp_constraint (e, ty)) }
+      { ghexp ~loc:$loc (Pexp_constraint (e, ty)) }
   | e = expr COLON ty1 = package_type COLONGREATER ty2 = package_type
-      { mkexp ~loc:$loc (Pexp_coerce (e, Some ty1, ty2)) }
+      { ghexp ~loc:$loc (Pexp_coerce (e, Some ty1, ty2)) }
   | e = expr COLONGREATER ty2 = package_type
-      { mkexp ~loc:$loc (Pexp_coerce (e, None, ty2)) }
+      { ghexp ~loc:$loc (Pexp_coerce (e, None, ty2)) }
 ;
 
 (* A structure, which appears between STRUCT and END (among other places),
@@ -1543,23 +1513,15 @@ structure:
 structure_item:
     let_bindings(ext)
       { val_of_let_bindings ~loc:$sloc $1 }
-  | wrap_mkstr_ext(
-      include_statement(module_expr)
-        { pstr_include $1 }
-    )
-    { $1 }
-  | local_structure_item
-    { $1 }
-;
-
-(* A local structure item (= can appear in let expressions) *)
-local_structure_item:
-  | wrap_mkstr_ext(
+  | mkstr(
       item_extension post_item_attributes
-        { pstr_extension $1 (add_docs_attrs (symbol_docs $sloc) $2) }
+        { let docs = symbol_docs $sloc in
+          Pstr_extension ($1, add_docs_attrs docs $2) }
     | floating_attribute
-        { pstr_attribute $1 }
-    | primitive_declaration
+        { Pstr_attribute $1 }
+    )
+  | wrap_mkstr_ext(
+      primitive_declaration
         { pstr_primitive $1 }
     | value_description
         { pstr_primitive $1 }
@@ -1569,20 +1531,20 @@ local_structure_item:
         { pstr_typext $1 }
     | str_exception_declaration
         { pstr_exception $1 }
+    | module_binding
+        { $1 }
     | rec_module_bindings
         { pstr_recmodule $1 }
     | module_type_declaration
-        { pstr_modtype $1 }
-    | class_declarations
-        { pstr_class $1 }
-    | class_type_declarations
-        { pstr_class_type $1 }
-    | sig_exception_declaration
-        { pstr_exception $1 }
-    | module_binding
-        { pstr_module $1 }
+        { let (body, ext) = $1 in (Pstr_modtype body, ext) }
     | open_declaration
-        { pstr_open $1 }
+        { let (body, ext) = $1 in (Pstr_open body, ext) }
+    | class_declarations
+        { let (ext, l) = $1 in (Pstr_class l, ext) }
+    | class_type_declarations
+        { let (ext, l) = $1 in (Pstr_class_type l, ext) }
+    | include_statement(module_expr)
+        { pstr_include $1 }
     )
     { $1 }
 ;
@@ -1598,7 +1560,7 @@ local_structure_item:
       let loc = make_loc $sloc in
       let attrs = attrs1 @ attrs2 in
       let body = Mb.mk name body ~attrs ~loc ~docs in
-      body, ext }
+      Pstr_module body, ext }
 ;
 
 (* The body (right-hand side) of a module binding. *)
@@ -1792,12 +1754,16 @@ signature:
 
 (* A signature item. *)
 signature_item:
+  | item_extension post_item_attributes
+      { let docs = symbol_docs $sloc in
+        mksig ~loc:$sloc (Psig_extension ($1, (add_docs_attrs docs $2))) }
+  | mksig(
+      floating_attribute
+        { Psig_attribute $1 }
+    )
+    { $1 }
   | wrap_mksig_ext(
-      item_extension post_item_attributes
-        { psig_extension $1 (add_docs_attrs (symbol_docs $sloc) $2) }
-    | floating_attribute
-        { psig_attribute $1 }
-    | value_description
+      value_description
         { psig_value $1 }
     | primitive_declaration
         { psig_value $1 }
@@ -1810,25 +1776,25 @@ signature_item:
     | sig_exception_declaration
         { psig_exception $1 }
     | module_declaration
-        { psig_module $1 }
+        { let (body, ext) = $1 in (Psig_module body, ext) }
     | module_alias
-        { psig_module $1 }
+        { let (body, ext) = $1 in (Psig_module body, ext) }
     | module_subst
-        { psig_modsubst $1 }
+        { let (body, ext) = $1 in (Psig_modsubst body, ext) }
     | rec_module_declarations
-        { psig_recmodule $1 }
+        { let (ext, l) = $1 in (Psig_recmodule l, ext) }
     | module_type_declaration
-        { psig_modtype $1 }
+        { let (body, ext) = $1 in (Psig_modtype body, ext) }
     | module_type_subst
-        { psig_modtypesubst $1 }
+        { let (body, ext) = $1 in (Psig_modtypesubst body, ext) }
     | open_description
-        { psig_open $1 }
+        { let (body, ext) = $1 in (Psig_open body, ext) }
     | include_statement(module_type)
         { psig_include $1 }
     | class_descriptions
-        { psig_class $1 }
+        { let (ext, l) = $1 in (Psig_class l, ext) }
     | class_type_declarations
-        { psig_class_type $1 }
+        { let (ext, l) = $1 in (Psig_class_type l, ext) }
     )
     { $1 }
 
@@ -2000,7 +1966,7 @@ class_fun_binding:
   | mkclass(
       COLON class_type EQUAL class_expr
         { Pcl_constraint($4, $2) }
-    | simple_param_pattern class_fun_binding
+    | labeled_simple_pattern class_fun_binding
       { let (l,o,p) = $1 in Pcl_fun(l, o, p, $2) }
     ) { $1 }
 ;
@@ -2055,8 +2021,8 @@ class_simple_expr:
 
 class_fun_def:
   mkclass(
-    simple_param_pattern MINUSGREATER e = class_expr
-  | simple_param_pattern e = class_fun_def
+    labeled_simple_pattern MINUSGREATER e = class_expr
+  | labeled_simple_pattern e = class_fun_def
       { let (l,o,p) = $1 in Pcl_fun(l, o, p, e) }
   ) { $1 }
 ;
@@ -2122,7 +2088,7 @@ method_:
     no_override_flag
     attrs = attributes
     private_ = virtual_with_private_flag
-    label = mkrhs(label) COLON ty = possibly_poly_type
+    label = mkrhs(label) COLON ty = poly_type
       { (label, private_, Cfk_virtual ty), attrs }
   | override_flag attributes private_flag mkrhs(label) strict_binding
       { let e = $5 in
@@ -2130,7 +2096,7 @@ method_:
         ($4, $3,
         Cfk_concrete ($1, ghexp ~loc (Pexp_poly (e, None)))), $2 }
   | override_flag attributes private_flag mkrhs(label)
-    COLON possibly_poly_type EQUAL seq_expr
+    COLON poly_type EQUAL seq_expr
       { let poly_exp =
           let loc = ($startpos($6), $endpos($8)) in
           ghexp ~loc (Pexp_poly($8, Some $6)) in
@@ -2211,8 +2177,7 @@ class_sig_field:
   | VAL attributes value_type post_item_attributes
       { let docs = symbol_docs $sloc in
         mkctf ~loc:$sloc (Pctf_val $3) ~attrs:($2@$4) ~docs }
-  | METHOD attributes private_virtual_flags mkrhs(label)
-    COLON possibly_poly_type
+  | METHOD attributes private_virtual_flags mkrhs(label) COLON poly_type
     post_item_attributes
       { let (p, v) = $3 in
         let docs = symbol_docs $sloc in
@@ -2367,7 +2332,7 @@ fun_seq_expr:
 seq_expr:
   | or_function(fun_seq_expr) { $1 }
 ;
-simple_param_pattern:
+labeled_simple_pattern:
     QUESTION LPAREN label_let_pattern opt_default RPAREN
       { (Optional (fst $3), $4, snd $3) }
   | QUESTION label_var
@@ -2384,10 +2349,6 @@ simple_param_pattern:
       { (Labelled $1, None, $2) }
   | simple_pattern
       { (Nolabel, None, $1) }
-  | LABEL LPAREN poly_pattern RPAREN
-      { (Labelled $1, None, $3) }
-  | LPAREN poly_pattern RPAREN
-      { (Nolabel, None, $2) }
 ;
 
 pattern_var:
@@ -2404,7 +2365,7 @@ pattern_var:
 label_let_pattern:
     x = label_var
       { x }
-  | x = label_var COLON cty = possibly_poly_type
+  | x = label_var COLON cty = core_type
       { let lab, pat = x in
         lab,
         mkpat ~loc:$sloc (Ppat_constraint (pat, cty)) }
@@ -2416,16 +2377,8 @@ label_let_pattern:
 let_pattern:
     pattern
       { $1 }
-  | mkpat(pattern COLON possibly_poly_type
+  | mkpat(pattern COLON core_type
       { Ppat_constraint($1, $3) })
-      { $1 }
-;
-%inline poly_pattern:
-    mkpat(
-      pat = pattern
-      COLON
-      cty = poly_type
-        { Ppat_constraint(pat, cty) })
       { $1 }
 ;
 
@@ -2478,13 +2431,23 @@ fun_expr:
     { mk_indexop_expr user_indexing_operators ~loc:$sloc $1 }
   | fun_expr attribute
       { Exp.attr $1 $2 }
+/* BEGIN AVOID */
+  | UNDERSCORE
+     { not_expecting $loc($1) "wildcard \"_\"" }
+/* END AVOID */
 ;
-expr:
+%inline expr:
   | or_function(fun_expr) { $1 }
 ;
 %inline fun_expr_attrs:
-  | LET ext_attributes local_structure_item IN seq_expr
-      { Pexp_struct_item($3, $5), $2 }
+  | LET MODULE ext_attributes mkrhs(module_name) module_binding_body IN seq_expr
+      { Pexp_letmodule($4, $5, $7), $3 }
+  | LET EXCEPTION ext_attributes let_exception_declaration IN seq_expr
+      { Pexp_letexception($4, $6), $3 }
+  | LET OPEN override_flag ext_attributes module_expr IN seq_expr
+      { let open_loc = make_loc ($startpos($2), $endpos($5)) in
+        let od = Opn.mk $5 ~override:$3 ~loc:open_loc in
+        Pexp_open(od, $7), $4 }
   /* Cf #5939: we used to accept (fun p when e0 -> e) */
   | FUN ext_attributes fun_params preceded(COLON, atomic_type)?
       MINUSGREATER fun_body
@@ -2613,10 +2576,10 @@ simple_expr:
   | simple_expr DOT mkrhs(label_longident)
       { Pexp_field($1, $3) }
   | od=open_dot_declaration DOT LPAREN seq_expr RPAREN
-      { Pexp_struct_item(Str.open_ od, $4) }
+      { Pexp_open(od, $4) }
   | od=open_dot_declaration DOT LBRACELESS object_expr_content GREATERRBRACE
       { (* TODO: review the location of Pexp_override *)
-        Pexp_struct_item(Str.open_ od, mkexp ~loc:$sloc (Pexp_override $4)) }
+        Pexp_open(od, mkexp ~loc:$sloc (Pexp_override $4)) }
   | mod_longident DOT LBRACELESS object_expr_content error
       { unclosed "{<" $loc($3) ">}" $loc($5) }
   | simple_expr HASH mkrhs(label)
@@ -2626,8 +2589,7 @@ simple_expr:
   | extension
       { Pexp_extension $1 }
   | od=open_dot_declaration DOT mkrhs(LPAREN RPAREN {Lident "()"})
-      { Pexp_struct_item(Str.open_ od,
-                         mkexp ~loc:($loc($3)) (Pexp_construct($3, None))) }
+      { Pexp_open(od, mkexp ~loc:($loc($3)) (Pexp_construct($3, None))) }
   | mod_longident DOT LPAREN seq_expr error
       { unclosed "(" $loc($3) ")" $loc($5) }
   | LBRACE record_expr_content RBRACE
@@ -2637,9 +2599,8 @@ simple_expr:
       { unclosed "{" $loc($1) "}" $loc($3) }
   | od=open_dot_declaration DOT LBRACE record_expr_content RBRACE
       { let (exten, fields) = $4 in
-        Pexp_struct_item(Str.open_ od,
-                         mkexp ~loc:($startpos($3), $endpos)
-                           (Pexp_record(fields, exten))) }
+        Pexp_open(od, mkexp ~loc:($startpos($3), $endpos)
+                        (Pexp_record(fields, exten))) }
   | mod_longident DOT LBRACE record_expr_content error
       { unclosed "{" $loc($3) "}" $loc($5) }
   | LBRACKETBAR expr_semi_list BARRBRACKET
@@ -2649,12 +2610,10 @@ simple_expr:
   | LBRACKETBAR BARRBRACKET
       { Pexp_array [] }
   | od=open_dot_declaration DOT LBRACKETBAR expr_semi_list BARRBRACKET
-      { Pexp_struct_item(Str.open_ od,
-                         mkexp ~loc:($startpos($3), $endpos) (Pexp_array($4))) }
+      { Pexp_open(od, mkexp ~loc:($startpos($3), $endpos) (Pexp_array($4))) }
   | od=open_dot_declaration DOT LBRACKETBAR BARRBRACKET
       { (* TODO: review the location of Pexp_array *)
-        Pexp_struct_item(Str.open_ od,
-                         mkexp ~loc:($startpos($3), $endpos) (Pexp_array [])) }
+        Pexp_open(od, mkexp ~loc:($startpos($3), $endpos) (Pexp_array [])) }
   | mod_longident DOT
     LBRACKETBAR expr_semi_list error
       { unclosed "[|" $loc($3) "|]" $loc($5) }
@@ -2667,10 +2626,9 @@ simple_expr:
           (* TODO: review the location of list_exp *)
           let tail_exp, _tail_loc = mktailexp $loc($5) $4 in
           mkexp ~loc:($startpos($3), $endpos) tail_exp in
-        Pexp_struct_item(Str.open_ od, list_exp) }
+        Pexp_open(od, list_exp) }
   | od=open_dot_declaration DOT mkrhs(LBRACKET RBRACKET {Lident "[]"})
-      { Pexp_struct_item(Str.open_ od,
-                         mkexp ~loc:$loc($3) (Pexp_construct($3, None))) }
+      { Pexp_open(od, mkexp ~loc:$loc($3) (Pexp_construct($3, None))) }
   | mod_longident DOT
     LBRACKET expr_semi_list error
       { unclosed "[" $loc($3) "]" $loc($5) }
@@ -2679,7 +2637,7 @@ simple_expr:
       { let modexp =
           mkexp_attrs ~loc:($startpos($3), $endpos)
             (Pexp_pack ($6, Some ptyp)) $5 in
-        Pexp_struct_item(Str.open_ od, modexp) }
+        Pexp_open(od, modexp) }
   | mod_longident DOT
     LPAREN MODULE ext_attributes module_expr COLON error
       { unclosed "(" $loc($3) ")" $loc($8) }
@@ -2847,7 +2805,7 @@ fun_param_as_list:
           (fun x -> { pparam_loc = loc; pparam_desc = Pparam_newtype x })
           ty_params
       }
-  | simple_param_pattern
+  | labeled_simple_pattern
       { let a, b, c = $1 in
         [ { pparam_loc = make_loc $sloc; pparam_desc = Pparam_val (a, b, c) } ]
       }
@@ -3069,11 +3027,12 @@ simple_pattern_not_ident:
       { reloc_pat ~loc:$sloc $2 }
   | simple_delimited_pattern
       { $1 }
-  | LPAREN MODULE ext_attrs = ext_attributes name = mkrhs(module_name) RPAREN
-      { mkpat_attrs ~loc:$sloc (Ppat_unpack (name, None)) ext_attrs }
-  | LPAREN MODULE ext_attrs = ext_attributes name = mkrhs(module_name) COLON
-    ptyp = package_type_ RPAREN
-      { mkpat_attrs ~loc:$sloc (Ppat_unpack (name, Some ptyp)) ext_attrs }
+  | LPAREN MODULE ext_attributes mkrhs(module_name) RPAREN
+      { mkpat_attrs ~loc:$sloc (Ppat_unpack $4) $3 }
+  | LPAREN MODULE ext_attributes mkrhs(module_name) COLON package_type RPAREN
+      { mkpat_attrs ~loc:$sloc
+          (Ppat_constraint(mkpat ~loc:$loc($4) (Ppat_unpack $4), $6))
+          $3 }
   | mkpat(simple_pattern_not_ident_)
       { $1 }
 ;
@@ -3308,7 +3267,7 @@ generic_type_declaration(flag, kind):
   params = type_parameters
   id = mkrhs(LIDENT)
   kind_priv_manifest = kind
-  constraints = constraints
+  cstrs = constraints
   attrs2 = post_item_attributes
     {
       let (kind, priv, manifest) = kind_priv_manifest in
@@ -3316,7 +3275,7 @@ generic_type_declaration(flag, kind):
       let attrs = attrs1 @ attrs2 in
       let loc = make_loc $sloc in
       (flag, ext),
-      Type.mk id ~params ~constraints ~kind ~priv ?manifest ~attrs ~loc ~docs
+      Type.mk id ~params ~cstrs ~kind ~priv ?manifest ~attrs ~loc ~docs
     }
 ;
 %inline generic_and_type_declaration(kind):
@@ -3325,7 +3284,7 @@ generic_type_declaration(flag, kind):
   params = type_parameters
   id = mkrhs(LIDENT)
   kind_priv_manifest = kind
-  constraints = constraints
+  cstrs = constraints
   attrs2 = post_item_attributes
     {
       let (kind, priv, manifest) = kind_priv_manifest in
@@ -3333,8 +3292,7 @@ generic_type_declaration(flag, kind):
       let attrs = attrs1 @ attrs2 in
       let loc = make_loc $sloc in
       let text = symbol_text $symbolstartpos in
-      Type.mk
-        id ~params ~constraints ~kind ~priv ?manifest ~attrs ~loc ~docs ~text
+      Type.mk id ~params ~cstrs ~kind ~priv ?manifest ~attrs ~loc ~docs ~text
     }
 ;
 %inline constraints:
@@ -3361,8 +3319,6 @@ nonempty_type_kind:
     priv = inline_private_flag
     LBRACE ls = label_declarations RBRACE
       { (Ptype_record ls, priv, oty) }
-  | EXTERNAL name = raw_string
-      { (Ptype_external name, Public, None) }
 ;
 %inline type_synonym:
   ioption(terminated(core_type, EQUAL))
@@ -3457,7 +3413,9 @@ generic_constructor_declaration(opening):
     }
 ;
 str_exception_declaration:
-  EXCEPTION
+  sig_exception_declaration
+    { $1 }
+| EXCEPTION
   ext = ext
   attrs1 = attributes
   id = mkrhs(constr_ident)
@@ -3485,6 +3443,11 @@ sig_exception_declaration:
       Te.mk_exception ~attrs ~loc
         (Te.decl id ~vars ~args ?res ~attrs:(attrs1 @ attrs2) ~loc ~docs)
       , ext }
+;
+%inline let_exception_declaration:
+    mkrhs(constr_ident) generalized_constructor_arguments attributes
+      { let vars, args, res = $2 in
+        Te.decl $1 ~vars ~args ?res ~attrs:$3 ~loc:(make_loc $sloc) }
 ;
 generalized_constructor_arguments:
     /*empty*/                     { ([],Pcstr_tuple [],None) }
@@ -3587,7 +3550,7 @@ with_constraint:
           ($3,
            (Type.mk lident
               ~params:$2
-              ~constraints:$6
+              ~cstrs:$6
               ~manifest:$5
               ~priv:$4
               ~loc:(make_loc $sloc))) }
@@ -3637,10 +3600,6 @@ possibly_poly(X):
     { $1 }
 ;
 %inline poly_type:
-  mktyp(poly(core_type))
-    { $1 }
-;
-%inline possibly_poly_type:
   possibly_poly(core_type)
     { $1 }
 ;
@@ -3696,13 +3655,13 @@ function_type:
       { ty }
   | mktyp(
       label = arg_label
-      domain = extra_rhs(param_type)
+      domain = extra_rhs(tuple_type)
       MINUSGREATER
       codomain = function_type
         { Ptyp_arrow(label, domain, codomain) }
     )
     { $1 }
-  (* The next two cases are for labeled tuples - see comment on [tuple_type]
+  (* The next two cases are for labled tuples - see comment on [tuple_type]
      below.
 
      The first case is present just to resolve a shift/reduce conflict in a
@@ -3739,12 +3698,6 @@ function_type:
   | /* empty */
       { Nolabel }
 ;
-%inline param_type:
-  | LPAREN poly_type RPAREN
-    { reloc_typ ~loc:$sloc $2 }
-  | ty = tuple_type
-    { ty }
-;
 (* Tuple types include:
    - atomic types (see below);
    - proper tuple types:                  int * int * int list
@@ -3755,7 +3708,7 @@ function_type:
    label is not parsed as a proper_tuple_type, but rather as a case of
    function_type above.  This resolves ambiguities around [x:t1 * t2 -> t3]
    which must continue to parse as a function with one labeled argument even in
-   the presence of labeled tuples.
+   the presence of labled tuples.
 *)
 tuple_type:
   | ty = atomic_type
@@ -4171,6 +4124,9 @@ rec_flag:
 ;
 %inline no_nonrec_flag:
     /* empty */ { Recursive }
+/* BEGIN AVOID */
+  | NONREC      { not_expecting $loc "nonrec flag" }
+/* END AVOID */
 ;
 direction_flag:
     TO                                          { Upto }
@@ -4335,6 +4291,9 @@ ext:
 ;
 %inline no_ext:
   | /* empty */     { None }
+/* BEGIN AVOID */
+  | PERCENT attr_id { not_expecting $loc "extension" }
+/* END AVOID */
 ;
 %inline ext_attributes:
   ext attributes    { $1, $2 }
