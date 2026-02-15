@@ -53,7 +53,8 @@ let rec merge_reductions rs1 rs2 =
 
 type ('g, 'lrc, 'n) _graph = {
   initials: ('lrc, 'n index) indexmap;
-  states: ('n, ('g, 'lrc, 'n) state) vector;
+  nodes: ('n, ('g, 'lrc, 'n) state) vector;
+  all_edges: ('g, 'n) edge list;
 }
 
 type ('g, 'lrc) graph = Graph : ('g, 'lrc, 'n) _graph -> ('g, 'lrc) graph
@@ -64,8 +65,8 @@ let enumerate (type g lrc)
     (stacks : (g, lrc) Automata.stacks)
   =
   let open IndexBuffer in
-  let module States = Gen.Make() in
-  let states = States.get_generator () in
+  let module Nodes = Gen.Make() in
+  let nodes = Nodes.get_generator () in
   let module Map = Map.Make(struct
       type t = g terminal indexset * g pending_reductions
       let compare (s1,l1) (s2,l2) =
@@ -77,23 +78,24 @@ let enumerate (type g lrc)
   in
   let table = Vector.make stacks.domain Map.empty in
   let todo = ref [] in
+  let create_state lrc (failed, pending)  =
+    let successors = [] and predecessors = [] in
+    let ix = Gen.add nodes {lrc; failed; pending; successors; predecessors} in
+    push todo ix;
+    ix
+  in
   let visit lrc key =
     let map = table.:(lrc) in
     match Map.find_opt key map with
     | Some result -> result
     | None ->
-      let failed, pending = key in
-      let index = Gen.add states {
-        lrc; failed; pending;
-        successors = [];
-        predecessors = [];
-      } in
-      push todo index;
+      let index = create_state lrc key in
       table.:(lrc) <- Map.add key index map;
       index
   in
+  let all_edges = ref [] in
   let populate source =
-    let state = Gen.get states source in
+    let state = Gen.get nodes source in
     assert (List.is_empty state.successors);
     match state.pending with
     | [] -> ()
@@ -128,21 +130,22 @@ let enumerate (type g lrc)
       explore nts;
       let pending = List.fold_left merge_reductions [] !pending in
       let target = visit lrc (!failed, pending) in
-      let state' = Gen.get states target in
+      let state' = Gen.get nodes target in
       let reached = if List.is_empty pending then !maximal else IndexSet.empty in
       let edge = {source; target; reached} in
+      push all_edges edge;
       state.successors <- edge :: state.successors;
       state'.predecessors <- edge :: state'.predecessors
   in
   let initials =
     IndexMap.inflate begin fun lrc ->
       let rc = rcs.:(stacks.label lrc) in
-      visit lrc (rc.failing, rc.all_reductions)
+      create_state lrc (rc.failing, rc.all_reductions)
     end stacks.tops
   in
   let counter = ref 0 in
   fixpoint ~counter ~propagate:populate todo;
-  let states = Gen.freeze states in
+  let nodes = Gen.freeze nodes in
   let reachable = ref IndexSet.empty in
   let initial = ref IndexSet.empty in
   Vector.iter begin fun state ->
@@ -163,13 +166,13 @@ let enumerate (type g lrc)
         reachable := IndexSet.union edge.reached !reachable
       end predecessors
     | (_ :: _), _ -> ()
-  end states;
-  stopwatch 1 "deterministic enumeration: %d steps, reached %d states, \
+  end nodes;
+  stopwatch 1 "deterministic enumeration: %d steps, reached %d nodes, \
                %d reduction patterns, %d initial patterns, \
                %d initials without reductions"
-    !counter (Vector.length_as_int states)
+    !counter (Vector.length_as_int nodes)
     (IndexSet.cardinal !reachable) (IndexSet.cardinal !initial)
-    (IndexMap.cardinal (IndexMap.filter (fun _ ix -> List.is_empty states.:(ix).successors) initials))
+    (IndexMap.cardinal (IndexMap.filter (fun _ ix -> List.is_empty nodes.:(ix).successors) initials))
   ;
   initial := IndexSet.diff !initial !reachable;
   if false then (
@@ -182,4 +185,87 @@ let enumerate (type g lrc)
       Printf.eprintf "| [_* /%s]\n  { ... }\n" (String.concat "\n      /" items)
     end !reachable;
   );
-  Graph {initials; states}
+  let all_edges = List.rev !all_edges in
+  Graph {initials; nodes; all_edges}
+
+let string_of_items_for_filter g lr0 =
+  let decompose item =
+    let prod, pos = Item.desc g item in
+    let rhs = Production.rhs g prod in
+    (Production.lhs g prod,
+     Array.sub rhs 0 pos,
+     Array.sub rhs pos (Array.length rhs - pos))
+  in
+  let lines = ref [] in
+  let append item =
+    let lhs, pre, post = decompose item in
+    match pre with
+    (* Optimization 1: skip items of the form symbol: symbol . ... *)
+    | [|first|] when Index.equal (Symbol.inj_n g lhs) first -> ()
+    | _ ->
+      (* Optimization 2: group items of the form
+         sym: α . x . β₁, sym: α . x.β₂, ...
+         as sym: α . x _* *)
+      match !lines with
+      | (lhs', pre', post') :: rest
+        when Index.equal lhs lhs' && array_equal Index.equal pre pre' ->
+        begin match post', post with
+          | `Suffix [||], _ | _, [||] ->
+            push lines (lhs, pre, `Suffix post)
+          | `Suffix post', post when Index.equal post'.(0) post.(0) ->
+            lines := (lhs', pre', `Wild post.(0)) :: rest
+          | `Wild post0, post when Index.equal post0 post.(0) ->
+            ()
+          | _ ->
+            push lines (lhs, pre, `Suffix post)
+        end
+      | _ -> push lines (lhs, pre, `Suffix post)
+  in
+  IndexSet.iter append (Lr0.items g lr0);
+  let print_item (lhs, pre, post) =
+    let syms syms = Array.to_list (Array.map (Symbol.to_string g) syms) in
+    String.concat " " @@
+    (Nonterminal.to_string g lhs ^ ":")
+    :: syms pre
+    @ "." :: match post with
+    | `Suffix post -> syms post
+    | `Wild sym -> [Symbol.to_string g sym; "_*"]
+  in
+  List.rev_map print_item !lines
+
+let print_pattern g lr0 =
+  let first, other, suffix =
+    match Lr0.incoming g lr0 with
+    | Some sym when Symbol.is_nonterminal g sym ->
+      "| [_* /",
+      "      /",
+      "]"
+    | Some _ | None ->
+      "| /",
+      "  /",
+      ""
+  in
+  let rec prepare pad = function
+    | [] -> assert false
+    | [x] -> [pad ^ x ^ suffix]
+    | x :: xs -> (pad ^ x) :: prepare other xs
+  in
+  prepare first (string_of_items_for_filter g lr0)
+
+let maximal (type g) (g : g grammar) gr =
+  let regular = Terminal.regular g in
+  let lr0_covered = Vector.make (Lr0.cardinal g) IndexSet.empty in
+  let lr0_edges = Vector.make (Lr0.cardinal g) [] in
+  List.iter begin fun edge ->
+    let node = gr.nodes.:(edge.target) in
+    if List.is_empty node.successors then
+      let failed = IndexSet.inter node.failed regular in
+      IndexSet.iter begin fun lr0 ->
+        let covered = lr0_covered.:(lr0) in
+        if not (IndexSet.subset failed covered) then begin
+          lr0_covered.:(lr0) <- IndexSet.union failed covered;
+          lr0_edges.@(lr0) <- List.cons (edge, failed)
+        end
+      end edge.reached
+  end gr.all_edges;
+  lr0_edges

@@ -571,95 +571,78 @@ let enumerate_command () =
   in
   let subset = lrc_from_entrypoints initial_states in
   let stacks = make_stacks subset ~error_only:true in
-  let _ = Denumeration.enumerate grammar !!red_closure stacks in
-  if false then
-  let regular_terminals = Terminal.regular grammar in
-  let initial_enum =
-    IndexSet.rev_map_elements stacks.tops
-      (fun lrc -> Enumeration.kernel lrc regular_terminals, lrc)
+  let Denumeration.Graph graph =
+    Denumeration.enumerate grammar !!red_closure stacks
   in
-  let Enumeration.Graph graph =
-    Enumeration.make_graph
-      grammar
-      !!red_closure
-      stacks
-      initial_enum
-  in
+  let by_lr0 = Denumeration.maximal grammar graph in
   let cases = ref 0 in
-  let report_sentences sentences =
-    let by_lr0 = Vector.make (Lr0.cardinal grammar) [] in
-    Seq.iter begin fun sentence ->
-      by_lr0.@(sentence.Enumeration.pattern) <- List.cons sentence
-    end sentences;
-    Vector.iteri begin fun lr0 -> function
-      | [] -> ()
-      | sentences ->
-        incr cases;
-        Printf.printf
-          "## Pattern %d\n\
-           \n\
-           ```\n" !cases;
-        List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0);
-        Printf.printf "```\n\n";
-        List.iteri begin fun i (sentence : _ Enumeration.failing_sentence) ->
-          Printf.printf
-            "### Sample %d\n\
-             \n"
-            (i + 1);
-          let lrc = graph.ker.:(sentence.first).lrc in
-          let suffix =
-            List.fold_right
-              (fun edge acc -> edge.Enumeration.path @ acc)
-              sentence.edges
-              [sentence.entry]
-          in
-          let lrcs = List.rev_append (subset.some_prefix lrc) suffix in
-          let lr1s = List.map stacks.label lrcs in
-          let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
-          let ppt t =
-            let s = Terminal.to_string grammar t in
-            match pretty s with
-            | s -> s
-            | exception Not_found -> s
-          in
-          Printf.printf
-            "Sentence:\n\
-             ```\n\
-             %s\n\
-             ```\n"
-            (string_concat_map " " ppt terms);
-          Printf.printf
-            "Stack:\n\
-             ```\n\
-             %s\n\
-             ```\n"
-            (string_concat_map " " (Lr1.symbol_to_string grammar) lr1s);
-          Printf.printf
-            "Rejected when looking ahead at any of the terminals in:\n\
-             ```\n\
-             %s\n\
-             ```\n\
-             \n"
-            (String.concat " "
-               (List.rev_map ppt
-                  (IndexSet.elements
-                     (IndexSet.inter regular_terminals sentence.failing))));
-          if not (list_is_empty sentence.edges) then (
-            Printf.printf
-              "Also covered by these intermediate patterns:\n\
-               ```\n";
-            List.iter (fun edge ->
-                let node = edge.Enumeration.source in
-                let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
-                List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0)
-              ) sentence.edges;
-            Printf.printf "```\n"
-          );
-          Printf.printf "\n"
-        end sentences
-    end by_lr0;
+  let report_case lr0 samples =
+    incr cases;
+    Printf.printf
+      "## Pattern %d\n\
+       \n\
+       ```\n" !cases;
+    List.iter print_endline (Denumeration.print_pattern grammar lr0);
+    Printf.printf "```\n\n";
+    List.iteri begin fun i (lrcs, failing) ->
+      Printf.printf "### Sample %d\n\n" (i + 1);
+      let lr1s = List.map stacks.label lrcs in
+      let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
+      let ppt t =
+        let s = Terminal.to_string grammar t in
+        match pretty s with
+        | s -> s
+        | exception Not_found -> s
+      in
+      Printf.printf
+        "Sentence:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (string_concat_map " " ppt terms);
+      Printf.printf
+        "Stack:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (string_concat_map " " (Lr1.symbol_to_string grammar) lr1s);
+      Printf.printf
+        "Rejected when looking ahead at any of the terminals in:\n\
+         ```\n\
+         %s\n\
+         ```\n"
+        (String.concat " " (List.rev_map ppt (IndexSet.elements failing)));
+      Printf.printf "\n"
+    end samples
   in
-  let sentences = Enumeration.cover_with_maximal_patterns
+  let rec node_suffix node =
+    let node = graph.nodes.:(node) in
+    match list_last node.predecessors with
+    | None -> [node.lrc]
+    | Some edge -> node.lrc :: node_suffix edge.source
+  in
+  let rcs = !!red_closure in
+  let regular = Terminal.regular grammar in
+  IndexMap.iter begin fun _ index ->
+    let node = graph.nodes.:(index) in
+    if List.is_empty node.successors then
+      let lr1 = stacks.label node.lrc in
+      let failing = IndexSet.inter rcs.:(lr1).failing regular in
+      if IndexSet.is_not_empty failing then
+        report_case (Lr1.to_lr0 grammar lr1) [[node.lrc], failing]
+  end graph.initials;
+  Vector.iteri begin fun lr0 edges ->
+    if not (List.is_empty edges) then
+      report_case lr0 (
+        List.map begin fun (edge, failing) ->
+          let lrc = graph.nodes.:(edge.Denumeration.target).lrc in
+          let lrcs = List.rev_append (subset.some_prefix lrc) (lrc :: node_suffix edge.source) in
+          (lrcs, failing)
+        end edges
+      )
+  end by_lr0
+
+  (*let sentences = Enumeration.cover_with_maximal_patterns
       grammar !!red_closure stacks graph
   in
   Printf.printf "# Maximal patterns\n\n";
@@ -668,7 +651,7 @@ let enumerate_command () =
     let cover = Enumeration.cover_all grammar !!red_closure stacks graph in
     List.iter (Enumeration.mark_sentence_covered grammar stacks graph cover) sentences;
     Printf.printf "# Exhaustive coverage\n\n";
-    report_sentences (Enumeration.to_seq cover)
+    report_sentences (Enumeration.to_seq cover)*)
 
 (* Command import *)
 

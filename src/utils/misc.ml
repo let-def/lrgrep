@@ -636,3 +636,8 @@ let print_dym f oc = function
     in
     Printf.fprintf oc " (did you mean %s%a?)" (f x)
       print_list (list_take 4 xs)
+
+let rec list_last = function
+  | [] -> None
+  | [x] | [_; x] | [_; _; x] -> Some x
+  | _ :: _ :: _ :: xs -> list_last xs

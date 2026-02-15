@@ -51,7 +51,7 @@ let coverage (type g r st tr lrc en)
   let lrc_at pos =
     match Sum.prj stacks.domain pos with
     | L lrc -> lrc
-    | R enu -> enum.states.:(enu).lrc
+    | R enu -> enum.nodes.:(enu).lrc
   in
   let process_transition filter predecessor live tr candidates =
     let mac = machine.target.:(tr) in
@@ -95,7 +95,7 @@ let coverage (type g r st tr lrc en)
     match Sum.prj stacks.domain cst.pos with
     | L lrc -> propagate_lrcs cst lrc
     | R enu ->
-      let enu = enum.states.:(enu) in
+      let enu = enum.nodes.:(enu) in
       match enu.successors with
       | [] -> propagate_lrcs cst enu.lrc
       | edges ->
