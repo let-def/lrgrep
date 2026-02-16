@@ -2410,37 +2410,39 @@ rule error_messages = parse error
 | /str_exception_declaration: EXCEPTION ext list(attribute) constr_ident EQUAL . constr_longident list(attribute) list(post_item_attribute)
   { "Expected constructor identifier after `=`" }
 
+(* CLEANUP ABOVE *)
+
 | /constr_extra_nonprefix_ident: LPAREN . RPAREN
   /constr_longident: LPAREN . COLONCOLON RPAREN
-  { "Expected constructor or operator after `(`" }
+  { "Expected `)` or `::)` after `(`" }
 
 | /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
   /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
-  { "Expected identifier after `.`" }
+  { "Expected identifier or `(::)` after `.`" }
 
 | /constr_longident: mod_longident DOT LPAREN . COLONCOLON RPAREN
-  { "Expected `::` after `(`" }
+  { "Expected `::)` after `(`" }
 
 | [_* /open_description: OPEN BANG ext list(attribute) . mod_ext_longident list(post_item_attribute)]
-  { "Expected module expression after `open !`" }
+  { "Expected module path after `open !`" }
 
 | [_* /open_description: OPEN ext list(attribute) . mod_ext_longident list(post_item_attribute)]
-  { "Expected module expression after `open`" }
+  { "Expected module path after `open`" }
 
 | [_* /module_type_declaration: MODULE TYPE ext list(attribute) . ident option(preceded(EQUAL,module_type)) list(post_item_attribute)
       /module_type_subst: MODULE TYPE ext list(attribute) . ident COLONEQUAL module_type list(post_item_attribute)]
-  { "Expected identifier after `module type`" }
+  { "Expected module type name after `module type`" }
 
 | /module_type_subst: MODULE TYPE ext list(attribute) ident COLONEQUAL . module_type list(post_item_attribute)
-  { "Expected module type after `:=`" }
+  { "Expected module type after `:=` to substitute module type" }
 
 | [_* /module_subst: MODULE ext list(attribute) . UIDENT COLONEQUAL mod_ext_longident list(post_item_attribute)
       /signature_item: MODULE ext list(attribute) . module_name _*
       /signature_item: MODULE ext list(attribute) . REC module_name COLON module_type list(post_item_attribute) list(and_module_declaration)]
-  { "Expected module name after `module`" }
+  { "Expected module name or `rec` after `module`" }
 
 | /module_subst: MODULE ext list(attribute) UIDENT COLONEQUAL . mod_ext_longident list(post_item_attribute)
-  { "Expected module expression after `:=`" }
+  { "Expected module path after `:=` to substitute module" }
 
 | /signature_item: MODULE ext list(attribute) REC . module_name COLON module_type list(post_item_attribute) list(and_module_declaration)
   { "Expected module name after `module rec`" }
@@ -2449,10 +2451,10 @@ rule error_messages = parse error
   { "Expected `:` after module name" }
 
 | /signature_item: MODULE ext list(attribute) REC module_name COLON . module_type list(post_item_attribute) list(and_module_declaration)
-  { "Expected module type after `:`" }
+  { "Expected module type after `:` to declare recursive module" }
 
 | [_* /list(and_module_declaration): AND list(attribute) . module_name COLON module_type list(post_item_attribute) list(and_module_declaration)]
-  { "Expected module name after `and`" }
+  { "Expected another module name after `and`" }
 
 | [_* /list(and_module_declaration): AND list(attribute) module_name . COLON module_type list(post_item_attribute) list(and_module_declaration)]
   { "Expected `:` after module name" }
@@ -2462,49 +2464,49 @@ rule error_messages = parse error
 
 | [_* /signature_item: MODULE ext list(attribute) module_name . module_declaration_body list(post_item_attribute)
       /signature_item: MODULE ext list(attribute) module_name . EQUAL mod_longident list(post_item_attribute)]
-  { "Expected module declaration body or `=` after module name" }
+  { "Expected `:`, a functor argument, or `=` after module name" }
 
 | /signature_item: MODULE ext list(attribute) module_name EQUAL . mod_longident list(post_item_attribute)
-  { "Expected module expression after `=`" }
+  { "Expected module path after `=` to define a module alias" }
 
 | /module_declaration_body: COLON . module_type
-  { "Expected module type after `:`" }
+  { "Expected module type after `:` in module declaration" }
 
 | [_* /module_declaration_body: functor_arg . module_declaration_body]
-  { "Expected module declaration body after functor argument" }
+  { "Expected `:` or another functor argument in module declaration" }
 
 | [_* /signature_item: INCLUDE ext list(attribute) . module_type list(post_item_attribute)]
   { "Expected module type after `include`" }
 
 | [_* /sig_exception_declaration: EXCEPTION ext list(attribute) . constr_ident generalized_constructor_arguments list(attribute) list(post_item_attribute)]
-  { "Expected constructor after `exception`" }
+  { "Expected exception name after `exception`" }
 
 | [_* /formal_class_parameters: LBRACKET reversed_separated_nonempty_llist(COMMA,type_parameter) . RBRACKET]
-  { "Expected closing `]` after class parameters" }
+  { "Expected `,` or a closing `]` after class parameters" }
 
 | [_* /class_type_declarations: CLASS TYPE ext list(attribute) virtual_flag formal_class_parameters . LIDENT EQUAL class_signature list(post_item_attribute) list(and_class_type_declaration)]
-  { "Expected identifier after class parameters" }
+  { "Expected class type name in class type declaration" }
 
 | /class_type_declarations: CLASS TYPE ext list(attribute) virtual_flag formal_class_parameters LIDENT . EQUAL class_signature list(post_item_attribute) list(and_class_type_declaration)
-  { "Expected `=` after identifier in class type declaration" }
+  { "Expected `=` after class type name in class type declaration" }
 
 | /class_type_declarations: CLASS TYPE ext list(attribute) virtual_flag formal_class_parameters LIDENT EQUAL . class_signature list(post_item_attribute) list(and_class_type_declaration)
-  { "Expected class signature after `=`" }
+  { "Expected class type after `=`" }
 
 | /class_self_type: LPAREN . core_type RPAREN
   { "Expected type after `(`" }
 
 | [_* /class_self_type: LPAREN core_type . RPAREN]
-  { "Expected closing `)` after type in class self type" }
+  { "Expected closing `)` after class self type" }
 
 | [_* /class_sig_field: VAL list(attribute) mutable_virtual_flags . LIDENT COLON core_type list(post_item_attribute)]
-  { "Expected field name after `val`" }
+  { "Expected value name after `val`" }
 
 | /class_sig_field: VAL list(attribute) mutable_virtual_flags LIDENT . COLON core_type list(post_item_attribute)
-  { "Expected `:` after field name" }
+  { "Expected `:` after value name" }
 
 | /class_sig_field: VAL list(attribute) mutable_virtual_flags LIDENT COLON . core_type list(post_item_attribute)
-  { "Expected type after `:` in class signature field" }
+  { "Expected type after `:` in class type value" }
 
 | [_* /class_sig_field: METHOD list(attribute) private_virtual_flags . LIDENT COLON possibly_poly(core_type) list(post_item_attribute)]
   { "Expected method name after `method`" }
@@ -2513,20 +2515,13 @@ rule error_messages = parse error
   { "Expected `:` after method name" }
 
 | /class_sig_field: METHOD list(attribute) private_virtual_flags LIDENT COLON . possibly_poly(core_type) list(post_item_attribute)
-  { "Expected type after `:` in class signature method" }
+  { "Expected type after `:` in class type method" }
 
 | [_* /class_sig_field: INHERIT list(attribute) . class_signature list(post_item_attribute)]
   { "Expected class signature after `inherit`" }
 
 | /class_signature: LET . OPEN _*
   { "Expected `open` after `let` in class signature" }
-
-| [_* /class_signature: LET OPEN BANG list(attribute) . mod_longident IN class_signature]
-  { "Expected module after `let open !`" }
-
-| [_* /class_signature: LET OPEN BANG list(attribute) mod_longident . IN class_signature
-      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
-  { "Expected `in` after module expression" }
 
 | /class_signature: LET OPEN BANG list(attribute) mod_longident IN . class_signature
   { "Expected class signature after `in`" }
@@ -2535,59 +2530,64 @@ rule error_messages = parse error
   { "Expected type list after `[`" }
 
 | [_* /class_signature: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) . RBRACKET clty_longident]
-  { "Expected closing `]` after type list" }
+  { "Expected `,` or closing `]` in type list" }
 
 | /class_signature: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) RBRACKET . clty_longident
-  { "Expected class type after `[...]`" }
+  { "Expected class path after class type parameters" }
 
 | /reversed_separated_nonempty_llist(COMMA,core_type): reversed_separated_nonempty_llist(COMMA,core_type) COMMA . core_type
-  { "Expected type after `,` in type list" }
+  { "Expected another type after `,` in type list" }
 
 | [_* /class_signature: LET OPEN list(attribute) . mod_longident IN class_signature]
-  { "Expected module after `let open`" }
+  { "Expected module path after `let open`" }
+
+| [_* /class_signature: LET OPEN BANG list(attribute) . mod_longident IN class_signature]
+  { "Expected module path after `let open !`" }
 
 | [_* /class_signature: LET OPEN list(attribute) mod_longident . IN class_signature
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
-  { "Expected `in` after module expression" }
+| [_* /class_signature: LET OPEN BANG list(attribute) mod_longident . IN class_signature
+      /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
+  { "Expected `.` or `in` after module path in `let open`" }
 
 | /class_signature: LET OPEN list(attribute) mod_longident IN . class_signature
   { "Expected class signature after `in`" }
 
 | [_* /class_sig_field: CONSTRAINT list(attribute) . constrain_field list(post_item_attribute)]
-  { "Expected constraint after `constraint`" }
+  { "Expected type after `constraint`" }
 
 | [_* /constrain_field: core_type . EQUAL core_type]
-  { "Expected `=` after type in constraint" }
+  { "Expected `=` after type in type constraint" }
 
 | /constrain_field: core_type EQUAL . core_type
-  { "Expected type after `=` in constraint" }
+  { "Expected another type after `=` in type constraint" }
 
 | [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
-  { "Expected closing `end` after object signature" }
+  { "Expected a class type field or a closing `end` in class type body" }
 
 | [_* /list(and_class_type_declaration): AND list(attribute) virtual_flag formal_class_parameters . LIDENT EQUAL class_signature list(post_item_attribute) list(and_class_type_declaration)]
-  { "Expected identifier after class parameters" }
+  { "Expected class type name in class type declarations" }
 
 | /list(and_class_type_declaration): AND list(attribute) virtual_flag formal_class_parameters LIDENT . EQUAL class_signature list(post_item_attribute) list(and_class_type_declaration)
-  { "Expected `=` after identifier in class type declaration" }
+  { "Expected `=` after class type name in class type declarations" }
 
 | /list(and_class_type_declaration): AND list(attribute) virtual_flag formal_class_parameters LIDENT EQUAL . class_signature list(post_item_attribute) list(and_class_type_declaration)
   { "Expected class signature after `=`" }
 
 | [_* /signature_item: CLASS ext list(attribute) virtual_flag formal_class_parameters . LIDENT COLON class_type list(post_item_attribute) list(and_class_description)]
-  { "Expected identifier after class parameters" }
+  { "Expected class name in class declaration" }
 
 | /signature_item: CLASS ext list(attribute) virtual_flag formal_class_parameters LIDENT . COLON class_type list(post_item_attribute) list(and_class_description)
-  { "Expected `:` after identifier in class declaration" }
+  { "Expected `:` after class name in class declaration" }
 
 | /signature_item: CLASS ext list(attribute) virtual_flag formal_class_parameters LIDENT COLON . class_type list(post_item_attribute) list(and_class_description)
   { "Expected class type after `:`" }
 
 | /class_type: LIDENT COLON . tuple_type MINUSGREATER class_type
-  { "Expected type after `:` in class type" }
+  { "Expected type after label in class type" }
 
 | [_* /class_type: LIDENT COLON tuple_type . MINUSGREATER class_type]
-  { "Expected `->` after type" }
+  { "Expected `->` after label type" }
 
 | /class_type: LIDENT COLON tuple_type MINUSGREATER . class_type
   { "Expected class type after `->`" }
@@ -2596,7 +2596,7 @@ rule error_messages = parse error
   /delimited_type_supporting_local_open: LBRACKET . tag_field RBRACKET
   /delimited_type_supporting_local_open: LBRACKET . BAR reversed_separated_nonempty_llist(BAR,row_field) RBRACKET
   /delimited_type_supporting_local_open: LBRACKET . row_field BAR reversed_separated_nonempty_llist(BAR,row_field) RBRACKET
-  { "Expected type, tag field, or row field after `[`" }
+  { "Expected class type parameters `[`" }
 
 | [_* /class_type: tuple_type . MINUSGREATER class_type]
   { "Expected `->` after type" }
@@ -2605,26 +2605,28 @@ rule error_messages = parse error
   { "Expected class type after `->`" }
 
 | [_* /class_type: optlabel . tuple_type MINUSGREATER class_type]
-  { "Expected parameter after optional label" }
+  { "Expected parameter type after label" }
 
 | [_* /class_type: optlabel tuple_type . MINUSGREATER class_type]
-  { "Expected `->` after parameter" }
+  { "Expected `->` after label type" }
 
 | /class_type: optlabel tuple_type MINUSGREATER . class_type
   { "Expected class type after `->`" }
 
 | [_* /list(and_class_description): AND list(attribute) virtual_flag formal_class_parameters . LIDENT COLON class_type list(post_item_attribute) list(and_class_description)]
-  { "Expected identifier after class parameters" }
+  { "Expected another class identifier in class descriptions" }
 
 | /list(and_class_description): AND list(attribute) virtual_flag formal_class_parameters LIDENT . COLON class_type list(post_item_attribute) list(and_class_description)
-  { "Expected `:` after identifier in class description" }
+  { "Expected `:` after class identifier in class descriptions" }
 
 | /list(and_class_description): AND list(attribute) virtual_flag formal_class_parameters LIDENT COLON . class_type list(post_item_attribute) list(and_class_description)
   { "Expected class type after `:`" }
 
-| [_* /list(generic_and_type_declaration(type_kind)): AND list(attribute) type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute) list(generic_and_type_declaration(type_kind))]
-  { "Expected type identifier after type parameters" }
+| [_* /list(generic_and_type_declaration(type_kind)): AND list(attribute) . type_parameters LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute) list(generic_and_type_declaration(type_kind))]
+| [_* /list(generic_and_type_declaration(type_subst_kind)): AND list(attribute) . type_parameters LIDENT COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute) list(generic_and_type_declaration(type_subst_kind))]
+  { "Expected type identifier after `and`" }
 
+| [_* /list(generic_and_type_declaration(type_kind)): AND list(attribute) type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute) list(generic_and_type_declaration(type_kind))]
 | [_* /list(generic_and_type_declaration(type_subst_kind)): AND list(attribute) type_parameters . LIDENT COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute) list(generic_and_type_declaration(type_subst_kind))]
   { "Expected type identifier after type parameters" }
 
@@ -2638,13 +2640,10 @@ rule error_messages = parse error
   /delimited_type_supporting_local_open: LBRACKET . tag_field RBRACKET
   /delimited_type_supporting_local_open: LBRACKET . BAR reversed_separated_nonempty_llist(BAR,row_field) RBRACKET
   /delimited_type_supporting_local_open: LBRACKET . row_field BAR reversed_separated_nonempty_llist(BAR,row_field) RBRACKET
-  { "Expected tag field or row field after `[`" }
-
-| [_* /nonempty_type_kind: LBRACE label_declarations . RBRACE]
-  { "Expected closing `}` after record type" }
+  { "Expected row field or `]` after `[`" }
 
 | /generic_constructor_declaration(BAR): BAR . constr_ident generalized_constructor_arguments list(attribute)
-  { "Expected constructor after `|`" }
+  { "Expected constructor name after `|`" }
 
 | /nonempty_type_kind: core_type EQUAL . constructor_declarations
   /nonempty_type_kind: core_type EQUAL . PRIVATE constructor_declarations
@@ -2652,102 +2651,60 @@ rule error_messages = parse error
   /nonempty_type_kind: core_type EQUAL . PRIVATE DOTDOT
   /nonempty_type_kind: core_type EQUAL . LBRACE label_declarations RBRACE
   /nonempty_type_kind: core_type EQUAL . PRIVATE LBRACE label_declarations RBRACE
-  { "Expected constructor declaration, type definition, or record after `=`" }
+  { "Expected constructor declaration, `{`, `private`, or `..` after `=`" }
 
 | /nonempty_type_kind: core_type EQUAL PRIVATE . constructor_declarations
   /nonempty_type_kind: core_type EQUAL PRIVATE . DOTDOT
   /nonempty_type_kind: core_type EQUAL PRIVATE . LBRACE label_declarations RBRACE
-  { "Expected constructor declaration or record after `private`" }
+  { "Expected constructor declaration, `{`, or `..` after `private`" }
 
+| [_* /nonempty_type_kind: LBRACE label_declarations . RBRACE]
 | [_* /nonempty_type_kind: core_type EQUAL PRIVATE LBRACE label_declarations . RBRACE]
-  { "Expected closing `}` after private record type" }
-
 | [_* /nonempty_type_kind: core_type EQUAL LBRACE label_declarations . RBRACE]
-  { "Expected closing `}` after record type" }
+  { "Expected closing `}` after record fields" }
 
 | [_* /structure_item: CLASS ext list(attribute) virtual_flag formal_class_parameters . LIDENT class_fun_binding list(post_item_attribute) list(and_class_declaration)]
-  { "Expected identifier after class parameters" }
+  { "Expected class name for class definition" }
 
 | /structure_item: CLASS ext list(attribute) virtual_flag formal_class_parameters LIDENT . class_fun_binding list(post_item_attribute) list(and_class_declaration)
-  { "Expected function binding after identifier in class definition" }
+  { "Expected `=`, `:` or binding pattern after class name in class definition" }
 
 | /class_fun_binding: EQUAL . class_expr
   { "Expected class expression after `=`" }
 
-| [_* /value: BANG list(attribute) mutable_flag . LIDENT _*]
-  { "Expected field name after `val !`" }
-
-| /value: BANG list(attribute) mutable_flag LIDENT . EQUAL seq_expr
-  /value: BANG list(attribute) mutable_flag LIDENT . type_constraint EQUAL seq_expr
-  { "Expected `=` after field name" }
-
-| /value: BANG list(attribute) mutable_flag LIDENT EQUAL . seq_expr
-  { "Expected expression after `=`" }
-
-| [_* /value: BANG list(attribute) mutable_flag LIDENT type_constraint . EQUAL seq_expr]
-  { "Expected `=` after type constraint" }
-
-| /value: BANG list(attribute) mutable_flag LIDENT type_constraint EQUAL . seq_expr
-  { "Expected expression after `=`" }
-
 | [_* /value: list(attribute) virtual_with_mutable_flag . LIDENT COLON core_type]
-  { "Expected field name after `val`" }
+  { "Expected value name after `val virtual`" }
 
 | /value: list(attribute) virtual_with_mutable_flag LIDENT . COLON core_type
-  { "Expected `:` after field name" }
+  { "Expected `:` after virtual value name" }
 
 | /value: list(attribute) virtual_with_mutable_flag LIDENT COLON . core_type
-  { "Expected type after `:` in value field" }
+  { "Expected type after `:` in value definition" }
 
 | [_* /value: list(attribute) mutable_flag . LIDENT _*]
-  { "Expected field name after `val`" }
+  { "Expected value name after `val`" }
+
+| [_* /value: BANG list(attribute) mutable_flag . LIDENT _*]
+  { "Expected value name after `val !`" }
 
 | /value: list(attribute) mutable_flag LIDENT . EQUAL seq_expr
   /value: list(attribute) mutable_flag LIDENT . type_constraint EQUAL seq_expr
-  { "Expected `=` after field name" }
-
-| /value: list(attribute) mutable_flag LIDENT EQUAL . seq_expr
-  { "Expected expression after `=`" }
+| /value: BANG list(attribute) mutable_flag LIDENT . EQUAL seq_expr
+  /value: BANG list(attribute) mutable_flag LIDENT . type_constraint EQUAL seq_expr
+  { "Expected `=` or `:` after field name" }
 
 | [_* /value: list(attribute) mutable_flag LIDENT type_constraint . EQUAL seq_expr]
-  { "Expected `=` after type constraint" }
+| [_* /value: BANG list(attribute) mutable_flag LIDENT type_constraint . EQUAL seq_expr]
+  { "Expected `=` after type constraint in value definition" }
 
+| /value: list(attribute) mutable_flag LIDENT EQUAL . seq_expr
 | /value: list(attribute) mutable_flag LIDENT type_constraint EQUAL . seq_expr
-  { "Expected expression after `=`" }
+| /value: BANG list(attribute) mutable_flag LIDENT EQUAL . seq_expr
+| /value: BANG list(attribute) mutable_flag LIDENT type_constraint EQUAL . seq_expr
+  { "Expected expression after `=` to define value" }
 
 | [_* /method_: BANG list(attribute) private_flag . LIDENT _*]
   { "Expected method name after `method !`" }
-
-| /method_: BANG list(attribute) private_flag LIDENT . strict_binding
-  /method_: BANG list(attribute) private_flag LIDENT . COLON _*
-  { "Expected `=` or `:` after method name" }
-
-| /method_: BANG list(attribute) private_flag LIDENT COLON . possibly_poly(core_type) EQUAL seq_expr
-  /method_: BANG list(attribute) private_flag LIDENT COLON . TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
-  { "Expected type after `:` in method" }
-
-| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE . nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
-  { "Expected type parameter after `type`" }
-
-| [_* /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) . DOT core_type EQUAL seq_expr]
-  { "Expected `.` after type parameters" }
-
-| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
-  { "Expected type after `.` in method definition" }
-
-| [_* /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type . EQUAL seq_expr]
-  { "Expected `=` after type in method definition" }
-
-| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL . seq_expr
-  { "Expected expression after `=` to define method" }
-
-| [_* /method_: BANG list(attribute) private_flag LIDENT COLON possibly_poly(core_type) . EQUAL seq_expr]
-  { "Expected `=` after type in method definition" }
-
-| /method_: BANG list(attribute) private_flag LIDENT COLON possibly_poly(core_type) EQUAL . seq_expr
-  { "Expected expression after `=` to define method" }
-
-(* CLEANUP ABOVE *)
 
 | [_* /method_: list(attribute) virtual_with_private_flag . LIDENT COLON possibly_poly(core_type)]
   { "Expected method name after `method`" }
@@ -2763,27 +2720,38 @@ rule error_messages = parse error
 
 | /method_: list(attribute) private_flag LIDENT . strict_binding
   /method_: list(attribute) private_flag LIDENT . COLON _*
+| /method_: BANG list(attribute) private_flag LIDENT . strict_binding
+  /method_: BANG list(attribute) private_flag LIDENT . COLON _*
   { "Expected `=`, parameter, or `:` after method name" }
 
 | /method_: list(attribute) private_flag LIDENT COLON . possibly_poly(core_type) EQUAL seq_expr
   /method_: list(attribute) private_flag LIDENT COLON . TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
+| /method_: BANG list(attribute) private_flag LIDENT COLON . possibly_poly(core_type) EQUAL seq_expr
+  /method_: BANG list(attribute) private_flag LIDENT COLON . TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
   { "Expected type after `:` in method" }
 
 | /method_: list(attribute) private_flag LIDENT COLON TYPE . nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
+| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE . nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL seq_expr
   { "Expected type name after `type`" }
 
 | [_* /method_: list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) . DOT core_type EQUAL seq_expr]
+| [_* /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) . DOT core_type EQUAL seq_expr]
   { "Expected `.` after polymorphic types" }
 
 | /method_: list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
+| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
   { "Expected type after `.`" }
 
 | [_* /method_: list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type . EQUAL seq_expr]
 | [_* /method_: list(attribute) private_flag LIDENT COLON possibly_poly(core_type) . EQUAL seq_expr]
+| [_* /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type . EQUAL seq_expr]
+| [_* /method_: BANG list(attribute) private_flag LIDENT COLON possibly_poly(core_type) . EQUAL seq_expr]
   { "Expected `=` after method type" }
 
 | /method_: list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL . seq_expr
 | /method_: list(attribute) private_flag LIDENT COLON possibly_poly(core_type) EQUAL . seq_expr
+| /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL . seq_expr
+| /method_: BANG list(attribute) private_flag LIDENT COLON possibly_poly(core_type) EQUAL . seq_expr
   { "Expected expression after `=` to define method" }
 
 | [_* /class_field: INITIALIZER list(attribute) . seq_expr list(post_item_attribute)]
@@ -2887,7 +2855,7 @@ rule error_messages = parse error
   { "Expected identifier after class parameters" }
 
 | /list(and_class_declaration): AND list(attribute) virtual_flag formal_class_parameters LIDENT . class_fun_binding list(post_item_attribute) list(and_class_declaration)
-  { "Expected `=`, `:` or binding pattern after identifier in class definition" }
+  { "Expected `=`, `:` or binding pattern after class name in class definition" }
 
 | [_* /floating_attribute: LBRACKETATATAT attr_id attr_payload . RBRACKET]
   { "Expected closing `]` after attribute" }
