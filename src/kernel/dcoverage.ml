@@ -17,6 +17,8 @@ let coverage (type g r st tr lrc en)
     (machine : (g, r, st, tr) Automata.Machine.t)
     (stacks : (g, lrc) Automata.stacks)
     (enum : (g, lrc, en) Denumeration._graph)
+  : (g lr0, ((en index, (g, en) Denumeration.edge list * lrc list) Either.t *
+             g terminal indexset) list) vector
   =
   let state_count = Vector.length machine.outgoing in
   let reachable = Vector.make state_count IndexMap.empty in
@@ -109,10 +111,11 @@ let coverage (type g r st tr lrc en)
         in
         cst.unhandled <- R (IndexSet.fold process trs edges)
   in
-  let counter = ref 0 in
-  fixpoint ~counter ~propagate todo;
-  let unhandled_tail = ref 0 in
-  let unhandled_midl = ref 0 in
+  begin
+    let counter = ref 0 in
+    fixpoint ~counter ~propagate todo;
+    stopwatch 2 "Coverage in %d steps" !counter;
+  end;
   Vector.iter begin IndexMap.iter begin fun _ node ->
       match node.unhandled with
       | L _ -> incr unhandled_tail
