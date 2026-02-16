@@ -62,7 +62,7 @@ rule error_messages = parse error
 | [_* /delimited_type_supporting_local_open: LPAREN MODULE ext list(attribute) . module_type RPAREN]
   { "Expected module type after `module` in parenthesized type." }
 
-| /type_parameter: type_variance . type_variable
+| [_* /type_parameter: type_variance . type_variable]
   { "Expected type variable after variance annotation." }
 
 | /type_variable: QUOTE . ident
@@ -73,7 +73,7 @@ rule error_messages = parse error
 
 | [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) NONREC type_parameters . LIDENT COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
       /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /signature_item: TYPE ext list(attribute) NONREC type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
+      /signature_item: TYPE ext list(attribute) NONREC type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
   { "Expected type identifier after type parameters." }
 
 | /type_kind: EQUAL . nonempty_type_kind
@@ -100,7 +100,7 @@ rule error_messages = parse error
   /object_type: LESS . GREATER
   { "Expected method list or `>` after `<`." }
 
-| /meth_list: LIDENT COLON . possibly_poly(core_type) _*
+| /meth_list: LIDENT COLON . possibly_poly(core_type_no_attr) _*
   { "Expected type after `:` in method." }
 
 | /extension: LBRACKETPERCENT . attr_id payload RBRACKET
@@ -3148,7 +3148,7 @@ rule error_messages = parse error
 | /toplevel_directive: HASH . ident _*
   { "Expected identifier after `#`." }
 
-| [_* /toplevel_directive: . SEMISEMI]
+| [_* /toplevel_phrase: toplevel_directive . SEMISEMI]
   { "Expected end of directive after directive name." }
 
 | [_* /toplevel_phrase: seq_expr list(post_item_attribute) . SEMISEMI]
