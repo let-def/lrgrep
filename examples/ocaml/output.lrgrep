@@ -236,6 +236,9 @@ rule error_messages = parse error
 | /delimited_type_supporting_local_open: LBRACKET row_field BAR . reversed_separated_nonempty_llist(BAR,row_field) RBRACKET
   { "Expected row field after `|`." }
 
+| [_* /delimited_type_supporting_local_open: LBRACKET row_field BAR reversed_separated_nonempty_llist(BAR,row_field) . RBRACKET]
+  { "Expected `]` to close the row type." }
+
 | [_* /delimited_type_supporting_local_open: LBRACKETGREATER option(BAR) reversed_separated_nonempty_llist(BAR,row_field) . RBRACKET]
   { "Expected closing `]` after object row type." }
 
@@ -255,8 +258,7 @@ rule error_messages = parse error
 | /type_constraint: COLON core_type COLONGREATER . core_type
   { "Expected type after `:>`." }
 
-| [_* /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint . RPAREN _*
-      /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint RPAREN COMMA TILDE LPAREN LIDENT type_constraint . RPAREN]
+| [_* /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint . RPAREN _*]
   { "Expected closing `)` after labeled parameter." }
 
 | /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint RPAREN . COMMA _*
@@ -341,6 +343,7 @@ rule error_messages = parse error
   { "Expected closing `)` or comma after labeled pattern." }
 
 | /labeled_tuple_pat_element_list(pattern): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA DOTDOT
   { "Expected comma after labeled pattern." }
 
 | /labeled_tuple_pat_element_list(pattern): TILDE LPAREN LIDENT COLON core_type RPAREN COMMA . pattern
@@ -526,6 +529,7 @@ rule error_messages = parse error
   { "Expected closing `)` or comma after labeled pattern." }
 
 | /labeled_tuple_pat_element_list(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA _*
+  /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type RPAREN . COMMA DOTDOT
   { "Expected comma after labeled pattern." }
 
 | /labeled_tuple_pat_element_list(pattern_no_exn): TILDE LPAREN LIDENT COLON core_type RPAREN COMMA . pattern_no_exn
@@ -732,6 +736,20 @@ rule error_messages = parse error
       /labeled_tuple_pat_element_list(pattern): TILDE LPAREN LIDENT COLON core_type . RPAREN _*
       /reversed_labeled_tuple_pattern(pattern): TILDE LPAREN LIDENT COLON core_type . RPAREN COMMA DOTDOT]
   { "Expected closing `)` after labeled pattern." }
+
+| /labeled_tuple_pat_element_list(pattern): pattern COMMA LABEL . simple_pattern
+  /labeled_tuple_pat_element_list(pattern): LABEL . simple_pattern _*
+  /reversed_labeled_tuple_pattern(pattern): LABEL . simple_pattern COMMA DOTDOT
+  { "Expected an unlabeled or labeled pattern (possibly with `..`) after `label:`." }
+
+| /pattern: pattern COLONCOLON . pattern
+  { "Expected a pattern after `::`." }
+
+| /pattern: pattern BAR . pattern
+  { "Expected a pattern after `|`." }
+
+| /pattern: pattern AS . val_ident
+  { "Expected a variable name after `as`." }
 
 | /labeled_tuple_pat_element_list(pattern): labeled_tuple_pat_element_list(pattern) COMMA . pattern
   /labeled_tuple_pat_element_list(pattern): labeled_tuple_pat_element_list(pattern) COMMA . LABEL simple_pattern
@@ -2083,6 +2101,21 @@ rule error_messages = parse error
 | [_* /simple_expr: simple_expr DOT mod_longident DOTOP LBRACE separated_or_terminated_nonempty_list(SEMI,expr) . RBRACE]
   { "Expected closing `}` after expression list." }
 
+| [_* /simple_expr: simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list(SEMI,expr) . RPAREN]
+  { "Expected an expression (or `)` if empty) after `(...)`." }
+
+| /simple_expr: simple_expr DOTOP LBRACKET . separated_or_terminated_nonempty_list(SEMI,expr) RBRACKET
+  { "Expected an expression after `[`." }
+
+| [_* /simple_expr: simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
+  { "Expected `]` to close the array subscript." }
+
+| /simple_expr: simple_expr DOTOP LBRACE . separated_or_terminated_nonempty_list(SEMI,expr) RBRACE
+  { "Expected an expression after `{`." }
+
+| [_* /simple_expr: simple_expr DOTOP LBRACE separated_or_terminated_nonempty_list(SEMI,expr) . RBRACE]
+  { "Expected `}` to close the record field access or object method call." }
+
 | [_* /simple_expr: BEGIN ext list(attribute) seq_expr . END]
   { "Expected closing `end` after expression in begin expression." }
 
@@ -3136,6 +3169,9 @@ rule error_messages = parse error
 
 | /parse_val_longident': . parse_val_longident
   { "Expected value path." }
+
+| [_* /parse_val_longident: val_longident . EOF]
+  { "Expected end of file, but found extra input after valid expression." }
 
 | [_* /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT
       /mk_longident(mod_longident,val_ident): mod_longident . DOT val_ident]
