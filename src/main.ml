@@ -570,18 +570,15 @@ let enumerate_command () =
     |> translate_entrypoints
   in
   let subset = lrc_from_entrypoints initial_states in
+  let rcs = !!red_closure in
   let stacks = make_stacks subset ~error_only:true in
-  let Denumeration.Graph graph =
-    Denumeration.enumerate grammar !!red_closure stacks
-  in
-  let by_lr0 = Denumeration.maximal grammar graph in
+  let Denumeration.Graph graph = Denumeration.enumerate grammar rcs stacks in
+  let by_lr0 = Denumeration.maximal grammar rcs stacks graph in
   let cases = ref 0 in
   let report_case lr0 samples =
     incr cases;
-    Printf.printf
-      "## Pattern %d\n\
-       \n\
-       ```\n" !cases;
+    Printf.printf "## Pattern %d\n\n\
+                   ```\n" !cases;
     List.iter print_endline (Denumeration.print_pattern grammar lr0);
     Printf.printf "```\n\n";
     List.iteri begin fun i (lrcs, failing) ->
@@ -621,28 +618,21 @@ let enumerate_command () =
     | None -> [node.lrc]
     | Some edge -> node.lrc :: node_suffix edge.source
   in
-  let rcs = !!red_closure in
-  let regular = Terminal.regular grammar in
-  IndexMap.iter begin fun _ index ->
-    let node = graph.nodes.:(index) in
-    if List.is_empty node.successors then
-      let lr1 = stacks.label node.lrc in
-      let failing = IndexSet.inter rcs.:(lr1).failing regular in
-      if IndexSet.is_not_empty failing then
-        report_case (Lr1.to_lr0 grammar lr1) [[node.lrc], failing]
-  end graph.initials;
-  Vector.iteri begin fun lr0 edges ->
-    if not (List.is_empty edges) then
-      report_case lr0 (
-        List.map begin fun (edge, failing) ->
-          let lrc = graph.nodes.:(edge.Denumeration.target).lrc in
-          let lrcs = List.rev_append (subset.some_prefix lrc) (lrc :: node_suffix edge.source) in
-          (lrcs, failing)
-        end edges
-      )
+  Vector.iteri begin fun lr0 paths ->
+    if not (List.is_empty paths) then
+      report_case lr0 @@
+      List.map begin fun (path, failing) ->
+        let suffix = match path with
+          | Either.Right edge ->
+            let lrc = graph.nodes.:(edge.Denumeration.target).lrc in
+            List.rev_append (subset.some_prefix lrc) (lrc :: node_suffix edge.source)
+          | Either.Left node -> [graph.nodes.:(node).lrc]
+        in
+        (suffix, failing)
+      end paths
   end by_lr0
 
-  (*let sentences = Enumeration.cover_with_maximal_patterns
+(*let sentences = Enumeration.cover_with_maximal_patterns
       grammar !!red_closure stacks graph
   in
   Printf.printf "# Maximal patterns\n\n";

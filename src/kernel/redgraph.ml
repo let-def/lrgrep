@@ -50,7 +50,9 @@ let rec merge_reductions = function
   | [] -> []
   | rrs ->
     let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
-    r :: merge_reductions rrs'
+    match merge_reductions rrs' with
+    | [] when IndexMap.is_empty r -> []
+    | rs -> r :: rs
 
 (* Step 1: pre-compute closure of ϵ-reductions *)
 
@@ -70,6 +72,11 @@ let group_reductions g = function
       Int.compare (Item.position g it1) (Item.position g it2)
     in
     group 0 IndexMap.empty (List.sort compare_items items)
+
+let rec validate = function
+  | [] -> true
+  | [x] -> not (IndexMap.is_empty x)
+  | _ :: xs -> validate xs
 
 type 'g stack_tree = {
   next: ('g lr1 index list * 'g terminal indexset * 'g stack_tree) list;
@@ -139,6 +146,7 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   let failing = ref IndexSet.empty in
   let group_stacks (items, next) =
     let reductions = group_reductions g items in
+    assert (validate reductions);
     {reductions; next}
   in
   let rec pop lookahead acc (item : g item index) = function
@@ -176,6 +184,7 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   let all_reductions =
     merge_reductions (fold_stack_reductions List.cons stacks [])
   in
+  assert (validate all_reductions);
   {accepting; failing; stacks; all_stacks; all_reductions}
 
 let rec filter_reductions g la = function

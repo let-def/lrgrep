@@ -252,20 +252,42 @@ let print_pattern g lr0 =
   in
   prepare first (string_of_items_for_filter g lr0)
 
-let maximal (type g) (g : g grammar) gr =
+let maximal (type g lrc)
+    (g : g grammar)
+    (rcs : (g lr1, g Redgraph.reduction_closure) vector)
+    (stacks : (g, lrc) Automata.stacks)
+    gr =
   let regular = Terminal.regular g in
   let lr0_covered = Vector.make (Lr0.cardinal g) IndexSet.empty in
   let lr0_edges = Vector.make (Lr0.cardinal g) [] in
+  let cover lr0s failed via =
+    let failed = IndexSet.inter failed regular in
+    IndexSet.iter begin fun lr0 ->
+      let covered = lr0_covered.:(lr0) in
+      if not (IndexSet.subset failed covered) then begin
+        lr0_covered.:(lr0) <- IndexSet.union failed covered;
+        lr0_edges.@(lr0) <- List.cons (via, failed)
+      end
+    end lr0s
+  in
+  IndexMap.iter begin fun _ index ->
+    let node = gr.nodes.:(index) in
+    if List.is_empty node.successors then
+      let lr1 = stacks.label node.lrc in
+      let rec visit_stack acc candidate stack =
+        match stack.Redgraph.next with
+        | [] -> IndexSet.add (Lr1.to_lr0 g candidate) acc
+        | next ->
+          List.fold_left
+            (fun acc (stack, _, next) -> visit_stack acc (List.hd stack) next)
+            acc next
+      in
+      let reached = visit_stack IndexSet.empty lr1 rcs.:(lr1).stacks in
+      cover reached node.failed (Either.Left index)
+  end gr.initials;
   List.iter begin fun edge ->
     let node = gr.nodes.:(edge.target) in
     if List.is_empty node.successors then
-      let failed = IndexSet.inter node.failed regular in
-      IndexSet.iter begin fun lr0 ->
-        let covered = lr0_covered.:(lr0) in
-        if not (IndexSet.subset failed covered) then begin
-          lr0_covered.:(lr0) <- IndexSet.union failed covered;
-          lr0_edges.@(lr0) <- List.cons (edge, failed)
-        end
-      end edge.reached
+      cover edge.reached node.failed (Either.Right edge)
   end gr.all_edges;
   lr0_edges
