@@ -291,3 +291,21 @@ let maximal (type g lrc)
       cover edge.reached node.failed (Either.Right edge)
   end gr.all_edges;
   lr0_edges
+
+let shortest_paths_to_failures gr =
+  let nodes = gr.nodes in
+  let covered = Vector.make (Vector.length nodes) IndexSet.empty in
+  let successors = Vector.make (Vector.length nodes) [] in
+  List.iter begin fun edge ->
+    let target = nodes.:(edge.target) in
+    if List.is_empty target.successors then
+      covered.:(edge.target) <- target.failed;
+    let ctarget = covered.:(edge.target) in
+    let csource = covered.:(edge.source) in
+    let csource' = IndexSet.union ctarget csource in
+    if csource != csource' then (
+      covered.:(edge.source) <- csource';
+      successors.@(edge.source) <- List.cons (edge, ctarget)
+    )
+  end gr.all_edges;
+  (covered, successors)
