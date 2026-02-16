@@ -1,36 +1,36 @@
 rule error_messages = parse error
 
 | /ext: PERCENT . attr_id
-  { "Expected extension name after `%`." }
+  { "Expected extension name after `%`" }
 
 | /attr_id: single_attr_id DOT . attr_id
-  { "Expected attribute identifier after the dot in an attribute path." }
+  { "Expected attribute identifier after `.` in an attribute path" }
 
 | /attribute: LBRACKETAT . attr_id attr_payload RBRACKET
-  { "Missing attribute identifier after `[`." }
+  { "Missing attribute identifier after `[@`" }
 
 | [_* /value_description: VAL ext list(attribute) . val_ident COLON possibly_poly(core_type) list(post_item_attribute)]
-  { "Expected value identifier after `val` and possible attributes." }
+  { "Expected value identifier after `val`" }
 
 | /val_extra_ident: LPAREN . operator RPAREN
-  { "Expected operator after `(` in a value identifier." }
+  { "Expected operator after `(` in a value identifier" }
 
 | /operator: DOTOP . LPAREN _*
   /operator: DOTOP . LBRACKET _*
   /operator: DOTOP . LBRACE _*
-  { "Expected opening delimiter after `.+` operator." }
+  { "Expected `(`, `[`, or `[` after `.<op>` operator" }
 
 | /index_mod: SEMI . DOTDOT
-  { "Expected `..` after `;` in array or string indexing." }
+  { "Expected `..` after `;` in index operator." }
 
 | [_* /operator: DOTOP LPAREN index_mod . RPAREN _*]
-  { "Expected closing `)` after array or string index expression." }
+  { "Expected closing `)` in index operator." }
 
 | [_* /operator: DOTOP LBRACKET index_mod . RBRACKET _*]
-  { "Expected closing `]` after array or string index expression." }
+  { "Expected closing `]` in index operator." }
 
 | [_* /operator: DOTOP LBRACE index_mod . RBRACE _*]
-  { "Expected closing `}` after array or string index expression." }
+  { "Expected closing `}` in index operator." }
 
 | [_* /val_extra_ident: LPAREN operator . RPAREN]
   { "Expected closing `)` after operator in value identifier." }
