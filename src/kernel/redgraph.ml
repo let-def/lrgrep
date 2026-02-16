@@ -314,7 +314,7 @@ let index_targets (type g) (g : g grammar) rc
     *)
     let rec visit_stacks acc {subs} =
       List.fold_left begin fun acc (stack, la, sub') ->
-        let acc = (follow_path stack, la) :: acc in
+        let acc = (follow_path (List.rev stack), la) :: acc in
         visit_stacks acc sub'
       end acc subs
     in
