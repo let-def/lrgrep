@@ -709,12 +709,28 @@ module Dataflow = struct
             Syntax.warn re.position "expression is unreachable"
         | _ -> iter_re check re
       in
-      Vector.iteri (fun branch (pattern : Syntax.pattern) ->
-          if IndexSet.mem branch reachable_branches then
-            check pattern.expr
-          else
-            Syntax.warn pattern.expr.position "clause is unreachable"
-        ) branches.pattern
+      let overriding = Vector.make (Vector.length branches.clause) IndexSet.empty in
+      Vector.iteri begin fun i (DFA.Packed st) ->
+        let accepting =
+          IndexSet.init_from_set (Vector.length st.branches) (Boolvector.test st.accepting)
+          |> IndexSet.map (Vector.get st.branches)
+        in
+        let kernel = Vector.cast_array (Vector.length st.branches) dfa.kernels.:(i) in
+        Vector.iteri begin fun i nfa ->
+          if NFA.is_accepting nfa && not (Boolvector.test st.accepting i) then
+            overriding.@(st.branches.:(i)) <- IndexSet.union accepting
+        end kernel;
+      end dfa.states;
+      Vector.iteri begin fun branch (pattern : Syntax.pattern) ->
+        if IndexSet.mem branch reachable_branches then
+          check pattern.expr
+        else begin
+          Syntax.warn pattern.expr.position "clause is unreachable";
+          IndexSet.iter begin fun branch' ->
+            Syntax.warn branches.pattern.:(branch').expr.position "this clause is shadowing it";
+          end overriding.:(branch)
+        end
+      end branches.pattern
     end;
     stopwatch 3 "Dead-code analysis";
     (* Pass 4: Compute priority splits *)
