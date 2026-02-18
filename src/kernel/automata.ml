@@ -460,8 +460,16 @@ module DFA = struct
     end in
     let states =
       let make (Construction.Prepacked {index; kernel; _}) =
+        let reachable = ref true in
+        let accepting = Boolvector.from_vector kernel (fun nfa ->
+            !reachable &&
+            if NFA.is_accepting nfa then (
+              if Boolvector.test branches.is_total nfa.branch then
+                reachable := false;
+              true
+            ) else false
+          ) in
         let branches = Vector.map (fun t -> t.NFA.branch) kernel in
-        let accepting = Boolvector.from_vector kernel NFA.is_accepting in
         Packed {index; branches; accepting; transitions = []}
       in
       Vector.map make Construction.prestates
