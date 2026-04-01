@@ -201,9 +201,9 @@ let lrc = lazy (
   result
 )
 
-let red_closure = lazy (
-  Redgraph.close_lr1_reductions !!grammar
-)
+let red_closure = lazy (Redgraph.close_lr1_reductions !!grammar)
+
+let red_table = lazy (Redpos.make !!grammar)
 
 let red_trie, red_targets =
   let red_index = lazy (Redgraph.index_targets !!grammar !!red_closure) in
@@ -290,6 +290,50 @@ let compiler_cover_output = lazy (
         (Printexc.to_string exn)
 )
 
+let report_cases oc =
+  let cases = ref 0 in
+  fun lr0 ->
+    incr cases;
+    Printf.fprintf oc "## Pattern %d\n\n```\n" !cases;
+    List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern !!grammar lr0);
+    Printf.fprintf oc "```\n\n"
+
+let report_samples oc (stacks : _ Automata.stacks) ~some_prefix ~get_lrc ~reached lr0 ~all =
+  let samples = ref 0 in
+  fun (tactic, failing) ->
+    let grammar = !!grammar in
+    let suffix = List.rev_map get_lrc tactic in
+    let _, prefix = some_prefix (List.hd suffix) in
+    let stack =
+      list_rev_mappend stacks.label prefix @@
+      List.map stacks.label suffix
+    in
+    incr samples;
+    Printf.fprintf oc "### Sample %d\n\n" !samples;
+    let terms = Sentence_generation.sentence_of_stack grammar !!reachability stack in
+    let ppt t = Terminal.to_string grammar t in
+    Printf.fprintf oc "Sentence:\n```\n%s\n```\n"
+      (string_concat_map " " ppt terms);
+    Printf.fprintf oc "Stack:\n```\n%s\n```\n"
+      (string_concat_map " " (Lr1.symbol_to_string grammar) stack);
+    Printf.fprintf oc "Rejected when looking ahead at any of the terminals in:\n\
+                       ```\n%s\n```\n"
+      (String.concat " " (List.rev_map ppt (IndexSet.elements failing)));
+    if all then (
+      let lr0s =
+        List.fold_left (fun acc n -> IndexSet.union (reached n) acc) IndexSet.empty tactic
+      in
+      let lr0s = IndexSet.remove lr0 lr0s in
+      if IndexSet.is_not_empty lr0s then (
+        Printf.fprintf oc "Also covered by the following patterns:\n```\n";
+        IndexSet.iter begin fun lr0 ->
+          List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern grammar lr0)
+        end lr0s;
+        Printf.fprintf oc "```\n";
+      )
+    );
+    Printf.fprintf oc "\n"
+
 let do_compile spec (cp : Code_printer.t option) =
   let grammar = !!grammar in
   Codegen.output_header grammar spec cp;
@@ -335,49 +379,64 @@ let do_compile spec (cp : Code_printer.t option) =
     Codegen.output_rule grammar spec rule clauses branches machine cp;
     stopwatch 1 "table & code generation";
     if fst rule.error then (
-      let cposition = Coverage.make_positions grammar in
-      let coverage =
-        Coverage.coverage
-          grammar branches machine stacks
-          !!red_closure cposition machine.initial
-      in
-      let uncovered =
-        Coverage.uncovered_cases grammar !!red_closure stacks
-          cposition coverage
-      in
-      let seq = uncovered () in
-      stopwatch 1 "coverage check";
-      match seq with
-      | Seq.Nil -> ()
-      | Seq.Cons (x, xs) ->
+      let rcs = !!red_closure in
+      let rtable = Redpos.make grammar in
+      let open Coverage in
+      let Andor.Graph agr = Andor.make grammar rcs stacks rtable in
+      let Deter.Graph dgr = Deter.make grammar rcs stacks rtable agr in
+      let Cover.Graph cgr = Cover.coverage grammar branches machine stacks agr dgr in
+      if not (List.is_empty cgr.sinks) then (
         begin match compiler_cover_output with
           | lazy None -> ()
           | lazy (Some oc) ->
             Printf.fprintf oc "# Rule %s\n" rule.name;
-            let cases = ref 0 in
-            let report case =
-              incr cases;
-              Printf.fprintf oc "\n# Uncovered case %d\n" !cases;
-              Coverage.report_case grammar stacks !!reachability
-                ~output:(output_string oc)
-                ~get_prefix:(fun lrc -> snd (entrypoints.some_prefix lrc))
-                (* Extract path from (length, path) tuple for coverage reporting. *)
-                case
+            let get_lrc st =
+              match Sum.prj stacks.domain (cgr.position st) with
+              | L lrc -> lrc
+              | R enu -> Deter.get_lrc agr dgr.nodes.:(enu)
             in
-            report x;
-            Seq.iter report xs
+            let reached st =
+              match Sum.prj stacks.domain (cgr.position st) with
+              | L _ -> IndexSet.empty
+              | R enu -> Deter.get_lr0 grammar rcs stacks rtable agr dgr enu
+            in
+            let iter_sinks f =
+              List.iter (fun sink -> f sink (fst (entrypoints.some_prefix (get_lrc sink))))
+                cgr.sinks
+            in
+            let maximals = Extract.compute_maximal_prefixes
+                ~graph:cgr.enum
+                ~iter_sinks
+                ~reached
+            in
+            let locals, _globals =
+              Report.emit_all
+                ~goals:(Lr0.cardinal grammar)
+                ~graph:cgr.enum
+                ~maximals
+                ~globals:[||]
+                ~reached
+            in
+            let report_case = report_cases oc in
+            Seq.iter begin fun (lr0, sentences) ->
+              report_case lr0;
+              Seq.iter (report_samples oc stacks
+                          ~some_prefix:entrypoints.some_prefix
+                          ~get_lrc ~reached lr0 ~all:false) sentences
+            end locals;
+
         end;
         stopwatch 1 "coverage report";
         let report =
-          if !opt_compile_cover_error then
-            Syntax.error
-          else
-            Syntax.warn
+          if !opt_compile_cover_error
+          then Syntax.error
+          else Syntax.warn
         in
         report Lexing.dummy_pos
           "rule %s has only partial coverage%s" rule.name
           (if !opt_compile_cover_report <> "" then ""
            else " (use --cover-report <file> to get more information)");
+      )
     )
   end spec.lexer_definition.rules;
   Codegen.output_trailer grammar spec cp
@@ -408,98 +467,46 @@ let enumerate_command () =
     |> translate_entrypoints
   in
   let subset = lrc_from_entrypoints initial_states in
+  let rcs = !!red_closure in
+  let rtbl = !!red_table  in
   let stacks = make_stacks subset ~error_only:true in
-  let regular_terminals = Terminal.regular grammar in
-  let initial_enum =
-    IndexSet.rev_map_elements stacks.tops
-      (fun lrc -> Enumeration.kernel lrc regular_terminals, lrc)
+  let open Coverage in
+  let Andor.Graph agr = Andor.make grammar rcs stacks rtbl in
+  let Deter.Graph dgr = Deter.make grammar rcs stacks rtbl agr in
+  let graph, maximals = Enum.prepare grammar agr dgr subset.some_prefix in
+  let reached = Deter.get_lr0 grammar rcs stacks rtbl agr dgr in
+  let globals =
+    if !opt_enum_all then
+      Extract.compute_global_prefixes
+        ~graph ~maximals ~reached
+    else [||]
   in
-  let Enumeration.Graph graph =
-    Enumeration.make_graph
-      grammar
-      !!red_closure
-      stacks
-      initial_enum
-  in
-  let cases = ref 0 in
-  let report_sentences sentences =
-    let by_lr0 = Vector.make (Lr0.cardinal grammar) [] in
-    Seq.iter begin fun sentence ->
-      by_lr0.@(sentence.Enumeration.pattern) <- List.cons sentence
-    end sentences;
-    Vector.iteri begin fun lr0 -> function
-      | [] -> ()
-      | sentences ->
-        incr cases;
-        Printf.printf
-          "## Pattern %d\n\
-           \n\
-           ```\n" !cases;
-        List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0);
-        Printf.printf "```\n\n";
-        List.iteri begin fun i (sentence : _ Enumeration.failing_sentence) ->
-          Printf.printf
-            "### Sample %d\n\
-             \n"
-            (i + 1);
-          let lrc = graph.ker.:(sentence.first).lrc in
-          let suffix =
-            List.fold_right
-              (fun edge acc -> edge.Enumeration.path @ acc)
-              sentence.edges
-              [sentence.entry]
-          in
-          (* Prepend path from (length, path) prefix for sentence generation. *)
-          let lrcs = List.rev_append (snd (subset.some_prefix lrc)) suffix in
-          let lr1s = List.map stacks.label lrcs in
-          let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
-          Printf.printf
-            "Sentence:\n\
-             ```\n\
-             %s\n\
-             ```\n"
-            (string_concat_map " " (Terminal.to_string grammar) terms);
-          Printf.printf
-            "Stack:\n\
-             ```\n\
-             %s\n\
-             ```\n"
-            (string_concat_map " " (Lr1.symbol_to_string grammar) lr1s);
-          Printf.printf
-            "Rejected when looking ahead at:\n\
-             ```\n\
-             %s\n\
-             ```\n\
-             \n"
-            (String.concat " "
-               (List.rev_map (Terminal.to_string grammar)
-                  (IndexSet.elements
-                     (IndexSet.inter regular_terminals sentence.failing))));
-          if not (list_is_empty sentence.edges) then (
-            Printf.printf
-              "Also covered by these intermediate patterns:\n\
-               ```\n";
-            List.iter (fun edge ->
-                let node = edge.Enumeration.source in
-                let lr0 = Enumeration.get_lr0_state grammar stacks graph.ker.:(node) in
-                List.iter print_endline (Coverage.string_of_items_for_filter grammar lr0)
-              ) sentence.edges;
-            Printf.printf "```\n"
-          );
-          Printf.printf "\n"
-        end sentences
-    end by_lr0;
-  in
-  let sentences = Enumeration.cover_with_maximal_patterns
-      grammar !!red_closure stacks graph
+  let locals, globals =
+    Report.emit_all
+      ~goals:(Lr0.cardinal grammar)
+      ~graph ~maximals ~globals ~reached
   in
   Printf.printf "# Maximal patterns\n\n";
-  report_sentences (List.to_seq sentences);
-  if !opt_enum_all then
-    let cover = Enumeration.cover_all grammar !!red_closure stacks graph in
-    List.iter (Enumeration.mark_sentence_covered grammar stacks graph cover) sentences;
-    Printf.printf "# Exhaustive coverage\n\n";
-    report_sentences (Enumeration.to_seq cover)
+  let report_case = report_cases stdout in
+  let report_samples lr0 =
+    report_samples stdout stacks
+      ~some_prefix:subset.some_prefix
+      ~get_lrc:(fun node -> Deter.get_lrc agr dgr.Deter.nodes.:(node))
+      ~reached:(Deter.get_lr0 grammar rcs stacks rtbl agr dgr)
+      lr0
+      ~all:!opt_enum_all
+  in
+  Seq.iter begin fun (lr0, sentences) ->
+    report_case lr0;
+    Seq.iter (report_samples lr0) sentences
+  end locals;
+  if !opt_enum_all then begin
+    Printf.printf "# Other reduce-filter patterns\n\n";
+    Seq.iter begin fun (lr0, sentences) ->
+      report_case lr0;
+      Seq.iter (report_samples lr0) sentences
+    end globals;
+  end
 
 (* Command import *)
 
