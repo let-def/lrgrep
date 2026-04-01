@@ -369,6 +369,9 @@ module Vector = struct
     | 0 -> empty
     | n -> Vector (Array.make n (f()))
 
+  let make_associate (type n) (Vector a : (n, _) t) x : (n, _) t =
+    Vector (Array.make (Array.length a) x)
+
   let init (type n) (Cardinal n : n cardinal) f : (n, _) t=
     Vector (Array.init (Lazy.force_val n) f)
 
@@ -476,6 +479,10 @@ module Vector = struct
   let as_array (type n) (Vector a : (n, _) t) = a
 
   let to_list (type n) (Vector a : (n, _) t) = Array.to_list a
+
+  let to_seq (type n) (Vector a : (n, _) t) = Array.to_seq a
+
+  let to_seqi (type n a) (Vector a : (n, a) t) : (n index * a) Seq.t = Array.to_seqi a
 
   let cast_array (type n) (Cardinal n : n cardinal) arr : (n, _) t =
     if Lazy.force_val n <> Array.length arr then

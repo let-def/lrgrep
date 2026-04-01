@@ -297,6 +297,13 @@ let sort_and_merge_indexed compare l =
     (fun (x, ix) rest -> (x, List.fold_left union_ix ix rest))
     l
 
+let list_rev_filter_map f xs =
+  List.fold_left (fun acc x ->
+      match f x with
+      | None -> acc
+      | Some y -> y :: acc
+    ) [] xs
+
 let list_foralli f l =
   let rec loop i = function
     | [] -> true
@@ -333,9 +340,9 @@ let rec list_take n = function
 let rec fixpoint ?counter ~propagate todo = match !todo with
   | [] -> ()
   | todo' ->
-    Option.iter incr counter;
     todo := [];
     List.iter propagate todo';
+    Option.iter incr counter;
     fixpoint ?counter ~propagate todo
 
 let assert_equal_length v1 v2 =
@@ -636,3 +643,8 @@ let print_dym f oc = function
     in
     Printf.fprintf oc " (did you mean %s%a?)" (f x)
       print_list (list_take 4 xs)
+
+let rec list_last = function
+  | [] -> None
+  | [x] | [_; x] | [_; _; x] -> Some x
+  | _ :: _ :: _ :: xs -> list_last xs

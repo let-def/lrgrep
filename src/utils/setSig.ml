@@ -89,6 +89,7 @@ module type S1 = sig
      set [s]. Elements are presented to [f] in increasing order. *)
 
   val iter: ('a element -> unit) -> 'a t -> unit
+  val iteri: (int -> 'a element -> unit) -> 'a t -> unit
 
   val rev_iter: ('a element -> unit) -> 'a t -> unit
 
@@ -108,6 +109,7 @@ module type S1 = sig
   val map: ('a element -> 'b element) -> 'a t -> 'b t
 
   val exists: ('a element -> bool) -> 'a t -> bool
+  val for_all: ('a element -> bool) -> 'a t -> bool
 
   (* [elements s] is a list of all elements in the set [s]. *)
 
@@ -194,6 +196,10 @@ module type S1 = sig
   val fused_inter_union : 'a t -> 'a t -> acc:'a t -> 'a t
 
   val rev_map_elements: 'a t -> ('a element -> 'b) -> 'b list
+
+  val map_to_array : 'a t -> ('a element -> 'b) -> 'b array
+
+  val rank : 'a element -> 'a t -> int
 end
 
 module type S0 = sig
