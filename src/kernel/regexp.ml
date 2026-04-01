@@ -1,32 +1,86 @@
 (* The MIT License (MIT)
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
 
-   Copyright (c) 2025 Frédéric Bour
+(** Regular expression definitions and operations for LRGrep
 
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
+    This module implements regular expressions used in LRGrep, including
+    derivation operations for filtering LR states and matching on reductions.
 
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
+    Architecture:
 
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+    - Capture module: Defines variables that can capture semantic values or
+      positions during derivation. Each capture is identified by a unique index.
+
+    - Reductions module: Represents reduction operations in regular expressions,
+      tracking which target patterns are being recognized.
+
+    - Expr module: The core regular expression structure:
+      - Set: Match a set of LR states, with optional capture
+      - Alt: Disjunction of sub-expressions
+      - Seq: Concatenation of sub-expressions
+      - Star: Kleene star (repetition)
+      - Filter: Look-ahead restriction to a set of LR states
+      - Reduce: Reduction operation
+      - Usage: A flag to identify unused constructions and map them to source
+          position to warn the user about unreachable parts of a specification.
+
+    - Label module: A label is a combination of:
+      - filter: Which LR states match
+      - captures: Which variables are captured
+      - usage: Which source constructs are being recognized
+
+    - K module: Continuations that appear during derivative computation:
+      - Accept: Recognition complete
+      - Done: Reached end of expression (derives to Accept)
+      - More: Continue with sub-expression
+      - Reducing: Intermediate states of reduction recognition
+
+    - Key operations:
+      - [derive]: Compute derivatives of regular expressions with respect to LR
+        states
+      - [compare]: Compare expressions for equality/hash-consing
+
+    Implementation details:
+
+    - The derivation algorithm handles the complex case of reductions with
+      nullable and non-nullable parts. It uses Antimirov's derivatives adapted
+      for LR states.
+
+    - The [Reducing] case handles the case where a reduction must be performed
+      before continuing. It tracks:
+      - The reduction targets we are looking for
+      - The current positions in the reduction graph
+      - The continuation to use when reduction succeeds
+
+    - The [Shortest] vs [Longest] policy determines whether the parser should
+      prefer smaller or larger when there are multiple possible reductions.
+      This is implemented by ordering the resulting continuations (shortest:
+      accept first, longest: accept last).
+
+    - The usage tracking enables dead-code analysis: expressions that are never
+      executed can be detected and reported.
 *)
 
-(** This module implements the regular expressions used by LRGrep.
-    It provides functions for creating, comparing, and deriving regular
-    expressions and continuations, which appear during the derivation process.
-    It is parameterized by the `Info` and `Redgraph` modules, which are used to
-    provide information about the LR automaton and its (viable) reductions,
-    respectively. *)
 open Fix.Indexing
 open Utils
 open Misc

@@ -1,3 +1,75 @@
+(* MIT License
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
+
+(** Code generation for the LR matching machine
+
+    This module generates the OCaml code for the LR matching machine from the
+    compiled specification and the generated automaton.
+    The "machine" is translated to a sparse transition table, a bytecode
+    program. An OCaml wrapper is generated to interpret the bytecode and invoke
+    the appropriate semantic actions.
+
+    Main components:
+
+    - The [spec] type holds global configuration including the parser name
+      and lexer definition.
+
+    - The [output_header], [output_trailer] functions generate the outer
+      module structure wrapping the generated code.
+
+    - The [output_rule] function is the core code generation function that:
+      - Outputs the bytecode and transition tables for the abstract machine
+      - Outputs semantic actions for each branch
+      - Outputs wrapper functions glueing the interpreter to user actions
+
+    Implementation details:
+
+    - The [output_table] function calls [Lrgrep_support.compact] to compress
+      the sparse table, then outputs the resulting bytecode and table structure.
+
+    - The [output_execute_function] generates a case analysis matching on:
+      - The clause number
+      - The lookahead token
+      - For each branch that accepts the clause, outputs a case that:
+        1. Binds registers to captured variables
+        2. Executes the semantic action
+        3. Returns the result
+
+    - The [bind_capture] function handles different capture types:
+      - [Value]: Regular captured values with full type information
+      - [Start_loc], [End_loc]: Start/end position captures
+      - It handles optional vs required captures based on whether they
+        can be undefined
+
+    - The [lookahead_constraint] function generates pattern matching for
+      branches with lookahead constraints, ensuring only the right tokens
+      trigger each branch.
+
+    - The code generator proceeds in two phases:
+      1. First, it compacts the state machine and outputs bytecode
+      2. Then, it generates semantic actions with proper variable binding
+*)
+
 open Fix.Indexing
 open Utils
 open Misc

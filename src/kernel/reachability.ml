@@ -1,35 +1,78 @@
-(******************************************************************************)
-(*                                                                            *)
-(*                                Reachability                                *)
-(*                                                                            *)
-(* Copyright (c) 2025 Frédéric Bour                                           *)
-(*                                                                            *)
-(* Permission is hereby granted, free of charge, to any person obtaining a    *)
-(* copy of this software and associated documentation files (the "Software"), *)
-(* to deal in the Software without restriction, including without limitation  *)
-(* the rights to use, copy, modify, merge, publish, distribute, sublicense,   *)
-(* and/or sell copies of the Software, and to permit persons to whom the      *)
-(* Software is furnished to do so, subject to the following conditions:       *)
-(*                                                                            *)
-(* The above copyright notice and this permission notice shall be included in   *)
-(* all copies or substantial portions of the Software.                        *)
-(*                                                                            *)
-(* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR *)
-(* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,   *)
-(* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL    *)
-(* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER *)
-(* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING    *)
-(* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER        *)
-(* DEALINGS IN THE SOFTWARE.                                                  *)
-(*                                                                            *)
-(******************************************************************************)
+(* MIT License
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
 
-(** This module computes the reachability of states in a parser automaton. It is
-    used to reason about the behavior of an LR(1) automaton after conflict
-    resolution (with some transitions removed).
-    The module implements algorithms for partitioning lookahead symbols with
-    identical behaviors, and uses these partitions to determine the cost of
-    reaching each state with a given lookahead. *)
+(** Reachability analysis for LR automata after conflict resolution
+
+    This module computes the reachability of states in a parser automaton
+    after conflicts have been resolved (some transitions removed). It's used
+    to reason about the actual behavior of the parser and compute minimal
+    parsing costs.
+
+    Architecture:
+
+    - The module computes classes of terminals that have identical behavior
+      across all transitions. This is used to compact cost matrices.
+
+    - The Tree module builds a DAG of all matrix products that appear in
+      the cost equations.
+
+    - The Cell module provides compact encoding of matrix cells as integers.
+
+    - The Analysis module solves the resulting dataflow problem to compute
+      minimal costs for reaching each state with each lookahead class.
+
+    The module uses:
+    - Tarjan's SCC algorithm for computing strongly connected components
+    - Dataflow analysis with fixpoint iteration for computing costs
+
+    Implementation details:
+
+    - The [Classes] module uses a refinement-based fixedpoint iteration to
+      compute partitionings of terminals. Each SCC is processed in reverse
+      topological order, using the current approximation for recursive
+      occurrences.
+
+    - The [Coercion] module implements the coerce matrices for changing
+      between different partitionings. The [infix] function handles the
+      special case where the last class is omitted (it has infinite cost).
+
+    - The [Tree] module hash-conses the matrix DAG to avoid duplicates.
+      The [ConsedTree] functor produces a tree where inner nodes represent
+      matrix products and leaves represent individual transition costs.
+
+    - The [Cell] module uses a clever bit-packing scheme to encode
+      (node, pre_class, post_class) as a single integer, enabling efficient
+      storage of large cost matrices.
+
+    - The [Solver] module implements two analyses:
+      - Shortest path analysis computing minimal costs
+      - Finite language analysis computing which cells are reachable
+
+    - The [Reversedependencies] module tracks how changes to one cell affect
+      others, enabling efficient incremental updates during the dataflow
+      analysis.
+*)
 
 open Fix.Indexing
 open Utils

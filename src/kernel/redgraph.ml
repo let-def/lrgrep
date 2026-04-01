@@ -1,32 +1,130 @@
 (* MIT License
-
-   Copyright (c) 2025 Frédéric Bour
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *)
 
-(** This module is responsible for computing viable reductions in a LR(1) parser
-    generator. It generates a graph of states, where each state represents a
-    configuration of the parser, including the top of the stack, the rest of the
-    stack, and the current lookahead set. The module also computes transitions
-    between these states based on possible reductions and goto actions.
+(** Reduction graph construction and analysis
+
+    This module builds and manipulates a graph of viable reductions in an LR(1)
+    parser. The reduction graph represents the structure of possible reductions
+    as paths through the automaton, enabling efficient lookahead analysis and
+    priority computation.
+
+    Proceeds in two steps:
+    - Compute the closure ϵ-reductions (reductions that do not consume any
+      input token) for each LR(1) state.
+      This analysis is local (it does not depend on the stack, only on the
+      LR(1) state), and form a tree of possible sequence of ϵ-reductions,
+      ending with optionl "pending", non-ϵ, reductions that need to consume
+      states from the stack to proceed.
+      This closure is represented by stack_tree's and reduction_closure's, and
+      simplifies and speedups latter analyses.
+
+    - Construct a graph whose edges are labelled by LR(1) states and which map
+      an LR(1) stack suffix to the (sequences of) reductions applicable to
+      this configuration.
+      The paths of this graph enumerate all the stack suffixes that can be
+      consumed by reducing. The process is repeated as long as a reduction is
+      applicable, thus a right recursion [A → α A] translates to a cycle.
+      The process also keeps track of lookahead symbols permitting each
+      reduction to strictly simulate the behavior of an LR(1) automaton that
+      possible went through conflict resolution.
+
+    But to recognize a reduction pattern, we have to do the reverse mapping:
+    the user provides the target of a reduction (e.g. I want to reduce an
+    expression), and we need to find the paths that can reach this target.
+    So we introduce a "target" abstraction to which a reduction pattern
+    translate to, a reverse index [target_trie] to go from a pattern to a
+    set of targets, and we associate to each node of the graph the reachable
+    targets.
+
+    Architecture:
+
+    - The graph nodes ("cells") represent configurations of (LR state, reduction
+      position, lookahead set). These are the vertices of the reduction graph.
+
+    - Edges represent transitions: moving from one reduction position to another
+      via goto transitions.
+
+    - The graph is minimization-aware: Valmari's algorithm is used to minimize
+      the graph while preserving the reachability structure needed for
+      computation of minimal costs.
+
+    Key data structures:
+
+    - 'g stack_tree: Represents the tree of possible reduction stacks for a
+      given LR state. Each node contains:
+      - [next]: Subtrees reachable after performing a reduction
+      - [reductions]: Pending non ϵ-reductions at each node, grouped by depth
+
+    - 'g reduction_closure: Complete ϵ-reductions information for an LR state
+      - [accepting], [failing]: Lookaheads that cause acceptance/failure
+      - [stacks]: Stack trees of ϵ-reductions
+      - [all_stacks], [all_reductions]: flattened ϵ-stacks and ϵ-reductions
+
+    - 'g target_trie: Trie for indexing reduction targets reached by sequences of LR(1) states.
+      E.g. if there is a goto transition `s0 -> s1` labelled `expression`, there will be
+        a path `s0 -> s1` labelled `expression target` in the trie.
+      - [sub]: Child nodes for each LR state
+      - [immediates]: States from which the reductions are immediate (ϵ-reductions by definition)
+      - [targets]: Targets reached by the current prefix.
+
+    - 'g graph: The minimized reduction graph, where each cell contains the
+      reductions applicable at that position, and each step contains the
+      transitions from that cell.
+
+    Tricky implementation details:
+
+    - The reduction graph is used to compute lookahead-dependent reduction
+      sequences. Each cell represents either a (state, lookahead) configuration,
+      or an intermediate step in a reduction sequence given by a triple (state,
+      depth, lookahead) (a non-deterministic transition which applies if
+      `state` is `depth` states deep in the stack).
+
+    - The [group_reductions] function groups items being reduced by their depth
+      in the stack, enabling efficient processing of nested reductions.
+
+    - The [index_targets] function creates a trie where each path corresponds
+      to a sequence of goto transitions leading to a target state. The trie
+      nodes mark "immediate" targets (directly reachable via reductions) and
+      track transitions via goto.
+
+    - The reduction graph construction uses a stream-based approach for
+      accessing predecessors, implemented via [get_stream] to avoid
+      recomputing them.
+
+    - The minimization via Valmari's algorithm preserves the reachability
+      structure needed for cost computation while reducing state space.
+
+    - The [step] type represents positions in the reduction graph, and
+      [cells_steps] maps each cell to its step index for efficient cost
+      computation.
+
+    - The [filter_reductions] function updates reduction lookahead sets when
+      the lookahead domain is restricted to preserve LR(1) behaviors.
+
+    - The [follow] function returns either an [Advance] (move to next step)
+      or a [Switch] (transition to different goto targets), enabling the
+      parser to navigate the reduction graph.
 *)
 
 open Fix.Indexing

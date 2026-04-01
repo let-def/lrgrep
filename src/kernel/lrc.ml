@@ -22,14 +22,49 @@
  *)
 
 (** This module constructs a graph refining the LR automaton to reason about
-  reachable configurations---the pairs of an LR state and a lookahead token, the
-  transitions that allow to go from one to another, in order to determine which
-  ones are reachable from initial states. It includes functionality to compute
-  reachable states, wait states, entry points, predecessors, successors, and
-  prefixes for states in the LR automaton.
-  LRC means "LR with classes", where a class is the partition of lookahead
-  symbols with identical behaviors, as determined by the reachability
-  analysis. *)
+    reachable configurations---the pairs of an LR state and a lookahead token, the
+    transitions that allow to go from one to another, in order to determine which
+    ones are reachable from initial states. It includes functionality to compute
+    reachable states, wait states, entry points, predecessors, successors, and
+    prefixes for states in the LR automaton.
+    LRC means "LR with classes", where a class is the partition of lookahead
+    symbols with identical behaviors, as determined by the reachability
+    analysis.
+
+    This module computes a refinement of LR(1) states by reachable "lookahead-classes".
+    When an LR(1) automaton is pruned to resolve conflicts, some sequence of
+    transitions might become unreachable, while the individual transitions
+    themselves stay reachable.
+    For instance a sequence of states s0 -> s1 -> s2 on the stack might be
+    impossible to reach, while s0 -> s1 and s1 -> s2 are individually reachable
+    because there is lookahead that permit to reach both consecutively.
+    Admittedly, this only happens for severely pruned automaton and not matter
+    much in practice. Most of the time, LRC after minimization coincide with
+    LR(1) states.
+    TODO: Maybe I could drop LRC to simplify things and accept the rare
+    over-approximations of reachable stacks? I should quantify the problem
+    by measuring how often LRC diverge from LR(1).
+
+    Key data structures:
+    - 'g n: type-level index for LRC states
+    - ('g, 'n) t: LRC structure with LR1_of, lrcs_of mappings and transition relations
+    - 'n entrypoints: Reachability info including some_prefix for minimal paths
+
+    Main functions:
+    - make: Build LRC from grammar and reachability analysis
+    - make_minimal: Build minimal LRC via Valmari's algorithm
+    - from_entrypoints: Compute reachability from specific entrypoints
+    - check_deterministic: Verify LRC automaton is deterministic (debugging)
+    - check_equivalence: Check equivalence of two LRC structures (debugging)
+
+    Tricky implementation details:
+    - The [make_minimal] function uses Valmari's algorithm to quotient
+      equivalent LRC states, significantly reducing memory usage.
+    - The [some_prefix] function computes minimal-length paths to each state.
+    - FIXME: Prefixes are minimal in number of symbols, not in number of
+      terminals, which is ultimately what we care about when generating
+      counter-examples. A short prefix can expand to a long sentence.
+*)
 
 open Utils
 open Misc

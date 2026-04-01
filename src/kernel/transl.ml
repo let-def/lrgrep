@@ -1,26 +1,83 @@
 (* MIT License
-
-   Copyright (c) 2025 Frédéric Bour
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *)
+
+(** Translation from syntax to regular expressions
+
+    This module handles the translation of pattern syntax (from the grammar)
+    into regular expression structures that can be processed by the compilation
+    pipeline.
+
+    Main components:
+
+    - Indices module: Pre-computes many-to-many mappings between symbols and
+      LR states:
+      - [by_incoming_symbol]: Maps each symbol to the set of LR states that
+        have a transition on that symbol
+      - [prod_by_lhs]: Maps each nonterminal to the set of productions that
+        have it as LHS
+      - [by_items]: Maps each LR(0) item to the set of LR1 states that
+        recognizes it
+
+    - Globbing module: Implements pattern globbing for filters, allowing
+      patterns like `[foo _* bar]` to match any sequence that starts with
+      `foo`, ends with `bar`, with any symbols in between.
+
+      - [struct_filter]: Parses a glob pattern into components
+      - [normalize_filter]: Normalizes the parsed components
+      - [extract]: Given a right-hand side, finds the positions where the
+        pattern matches (dots表示位置 where symbols can vary)
+
+    - [transl_filter]: Translates filter patterns into sets of LR states that
+      satisfy the filter.
+
+    - [transl]: The main translation function that converts a regular expression
+      from the syntax tree into an Expr.t regular expression structure.
+
+    Tricky implementation details:
+
+    - Globbing implements substring matching with optional wildcards (`_` for
+      exact match, `.*` for skip). The [match_skip] and [extract_skip]
+      functions implement sophisticated backtracking to find all matching
+      positions.
+
+    - The [compile_reduce_expr] function uses the Redgraph.target_trie to
+      find all states where a reduction can occur. It tracks both immediate
+      reductions (can happen now) and deferred reductions (need to follow
+      transitions first).
+
+    - The translation handles two modes:
+      - Regular mode: Normal parsing with captures
+      - Reduction mode: Used internally for nested reductions within
+        reductions (which aren't allowed, hence the error)
+
+    - The [Usage] system tracks which parser constructs are actually used,
+      enabling dead-code analysis.
+
+    - Filters can match on the left-hand side (which production) and right-hand
+      side (which sequence of symbols). The globbing system enables powerful
+      pattern matching on the parse stack contents.
+*)
 
 open Utils
 open Misc
