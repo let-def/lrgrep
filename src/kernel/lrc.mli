@@ -52,7 +52,7 @@
       - [wait]: Wait states among reachable states
       - [entrypoints]: The initial entrypoint states
       - [successors], [predecessors]: Transition relations
-      - [some_prefix]: Computing prefixes to reach states
+      - [some_prefix]: Computing prefixes to reach states, returning both length and path.
 
     - 'g mlrc: Minimal LRC states (minimized via Valmari's algorithm)
 
@@ -105,7 +105,11 @@ type 'n entrypoints = {
   entrypoints: 'n indexset;
   successors: ('n, 'n indexset) vector;
   predecessors: ('n, 'n indexset) vector;
-  some_prefix: 'n index -> 'n index list;
+  some_prefix: 'n index -> int * 'n index list;
+  (** [some_prefix state] returns a prefix to reach [state] from an entrypoin.
+      The prefix's length and the sequence of states (excluding [state]) are
+      given, starting from the end.
+      Thus, [List.rev (state :: some_prefix state)] is a valid prefix. *)
 }
 
 val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints

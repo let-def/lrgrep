@@ -212,7 +212,11 @@ type 'n entrypoints = {
   entrypoints: 'n indexset;
   successors: ('n, 'n indexset) vector;
   predecessors: ('n, 'n indexset) vector;
-  some_prefix: 'n index -> 'n index list;
+  some_prefix: 'n index -> int * 'n index list;
+  (** [some_prefix state] returns a prefix to reach [state] from an entrypoin.
+      The prefix's length and the sequence of states (excluding [state]) are
+      given, starting from the end.
+      Thus, [List.rev (state :: some_prefix state)] is a valid prefix. *)
 }
 
 (* Find states reachable from specific states by closing over raw reachability
@@ -249,16 +253,19 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
   (* Wait states that are reachable *)
   let wait = IndexSet.inter lrc_graph.all_wait reachable in
 
-  (* Compute a prefix to reach each state *)
+  (* Compute a prefix to reach each state.
+     The prefix is represented as (length, path) to avoid reconstructing
+     the path when only the length is needed for coverage analysis. *)
   let some_prefix =
     let table = lazy (
-      let table = Vector.make (count lrc_graph) [] in
+      let table = Vector.make (count lrc_graph) (0, []) in
       let todo = ref [] in
       let expand prefix state =
         match Vector.get table state with
-        | [] ->
+        | (0, []) ->
           Vector.set table state prefix;
-          let prefix = state :: prefix in
+          let length, prefix = prefix in
+          let prefix = (length + 1, state :: prefix) in
           let succ = successors.:(state) in
           if IndexSet.is_not_empty succ then
             push todo (succ, prefix)
@@ -266,7 +273,7 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
       in
       Vector.iteri (fun lr1 lrcs ->
           if Option.is_none (Lr1.incoming g lr1) then
-            expand [] (Option.get (IndexSet.minimum lrcs)))
+            expand (0, []) (Option.get (IndexSet.minimum lrcs)))
         lrc_graph.lrcs_of;
       let propagate (succ, prefix) =
         IndexSet.iter (expand prefix) succ

@@ -360,7 +360,8 @@ let do_compile spec (cp : Code_printer.t option) =
               Printf.fprintf oc "\n# Uncovered case %d\n" !cases;
               Coverage.report_case grammar stacks !!reachability
                 ~output:(output_string oc)
-                ~get_prefix:entrypoints.some_prefix
+                ~get_prefix:(fun lrc -> snd (entrypoints.some_prefix lrc))
+                (* Extract path from (length, path) tuple for coverage reporting. *)
                 case
             in
             report x;
@@ -448,7 +449,8 @@ let enumerate_command () =
               sentence.edges
               [sentence.entry]
           in
-          let lrcs = List.rev_append (subset.some_prefix lrc) suffix in
+          (* Prepend path from (length, path) prefix for sentence generation. *)
+          let lrcs = List.rev_append (snd (subset.some_prefix lrc)) suffix in
           let lr1s = List.map stacks.label lrcs in
           let terms = Sentence_generation.sentence_of_stack grammar !!reachability lr1s in
           Printf.printf
