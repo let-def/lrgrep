@@ -21,12 +21,32 @@
  * SOFTWARE.
  *)
 
-(** This module defines data structures and operations for handling grammar
-  information in a structured way. It includes representations for terminals,
-  non-terminals, productions, and LR states, along with their transitions and
-  reductions. The module is designed to work with Menhir's grammar
-  representation and extends it with additional functionality for
-  convenience. *)
+(** Grammar information interface
+
+    This module exports data structures and operations for handling grammar
+    information. It provides indexed representations of grammars with type-level
+    cardinalities for type-safe access.
+
+    Main components:
+
+    - The [Lift] module takes Menhir's grammar representation and computes
+      all index structures for the grammar.
+
+    - Types for grammar elements with their indices:
+      - [terminal], [nonterminal], [symbol], [production], [item]
+      - [lr0], [lr1]: LR(0) and LR(1) states
+      - [goto_transition], [shift_transition], [transition]: Transitions
+      - [reduction]: Reductions
+
+    - Module interfaces for each grammar element:
+      - [Terminal], [Nonterminal], [Symbol], [Production], [Item]
+      - [Lr0], [Lr1], [Transition], [Reduction]
+
+    Each module provides:
+      - [cardinal]: The size of the index set
+      - [of_int]: Construct an index from an integer
+      - Type-specific functions for accessing properties
+*)
 
 open Utils
 open Misc

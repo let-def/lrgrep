@@ -19,14 +19,61 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
-*)
+ *)
 
-(** This module defines data structures and operations for handling grammar
-    information in a structured way. It includes representations for terminals,
-    non-terminals, productions, and LR states, along with their transitions and
-    reductions. The module is designed to work with Menhir's grammar
-    representation and extends it with additional functionality for
-    convenience. *)
+(** Grammar information and index management
+
+    This module defines comprehensive data structures for representing grammars
+    and provides indexed representations of all grammar elements (terminals,
+    non-terminals, productions, LR states, items, etc.).
+
+    Design principles:
+
+    - The module uses type-level index cardinalities to ensure type-safe
+      access to grammar structures.
+
+    - All data structures are vector-based for efficient random access.
+
+    - The module extends Menhir's grammar representation with additional
+      convenience functions and derived information.
+
+    Key data structures:
+
+    - Grammar: Contains all grammar information:
+      - [terminal_*, nonterminal_*]: Sets and tables for terminals and
+        non-terminals
+      - [production_*]: Productions with LHS and RHS information
+      - [item_*]: LR(0) items derived from productions
+      - [lr0_*], [lr1_*]: LR(0) and LR(1) states
+      - [transition_*]: Transitions between states (shift and goto)
+      - [reduction_*]: Reductions available at each LR state
+
+    - Indexing:
+      - Each grammar element is assigned a unique index
+      - Index vectors enable O(1) lookup of properties
+      - The [Lift] module computes all the index mappings from Menhir's
+        grammar representation
+
+    Tricky implementation details:
+
+    - The [Item] module computes offsets for items based on production
+      lengths, enabling efficient conversion between production+position
+      and item indices.
+
+    - The [Transition] module separately tracks goto and shift transitions,
+      with [goto_table] enabling efficient lookup of goto transitions by
+      (state, nonterminal) pair.
+
+    - The [Reduction] module groups reductions by (state, production) pairs
+      with their lookahead sets, supporting efficient lookup of applicable
+      reductions.
+
+    - The [Symbol] module provides both terminal/nonterminal projections and
+      the combined symbol type for representing grammar symbols.
+
+    - The [find] functions with [approx] support fuzzy matching and provide
+      helpful error messages with suggestions when symbols are not found.
+*)
 
 open Utils
 open Misc
@@ -860,7 +907,7 @@ module Transition = struct
     | Some gt -> gt
     | None ->
       Printf.ksprintf invalid_arg "find_goto(%s, %s)"
-        (Lr1.to_string g lr1) (Nonterminal.to_string g lr1)
+        (Lr1.to_string g lr1) (Nonterminal.to_string g nt)
 
   let find_goto_target g lr1 nt =
     g.transition_target.:(of_goto g (find_goto g lr1 nt))
