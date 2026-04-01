@@ -160,12 +160,12 @@ let analyze_stack grammar (rcs : (_, _ Kernel.Redgraph.reduction_closure) vector
   let outer = ref [] in
   let reached_state ~is_goto lookaheads state =
     let rc = rcs.:(state) in
-    outer := merge_reductions (!outer, filter_reductions lookaheads rc.reductions);
+    outer := merge_reductions (!outer, filter_reductions lookaheads rc.all_reductions);
     failing := IndexSet.fused_inter_union rc.failing lookaheads ~acc:!failing;
     let rec visit_stacks (stack, lookaheads', sub') =
       if not (IndexSet.disjoint lookaheads lookaheads') then (
         print_stack grammar config ~is_goto stack;
-        List.iter visit_stacks sub'.Kernel.Redgraph.subs
+        List.iter visit_stacks sub'.Kernel.Redgraph.next
       )
     in
     visit_stacks ([state], lookaheads, rc.stacks)
