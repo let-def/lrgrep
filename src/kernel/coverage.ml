@@ -266,7 +266,7 @@ module Andor = struct
       in
       let counter = ref 0 in
       fixpoint ~counter ~propagate todo;
-      stopwatch 1 "fenum Andor construction: %d iterations, %d propagations, %d nodes"
+      stopwatch 1 "Andor construction: %d iterations, %d propagations, %d nodes"
         !counter !propagations (cardinal Nodes.n);
     end;
     let nodes = Gen.freeze nodes in
@@ -361,7 +361,7 @@ module Deter = struct
     in
     let counter = ref 0 in
     fixpoint ~counter ~propagate todo;
-    stopwatch 1 "fenum Deter construction: %d iterations, %d initials, %d nodes"
+    stopwatch 1 "Deter construction: %d iterations, %d initials, %d nodes"
       !counter (IndexMap.cardinal initials) (cardinal Nodes.n);
     let nodes = Gen.freeze nodes in
     Graph {initials; nodes}
@@ -463,7 +463,6 @@ module Enum = struct
       update None target (IndexSet.diff regular accept)
     end dgr.initials;
     fixpoint ~counter ~propagate todo;
-    stopwatch 1 "fenum compute unaccepted";
     let pfx_min = ref max_int and pfx_max = ref 0 in
     Vector.iter begin fun node ->
       if Array.length node.Deter.successors = 0 then (
@@ -620,7 +619,7 @@ module Cover = struct
       ignore (update st (IndexSet.diff regular accept))
     end dgr.initials;
     fixpoint ~counter ~propagate todo;
-    stopwatch 1 "dcoverage (%d iterations, %d propagations, %d uncovered states)"
+    stopwatch 1 "Cover (%d iterations, %d propagations, %d uncovered states)"
       !counter !propagations (List.length !uncovered);
     let enum = {
       Enum.domain = Ker.n;
