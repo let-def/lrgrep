@@ -33,11 +33,15 @@ let (!!) = Lazy.force
 module Interpreter = Interpreter
 module Message_file = Message_file
 
+type 'a with_position = 'a * Lexing.position * Lexing.position
+
 module type CUSTOM_GRAMMAR = sig
   type g
   val grammar : g grammar
   val string_of_terminal : (g terminal index -> string) option
   val string_of_sentence : (g terminal index list -> string) option
+  val sentence_lexer : (in_channel -> string with_position option *
+                                      g terminal index with_position list) option
 end
 
 module Lazy_grammar (Load : functor() -> CUSTOM_GRAMMAR) : sig
@@ -210,6 +214,7 @@ Examples:
                   include I
                   let string_of_terminal = None
                   let string_of_sentence = None
+                  let sentence_lexer = None
                 end : CUSTOM_GRAMMAR)
               with exn ->
                 fatal_error ~exn "cannot load grammar file %S" path
@@ -229,6 +234,9 @@ Examples:
 
   let builtin_print_sentence =
     lazy (let module G = Force() in G.string_of_sentence)
+
+  let builtin_sentence_lexer =
+    lazy (let module G = Force() in G.sentence_lexer)
 
   let parser_name =
     match Language.grammar with
@@ -660,7 +668,8 @@ Examples:
   let opt_interpret_items = ref false
 
   let interpret_command () =
-    let parser = Interpreter.make_parser !!grammar in
+    let grammar = !!grammar in
+    let parser = Interpreter.make_parser grammar in
     let config =
       Interpreter.config
         ~print_reduce_filter:!opt_interpret_patterns
@@ -670,28 +679,33 @@ Examples:
     let rec loop () =
       output_string stdout "$ ";
       flush stdout;
-      match input_line stdin with
-      | exception End_of_file -> ()
-      | line ->
-        match Interpreter.lift_sentence !!grammar line with
-        | exception Exit ->
-          flush_all ();
-          loop ()
-        | sentence ->
-          let entrypoint =
-            match sentence.entrypoint with
-            | None -> Option.get (IndexSet.minimum (Lr1.entrypoints !!grammar))
-            | Some (ep, _, _) -> ep
-          in
-          let stack, _final_stack, remainder =
-            Interpreter.parse_sentence parser
-              (entrypoint, Lexing.dummy_pos, Lexing.dummy_pos)
-              (List.to_seq sentence.symbols)
-          in
-          let remainder = List.map (fun (x, _, _) -> x) (List.of_seq remainder) in
-          Interpreter.analyze_stack ~stack ~remainder
-            !!grammar !!red_closure config;
-          loop ()
+      match
+        (* Lex one sentence *)
+        match !!builtin_sentence_lexer with
+        | None -> Interpreter.lift_sentence grammar (input_line stdin)
+        | Some f ->
+          let entrypoint, symbols = f stdin in
+          let entrypoint = Option.map (Interpreter.lift_entrypoint grammar) entrypoint in
+          {entrypoint; symbols}
+      with
+      | exception Exit ->
+        flush_all ();
+        loop ()
+      | sentence ->
+        let entrypoint =
+          match sentence.entrypoint with
+          | None -> Option.get (IndexSet.minimum (Lr1.entrypoints grammar))
+          | Some (ep, _, _) -> ep
+        in
+        let stack, _final_stack, remainder =
+          Interpreter.parse_sentence parser
+            (entrypoint, Lexing.dummy_pos, Lexing.dummy_pos)
+            (List.to_seq sentence.symbols)
+        in
+        let remainder = List.map (fun (x, _, _) -> x) (List.of_seq remainder) in
+        Interpreter.analyze_stack ~stack ~remainder
+          grammar !!red_closure config;
+        loop ()
     in
     loop ()
 
@@ -758,6 +772,7 @@ let run_custom_lrgrep
     ~language_name ~parser_module_name ~(grammar:g grammar)
     ?string_of_terminal
     ?string_of_sentence
+    ?sentence_lexer
     ()
   =
   let open Make(struct
@@ -767,6 +782,7 @@ let run_custom_lrgrep
         let grammar = grammar
         let string_of_terminal = string_of_terminal
         let string_of_sentence = string_of_sentence
+        let sentence_lexer = sentence_lexer
       end : CUSTOM_GRAMMAR)
       let parser_name = parser_module_name
     end)()

@@ -36,7 +36,7 @@ type 'g sentence = {
   symbols: ('g terminal index, Lexing.position) with_position list;
 }
 
-let lift_sentence g sentence =
+let lex_sentence sentence =
   (* Step 1: extract optional entrypoint and symbols *)
   let lexbuf = Lexing.from_string ~with_positions:true sentence in
   Lexing.set_filename lexbuf "input";
@@ -61,32 +61,35 @@ let lift_sentence g sentence =
     | `COLON -> (Some candidate, symbols [])
     | other  -> (None, symbols [symbol other; candidate])
   in
-  (* Step 2: lift to grammatical entities *)
-  let lift_entrypoint (sym, startp, endp) =
-    let entrypoints = Lr1.entrypoint_table g in
-    match Hashtbl.find_opt entrypoints sym  with
-    | None ->
-      Syntax.nonfatal_error
-        startp
-        "unknown entrypoint %S%a\n"
-        sym
-        (print_dym (fun (_,s,_) -> s))
-        (Damerau_levenshtein.filter_approx ~dist:10 sym
-           (Hashtbl.to_seq entrypoints));
-      raise Exit
-    | Some sym -> (sym, startp, endp)
-  in
-  let lift_terminal (sym, startp, endp) =
-    match Terminal.find g sym with
-    | Result.Ok t -> (t, startp, endp)
-    | Result.Error dym ->
-      Syntax.nonfatal_error startp
-        "unknown terminal %S%a\n" sym
-        (print_dym (fun (_,s,_) -> s)) dym;
-      raise Exit
-  in
-  let entrypoint = Option.map lift_entrypoint entrypoint in
-  let symbols = List.map lift_terminal symbols in
+  (entrypoint, symbols)
+
+let lift_entrypoint g (sym, startp, endp) =
+  let entrypoints = Lr1.entrypoint_table g in
+  match Hashtbl.find_opt entrypoints sym  with
+  | None ->
+    Syntax.nonfatal_error
+      startp
+      "unknown entrypoint %S%a\n"
+      sym
+      (print_dym (fun (_,s,_) -> s))
+      (Damerau_levenshtein.filter_approx ~dist:10 sym
+         (Hashtbl.to_seq entrypoints));
+    raise Exit
+  | Some sym -> (sym, startp, endp)
+
+let lift_terminal g (sym, startp, endp) =
+  match Terminal.find g sym with
+  | Result.Ok t -> (t, startp, endp)
+  | Result.Error dym ->
+    Syntax.nonfatal_error startp
+      "unknown terminal %S%a\n" sym
+      (print_dym (fun (_,s,_) -> s)) dym;
+    raise Exit
+
+let lift_sentence g sentence =
+  let entrypoint, symbols = lex_sentence sentence in
+  let entrypoint = Option.map (lift_entrypoint g) entrypoint in
+  let symbols = List.map (lift_terminal g) symbols in
   { entrypoint; symbols }
 
 let print_loc ((loc_start : Lexing.position), (loc_end : Lexing.position)) =

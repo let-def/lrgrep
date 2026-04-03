@@ -27,11 +27,15 @@ open Fix.Indexing
 
 val run_lrgrep : unit -> unit
 
+type 'a with_position = 'a * Lexing.position * Lexing.position
+
 val run_custom_lrgrep
   : language_name:string
   -> parser_module_name:string
   -> grammar:'g grammar
   -> ?string_of_terminal:('g terminal index -> string)
   -> ?string_of_sentence:('g terminal index list -> string)
+  -> ?sentence_lexer:(in_channel -> string with_position option *
+                                    'g terminal index with_position list)
   -> unit
   -> unit
