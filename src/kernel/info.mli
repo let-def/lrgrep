@@ -56,11 +56,9 @@ module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
 type 'g grammar
 
-module Lift() : sig
+module Load_grammar(G : MenhirSdk.Cmly_api.GRAMMAR) : sig
   type g
-  module Load_grammar(G : MenhirSdk.Cmly_api.GRAMMAR) : sig
-    val grammar : g grammar
-  end
+  val grammar : g grammar
 end
 
 type 'g terminal

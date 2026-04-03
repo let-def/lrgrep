@@ -1,15 +1,9 @@
 (executable
- (name main)
+ (name lrgrep)
  (public_name lrgrep)
- (modules main message_file)
- (libraries lrgrep_interpreter cmon fix front kernel menhirSdk support utils valmari perfctl))
+ (libraries lrgrep_top))
 
 (executable
  (name minilrgrep)
  (modules minilrgrep)
  (libraries cmon fix front kernel menhirSdk support unix utils valmari))
-
-(executable
- (name test)
- (modules test)
- (libraries bit_lib))

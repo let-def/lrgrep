@@ -1,0 +1,8 @@
+(executable
+ (name bitlib)
+ (modules bitlib)
+ (libraries bit_lib))
+
+(rule
+ (alias runtest)
+ (action (run ./bitlib.exe)))

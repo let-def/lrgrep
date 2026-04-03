@@ -2,7 +2,7 @@ open Fix.Indexing
 open Utils
 open Misc
 open Kernel.Info
-open Lrgrep_interpreter
+open Interpreter
 
 let classify_line txt =
   let is_whitespace = function ' ' | '\t' -> true | _ -> false in
