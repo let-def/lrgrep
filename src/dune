@@ -7,3 +7,8 @@
  (name minilrgrep)
  (modules minilrgrep)
  (libraries cmon fix front kernel menhirSdk support unix utils valmari))
+
+(executable
+ (name embed)
+ (public_name lrgrep-embed)
+ (modules embed))
