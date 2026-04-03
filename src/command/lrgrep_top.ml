@@ -677,12 +677,13 @@ Examples:
         ()
     in
     let rec loop () =
-      output_string stdout "$ ";
-      flush stdout;
       match
         (* Lex one sentence *)
         match !!builtin_sentence_lexer with
-        | None -> Interpreter.lift_sentence grammar (input_line stdin)
+        | None ->
+          output_string stdout "$ ";
+          flush stdout;
+          Interpreter.lift_sentence grammar (input_line stdin)
         | Some f ->
           let entrypoint, symbols = f stdin in
           let entrypoint = Option.map (Interpreter.lift_entrypoint grammar) entrypoint in
@@ -691,6 +692,7 @@ Examples:
       | exception Exit ->
         flush_all ();
         loop ()
+      | exception End_of_file -> ()
       | sentence ->
         let entrypoint =
           match sentence.entrypoint with

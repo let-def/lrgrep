@@ -24,6 +24,7 @@
 
 %{
 
+[@@@ocaml.warning "-9"]
 [@@@ocaml.warning "-60"] module Str = Ast_helper.Str (* For ocamldep *)
 [@@@ocaml.warning "+60"]
 
@@ -392,7 +393,7 @@ let mk_indexop_expr array_indexing_operator ~loc
   let args = (Nolabel,array) :: index @ set_arg in
   mkexp ~loc (Pexp_apply(ghexp ~loc (Pexp_ident fn), args))
 
-let indexop_unclosed_error loc_s s loc_e =
+let _indexop_unclosed_error loc_s s loc_e =
   let left, right = paren_to_strings s in
   unclosed left loc_s right loc_e
 

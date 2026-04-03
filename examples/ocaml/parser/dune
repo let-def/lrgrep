@@ -3,7 +3,9 @@
   (deps    parser.cmly)
   (action
     (with-stdout-to %{targets}
-       (run lrgrep-embed grammar=parser.cmly))))
+       (run lrgrep-embed content=parser.cmly))))
+
+(ocamllex lexer)
 
 (menhir
   (modules parser)
@@ -11,5 +13,5 @@
 
 (library
  (name ocaml_parser)
- (modules parser grammar_data)
-  (libraries compiler-libs.common))
+ (modules lexer parser grammar_data)
+  (libraries menhirLib compiler-libs.common))
