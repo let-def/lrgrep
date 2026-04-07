@@ -381,14 +381,6 @@ Examples:
           (Printexc.to_string exn)
   )
 
-  let report_cases oc =
-    let cases = ref 0 in
-    fun lr0 ->
-      incr cases;
-      Printf.fprintf oc "## Pattern %d\n\n```\n" !cases;
-      List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern !!grammar lr0);
-      Printf.fprintf oc "```\n\n"
-
   let print_terminal g t =
     match !opt_terminal_printer with
     | `Name -> Terminal.to_string g t
@@ -404,39 +396,63 @@ Examples:
     | None -> string_concat_map " " (print_terminal !!grammar)
   )
 
-  let report_samples oc (stacks : _ Automata.stacks) ~some_prefix ~get_lrc ~reached lr0 ~all =
-    let samples = ref 0 in
-    fun (tactic, failing) ->
-      let grammar = !!grammar in
-      let suffix = List.rev_map get_lrc tactic in
-      let _, prefix = some_prefix (List.hd suffix) in
-      let stack =
-        list_rev_mappend stacks.label prefix @@
-        List.map stacks.label suffix
-      in
-      incr samples;
-      Printf.fprintf oc "### Sample %d\n\n" !samples;
-      let terms = Sentence_generation.sentence_of_stack grammar !!reachability stack in
-      Printf.fprintf oc "Sentence:\n```\n%s\n```\n" (!!print_sentence terms);
-      Printf.fprintf oc "Stack:\n```\n%s\n```\n"
-        (string_concat_map " " (Lr1.symbol_to_string grammar) stack);
-      Printf.fprintf oc "Rejected when looking ahead at any of the terminals in:\n\
-                         ```\n%s\n```\n"
-        (String.concat " " (List.rev_map (print_terminal grammar) (IndexSet.elements failing)));
-      if all then (
-        let lr0s =
-          List.fold_left (fun acc n -> IndexSet.union (reached n) acc) IndexSet.empty tactic
-        in
-        let lr0s = IndexSet.remove lr0 lr0s in
-        if IndexSet.is_not_empty lr0s then (
-          Printf.fprintf oc "Also covered by the following patterns:\n```\n";
-          IndexSet.iter begin fun lr0 ->
-            List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern grammar lr0)
-          end lr0s;
-          Printf.fprintf oc "```\n";
-        )
-      );
-      Printf.fprintf oc "\n"
+  type 'g report_sample = {
+    stack: 'g lr1 index list;
+    sentence: g terminal index list;
+    failing: 'g terminal indexset;
+    patterns: 'g lr0 indexset;
+  }
+
+  let prepare_sample grammar (stacks : _ Automata.stacks)
+      ~some_prefix ~get_lrc ~reached lr0 ~all (tactic, failing)
+    =
+    let suffix = List.rev_map get_lrc tactic in
+    let _, prefix = some_prefix (List.hd suffix) in
+    let stack =
+      list_rev_mappend stacks.label prefix @@
+      List.map stacks.label suffix
+    in
+    let sentence = Sentence_generation.sentence_of_stack grammar !!reachability stack in
+    let patterns =
+      if all then
+        IndexSet.remove lr0 @@
+        List.fold_left (fun acc n -> IndexSet.union (reached n) acc) IndexSet.empty tactic
+      else
+        IndexSet.empty
+    in
+    {stack; sentence; failing; patterns}
+
+  let report_text_sample oc grammar i {stack; sentence; failing; patterns} =
+    Printf.fprintf oc "### Sample %d\n\n" i;
+    Printf.fprintf oc "Sentence:\n```\n%s\n```\n" (!!print_sentence sentence);
+    Printf.fprintf oc "Stack:\n```\n%s\n```\n"
+      (string_concat_map " " (Lr1.symbol_to_string grammar) stack);
+    Printf.fprintf oc "Rejected when looking ahead at any of the terminals in:\n\
+                       ```\n%s\n```\n"
+      (String.concat " " (List.rev_map (print_terminal grammar) (IndexSet.elements failing)));
+    if IndexSet.is_not_empty patterns then begin
+      Printf.fprintf oc "Also covered by the following patterns:\n```\n";
+      IndexSet.iter begin fun lr0 ->
+        List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern grammar lr0)
+      end patterns;
+      Printf.fprintf oc "```\n";
+    end;
+    Printf.fprintf oc "\n"
+
+  let report_text oc grammar header cases =
+    begin match header with
+      | `Rule name -> Printf.fprintf oc "# Rule %s\n" name
+      | `Enum_maximal -> Printf.fprintf oc "# Maximal patterns\n\n"
+      | `Enum_other -> Printf.fprintf oc "# Other reduce-filter patterns\n\n";
+    end;
+    let count = ref 0 in
+    Seq.iter begin fun (lr0, samples) ->
+      Printf.fprintf oc "## Pattern %d\n\n```\n" !count;
+      incr count;
+      List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern grammar lr0);
+      Printf.fprintf oc "```\n\n";
+      Seq.iteri (report_text_sample oc grammar) samples
+    end cases
 
   let do_compile spec (cp : Code_printer.t option) =
     let grammar = !!grammar in
@@ -493,7 +509,6 @@ Examples:
           begin match compiler_cover_output with
             | lazy None -> ()
             | lazy (Some oc) ->
-              Printf.fprintf oc "# Rule %s\n" rule.name;
               let get_lrc st =
                 match Sum.prj stacks.domain (cgr.position st) with
                 | L lrc -> lrc
@@ -521,13 +536,12 @@ Examples:
                   ~globals:[||]
                   ~reached
               in
-              let report_case = report_cases oc in
-              Seq.iter begin fun (lr0, sentences) ->
-                report_case lr0;
-                Seq.iter (report_samples oc stacks
-                            ~some_prefix:entrypoints.some_prefix
-                            ~get_lrc ~reached lr0 ~all:false) sentences
-              end locals;
+              report_text oc grammar (`Rule rule.name)
+                (Seq.map (fun (lr0, sentences) ->
+                     (lr0, Seq.map (prepare_sample grammar stacks
+                                      ~some_prefix:entrypoints.some_prefix
+                                      ~get_lrc ~reached lr0 ~all:false) sentences))
+                    locals);
 
           end;
           stopwatch 1 "coverage report";
@@ -590,27 +604,21 @@ Examples:
         ~goals:(Lr0.cardinal grammar)
         ~graph ~maximals ~globals ~reached
     in
-    Printf.printf "# Maximal patterns\n\n";
-    let report_case = report_cases stdout in
-    let report_samples lr0 =
-      report_samples stdout stacks
+    let prepare_sample lr0 =
+      prepare_sample grammar stacks
         ~some_prefix:subset.some_prefix
         ~get_lrc:(fun node -> Deter.get_lrc agr dgr.Deter.nodes.:(node))
         ~reached:(Deter.get_lr0 grammar rcs stacks rtbl agr dgr)
-        lr0
         ~all:!opt_enum_all
+        lr0
     in
-    Seq.iter begin fun (lr0, sentences) ->
-      report_case lr0;
-      Seq.iter (report_samples lr0) sentences
-    end locals;
-    if !opt_enum_all then begin
-      Printf.printf "# Other reduce-filter patterns\n\n";
-      Seq.iter begin fun (lr0, sentences) ->
-        report_case lr0;
-        Seq.iter (report_samples lr0) sentences
-      end globals;
-    end
+    let prepare_samples seq =
+      seq |> Seq.map @@ fun (lr0, sentences) ->
+      (lr0, Seq.map (prepare_sample lr0) sentences)
+    in
+    report_text stdout grammar `Enum_maximal (prepare_samples locals);
+    if !opt_enum_all then
+      report_text stdout grammar `Enum_other (prepare_samples globals)
 
   (* Command import *)
 
