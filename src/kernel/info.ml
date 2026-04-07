@@ -109,6 +109,7 @@ type 'g grammar = {
   terminal_all: 'g terminal indexset;
   terminal_regular: 'g terminal indexset;
   terminal_table : (string, 'g terminal index) Hashtbl.t;
+  terminal_aliases : (string, string) Hashtbl.t lazy_t;
   nonterminal_n : 'g nonterminal cardinal;
   nonterminal_all: 'g nonterminal indexset;
   nonterminal_table : (string, 'g nonterminal index) Hashtbl.t;
@@ -178,6 +179,16 @@ module Lift() = struct
           | `EOF | `REGULAR -> true
           | `PSEUDO | `ERROR -> false
         )
+      let aliases = lazy (
+        let table = Hashtbl.create 7 in
+        let open G.Surface in
+        List.iter begin fun (name, token) ->
+          match Token.alias token with
+          | Some alias -> Hashtbl.add table name alias
+          | None -> ()
+        end (Syntax.tokens G.Surface.before_inlining);
+        table
+      )
     end
 
     module Nonterminal = Import(UC_nonterminal)(G.Nonterminal)
@@ -472,6 +483,7 @@ module Lift() = struct
       terminal_all            = Terminal.all;
       terminal_regular        = Terminal.regular;
       terminal_table          = Hashtbl.create 7;
+      terminal_aliases        = Terminal.aliases;
       nonterminal_n           = Nonterminal.n;
       nonterminal_all         = Nonterminal.all;
       nonterminal_table       = Hashtbl.create 7;
@@ -527,6 +539,9 @@ module Terminal = struct
   let to_string g i =
     let open (val g.raw) in
     Terminal.name (Terminal.of_int (Index.to_int i))
+
+  let alias g i =
+    Hashtbl.find_opt (Lazy.force g.terminal_aliases) (to_string g i)
 
   let all g = g.terminal_all
 

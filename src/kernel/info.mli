@@ -95,6 +95,8 @@ module Terminal : sig
   include INDEXED with type 'g n = 'g terminal
 
   val to_string : 'g grammar -> 'g n index -> string
+  val alias : 'g grammar -> 'g n index -> string option
+
   val all : 'g grammar -> 'g n indexset
   val regular : 'g grammar -> 'g n indexset
 
