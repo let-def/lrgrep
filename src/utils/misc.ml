@@ -648,3 +648,35 @@ let rec list_last = function
   | [] -> None
   | [x] | [_; x] | [_; _; x] -> Some x
   | _ :: _ :: _ :: xs -> list_last xs
+
+let escape_json_substring out s i l =
+  let i' = ref i in
+  let flush i =
+    if !i' < i then (
+      out s !i' (i - !i');
+    );
+    i' := i + 1
+  in
+  for i = i to i + l - 1 do
+    match
+      match s.[i] with
+      | '"'  -> Some "\\\""
+      | '\\' -> Some "\\\\"
+      | '\b' -> Some "\\b"
+      | '\n' -> Some "\\n"
+      | '\r' -> Some "\\r"
+      | '\t' -> Some "\\t"
+      | c when Char.code c < 32 ->
+        (* Escape control characters as \uXXXX *)
+        Some (Printf.sprintf "\\u%04x" (Char.code c))
+      | _ -> None
+    with
+    | None -> ()
+    | Some escape ->
+      flush i;
+      out escape 0 (String.length escape)
+  done;
+  flush (i + l)
+
+let escape_json_string out s =
+  escape_json_substring out s 0 (String.length s)
