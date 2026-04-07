@@ -171,11 +171,38 @@ struct
         | `PSEUDO | `ERROR -> false
       )
     let aliases = lazy (
+      let b = Buffer.create 32 in
+      let unescape s =
+        let length = String.length s in
+        if length = 0 || s.[0] <> '"' then
+          s
+        else
+          let length = if s.[length - 1] = '"' then length - 1 else length in
+          let i = ref 1 in
+          Buffer.clear b;
+          while !i < length do
+            match s.[!i] with
+            | '\\' ->
+              if !i + 1 < length then begin
+                match s.[!i + 1] with
+                | '"' | '\\' as c -> Buffer.add_char b c
+                | 'n' -> Buffer.add_char b '\n'
+                | 'r' -> Buffer.add_char b '\r'
+                | 't' -> Buffer.add_char b '\t'
+                | c -> Buffer.add_char b c
+              end;
+              i := !i + 2
+            | c ->
+              Buffer.add_char b c;
+              incr i
+          done;
+          Buffer.contents b
+      in
       let table = Hashtbl.create 7 in
       let open G.Surface in
       List.iter begin fun (name, token) ->
         match Token.alias token with
-        | Some alias -> Hashtbl.add table name alias
+        | Some alias -> Hashtbl.add table name (unescape alias)
         | None -> ()
       end (Syntax.tokens G.Surface.before_inlining);
       table
