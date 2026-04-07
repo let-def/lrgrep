@@ -697,4 +697,4 @@ let rec rank addr mask acc = function
 let rank i t =
   let ioffset = i mod word_size in
   let iaddr = i - ioffset and imask = 1 lsl ioffset in
-  rank iaddr (imask lor (imask - 1)) 0 t
+  rank iaddr (imask - 1) 0 t
