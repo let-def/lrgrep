@@ -36,6 +36,7 @@ Examples:
   lrgrep -g grammar.cmly -s error.lrgrep interpret -i \"invalid sentence\"
   "
 
+let opt_prefer_aliases = ref false
 
 let badf fmt =
   Printf.ksprintf (fun msg -> raise (Arg.Bad msg)) fmt
@@ -298,6 +299,14 @@ let report_cases oc =
     List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern !!grammar lr0);
     Printf.fprintf oc "```\n\n"
 
+let print_terminal g t =
+  if !opt_prefer_aliases then
+    match Terminal.alias g t with
+    | None -> Terminal.to_string g t
+    | Some alias -> alias
+  else
+    Terminal.to_string g t
+
 let report_samples oc (stacks : _ Automata.stacks) ~some_prefix ~get_lrc ~reached lr0 ~all =
   let samples = ref 0 in
   fun (tactic, failing) ->
@@ -311,7 +320,7 @@ let report_samples oc (stacks : _ Automata.stacks) ~some_prefix ~get_lrc ~reache
     incr samples;
     Printf.fprintf oc "### Sample %d\n\n" !samples;
     let terms = Sentence_generation.sentence_of_stack grammar !!reachability stack in
-    let ppt t = Terminal.to_string grammar t in
+    let ppt = print_terminal grammar in
     Printf.fprintf oc "Sentence:\n```\n%s\n```\n"
       (string_concat_map " " ppt terms);
     Printf.fprintf oc "Stack:\n```\n%s\n```\n"
@@ -608,7 +617,9 @@ let commands =
       "--cover-all", Arg.Set opt_compile_cover_error,
       " Exit with a failure if coverage of errors is not exhaustive";
       "--cover-report", Arg.Set_string opt_compile_cover_report,
-      "<report.md> Write a detailed report of uncovered cases (if any)"
+      "<report.md> Write a detailed report of uncovered cases (if any)";
+      "--prefer-token-aliases", Arg.Set opt_prefer_aliases,
+      " In the coverage report, prefer token alias to token name print a terminal";
     ] ~commit:compile_command;
     command "interpret" "Parse a sentence and suggest patterns that can match it" [
       "--no-patterns", Arg.Clear opt_interpret_patterns, " Do not suggest patterns";
@@ -624,6 +635,8 @@ let commands =
       "-a", Arg.Set opt_enum_all, " Cover all filter-reduce patterns";
       "-e", Arg.String (push opt_enum_entrypoints),
       "<entrypoint> Enumerate sentences from this entrypoint (multiple allowed)";
+      "--prefer-token-aliases", Arg.Set opt_prefer_aliases,
+      " In the report, prefer token alias to token name to print a terminal";
     ] ~commit:enumerate_command;
     command "import-messages" "<file.messages> Generate a .lrgrep file from a .messages file" [
       "-o", Arg.Set_string opt_import_output, "<file.lrgrep> Output destination";
