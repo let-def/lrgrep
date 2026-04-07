@@ -1,0 +1,6 @@
+(rule
+  (targets parser.cmly parser.ml parser.mli)
+  (deps parser.mly)
+  (action
+   (progn
+    (run menhir --table --cmly --lalr parser.mly))))
