@@ -318,7 +318,7 @@ let () =
           output_string stdout "$ ";
         flush stdout;
         );
-        Lexer.init ();
+        Ocaml_parser.Lexer.init ();
         let lexbuf = Lexing.from_channel ~with_positions:true ic in
         Lexing.set_filename lexbuf "<lrgrep-interpreter>";
         let rec drain acc =
