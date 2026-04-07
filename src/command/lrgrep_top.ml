@@ -83,6 +83,8 @@ Examples:
 
   let opt_terminal_printer = ref `Builtin
 
+  let opt_report_format = ref `Text
+
   let badf fmt =
     Printf.ksprintf (fun msg -> raise (Arg.Bad msg)) fmt
 
@@ -194,6 +196,18 @@ Examples:
                 other
           ),
         "<name|alias|builtin> When reporting a terminal, display it by its name or its alias";
+        "--report-format", Arg.String (function
+            | "text" -> opt_report_format := `Text
+            | "json" -> opt_report_format := `Json
+            | other ->
+              usage_error
+                "--report-format: unexpected argument %s\n\
+                 Accepted values are:\n\
+                 - text: human-readable report\n\
+                 - json: json-object easy to post-process\n"
+                other
+          ),
+        "<text|json> Report serialization format";
       ]
 
   (* Lazily load grammar and specification *)
@@ -404,7 +418,7 @@ Examples:
   }
 
   let prepare_sample grammar (stacks : _ Automata.stacks)
-      ~some_prefix ~get_lrc ~reached lr0 ~all (tactic, failing)
+      ~some_prefix ~get_lrc ~reached ~all (tactic, failing)
     =
     let suffix = List.rev_map get_lrc tactic in
     let _, prefix = some_prefix (List.hd suffix) in
@@ -415,14 +429,13 @@ Examples:
     let sentence = Sentence_generation.sentence_of_stack grammar !!reachability stack in
     let patterns =
       if all then
-        IndexSet.remove lr0 @@
         List.fold_left (fun acc n -> IndexSet.union (reached n) acc) IndexSet.empty tactic
       else
         IndexSet.empty
     in
     {stack; sentence; failing; patterns}
 
-  let report_text_sample oc grammar i {stack; sentence; failing; patterns} =
+  let report_text_sample oc grammar main i {stack; sentence; failing; patterns} =
     Printf.fprintf oc "### Sample %d\n\n" i;
     Printf.fprintf oc "Sentence:\n```\n%s\n```\n" (!!print_sentence sentence);
     Printf.fprintf oc "Stack:\n```\n%s\n```\n"
@@ -430,6 +443,7 @@ Examples:
     Printf.fprintf oc "Rejected when looking ahead at any of the terminals in:\n\
                        ```\n%s\n```\n"
       (String.concat " " (List.rev_map (print_terminal grammar) (IndexSet.elements failing)));
+    let patterns = IndexSet.remove main patterns in
     if IndexSet.is_not_empty patterns then begin
       Printf.fprintf oc "Also covered by the following patterns:\n```\n";
       IndexSet.iter begin fun lr0 ->
@@ -445,18 +459,114 @@ Examples:
       | `Enum_maximal -> Printf.fprintf oc "# Maximal patterns\n\n"
       | `Enum_other -> Printf.fprintf oc "# Other reduce-filter patterns\n\n";
     end;
-    let count = ref 0 in
-    Seq.iter begin fun (lr0, samples) ->
-      Printf.fprintf oc "## Pattern %d\n\n```\n" !count;
-      incr count;
+    Seq.iteri begin fun i (lr0, samples) ->
+      Printf.fprintf oc "## Pattern %d\n\n```\n" i;
       List.iter (Printf.fprintf oc "%s\n") (Coverage.print_pattern grammar lr0);
       Printf.fprintf oc "```\n\n";
-      Seq.iteri (report_text_sample oc grammar) samples
+      Seq.iteri (report_text_sample oc grammar lr0) samples
     end cases
+
+  let escape_json_string oc string =
+    escape_json_string (output_substring oc) string
+
+  let print_json_string oc string =
+    output_char oc '"';
+    escape_json_string oc string;
+    output_char oc '"'
+
+  let print_comma_sep () =
+    let first = ref true in
+    fun oc ->
+      if !first then
+        first := false
+      else
+        output_char oc ','
+
+  let report_json_sample oc grammar acc i {stack; sentence; failing; patterns} =
+    if i > 0 then
+      output_char oc ',';
+    output_string oc "{\"sentence\":";
+    print_json_string oc (!!print_sentence sentence);
+    output_string oc ",\"stack\":\"";
+    List.iteri begin fun i sym ->
+      if i > 0 then output_char oc ' ';
+      escape_json_string oc (Lr1.symbol_to_string grammar sym);
+    end stack;
+    output_string oc "\",\"failing\":[";
+    let print_comma = print_comma_sep () in
+    IndexSet.rev_iter begin fun term ->
+      print_comma oc;
+      print_json_string oc (print_terminal grammar term)
+    end failing;
+    if IndexSet.is_not_empty patterns then begin
+      acc := IndexSet.union patterns !acc;
+      output_string oc "],\"patterns\":[";
+      let print_comma = print_comma_sep () in
+      IndexSet.iter begin fun lr0 ->
+        print_comma oc;
+        Printf.fprintf oc "\"%d\"" (Index.to_int lr0);
+      end patterns;
+    end;
+    output_string oc "]}"
+
+  let report_json_patterns oc grammar patterns =
+    output_string oc "{";
+    let print_comma = print_comma_sep () in
+    IndexSet.iter begin fun lr0 ->
+      print_comma oc;
+      Printf.fprintf oc "\"%d\":\"" (Index.to_int lr0);
+      List.iteri begin fun i text ->
+        if i > 0 then output_string oc "\\n";
+        escape_json_string oc text;
+      end (Coverage.print_pattern grammar lr0);
+      output_string oc "\""
+    end patterns;
+    output_string oc "}"
+
+  let report_json oc grammar header cases acc =
+    output_string oc "{\"kind\":";
+    begin match header with
+      | `Rule name ->
+        output_string oc "\"coverage\",\"name\":";
+        print_json_string oc name;
+      | `Enum_maximal ->
+        output_string oc "\"enumeration\",\"name\":\"maximal\""
+      | `Enum_other ->
+        output_string oc "\"enumeration\",\"name\":\"other\""
+    end;
+    output_string oc ",\"cases\":[";
+    Seq.iteri begin fun i (lr0, samples) ->
+      if i > 0 then output_char oc ',';
+      acc := IndexSet.add lr0 !acc;
+      Printf.fprintf oc "{\"pattern\":\"%d\",\"sentences\":[" (Index.to_int lr0);
+      Seq.iteri (report_json_sample oc grammar acc) samples;
+      output_string oc "]}";
+    end cases;
+    output_string oc "]}"
+
+  let begin_report oc grammar =
+    match !opt_report_format with
+    | `Json ->
+      output_string oc "{\"reports\":[";
+      let print_comma = print_comma_sep () in
+      let patterns = ref IndexSet.empty in
+      ((fun header cases ->
+          print_comma oc;
+          report_json oc grammar header cases patterns),
+       (fun () ->
+          output_string oc "]";
+          output_string oc ",\"patterns\":";
+          report_json_patterns oc grammar !patterns;
+          output_string oc "}"))
+    | `Text -> (report_text oc grammar, ignore)
 
   let do_compile spec (cp : Code_printer.t option) =
     let grammar = !!grammar in
     Codegen.output_header grammar spec cp;
+    let cover_report = match compiler_cover_output with
+      | lazy None -> None
+      | lazy (Some oc) -> Some (begin_report oc grammar)
+    in
     List.iter begin fun (rule : Syntax.rule) ->
       let entrypoints = lrc_from_entrypoints (translate_entrypoints rule.startsymbols) in
       let stacks = make_stacks entrypoints ~error_only:(fst rule.error) in
@@ -506,9 +616,9 @@ Examples:
         let Deter.Graph dgr = Deter.make grammar rcs stacks rtable agr in
         let Cover.Graph cgr = Cover.coverage grammar branches machine stacks agr dgr in
         if not (List.is_empty cgr.sinks) then (
-          begin match compiler_cover_output with
-            | lazy None -> ()
-            | lazy (Some oc) ->
+          begin match cover_report with
+            | None -> ()
+            | (Some (report, _)) ->
               let get_lrc st =
                 match Sum.prj stacks.domain (cgr.position st) with
                 | L lrc -> lrc
@@ -536,13 +646,12 @@ Examples:
                   ~globals:[||]
                   ~reached
               in
-              report_text oc grammar (`Rule rule.name)
-                (Seq.map (fun (lr0, sentences) ->
-                     (lr0, Seq.map (prepare_sample grammar stacks
-                                      ~some_prefix:entrypoints.some_prefix
-                                      ~get_lrc ~reached lr0 ~all:false) sentences))
-                    locals);
-
+              let prepare = prepare_sample grammar stacks
+                  ~some_prefix:entrypoints.some_prefix
+                  ~get_lrc ~reached ~all:false
+              in
+              report (`Rule rule.name)
+                (Seq.map (fun (lr0, sentences) -> (lr0, Seq.map prepare sentences)) locals);
           end;
           stopwatch 1 "coverage report";
           let report =
@@ -557,6 +666,10 @@ Examples:
         )
       )
     end spec.lexer_definition.rules;
+    begin match cover_report with
+      | None -> ()
+      | Some (_, end_report) -> end_report ()
+    end;
     Codegen.output_trailer grammar spec cp
 
   let compile_command () =
@@ -604,21 +717,22 @@ Examples:
         ~goals:(Lr0.cardinal grammar)
         ~graph ~maximals ~globals ~reached
     in
-    let prepare_sample lr0 =
+    let prepare_sample =
       prepare_sample grammar stacks
         ~some_prefix:subset.some_prefix
         ~get_lrc:(fun node -> Deter.get_lrc agr dgr.Deter.nodes.:(node))
         ~reached:(Deter.get_lr0 grammar rcs stacks rtbl agr dgr)
         ~all:!opt_enum_all
-        lr0
     in
     let prepare_samples seq =
-      seq |> Seq.map @@ fun (lr0, sentences) ->
-      (lr0, Seq.map (prepare_sample lr0) sentences)
+      Seq.map (fun (lr0, sentences) -> (lr0, Seq.map prepare_sample sentences))
+        seq
     in
-    report_text stdout grammar `Enum_maximal (prepare_samples locals);
+    let report, end_report = begin_report stdout grammar in
+    report `Enum_maximal (prepare_samples locals);
     if !opt_enum_all then
-      report_text stdout grammar `Enum_other (prepare_samples globals)
+      report `Enum_other (prepare_samples globals);
+    end_report ()
 
   (* Command import *)
 
