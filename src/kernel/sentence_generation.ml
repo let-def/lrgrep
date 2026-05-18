@@ -1,3 +1,79 @@
+(* MIT License
+ *
+ * Copyright (c) 2026 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
+
+(** Generating parse sentences from transitions
+
+    This module provides functionality to generate concrete parse examples
+    (sentences) from sequences of LR states or LR transitions. It's used
+    for generating counterexamples and debug information.
+
+    Core algorithm:
+
+    - The algorithm works backwards from the desired parsing outcome to find
+      a valid sequence of transitions that would produce that outcome.
+
+    - [to_transitions] converts a sequence of LR states to a sequence of
+      transitions that connect those states.
+
+    - [to_cells] maps transitions to reduction graph cells, using dynamic
+      programming to find the minimum-cost path through the reduction graph.
+
+    - [expand_cells] recursively expands cells back to the original terminal
+      symbols that would trigger the reductions.
+
+    Key data structures:
+
+    - Cells: Represent positions in the reduction graph, encoded as a compact
+      triple (node, pre_class, post_class) for efficient storage and lookup.
+      (Pre_class and post_class constrain the lookahead symbols that can precede
+      and follow)
+
+    - The algorithm uses a priority-based search to find minimum-cost paths
+      through the reduction graph.
+
+    Implementation details:
+
+    - [to_cells] uses a sophisticated dynamic programming approach where at
+      each transition, it considers:
+      - All post_classes of the current node
+      - For each, all pre_classes that can reach it with finite cost
+      Then it keeps only the minimal cost paths
+
+    - [expand_cells] handles two cases:
+      - [L tr]: A transition node - either shift (return the terminal) or
+        goto (recursively solve the subproblem with minimum cost)
+      - [R (l, r)]: An inner node - decompose into left and right subproblems,
+        finding solutions that minimize total cost
+
+    - The [Break] exception is used to short-circuit when a minimal-cost
+      solution is found during the exploration of all possible decompositions.
+
+    - Nullable reductions need some special care. If a nullable reduction is
+      possible and the lookahead classes allow it, the algorithm take that path
+      instead of the non-nullable one.
+*)
+
 open Utils
 open Fix.Indexing
 open Info

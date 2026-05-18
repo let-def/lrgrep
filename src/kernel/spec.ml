@@ -1,26 +1,84 @@
 (* MIT License
-
-   Copyright (c) 2025 Frédéric Bour
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *)
+
+(** Specification structures for LRGrep
+
+    This module defines the core data structures that represent the user's
+    error specification after parsing and resolution: clauses, branches, and
+    their relationships.
+
+    Design:
+
+    - A *clause* represents one alternative in the user's grammar definition.
+      Multiple clauses can be grouped together (e.g., using `%%shortest`).
+
+    - A *branch* is a single pattern-action pair. Each clause contains one
+      or more branches (patterns), each with its own action.
+
+    - Key relationships:
+      - [of_clause] maps each clause to the set of branches in that clause
+      - [clause] maps each branch to its containing clause
+      - [priority] tracks the priority chain: branches in the same group
+        have the same priority, branches in different groups have higher
+        priority if they appear earlier
+
+    - Data structures:
+      - [branches]: Contains all branch-level information:
+        - [clause], [pattern], [expr]: The branch's membership, syntax, and
+          compiled regular expression
+        - [of_clause]: Mapping from clauses to branches
+        - [lookaheads]: Optional lookahead constraints for each branch
+        - [br_captures]: Captured variables for each branch
+        - [is_total], [is_partial]: Whether branches accept all inputs or
+          can fail
+        - [priority]: Priority mapping for branch handling
+
+    - The import_rules function transforms the user-facing syntax into these
+      internal structures,:
+      - Parsing clauses and their actions (total/partial/unreachable)
+      - Compiling patterns to Expr.t using the [Transl.transl] function
+      - Computing priority relationships between branches
+
+    Tricky implementation details:
+
+    - The priority system is complex: branches within a group share priority,
+      but branches in later groups have lower priority. This enables
+      specification like:
+        clause1 : pattern1a | pattern1b  (high priority)
+        clause2 : pattern2a | pattern2b  (lower priority)
+
+    - The [is_total] vs [is_partial] distinction matters for coverage analysis:
+      total clauses accept any lookahead, partial clauses have specific
+      lookahead constraints.
+
+    - The [lookaheads] field stores optional lookahead specifications, which
+      can be terminals or `first(nonterminal)` to match the first symbol
+      of a nonterminal.
+
+    - The [br_captures] vector tracks which variables are captured by each
+      branch, for register allocation during code generation.
+*)
 
 open Utils
 open Misc

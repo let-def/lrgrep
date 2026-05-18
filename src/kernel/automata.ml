@@ -1,36 +1,80 @@
 (* MIT License
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *)
 
-   Copyright (c) 2025 Frédéric Bour
+(** DFA construction and analysis for LR error analysis
 
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
+    This module implements a deterministic finite automaton (DFA) construction for
+    analyzing failures of an LR automaton by consuming its stack.
 
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
+    Architecture:
 
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
-*)
+    - NFA module: Constructs NFA (nondeterministic finite automaton) from
+      regular expressions specifying error patterns.
 
-(** This module is responsible for generating a deterministic finite automaton
-    (DFA) from a given grammar and lookahead set. The DFA is used to perform
-    pattern matching on input tokens according to the grammar rules.
-    The module includes several stages:
-    - Construction of a big DFA from the grammar and lookahead set.
-    - Minimization of the DFA.
-    - Generation of output code for the minimized DFA.
-    The module uses various data structures and algorithms to ensure efficient
-    construction and minimization of the DFA, as well as to generate the
-    corresponding OCaml code.
+    - DFA module: Converts the NFA to a DFA using a variant of power set
+      construction (ordered to respect clause priorities). The DFA states
+      contain:
+      - A kernel of NFA states
+      - Transitions with mappings to relate the kernels of the source and target
+        state (to answer questions like which NFA state of the source an NFA
+        state of the target comes from?)
+
+    - Dataflow module: Performs dataflow analysis on the DFA to compute:
+      - Liveness of captured variables
+      - Defined variables at each state
+      - Register allocation for captured values
+      - Priority chain for handling clause precedence
+
+    - Machine module: Abstract machine representation that will be used for
+      code generation. Contains:
+      - States and transitions labelled by LR(1)
+      - A register transfer language for implementing captures
+      - Priority remappings (a minimal form of dynamic control flow to remember
+        clauses priority; doing so statically can cause a combinatorial
+        explosion in the number of states)
+
+    Implementation details:
+
+    - The DFA construction uses hash-consing to ensure canonical representation
+      of equivalent states. The power set construction is affected in three main
+      ways:
+      - NFA states are ordered to represent priorities (a "power seq" construction)
+      - Only paths representing reachable stacks are determinized (a form of automata "implication")
+      - Implicit pruning of branches unreachable because of their low priority
+
+    - The dataflow analysis uses fixpoint iteration to handle mutually recursive
+      definitions of liveness and definedness.
+
+    - Register allocation is done lazily based on live ranges computed from the
+      liveness analysis. The naive allocation assigns registers greedily
+      according to variable classes. It leads to less efficient but more
+      minimisable ("factorizable") code.
+
+    - The priority chain mechanism (Order_chain) handles the complex case of
+      dynamically ordering continuations from the same branch.
+
+    - The minimization in [Dataflow.make] uses a refinement of Valmari's
+      algorithm.
 *)
 
 open Utils
@@ -416,8 +460,16 @@ module DFA = struct
     end in
     let states =
       let make (Construction.Prepacked {index; kernel; _}) =
+        let reachable = ref true in
+        let accepting = Boolvector.from_vector kernel (fun nfa ->
+            !reachable &&
+            if NFA.is_accepting nfa then (
+              if Boolvector.test branches.is_total nfa.branch then
+                reachable := false;
+              true
+            ) else false
+          ) in
         let branches = Vector.map (fun t -> t.NFA.branch) kernel in
-        let accepting = Boolvector.from_vector kernel NFA.is_accepting in
         Packed {index; branches; accepting; transitions = []}
       in
       Vector.map make Construction.prestates
@@ -657,12 +709,28 @@ module Dataflow = struct
             Syntax.warn re.position "expression is unreachable"
         | _ -> iter_re check re
       in
-      Vector.iteri (fun branch (pattern : Syntax.pattern) ->
-          if IndexSet.mem branch reachable_branches then
-            check pattern.expr
-          else
-            Syntax.warn pattern.expr.position "clause is unreachable"
-        ) branches.pattern
+      let overriding = Vector.make (Vector.length branches.clause) IndexSet.empty in
+      Vector.iteri begin fun i (DFA.Packed st) ->
+        let accepting =
+          IndexSet.init_from_set (Vector.length st.branches) (Boolvector.test st.accepting)
+          |> IndexSet.map (Vector.get st.branches)
+        in
+        let kernel = Vector.cast_array (Vector.length st.branches) dfa.kernels.:(i) in
+        Vector.iteri begin fun i nfa ->
+          if NFA.is_accepting nfa && not (Boolvector.test st.accepting i) then
+            overriding.@(st.branches.:(i)) <- IndexSet.union accepting
+        end kernel;
+      end dfa.states;
+      Vector.iteri begin fun branch (pattern : Syntax.pattern) ->
+        if IndexSet.mem branch reachable_branches then
+          check pattern.expr
+        else begin
+          Syntax.warn pattern.expr.position "clause is unreachable";
+          IndexSet.iter begin fun branch' ->
+            Syntax.warn branches.pattern.:(branch').expr.position "this clause is shadowing it";
+          end overriding.:(branch)
+        end
+      end branches.pattern
     end;
     stopwatch 3 "Dead-code analysis";
     (* Pass 4: Compute priority splits *)
