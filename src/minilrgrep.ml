@@ -51,7 +51,6 @@ module Grammar = MenhirSdk.Cmly_read.Read(struct let filename = grammar_file end
 (** Information module is the representation of the grammar and LR automaton we
     are going to use. *)
 open Kernel.Info
-include Lift()
 include Load_grammar(Grammar)
 
 (** {1 Helpers} *)
