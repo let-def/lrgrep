@@ -1,0 +1,17 @@
+(rule
+  (targets grammar_data.ml)
+  (deps    parser.cmly)
+  (action
+    (with-stdout-to %{targets}
+       (run lrgrep-embed content=parser.cmly))))
+
+(ocamllex lexer)
+
+(menhir
+  (modules parser)
+  (flags :standard --table --lalr --cmly))
+
+(library
+ (name ocaml_parser)
+ (modules lexer parser grammar_data)
+  (libraries menhirLib compiler-libs.common))

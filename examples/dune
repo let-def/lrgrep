@@ -1,1 +1,1 @@
-(dirs ("tiny" "calc" "tiny-parameterized"))
+(dirs ("tiny" "calc" "tiny-parameterized" "ocaml" "oxcaml"))
