@@ -297,6 +297,13 @@ let sort_and_merge_indexed compare l =
     (fun (x, ix) rest -> (x, List.fold_left union_ix ix rest))
     l
 
+let list_rev_filter_map f xs =
+  List.fold_left (fun acc x ->
+      match f x with
+      | None -> acc
+      | Some y -> y :: acc
+    ) [] xs
+
 let list_foralli f l =
   let rec loop i = function
     | [] -> true
@@ -333,9 +340,9 @@ let rec list_take n = function
 let rec fixpoint ?counter ~propagate todo = match !todo with
   | [] -> ()
   | todo' ->
-    Option.iter incr counter;
     todo := [];
     List.iter propagate todo';
+    Option.iter incr counter;
     fixpoint ?counter ~propagate todo
 
 let assert_equal_length v1 v2 =
@@ -636,3 +643,40 @@ let print_dym f oc = function
     in
     Printf.fprintf oc " (did you mean %s%a?)" (f x)
       print_list (list_take 4 xs)
+
+let rec list_last = function
+  | [] -> None
+  | [x] | [_; x] | [_; _; x] -> Some x
+  | _ :: _ :: _ :: xs -> list_last xs
+
+let escape_json_substring out s i l =
+  let i' = ref i in
+  let flush i =
+    if !i' < i then (
+      out s !i' (i - !i');
+    );
+    i' := i + 1
+  in
+  for i = i to i + l - 1 do
+    match
+      match s.[i] with
+      | '"'  -> Some "\\\""
+      | '\\' -> Some "\\\\"
+      | '\b' -> Some "\\b"
+      | '\n' -> Some "\\n"
+      | '\r' -> Some "\\r"
+      | '\t' -> Some "\\t"
+      | c when Char.code c < 32 ->
+        (* Escape control characters as \uXXXX *)
+        Some (Printf.sprintf "\\u%04x" (Char.code c))
+      | _ -> None
+    with
+    | None -> ()
+    | Some escape ->
+      flush i;
+      out escape 0 (String.length escape)
+  done;
+  flush (i + l)
+
+let escape_json_string out s =
+  escape_json_substring out s 0 (String.length s)
