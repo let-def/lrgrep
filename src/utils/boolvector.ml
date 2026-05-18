@@ -34,5 +34,5 @@ let init c f =
 let from_vector vec f =
   let n = Vector.length vec in
   let result = make n false in
-  Index.iter n (fun i -> if f (Vector.get vec i) then set result i);
+  Vector.iteri (fun i x -> if f x then set result i) vec;
   result
