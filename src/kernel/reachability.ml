@@ -353,10 +353,11 @@ let make (type g) (g : g grammar) : g t = (module struct
               (* Intersect with the lookahead set, implementing the ↑Z operator
                   from equation (6). When the lookahead is all terminals, the
                   intersection is a no-op. *)
-               let base =
-                 if lookahead != Terminal.all g
-                 then IndexSet.Set.map (IndexSet.inter lookahead) base
-                 else base
+              let base =
+                if lookahead != Terminal.all g
+                then IndexSet.Set.map (IndexSet.inter lookahead) base
+                else base
+              in
               acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
             ) (unreduce edge)
       end;
@@ -573,19 +574,19 @@ let make (type g) (g : g grammar) : g t = (module struct
       | Pre_identity
       | Pre_singleton of int
 
-   (* Compute the pre coercion from a partition of the form
-         P = first(cost(s, A))
-        to a partition of the form
-          Q = first(ccost(s, A → ϵ•α)))
+    (* Compute the pre coercion from a partition of the form
+          P = first(cost(s, A))
+         to a partition of the form
+           Q = first(ccost(s, A → ϵ•α)))
 
-        If α starts with a terminal, the inner partition Q is a singleton
-        containing that terminal. We find which class of P contains it,
-        returning [Pre_singleton i] where [i] is the index of that class.
-        If the terminal belongs to no class (unreachable due to conflict
-        resolution), returns [None].
+         If α starts with a terminal, the inner partition Q is a singleton
+         containing that terminal. We find which class of P contains it,
+         returning [Pre_singleton i] where [i] is the index of that class.
+         If the terminal belongs to no class (unreachable due to conflict
+         resolution), returns [None].
 
-        If α starts with a non-terminal, P and Q are guaranteed to be the
-        same partition, so we return [Pre_identity].
+         If α starts with a non-terminal, P and Q are guaranteed to be the
+         same partition, so we return [Pre_identity].
     *)
     let pre outer inner =
       if outer == inner then

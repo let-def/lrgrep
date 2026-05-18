@@ -249,16 +249,16 @@ module K = struct
 
   let cmon ?lr1 ?step k =
     let rec aux = function
-    | Accept -> Cmon.constant "Accept"
-    | Done -> Cmon.constant "Done"
-    | More (e, t) ->
-      Cmon.construct "More" [Expr.cmon ?lr1 e; aux t]
-    | Reducing {reduction=_; steps; next} ->
-      Cmon.crecord "Reducing" [
-        "reduction", Cmon.constant "...";
-        "steps", cmon_indexset ?index:step steps;
-        "next", aux next;
-      ]
+      | Accept -> Cmon.constant "Accept"
+      | Done -> Cmon.constant "Done"
+      | More (e, t) ->
+        Cmon.construct "More" [Expr.cmon ?lr1 e; aux t]
+      | Reducing {reduction=_; steps; next} ->
+        Cmon.crecord "Reducing" [
+          "reduction", Cmon.constant "...";
+          "steps", cmon_indexset ?index:step steps;
+          "next", aux next;
+        ]
     in
     aux k
 
@@ -420,9 +420,9 @@ module K = struct
             continue ks {label with filter} (Reducing {reduction; steps; next})
           ) next_steps;
 
-        | Usage set ->
-          let label = Label.capture label IndexSet.empty set in
-          process_k label next
+      | Usage set ->
+        let label = Label.capture label IndexSet.empty set in
+        process_k label next
     in
     let label = {Label. filter; captures = IndexSet.empty; usage = Usage.empty} in
     process_k label k;

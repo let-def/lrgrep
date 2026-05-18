@@ -395,51 +395,51 @@ module DFA = struct
       let initial =
         let rec determinize_kernel : type n . (n, (g, r) NFA.t) vector -> n prestate =
           fun kernel ->
-            match KernelMap.find_opt (Vector.as_array kernel) !dfa with
-            | Some (Prepacked t') ->
-              let Refl = assert_equal_length kernel t'.kernel in
-              t'
-            | None ->
-              let accept = ref None in
-              let rev_transitions =
-                let make i ({Label. filter; captures; usage}, t) =
-                  (filter, (i, (captures, usage), t))
+          match KernelMap.find_opt (Vector.as_array kernel) !dfa with
+          | Some (Prepacked t') ->
+            let Refl = assert_equal_length kernel t'.kernel in
+            t'
+          | None ->
+            let accept = ref None in
+            let rev_transitions =
+              let make i ({Label. filter; captures; usage}, t) =
+                (filter, (i, (captures, usage), t))
+              in
+              kernel_fold
+                (fun i nfa acc ->
+                   if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
+                     accept := Some branches.priority.:(nfa.branch);
+                   list_rev_mappend (make i) nfa.transitions acc)
+                kernel []
+            in
+            let prepare_target_kernel (index, captures, lazy nfa) =
+              nfa, (index, captures)
+            in
+            let process_class label rev_targets =
+              label, lazy (
+                let Packed result =
+                  rev_targets
+                  |> List.rev_map prepare_target_kernel
+                  |> kernel_make fst
+                  |> Vector.of_array
                 in
-                kernel_fold
-                  (fun i nfa acc ->
-                     if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
-                       accept := Some branches.priority.:(nfa.branch);
-                     list_rev_mappend (make i) nfa.transitions acc)
-                  kernel []
-              in
-              let prepare_target_kernel (index, captures, lazy nfa) =
-                nfa, (index, captures)
-              in
-              let process_class label rev_targets =
-                label, lazy (
-                  let Packed result =
-                    rev_targets
-                    |> List.rev_map prepare_target_kernel
-                    |> kernel_make fst
-                    |> Vector.of_array
-                  in
-                  Fwd_mapping ((Vector.map snd result),
-                               determinize_kernel (Vector.map fst result))
-                )
-              in
-              let raw_transitions = ref [] in
-              IndexRefine.iter_merged_decomposition rev_transitions
-                (fun label targets -> push raw_transitions (process_class label targets));
-              let raw_transitions = !raw_transitions in
-              let reservation = IndexBuffer.Gen.reserve prestates in
-              let state = {
-                index = IndexBuffer.Gen.index reservation;
-                kernel; accept = !accept;
-                raw_transitions;
-              } in
-              IndexBuffer.Gen.commit prestates reservation (Prepacked state);
-              dfa := KernelMap.add (Vector.as_array kernel) (Prepacked state) !dfa;
-              state
+                Fwd_mapping ((Vector.map snd result),
+                             determinize_kernel (Vector.map fst result))
+              )
+            in
+            let raw_transitions = ref [] in
+            IndexRefine.iter_merged_decomposition rev_transitions
+              (fun label targets -> push raw_transitions (process_class label targets));
+            let raw_transitions = !raw_transitions in
+            let reservation = IndexBuffer.Gen.reserve prestates in
+            let state = {
+              index = IndexBuffer.Gen.index reservation;
+              kernel; accept = !accept;
+              raw_transitions;
+            } in
+            IndexBuffer.Gen.commit prestates reservation (Prepacked state);
+            dfa := KernelMap.add (Vector.as_array kernel) (Prepacked state) !dfa;
+            state
         in
         let Vector.Packed kernel =
           Vector.of_array (kernel_make Fun.id (Vector.to_list initial))
@@ -483,9 +483,9 @@ module DFA = struct
         let update bound (Prepacked t) =
           let todo = scheduled.*(t.index) in
           if false then
-          Printf.eprintf "processing#%d: %s\n"
-            (Index.to_int t.index)
-            (Lr1.set_to_string g (IndexSet.map stacks.label todo));
+            Printf.eprintf "processing#%d: %s\n"
+              (Index.to_int t.index)
+              (Lr1.set_to_string g (IndexSet.map stacks.label todo));
           visited.*(t.index) <- IndexSet.union visited.*(t.index) todo;
           scheduled.*(t.index) <- IndexSet.empty;
           let by_label =
@@ -647,14 +647,14 @@ module Dataflow = struct
 
   (** Reverse mapping: from a target state back to a source state and the
       associated kernel mapping. Used for backward dataflow analysis. *)
-  type ('g, 'r, 'dfa, 'tgt) rev_mapping = Rev_mapping
-      :  ('g, 'r, 'dfa, 'src) DFA.state * ('src, 'tgt) DFA.mapping
-      -> ('g, 'r, 'dfa, 'tgt) rev_mapping
+  type ('g, 'r, 'dfa, 'tgt) rev_mapping =
+      Rev_mapping : ('g, 'r, 'dfa, 'src) DFA.state * ('src, 'tgt) DFA.mapping
+        -> ('g, 'r, 'dfa, 'tgt) rev_mapping
 
   (** Packed list of reverse mappings for a DFA state. *)
-  type ('g, 'r, 'dfa) packed_rev_mapping = Rev_packed
-      :  ('g, 'r, 'dfa, 'n) rev_mapping list
-      -> ('g, 'r, 'dfa) packed_rev_mapping [@@ocaml.unboxed]
+  type ('g, 'r, 'dfa) packed_rev_mapping =
+      Rev_packed : ('g, 'r, 'dfa, 'n) rev_mapping list
+        -> ('g, 'r, 'dfa) packed_rev_mapping [@@ocaml.unboxed]
 
   let dump g dfa t oc =
     let p fmt = Printf.fprintf oc fmt in
@@ -873,14 +873,14 @@ module Dataflow = struct
       in
       let rec schedule_one : type n. n data -> n indexset -> unit =
         fun (type n) (t : n data) (splits : n indexset) ->
-          let splits = IndexSet.diff splits t.splits in
-          if IndexSet.is_empty splits then
-            ()
-          else if IndexSet.is_empty t.new_splits then (
-            t.new_splits <- splits;
-            propagate (Packed t)
-          ) else
-            t.new_splits <- IndexSet.union t.new_splits splits
+        let splits = IndexSet.diff splits t.splits in
+        if IndexSet.is_empty splits then
+          ()
+        else if IndexSet.is_empty t.new_splits then (
+          t.new_splits <- splits;
+          propagate (Packed t)
+        ) else
+          t.new_splits <- IndexSet.union t.new_splits splits
       and propagate (Packed src) =
         let new_splits = src.new_splits in
         src.new_splits <- IndexSet.empty;
@@ -1380,10 +1380,10 @@ module Machine = struct
           let c = IndexSet.compare t1.clear t2.clear in
           c
 
- (** The machine representation for code generation.
+  (** The machine representation for code generation.
 
-      A sparse transition table with register transfer operations.
-      Parameterized by:
+       A sparse transition table with register transfer operations.
+       Parameterized by:
       - ['g] is the grammar (input)
       - ['r] is the set of rules (input)
       - ['st] is the set of states (output)
@@ -1399,22 +1399,22 @@ module Machine = struct
     label: ('tr, ('g, 'r) label) vector;
     (** For each transition, its label (filter, captures, moves, clear, priority). *)
 
+    unhandled: ('st, 'g lr1 indexset) vector;
     (** For each state, the set of LR(1) states for which stacks can reach
         this state but no transition is defined. These should be rejected
         at runtime. *)
-    unhandled: ('st, 'g lr1 indexset) vector;
 
-    (** For each state, the set of outgoing transition indices. *)
     outgoing: ('st, 'tr indexset) vector;
+    (** For each state, the set of outgoing transition indices. *)
 
+    accepting: ('st, (('g, 'r) branch index * priority * Register.t Capture.map) list) vector;
     (** For each state, the list of clauses accepted when reaching that state.
         Each clause comes with a priority level and a register mapping indicating
         where captured variables can be found. The first matching clause wins. *)
-    accepting: ('st, (('g, 'r) branch index * priority * Register.t Capture.map) list) vector;
 
+    branches: ('st, (('g, 'r) branch index * bool * Register.t Capture.map) list) vector;
     (** For each state, the list of clauses being recognized in that state.
         Each entry is (branch index, is_accepting, register mapping). *)
-    branches: ('st, (('g, 'r) branch index * bool * Register.t Capture.map) list) vector;
 
     register_count : int;
     (** Total number of registers used across all states. *)
@@ -1436,7 +1436,7 @@ module Machine = struct
               (fun (cap, reg) -> string_of_cap cap ^ " = !" ^ string_of_index reg)
               (IndexMap.bindings captures)
             ^ "]"
-                              ) accept in
+          ) accept in
         p "  st%d[label=%S];\n"
           (Index.to_int st)
           (String.concat "," accept);
@@ -1549,66 +1549,66 @@ module Machine = struct
       end acc dfa.states
     in
     let module Min = Valmari.Minimize_with_custom_decomposition(struct
-      type states = dfa
-      let states = DFA.state_count dfa
+        type states = dfa
+        let states = DFA.state_count dfa
 
-      type transitions = Transition.n
-      let transitions = Transition.n
+        type transitions = Transition.n
+        let transitions = Transition.n
 
-      type [@ocaml.warning "-34"] nonrec label = (g, r) label
-      let label i = Transition.vector.:(i).label
-      let source i = Transition.vector.:(i).source
-      let target i = Transition.vector.:(i).target
+        type [@ocaml.warning "-34"] nonrec label = (g, r) label
+        let label i = Transition.vector.:(i).label
+        let source i = Transition.vector.:(i).source
+        let target i = Transition.vector.:(i).target
 
-      let initials f = f dfa.initial
-      let finals f =
-        Vector.iteri (fun index accepts ->
-            match accepts with
+        let initials f = f dfa.initial
+        let finals f =
+          Vector.iteri (fun index accepts ->
+              match accepts with
+              | [] -> ()
+              | _ :: _ -> f index
+            ) dataflow.accepts
+
+        let [@ocaml.warning "-32"] refinements refine =
+          (* Refine states by accepted actions *)
+          let table = Hashtbl.create 7 in
+          Vector.rev_iteri (fun index accepts ->
+              match accepts with
+              | [] -> ()
+              | _ :: _ ->
+                match Hashtbl.find_opt table accepts with
+                | None -> Hashtbl.add table accepts (ref (IndexSet.singleton index))
+                | Some r -> r := IndexSet.add index !r
+            ) dataflow.accepts;
+          Hashtbl.iter
+            (fun _ r -> refine (fun ~add -> IndexSet.iter add !r))
+            table
+
+        let [@ocaml.warning "-32"] decomposition refine =
+          let acc = ref [] in
+          let actions = ref [] in
+          Index.iter transitions (fun tr ->
+              let label = label tr in
+              push acc (label.filter, tr);
+              if label.captures <> [] ||
+                 IndexSet.is_not_empty label.clear ||
+                 not (IndexMap.is_empty label.moves) then
+                push actions ({label with filter = IndexSet.empty}, tr);
+            );
+          IndexRefine.iter_decomposition !acc
+            (fun _set iter -> refine (fun ~add -> iter add));
+          let actions = List.sort (fun (l1, _) (l2, _) -> label_compare l1 l2) !actions in
+          let rec group_actions l ks = function
+            | (l', k) :: rest when label_compare l l' = 0 ->
+              group_actions l (k :: ks) rest
+            | rest ->
+              refine (fun ~add -> List.iter add ks);
+              start rest
+          and start = function
             | [] -> ()
-            | _ :: _ -> f index
-          ) dataflow.accepts
-
-      let [@ocaml.warning "-32"] refinements refine =
-        (* Refine states by accepted actions *)
-        let table = Hashtbl.create 7 in
-        Vector.rev_iteri (fun index accepts ->
-            match accepts with
-            | [] -> ()
-            | _ :: _ ->
-              match Hashtbl.find_opt table accepts with
-              | None -> Hashtbl.add table accepts (ref (IndexSet.singleton index))
-              | Some r -> r := IndexSet.add index !r
-          ) dataflow.accepts;
-        Hashtbl.iter
-          (fun _ r -> refine (fun ~add -> IndexSet.iter add !r))
-          table
-
-      let [@ocaml.warning "-32"] decomposition refine =
-        let acc = ref [] in
-        let actions = ref [] in
-        Index.iter transitions (fun tr ->
-            let label = label tr in
-            push acc (label.filter, tr);
-            if label.captures <> [] ||
-               IndexSet.is_not_empty label.clear ||
-               not (IndexMap.is_empty label.moves) then
-              push actions ({label with filter = IndexSet.empty}, tr);
-          );
-        IndexRefine.iter_decomposition !acc
-          (fun _set iter -> refine (fun ~add -> iter add));
-        let actions = List.sort (fun (l1, _) (l2, _) -> label_compare l1 l2) !actions in
-        let rec group_actions l ks = function
-          | (l', k) :: rest when label_compare l l' = 0 ->
-            group_actions l (k :: ks) rest
-          | rest ->
-            refine (fun ~add -> List.iter add ks);
-            start rest
-        and start = function
-          | [] -> ()
-          | (l, k) :: rest -> group_actions l [k] rest
-        in
-        start actions
-    end)
+            | (l, k) :: rest -> group_actions l [k] rest
+          in
+          start actions
+      end)
     in
     let initial =
       if Array.length Min.initials = 0

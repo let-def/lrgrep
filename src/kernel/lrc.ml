@@ -314,11 +314,10 @@ let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reac
            print_class
            (Array.to_list (Reachability.Classes.for_lr1 top))
         )
-    else
-      if not (Hashtbl.mem table key) then (
-        Hashtbl.add table key ();
-        push todo path
-      )
+    else if not (Hashtbl.mem table key) then (
+      Hashtbl.add table key ();
+      push todo path
+    )
   in
   let propagate path =
     let (target, post_class_indices) = List.hd path in
@@ -464,34 +463,34 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
     ) table;*)
   let module Min =
     Valmari.Minimize(struct
-        type t = g lr1 index
-        let compare = Index.compare
-      end)(struct
-        let source tr = fst (Gen.get transitions tr)
-        let target tr = snd (Gen.get transitions tr)
-        let label tr = fst (Gen.get states (source tr))
+      type t = g lr1 index
+      let compare = Index.compare
+    end)(struct
+      let source tr = fst (Gen.get transitions tr)
+      let target tr = snd (Gen.get transitions tr)
+      let label tr = fst (Gen.get states (source tr))
 
-        let initials f = IndexSet.iter f all_leaf
+      let initials f = IndexSet.iter f all_leaf
 
-        let finals f =
-          IndexSet.iter (fun lr1 ->
-              let state = (Hashtbl.find table (lr1, IntSet.singleton 0)) in
-              (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
-              f state
-            ) (Lr1.entrypoints g)
+      let finals f =
+        IndexSet.iter (fun lr1 ->
+            let state = (Hashtbl.find table (lr1, IntSet.singleton 0)) in
+            (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
+            f state
+          ) (Lr1.entrypoints g)
 
-        let refinements f =
-          IndexSet.iter (fun lr1 ->
-              match Hashtbl.find_opt table (lr1, IntSet.singleton 0) with
-              | None -> ()
-              | Some index -> f (fun ~add -> add index)
-            ) (Lr1.entrypoints g)
+      let refinements f =
+        IndexSet.iter (fun lr1 ->
+            match Hashtbl.find_opt table (lr1, IntSet.singleton 0) with
+            | None -> ()
+            | Some index -> f (fun ~add -> add index)
+          ) (Lr1.entrypoints g)
 
-        type states = State.n
-        let states = State.n
-        type transitions = Transitions.n
-        let transitions = Transitions.n
-      end)
+      type states = State.n
+      let states = State.n
+      type transitions = Transitions.n
+      let transitions = Transitions.n
+    end)
   in
   stopwatch 2 "Minimized deterministic Lrc: %d states" (cardinal Min.states);
   (* Lr1 of each state *)

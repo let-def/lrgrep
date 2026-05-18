@@ -291,7 +291,7 @@ type 'g target_trie = {
 }
 
 let index_targets (type g) (g : g grammar) rc
-    : g target_trie * (g goto_transition, g targets) vector
+  : g target_trie * (g goto_transition, g targets) vector
   =
   (* Index sources of goto transitions *)
   let goto_sources = Vector.make (Lr1.cardinal g) IndexSet.empty in

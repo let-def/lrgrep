@@ -421,11 +421,11 @@ let compile_reduce_expr (type g) (g : g grammar) rg trie re =
   in
   derive [] trie (K.More (re, K.Done));
   (* if printf_debug then
-    Printf.printf "pattern:\n\
-                   - goto: %s\n\
-                   - immediate: %s\n"
-      (string_of_indexset ~index:(string_of_goto g) !goto)
-      (Lr1.set_to_string g !immediate); *)
+     Printf.printf "pattern:\n\
+     - goto: %s\n\
+     - immediate: %s\n"
+       (string_of_indexset ~index:(string_of_goto g) !goto)
+       (Lr1.set_to_string g !immediate); *)
   (!targets, !immediate)
 
 let transl (type g) (g : g grammar) rg indices trie ~capture re =

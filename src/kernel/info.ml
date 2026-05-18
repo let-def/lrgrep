@@ -585,13 +585,13 @@ module Terminal = struct
     | `ERROR -> true
     | _ -> false
 
-(** Converts a set of lookahead terminals to a human-readable string.
-      Sets larger than 10 elements are abbreviated as "<n lookaheads>" *)
+  (** Converts a set of lookahead terminals to a human-readable string.
+        Sets larger than 10 elements are abbreviated as "<n lookaheads>" *)
   let lookaheads_to_string g la =
     match IndexSet.cardinal la with
     | n when n > 10 -> Printf.sprintf "<%d lookaheads>" n
     | _ -> string_concat_map ~wrap:("<",">") ","
-              (to_string g) (IndexSet.elements la)
+             (to_string g) (IndexSet.elements la)
 
   (** Lazily builds and returns the terminal name-to-index lookup table *)
   let terminal_table g =

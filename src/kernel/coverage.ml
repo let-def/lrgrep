@@ -135,8 +135,8 @@ let string_of_items_for_filter g lr0 =
     (Nonterminal.to_string g lhs ^ ":")
     :: syms pre
     @ "." :: match post with
-    | `Suffix post -> syms post
-    | `Wild sym -> [Symbol.to_string g sym; "_*"]
+      | `Suffix post -> syms post
+      | `Wild sym -> [Symbol.to_string g sym; "_*"]
   in
   List.rev_map print_item !lines
 
@@ -213,12 +213,12 @@ module Andor = struct
     =
     let open IndexBuffer in
     let module Map = Map.Make(struct
-      type t = g Redpos.t Opt.n index * g terminal indexset
-      let compare (i1,s1) (i2,s2) =
-        let c = Index.compare i1 i2 in
-        if c <> 0 then c else
-          IndexSet.compare s1 s2
-    end) in
+        type t = g Redpos.t Opt.n index * g terminal indexset
+        let compare (i1,s1) (i2,s2) =
+          let c = Index.compare i1 i2 in
+          if c <> 0 then c else
+            IndexSet.compare s1 s2
+      end) in
     let module Nodes = Gen.Make() in
     let nodes = Nodes.get_generator () in
     let table = Vector.make stacks.domain Map.empty in
@@ -836,9 +836,9 @@ module Report = struct
       of sentences sorted by cost. States with no remaining goals are
       omitted. *)
   let emit_local
-    (type lr0 term tactic)
-    (goals : (lr0, term indexset) vector)
-    (sentences : lr0 index -> (tactic * int * term indexset) list)
+      (type lr0 term tactic)
+      (goals : (lr0, term indexset) vector)
+      (sentences : lr0 index -> (tactic * int * term indexset) list)
     : (lr0 index * (tactic * term indexset) Seq.t) Seq.t
     =
     Vector.to_seqi goals |> Seq.filter_map begin fun (lr0, goal) ->
@@ -865,7 +865,7 @@ module Report = struct
       (type lr0 term tactic)
       (goals : (lr0, term indexset) vector)
       (sentences : lr0 index -> (tactic * int * term indexset) list)
-      : (lr0 index * tactic * term indexset) Seq.t
+    : (lr0 index * tactic * term indexset) Seq.t
     =
     let module H = Heap.Int in
     let add_sentences heap = function
@@ -936,7 +936,7 @@ module Report = struct
         let la = IndexSet.inter (graph.unaccepted node) la in
         loop_successors (node :: prefix) la acc goal
       and loop_successors prefix la acc goal =
-          match graph.predecessors (List.hd prefix) with
+        match graph.predecessors (List.hd prefix) with
         | [] ->
           commit_until prefix0 la prefix;
           (prefix, la) :: acc
