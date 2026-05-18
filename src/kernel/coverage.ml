@@ -88,6 +88,12 @@ open Misc
 open Fix.Indexing
 open Info
 
+(** Convert LR(0) items to a filtered string representation for display.
+    Two optimizations are applied:
+    - Skip trivial items of the form [symbol: symbol . ...] where the LHS
+      equals the first RHS symbol.
+    - Group items sharing the same LHS and prefix but differing in the
+      post-dot suffix, collapsing them with a wildcard ([_*]). *)
 let string_of_items_for_filter g lr0 =
   let decompose item =
     let prod, pos = Item.desc g item in
@@ -134,6 +140,9 @@ let string_of_items_for_filter g lr0 =
   in
   List.rev_map print_item !lines
 
+(** Format LR(0) items into a multi-line visual pattern with indentation,
+    used for coverage filter display. The incoming symbol of the LR(0) state
+    determines the prefix style. *)
 let print_pattern g lr0 =
   let first, other, suffix =
     match Lr0.incoming g lr0 with
@@ -154,6 +163,9 @@ let print_pattern g lr0 =
   prepare first (string_of_items_for_filter g lr0)
 
 module Andor = struct
+  (** Non-deterministic AND-OR graph for coverability analysis.
+      OR nodes represent choice points where multiple reductions may fire.
+      AND nodes represent deterministic stack consumption during a reduction. *)
   type ('g, 'lrc, 'n) node = {
     lrc: 'lrc index;
     rpos: 'g Redpos.t Opt.n index;
@@ -168,10 +180,17 @@ module Andor = struct
 
   type ('g, 'lrc) graph = Graph : ('g, 'lrc, 'n) _graph -> ('g, 'lrc) graph
 
+  (** Returns true when the node is an OR node, i.e., at a reduction choice
+      point: either between reductions ([rpos = None]) or at the start of a
+      reduction ([rpos] at position zero). *)
   let is_or_node rtable node = match Opt.prj node.rpos with
     | None -> true
     | Some rpos -> Redpos.is_zero rtable rpos
 
+  (** Returns the top LR(1) state on the stack for a given node.
+      For OR nodes ([rpos = None]), this is the label of the LRC state.
+      For AND nodes mid-reduction on a nonterminal, this is the goto target
+      from the LRC's label state. *)
   let top_state g (stacks : _ Automata.stacks) rtable node =
     match Opt.prj node.rpos with
     | None -> stacks.label node.lrc
@@ -181,6 +200,11 @@ module Andor = struct
       | Either.Left nt ->
         Transition.find_goto_target g (stacks.label node.lrc) nt
 
+  (** Build the AND-OR graph by fixpoint iteration.
+      Starting from each LRC state with all regular terminals as active
+      lookahead, the graph explores reductions and stack pops. OR nodes
+      branch into all applicable reductions; AND nodes chain through
+      right-to-left consumption of production RHS symbols. *)
   let make (type g lrc)
       (g : g grammar)
       (rcs : (g lr1, g Redgraph.reduction_closure) vector)
@@ -274,6 +298,10 @@ module Andor = struct
 end
 
 module Deter = struct
+  (** Deterministic automaton obtained by merging Andor OR nodes into single
+      states and grouping AND nodes that branch on the same LR state.
+      Lookahead sets are intentionally excluded from the DFA kernel to avoid
+      combinatorial explosion. *)
   type ('g, 'n, 'm) node = {
     index: 'm index;
     ker: 'n indexset;
@@ -289,9 +317,17 @@ module Deter = struct
 
   type ('g, 'lrc, 'n) graph = Graph : ('g, 'lrc, 'n, 'm) _graph -> ('g, 'lrc, 'n) graph
 
+  (** Returns the LRC state shared by all Andor nodes in the kernel of a
+      Deter node. All Andor nodes in a Deter kernel are guaranteed to have
+      the same LRC state. *)
   let get_lrc agr node =
     agr.Andor.nodes.:(IndexSet.choose node.ker).lrc
 
+  (** Build the deterministic graph from an Andor graph.
+      OR nodes are collapsed via epsilon transitions; AND nodes are grouped
+      by their branching LR state. The resulting DFA tracks which Andor
+      nodes form each kernel, along with accumulated accept sets and top
+      LR(1) states. *)
   let make (type g lrc n)
       (g : g grammar)
       (_rcs : (g lr1, g Redgraph.reduction_closure) vector)
@@ -366,6 +402,11 @@ module Deter = struct
     let nodes = Gen.freeze nodes in
     Graph {initials; nodes}
 
+  (** Compute the set of LR(0) states reachable from a Deter node.
+      Traverses the Andor graph from the node's kernel, following OR nodes
+      down through reduction closure trees, and collecting the LR(0) base
+      state at each leaf. Used for mapping coverage results back to
+      human-readable grammar states. *)
   let get_lr0
       (type g lrc n m)
       (g : g grammar)
@@ -398,6 +439,10 @@ module Deter = struct
     !states
 end
 
+(** Create a dynamically growing array backed by a reference.
+    Returns the reference and a setter that automatically resizes the
+    array (doubling as needed) when an out-of-bounds index is set.
+    Values are accumulated as lists at each index. *)
 let dyn_array () =
   let r = ref (Array.make 16 []) in
   let set index cell =
@@ -415,12 +460,21 @@ let dyn_array () =
   (r, set)
 
 module Enum = struct
+  (** Augments the deterministic graph with unaccepted lookahead tracking.
+      For each node, computes which terminal symbols have not been accepted
+      by any applicable reduction. Sink nodes with non-empty unaccepted sets
+      represent coverage gaps. Predecessor links enable path reconstruction. *)
   type ('n,'term) _graph = {
     domain: 'n cardinal;
     predecessors: 'n index -> ('n index * int * 'term indexset) list;
     unaccepted: 'n index -> 'term indexset;
   }
 
+  (** Build the enumeration graph and compute maximal sink groups.
+      Propagates unaccepted lookaheads from initial states through the
+      deterministic graph, subtracting each node's accept set along edges.
+      Returns the graph with predecessor/unaccepted accessors, plus an
+      array of sink groups indexed by stack prefix length. *)
   let prepare (type g lrc n m)
       (g : g grammar)
       (agr : (g, lrc, n) Andor._graph)
@@ -486,6 +540,10 @@ module Enum = struct
 end
 
 module Cover = struct
+  (** Computes coverage by constructing a synchronized product of the user's
+      error matching machine with the enumeration graph. States where the
+      machine cannot handle the unaccepted lookaheads of the enumeration
+      graph are identified as uncovered. *)
   type ('g, 'lrc, 'enu) graph = Graph : {
       enum: ('n, 'g terminal) Enum._graph;
       position: 'n index -> ('lrc, 'enu) Sum.n index;
@@ -493,6 +551,12 @@ module Cover = struct
       sinks: 'n index list;
     } -> ('g, 'lrc, 'enu) graph
 
+  (** Compute the coverage product graph.
+      Each product state pairs a machine state with a position in the
+      enumeration graph (either an LRC state or an Enum node). Unaccepted
+      lookaheads are propagated through the product, filtered by the
+      machine's accepting transitions and branch lookahead sets. Sink
+      states with remaining unaccepted lookaheads are coverage gaps. *)
   let coverage (type g r st tr lrc ao en)
       (g : g grammar)
       (branches : (g, r) Spec.branches)
@@ -634,6 +698,15 @@ module Cover = struct
 end
 
 module Extract = struct
+  (** Extracts witness paths from coverage analysis graphs.
+      Propagates rejectable lookaheads backward from sink nodes through
+      predecessor links, identifying maximal nodes where user-reached
+      goals intersect with unaccepted lookaheads. *)
+
+  (** Compute maximal prefixes: paths from sink nodes back to nodes where
+      goals have been reached. Rejectable lookaheads are propagated backward
+      through predecessors, intersected with each predecessor's unaccepted
+      set. Results are grouped by propagation depth. *)
   let compute_maximal_prefixes
       (type n goal term)
       ~(graph : (n, term) Enum._graph)
@@ -689,6 +762,11 @@ module Extract = struct
     fixpoint ~counter ~propagate todo;
     !maximals
 
+  (** Compute global prefixes: propagate rejectable lookaheads from maximal
+      nodes further backward, collecting all nodes where goals were reached.
+      Unlike [compute_maximal_prefixes], which stops at the first goal node,
+      this continues propagation to find all goal intersections along each
+      path. Results are grouped by propagation depth. *)
   let compute_global_prefixes
       (type n goal term)
       ~(graph : (n, term) Enum._graph)
@@ -733,7 +811,14 @@ module Extract = struct
 end
 
 module Report = struct
+  (** Formats and emits coverage results for user-facing output.
+      Provides local (per-state) and global (cross-state) reporting modes,
+      with sentence deduplication and cost-based ordering. *)
 
+  (** Deduplicate and filter sentences for a single LR(0) state.
+      Sentences are sorted by cost, and lookaheads already covered by
+      earlier sentences are removed. Only sentences contributing new
+      uncovered lookaheads are retained. *)
   let cleanup_sentences (goal : 'term indexset) lr0 (sentences : ('tactic * int * 'term indexset) list) =
     let covered = ref IndexSet.empty in
     sentences
@@ -746,6 +831,10 @@ module Report = struct
         else Some (t,c,l,lr0)
       )
 
+  (** Emit local (per-state) coverage results.
+      For each LR(0) state with uncovered lookaheads, returns a sequence
+      of sentences sorted by cost. States with no remaining goals are
+      omitted. *)
   let emit_local
     (type lr0 term tactic)
     (goals : (lr0, term indexset) vector)
@@ -768,6 +857,10 @@ module Report = struct
           Some (lr0, sentences)
     end
 
+  (** Emit global coverage results using a priority queue.
+      Sentences from all LR(0) states are merged into a single cost-ordered
+      sequence, so the most relevant counterexamples appear first regardless
+      of which state they belong to. *)
   let emit_global
       (type lr0 term tactic)
       (goals : (lr0, term indexset) vector)
@@ -798,6 +891,12 @@ module Report = struct
     in
     loop all_sentences
 
+  (** Emit both local and global coverage results.
+      Populates goal-to-sentence mappings from maximal and global prefix
+      arrays, then expands paths by following predecessor links and
+      committing coverage decisions (removing lookaheads already accounted
+      for by earlier sentences). Returns a pair of (local, global) result
+      sequences. *)
   let emit_all (type n goal term)
       ~goals:(goal_domain : goal cardinal)
       ~(graph : (n, term) Enum._graph)

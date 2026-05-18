@@ -21,46 +21,21 @@
  * SOFTWARE.
  *)
 
-(** This module constructs a graph refining the LR automaton to reason about
-    reachable configurations---the pairs of an LR state and a lookahead token, the
-    transitions that allow to go from one to another, in order to determine which
-    ones are reachable from initial states. It includes functionality to compute
-    reachable states, wait states, entry points, predecessors, successors, and
-    prefixes for states in the LR automaton.
-    LRC means "LR with classes", where a class is the partition of lookahead
-    symbols with identical behaviors, as determined by the reachability
-    analysis.
+(** LRC (LR with classes) — implementation.
 
-    This module computes a refinement of LR(1) states by reachable "lookahead-classes".
-    When an LR(1) automaton is pruned to resolve conflicts, some sequence of
-    transitions might become unreachable, while the individual transitions
-    themselves stay reachable.
-    For instance a sequence of states s0 -> s1 -> s2 on the stack might be
-    impossible to reach, while s0 -> s1 and s1 -> s2 are individually reachable
-    because there is lookahead that permit to reach both consecutively.
-    Admittedly, this only happens for severely pruned automaton and not matter
-    much in practice. Most of the time, LRC after minimization coincide with
-    LR(1) states.
-    TODO: Maybe I could drop LRC to simplify things and accept the rare
-    over-approximations of reachable stacks? I should quantify the problem
-    by measuring how often LRC diverge from LR(1).
+    Constructs the LRC graph by iterating over LR1 states and their lookahead
+    classes, building transition relations, and computing transitive closure
+    via Tarjan's algorithm. Provides two construction paths: the full LRC
+    ([make]) and a minimized version ([make_minimal]) using Valmari's DFA
+    minimization algorithm.
 
-    Key data structures:
-    - 'g n: type-level index for LRC states
-    - ('g, 'n) t: LRC structure with LR1_of, lrcs_of mappings and transition relations
-    - 'n entrypoints: Reachability info including some_prefix for minimal paths
-
-    Main functions:
-    - make: Build LRC from grammar and reachability analysis
-    - make_minimal: Build minimal LRC via Valmari's algorithm
-    - from_entrypoints: Compute reachability from specific entrypoints
-    - check_deterministic: Verify LRC automaton is deterministic (debugging)
-    - check_equivalence: Check equivalence of two LRC structures (debugging)
-
-    Tricky implementation details:
-    - The [make_minimal] function uses Valmari's algorithm to quotient
-      equivalent LRC states, significantly reducing memory usage.
-    - The [some_prefix] function computes minimal-length paths to each state.
+    Implementation notes:
+    - [make] allocates LRC states contiguously per LR1 state, using index
+      offsets to encode the (LR1 state, class index) pairing efficiently.
+    - [make_minimal] builds the LRC graph on-the-fly during a backward
+      traversal from LR1 states, then minimizes with Valmari's algorithm.
+    - [from_entrypoints] computes reachability from a subset of states and
+      lazily evaluates prefix paths for counterexample generation.
     - FIXME: Prefixes are minimal in number of symbols, not in number of
       terminals, which is ultimately what we care about when generating
       counter-examples. A short prefix can expand to a long sentence.
@@ -80,6 +55,7 @@ type ('g, 'n) t = {
   reachable_from: ('n, 'n indexset) vector;
 }
 
+(* Number of LRC states in the structure *)
 let count t = Vector.length t.lr1_of
 
 (* Compute the difference between two indices *)
@@ -93,7 +69,9 @@ let class_index t lrc =
 module N = Unsafe_cardinal()
 type 'g n = 'g N.t
 
-(* Functor to create an LRC module from an Info module and Reachability module *)
+(* Build the LRC structure from grammar and reachability analysis.
+     Creates one LRC state per (LR1 state, lookahead class) pair, computes
+     transition relations, and closes them transitively with Tarjan's algorithm. *)
 let make (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   (* Compute the total number of LRC states *)
   let n =
@@ -213,7 +191,7 @@ type 'n entrypoints = {
   successors: ('n, 'n indexset) vector;
   predecessors: ('n, 'n indexset) vector;
   some_prefix: 'n index -> int * 'n index list;
-  (** [some_prefix state] returns a prefix to reach [state] from an entrypoin.
+  (** [some_prefix state] returns a prefix to reach [state] from an entrypoint.
       The prefix's length and the sequence of states (excluding [state]) are
       given, starting from the end.
       Thus, [List.rev (state :: some_prefix state)] is a valid prefix. *)
@@ -286,8 +264,8 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
   in
   {reachable; wait; entrypoints; successors; predecessors; some_prefix}
 
-(* Alternative formulation with minimization *)
-
+(* Debugging: verify the LRC automaton is deterministic by traversing all
+     (LR1 state, class) pairs backward and checking for dead-ends. *)
 let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reachability.t) =
   let prefix = Vector.make (Lr1.cardinal g) [] in
   let rec loop next = function
@@ -391,6 +369,9 @@ let check_deterministic (type g) (g : g grammar) ((module Reachability) : g Reac
 module Mlrc = Unsafe_cardinal()
 type 'g mlrc = 'g Mlrc.t
 
+(* Build a minimal LRC structure.
+     Constructs the graph lazily during backward traversal, then applies
+     Valmari's DFA minimization to merge equivalent states. *)
 let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachability.t) : (g, g mlrc) t =
   let open IndexBuffer in
   let module State = Gen.Make() in

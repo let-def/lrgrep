@@ -29,14 +29,14 @@ Each grammar element category has its own submodule following the `INDEXED` sign
 
 | Submodule | Element | Key functions |
 |-----------|---------|---------------|
-| `Terminal` | `'g terminal` | `to_string`, `semantic_value`, `is_error`, `find`, `intersect` |
-| `Nonterminal` | `'g nonterminal` | `to_string`, `nullable`, `first`, `kind`, `find` |
-| `Symbol` | `'g symbol` (= terminal ⊎ nonterminal) | `desc`, `is_terminal`, `is_nonterminal`, `inj_t`, `inj_n` |
+| `Terminal` | `'g terminal` | `to_string`, `alias`, `semantic_value`, `is_error`, `find`, `intersect`, `lookaheads_to_string` |
+| `Nonterminal` | `'g nonterminal` | `to_string`, `nullable`, `first`, `kind`, `find`, `find_mangled` |
+| `Symbol` | `'g symbol` (= terminal ⊎ nonterminal) | `desc`, `is_terminal`, `is_nonterminal`, `inj_t`, `inj_n`, `to_string`, `find` |
 | `Production` | `'g production` | `lhs`, `rhs`, `length`, `kind` |
-| `Item` | `'g item` (= production + dot position) | `make`, `desc`, `prev`, `is_reducible`, `to_string` |
+| `Item` | `'g item` (= production + dot position) | `make`, `last`, `desc`, `prev`, `position`, `production`, `is_reducible`, `to_string` |
 | `Lr0` | `'g lr0` | `incoming`, `items`, `is_entrypoint` |
-| `Lr1` | `'g lr1` | `all`, `accepting`, `wait`, `to_lr0`, `incoming`, `items`, `shift_on`, `reduce_on`, `reject`, `predecessors`, `entrypoints`, `default_reduction` |
-| `Transition` | `'g transition` (= goto ⊎ shift) | `source`, `target`, `symbol`, `successors`, `predecessors`, `find_goto`, `accepting` |
+| `Lr1` | `'g lr1` | `all`, `accepting`, `wait`, `to_lr0`, `incoming`, `items`, `shift_on`, `reduce_on`, `reject`, `predecessors`, `is_entrypoint`, `entrypoints`, `entrypoint_table`, `default_reduction`, `intersect`, `to_string` |
+| `Transition` | `'g transition` (= goto ⊎ shift) | `goto`, `shift`, `any`, `of_goto`, `of_shift`, `split`, `source`, `target`, `symbol`, `goto_symbol`, `shift_symbol`, `successors`, `predecessors`, `find_goto`, `find_goto_target`, `accepting`, `find`, `to_string` |
 | `Reduction` | `'g reduction` (= lr1, production, lookaheads) | `state`, `production`, `lookaheads`, `from_lr1` |
 
 ### Key design decisions

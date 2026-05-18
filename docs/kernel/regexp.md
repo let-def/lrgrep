@@ -33,7 +33,7 @@ and 'g desc =
 - **`Alt`**: Disjunction. `Alt []` = empty language.
 - **`Seq`**: Concatenation. `Seq []` = {ε}.
 - **`Star`**: Kleene star with quantifier policy (`*`, `+`, `?`, `{m,n}`).
-- **`Filter`**: Lookahead restriction — match only if current state is in the set.
+- **`Filter`**: State guard — restrict matching to LR(1) states in the given set.
 - **`Reduce`**: Reduction operator — match a viable reduction pattern.
 - **`Usage`**: Dead-code tracking marker.
 
@@ -87,13 +87,17 @@ The `Reducing` case is the most complex: it tracks which reduction graph steps a
 
 ### Shortest vs Longest policy
 
-Controlled by ordering of continuations in the `Reducing` case:
-- **Shortest**: `Accept` continuation comes first (prefer smaller match)
-- **Longest**: `Accept` continuation comes last (prefer larger match)
+Controlled by the order in which the `Accept` continuation and the continuing
+`Reducing` step are emitted during derivative computation:
+- **Shortest**: `Accept` is emitted before continuing reductions (prefer smaller match)
+- **Longest**: `Accept` is emitted after continuing reductions (prefer larger match)
+
+The same ordering principle applies to `Star` derivatives: shortest emits the
+"stop repeating" continuation first, longest emits it last.
 
 ## Key design decisions
 
-- **Hash-consed terms**: Expressions are compared structurally via `compare`, enabling deduplication in the NFA.
+- **UID-based comparison**: Expressions are compared by unique ID via `compare`, enabling ordering for deduplication in the NFA. UIDs are assigned at parse time and remain stable during derivation.
 - **Antimirov derivatives**: Used for parallel derivatives (multiple continuations from one expression), adapted for LR states rather than character alphabets.
 - **Usage tracking**: The `Usage` constructor marks which source constructs are exercised, enabling dead-code warnings.
 

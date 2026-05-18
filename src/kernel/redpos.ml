@@ -74,13 +74,24 @@ open Info
 
 include Unsafe_cardinal()
 
+(** A position as a (nonterminal, offset) pair.
+    The offset is the number of stack elements to pop before
+    following the goto transition labeled by the nonterminal. *)
 type 'g desc = 'g nonterminal index * int
 
+(** Table mapping compact indices to (nonterminal, offset) positions.
+    [desc] stores positions contiguously per nonterminal for O(1) access.
+    [zero] maps each nonterminal to the index of its position-0 entry,
+    enabling fast injection of (nt, 0) pairs. *)
 type 'g table = {
   desc: ('g t, 'g desc) vector;
   zero: ('g nonterminal, 'g t index) vector;
 }
 
+(** Build a position table from a grammar.
+    For each nonterminal, allocates contiguous slots equal to the maximum
+    RHS length of its productions, plus a sentinel at index 0.
+    Total cardinality = 1 + sum of max production lengths per nonterminal. *)
 let make (type g) (g : g grammar) : g table =
   let length = Vector.make (Nonterminal.cardinal g) 0 in
   Index.iter (Production.cardinal g) (fun prod ->
@@ -105,6 +116,8 @@ let make (type g) (g : g grammar) : g table =
   in
   {desc; zero}
 
+(** Inject a (nonterminal, offset) pair into a compact table index.
+    Raises [Assert_failure] if the offset is out of range. *)
 let inj (type g) (p : g table) nt pos =
   assert (pos >= 0);
   let p0 = p.zero.:(nt) in
@@ -114,14 +127,23 @@ let inj (type g) (p : g table) nt pos =
   assert (pos = pos');
   pn
 
+(** Project a compact table index back to its (nonterminal, offset) pair. *)
 let prj (type g) (p : g table) pos =
   p.desc.:(pos)
 
+(** Navigate to the predecessor position in a reduction.
+    Returns [Left nt] if at position 0 for nonterminal [nt] (start of
+    a reduction — follow the goto transition labeled [nt]).
+    Returns [Right pos'] if at position > 0 (middle of a reduction —
+    [pos'] is the previous position, obtained via O(1) [Index.pred]). *)
 let previous (type g) (p : g table) pos =
   match p.desc.:(pos) with
   | (nt, 0) -> Either.Left nt
   | _ -> Either.Right (Option.get (Index.pred pos))
 
+(** Like [previous] but accepts an optional index.
+    Returns [Right Opt.none] when the input is [None].
+    Used in reduction graphs where positions may be absent. *)
 let previous' (type g) (p : g table) pos =
   match Opt.prj pos with
   | None -> Either.Right Opt.none
@@ -130,6 +152,7 @@ let previous' (type g) (p : g table) pos =
     | (nt, 0) -> Either.Left nt
     | _ -> Either.Right (Option.get (Index.pred pos))
 
+(** Check whether the position is at offset 0 (start of a reduction). *)
 let is_zero (type g) (p : g table) pos =
   let _, pos = p.desc.:(pos) in
   (pos = 0)

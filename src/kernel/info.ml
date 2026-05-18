@@ -51,8 +51,8 @@
     - Indexing:
       - Each grammar element is assigned a unique index
       - Index vectors enable O(1) lookup of properties
-      - The [Lift] module computes all the index mappings from Menhir's
-        grammar representation
+      - The [Load_grammar] functor computes all the index mappings from
+        Menhir's grammar representation
 
     Tricky implementation details:
 
@@ -552,44 +552,56 @@ module Terminal = struct
   let cardinal g = g.terminal_n
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** Converts a terminal index to its string representation *)
   let to_string g i =
     let open (val g.raw) in
     Terminal.name (Terminal.of_int (Index.to_int i))
 
+  (** Returns the alias for a terminal, if one exists *)
   let alias g i =
     Hashtbl.find_opt (Lazy.force g.terminal_aliases) (to_string g i)
 
+  (** Returns the set of all terminals *)
   let all g = g.terminal_all
 
+  (** Returns the set of regular terminals, excluding EOF, ERROR, and pseudo-terminals *)
   let regular g = g.terminal_regular
 
+  (** Returns the semantic value type of a terminal *)
   let semantic_value g i =
     let open (val g.raw) in
     Terminal.typ (Terminal.of_int (Index.to_int i))
 
+  (** Optimized intersection: short-circuits when either argument is [all] *)
   let intersect g a b =
     if a == g.terminal_all then b
     else if b == g.terminal_all then a
     else IndexSet.inter a b
 
+  (** Returns [true] if the terminal is the special ERROR symbol *)
   let is_error g i =
     let open (val g.raw) in
     match Terminal.kind (Terminal.of_int (i : _ index :> int)) with
     | `ERROR -> true
     | _ -> false
 
+(** Converts a set of lookahead terminals to a human-readable string.
+      Sets larger than 10 elements are abbreviated as "<n lookaheads>" *)
   let lookaheads_to_string g la =
     match IndexSet.cardinal la with
     | n when n > 10 -> Printf.sprintf "<%d lookaheads>" n
     | _ -> string_concat_map ~wrap:("<",">") ","
-             (to_string g) (IndexSet.elements la)
+              (to_string g) (IndexSet.elements la)
 
+  (** Lazily builds and returns the terminal name-to-index lookup table *)
   let terminal_table g =
     if Hashtbl.length g.terminal_table = 0 then
       Index.iter (cardinal g)
         (fun t -> Hashtbl.add g.terminal_table (to_string g t) t);
     g.terminal_table
 
+  (** Finds a terminal by name. With [approx > 0], returns fuzzy match
+      suggestions when the exact name is not found. *)
   let find g ?(approx=3) name =
     let table = terminal_table g in
     match Hashtbl.find_opt table name, approx with
@@ -606,16 +618,20 @@ module Nonterminal = struct
   let cardinal g = g.nonterminal_n
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** Returns the set of all non-terminals *)
   let all g = g.nonterminal_all
 
+  (** Converts a nonterminal index to its name string *)
   let to_string g i =
     let open (val g.raw) in
     Nonterminal.name (Nonterminal.of_int (Index.to_int i))
 
+  (** Converts a nonterminal index to its mangled name (used internally by Menhir) *)
   let to_mangled_string g i =
     let open (val g.raw) in
     Nonterminal.mangled_name (Nonterminal.of_int (Index.to_int i))
 
+  (** Finds a nonterminal by its mangled name. Linear search, not cached. *)
   let find_mangled g str =
     let enum = Index.enumerate (cardinal g) in
     let rec loop () =
@@ -629,18 +645,23 @@ module Nonterminal = struct
     | i -> Some i
     | exception Index.End_of_set -> None
 
+  (** Returns [`REGULAR] for ordinary non-terminals and [`START] for entrypoint non-terminals *)
   let kind g i =
     let open (val g.raw) in
     Nonterminal.kind (Nonterminal.of_int (Index.to_int i))
 
+  (** Returns the semantic value type of a nonterminal *)
   let semantic_value g i =
     let open (val g.raw) in
     Nonterminal.typ (Nonterminal.of_int (Index.to_int i))
 
+  (** Returns [true] if the nonterminal can derive the empty string *)
   let nullable g i =
     let open (val g.raw) in
     Nonterminal.nullable (Nonterminal.of_int (Index.to_int i))
 
+  (** Returns the FIRST set of a nonterminal: the set of terminals that can begin
+      a string derived from this nonterminal *)
   let first g i =
     let open (val g.raw) in
     Nonterminal.of_int (Index.to_int i)
@@ -648,12 +669,15 @@ module Nonterminal = struct
     |> List.map (fun t -> Index.of_int g.terminal_n (Terminal.to_int t))
     |> IndexSet.of_list
 
+  (** Lazily builds and returns the nonterminal name-to-index lookup table *)
   let nonterminal_table g =
     if Hashtbl.length g.nonterminal_table = 0 then
       Index.iter (cardinal g)
         (fun t -> Hashtbl.add g.nonterminal_table (to_string g t) t);
     g.nonterminal_table
 
+  (** Finds a nonterminal by name. Checks both regular and mangled names.
+      With [approx > 0], returns fuzzy match suggestions on failure. *)
   let find g ?(approx=3) name =
     let table = nonterminal_table g in
     match Hashtbl.find_opt table name, approx with
@@ -676,40 +700,54 @@ module Symbol = struct
   let cardinal g = Sum.cardinal g.terminal_n g.nonterminal_n
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** Discriminated union of terminal and nonterminal indices *)
   type 'g desc =
     | T of 'g terminal index
     | N of 'g nonterminal index
 
+  (** Internal projection of symbol index into terminal/nonterminal sum *)
   let prj g i = Sum.prj g.terminal_n i
 
+  (** Returns the symbol as a discriminated union: [T] for terminals, [N] for non-terminals *)
   let desc g i =
     match prj g i with
     | L t -> T t
     | R n -> N n
 
+  (** Returns [true] if the symbol is a terminal *)
   let is_terminal g t = match prj g t with
     | L _ -> true
     | R _ -> false
 
+  (** Returns [true] if the symbol is a non-terminal *)
   let is_nonterminal g t = match prj g t with
     | L _ -> false
     | R _ -> true
 
+  (** Converts a symbol to its name string. With [mangled:true], returns Menhir's internal name. *)
   let to_string g ?mangled t =
     let open (val g.raw) in
     match prj g t with
     | L t -> symbol_name ?mangled (T (Terminal.of_int (Index.to_int t)))
     | R n -> symbol_name ?mangled (N (Nonterminal.of_int (Index.to_int n)))
 
+  (** Returns the semantic value type of a symbol. For terminals without a semantic
+      value, returns [Some "unit"]. *)
   let semantic_value g t = match prj g t with
     | L t -> Some (Option.value (Terminal.semantic_value g t) ~default:"unit")
     | R n -> Nonterminal.semantic_value g n
 
+  (** Returns the set of all symbols (terminals and non-terminals) *)
   let all g = g.symbol_all
 
+  (** Inject a terminal index into the symbol index space *)
   let inj_t _ t = Sum.inj_l t
+
+  (** Inject a nonterminal index into the symbol index space *)
   let inj_n g n = Sum.inj_r g.terminal_n n
 
+  (** Finds a symbol (terminal or nonterminal) by name. Checks both regular and
+      mangled names. With [approx > 0], returns fuzzy match suggestions on failure. *)
   let find g ?(approx=3) name =
     let ttable = Terminal.terminal_table g in
     match Hashtbl.find_opt ttable name with
@@ -739,49 +777,70 @@ module Production = struct
   let cardinal g = Vector.length g.production_lhs
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** Returns the left-hand side nonterminal of a production *)
   let lhs g i = g.production_lhs.:(i)
+
+  (** Returns the right-hand side symbols of a production *)
   let rhs g i = g.production_rhs.:(i)
+
+  (** Returns the number of symbols on the right-hand side *)
   let length g i = Array.length (rhs g i)
+
+  (** Returns [`REGULAR] for ordinary productions and [`START] for pseudo start productions *)
   let kind g i =
     let open (val g.raw) in
     Production.kind (Production.of_int (Index.to_int i))
+
+  (** Returns the set of all productions *)
   let all g = g.production_all
 end
 
-(* Explicit representation of LR(0) items *)
+(** Explicit representation of LR(0) items.
+    An item is a production with a dot position: [A -> α . β].
+    Items are indexed globally across all productions for efficient set operations. *)
 module Item = struct
   type 'g n = 'g item
 
   let cardinal g = Vector.length g.item_productions
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** [make g prod pos] creates an item for production [prod] with the dot
+      at position [pos]. Raises [Invalid_argument] if [pos] is out of bounds. *)
   let make g prod pos =
     if pos < 0 || pos > Production.length g prod then
       invalid_arg "Info.Item.make: pos out of bounds";
     Index.of_int (cardinal g) (g.item_offsets.:(prod) + pos)
 
+  (** Creates an item with the dot at the end of the production (fully recognized) *)
   let last g prod =
     make g prod (Production.length g prod)
 
+  (** Returns the production that this item belongs to *)
   let production g i = g.item_productions.:(i)
 
+  (** Returns the dot position within the item's production (0 = before all symbols) *)
   let position g i =
     ((i : _ index :> int) - g.item_offsets.:(production g i))
 
+  (** Returns the (production, position) pair for the item *)
   let desc g i =
     let prod = production g i in
     (prod, (i : _ index :> int) - g.item_offsets.:(prod))
 
+  (** Returns the previous item in the same production (dot moved one position left),
+      or [None] if the dot is already at position 0. *)
   let prev g (i : 'g n index) =
     match Index.pred i with
     | Some j when not (Index.equal (production g i) (production g j)) -> None
     | result -> result
 
+  (** Returns [true] if the dot is at the end of the production (ready to reduce) *)
   let is_reducible g i =
     let prod = production g i in
     ((i : _ index :> int) - g.item_offsets.:(prod)) =
     Production.length g prod
 
+  (** Converts an item to standard notation string, e.g. "A:B . c d" *)
   let to_string g i =
     let prod, pos = desc g i in
     let b = Buffer.create 63 in
@@ -800,56 +859,65 @@ module Item = struct
     Buffer.contents b
 end
 
+(** LR(0) state information.
+    LR(0) states represent the "core" of LR(1) states, ignoring lookahead information. *)
 module Lr0 = struct
   type 'g n = 'g lr0
 
   let cardinal g = Vector.length g.lr0_items
   let of_int g i = Index.of_int (cardinal g) i
 
-  (* See [Lr1.incoming]. *)
+  (** Returns the symbol that labels the transition into this state.
+      [None] for initial states. *)
   let incoming g i = g.lr0_incoming.:(i)
 
-  (* See [Lr1.items]. *)
+  (** Returns the set of LR(0) items in this state (kernel items before closure) *)
   let items g i = g.lr0_items.:(i)
 
-  (* If the state is an initial state, returns the pseudo (start)
-     production that recognizes this entrypoint. *)
+  (** Returns [Some prod] if this is an initial state for an entrypoint,
+      where [prod] is the pseudo start production. [None] otherwise. *)
   let is_entrypoint g i = g.lr0_is_entrypoint.:(i)
 end
 
+(** LR(1) state information.
+    LR(1) states extend LR(0) cores with lookahead information. *)
 module Lr1 = struct
   type 'g n = 'g lr1
 
   let cardinal g = Vector.length g.lr1_reduce_on
   let of_int g i = Index.of_int (cardinal g) i
 
+  (** Returns the set of all LR(1) states *)
   let all g = g.lr1_all
+
+  (** Returns the set of accepting states (reached after recognizing an entrypoint) *)
   let accepting g = g.lr1_accepting
 
-  (* A ``wait'' state is an LR(1) state in which the parser needs to look at
-     more input before knowing how to proceed.
-     Wait states are the initial states and the targets of SHIFT transitions
-     (states with a terminal as incoming symbol), except the accepting ones
-     (after reading EOF, the only valid action is to reduce). *)
+  (** Returns the set of "wait" states: states where the parser must read more input.
+      Includes initial states and shift transition targets, excluding accepting states. *)
   let wait g = g.lr1_wait
 
-  (* Get the LR(0) "core" state *)
+  (** Returns the LR(0) "core" state corresponding to this LR(1) state *)
   let to_lr0 g i = g.lr1_lr0.:(i)
 
-  (* The symbol annotating the incoming transitions of a state.
-     There is none for initial states, and at most one for others. *)
+  (** Returns the symbol labeling the incoming transition. [None] for initial states. *)
   let incoming g i = Lr0.incoming g (to_lr0 g i)
 
-  (* Get the items in the kernel of a state (before closure). *)
+  (** Returns the kernel items of the state (before closure) *)
   let items g i = Lr0.items g (to_lr0 g i)
 
+  (** Returns [Some prod] if this is an entrypoint state, [None] otherwise *)
   let is_entrypoint g i = Lr0.is_entrypoint g (to_lr0 g i)
+
+  (** Hash table mapping entrypoint names to their LR(1) states *)
   let entrypoint_table g = g.lr1_entrypoint_table
+
+  (** Returns the set of entrypoint states *)
   let entrypoints g = g.lr1_entrypoints
 
-  (* Printing functions, for debug purposes.
-     Not nice for the end-user (FIXME). *)
+  (** Debug printing functions. Formats are not stable across versions. *)
 
+  (** Converts the incoming symbol of a state to a debug string *)
   let symbol_to_string g lr1 =
     match incoming g lr1 with
     | Some sym -> Symbol.to_string g sym
@@ -857,36 +925,38 @@ module Lr1 = struct
       let entrypoint = Option.get (is_entrypoint g lr1) in
       (Symbol.to_string g (Production.rhs g entrypoint).(0) ^ ":")
 
+  (** Converts an LR(1) state to a debug string *)
   let to_string g lr1 =
     string_of_index lr1 ^ ":" ^ symbol_to_string g lr1
 
+  (** Converts a list of LR(1) states to a debug string *)
   let list_to_string g lr1s =
     string_concat_map ~wrap:("[","]") "; " (to_string g) lr1s
 
+  (** Converts a set of LR(1) states to a debug string *)
   let set_to_string g lr1s =
     string_concat_map ~wrap:("{","}") ", " (to_string g) (IndexSet.elements lr1s)
 
-  (** [shift_on t] is the set of lookaheads that state [t] can shift *)
+  (** Returns the set of terminals that state [i] can shift on *)
   let shift_on g i = g.lr1_shift_on.:(i)
 
-  (** [reduce_on t] is the set of lookaheads that trigger a reduction in state
-      [t] *)
+  (** Returns the set of terminals that trigger a reduction in state [i] *)
   let reduce_on g i = g.lr1_reduce_on.:(i)
 
-  (** [reject t] is set of lookaheads that cause the automaton to fail when in
-      state [t] *)
+  (** Returns the set of terminals that cause a syntax error in state [i] *)
   let reject g i = g.lr1_reject.:(i)
 
-  (** [predecessors t] is the set of LR(1) states that have transition going
-      to [t]. *)
+  (** Returns the lazy stream of predecessor states (states with transitions to [i]) *)
   let predecessors g i = g.lr1_predecessors.:(i)
 
-  (** Wrapper around [IndexSet.inter] speeding-up intersection with [all] *)
+  (** Optimized intersection: short-circuits when either argument is [all] *)
   let intersect g a b =
     if a == g.lr1_all then b
     else if b == g.lr1_all then a
     else IndexSet.inter a b
 
+  (** Returns the default reduction for the state, if any. Some states have a single
+      applicable reduction that can be taken without checking the lookahead. *)
   let default_reduction g i =
     let open (val g.raw) in
     match Lr1.default_reduction (Lr1.of_int (i : _ index :> int)) with
@@ -894,45 +964,52 @@ module Lr1 = struct
     | Some p -> Some (Index.of_int (Vector.length g.production_rhs) (Production.to_int p))
 end
 
+(** Reduction information.
+    A reduction is a (state, production, lookahead set) triple, meaning that
+    in the given state, when the lookahead terminal is in the set, the parser
+    should reduce by the given production. *)
 module Reduction = struct
   type 'g n = 'g reduction
 
   let cardinal g = Vector.length g.reduction_production
   let of_int g i = Index.of_int (cardinal g) i
 
-  (* A reduction is a triple [(lr1, prod, lookaheads)], meaning that:
-     in state [lr1], when looking ahead at a terminal in [lookaheads], the
-     action is to reduce [prod]. *)
-
+  (** Returns the LR(1) state where this reduction applies *)
   let state g i = g.reduction_state.:(i)
+
+  (** Returns the production that this reduction reduces by *)
   let production g i = g.reduction_production.:(i)
+
+  (** Returns the set of lookahead terminals that trigger this reduction *)
   let lookaheads g i = g.reduction_lookaheads.:(i)
 
-  (* All reductions applicable to an lr1 state. *)
+  (** Returns the set of all reductions applicable in the given LR(1) state *)
   let from_lr1 g lr1 =
     g.reduction_from_lr1.:(lr1)
 end
 
 module Transition = struct
-  (* The set of goto transitions *)
+  (** Returns the cardinality of goto transitions *)
   let goto g = Vector.length g.transition_goto_sym
-  (* The set of all transitions = goto U shift *)
+
+  (** Returns the cardinality of all transitions (goto + shift) *)
   let any g = Vector.length g.transition_source
-  (* The set of shift transitions *)
+
+  (** Returns the cardinality of shift transitions *)
   let shift g = Vector.length g.transition_shift_sym
 
-  (* Inject goto into any *)
+  (** Inject a goto transition index into the combined transition index space *)
   let of_goto _g i = Sum.inj_l i
 
-  (* Inject shift into any *)
+  (** Inject a shift transition index into the combined transition index space *)
   let of_shift g i = Sum.inj_r (goto g) i
 
-  (* Project a transition into a goto or a shift transition *)
+  (** Project a transition index into either a goto or shift transition index *)
   let split g i =
     Sum.prj (goto g) i
 
-  (* [find_goto s nt] finds the goto transition originating from [s] and
-     labelled by [nt], or raise [Not_found].  *)
+  (** [find_goto s nt] finds the goto transition from state [s] labelled by
+      nonterminal [nt]. Raises [Invalid_argument] if no such transition exists. *)
   let find_goto g lr1 nt =
     match IndexMap.find_opt nt g.transition_goto_table.:(lr1) with
     | Some gt -> gt
@@ -940,44 +1017,46 @@ module Transition = struct
       Printf.ksprintf invalid_arg "find_goto(%s, %s)"
         (Lr1.to_string g lr1) (Nonterminal.to_string g nt)
 
+  (** Returns the target state of the goto transition from [lr1] labelled by [nt] *)
   let find_goto_target g lr1 nt =
     g.transition_target.:(of_goto g (find_goto g lr1 nt))
 
-  (* Get the source state of a transition *)
+  (** Returns the source (origin) state of a transition *)
   let source g i = g.transition_source.:(i)
 
-  (* Get the target state of a transition *)
+  (** Returns the target (destination) state of a transition *)
   let target g i = g.transition_target.:(i)
 
-  (* Symbol that labels a transition *)
+  (** Returns the grammar symbol that labels a transition *)
   let symbol g i =
     match split g i with
     | L i -> Sum.inj_r g.terminal_n g.transition_goto_sym.:(i)
     | R i -> Sum.inj_l g.transition_shift_sym.:(i)
 
-  (* Symbol that labels a goto transition *)
+  (** Returns the nonterminal that labels a goto transition *)
   let goto_symbol g i = g.transition_goto_sym.:(i)
 
-  (* Symbol that labels a shift transition *)
+  (** Returns the terminal that labels a shift transition *)
   let shift_symbol g i = g.transition_shift_sym.:(i)
 
-  (* [successors s] returns all the transitions [tr] such that
-     [source tr = s] *)
+  (** Returns the set of outgoing transitions from state [i] *)
   let successors g i = g.transition_successors.:(i)
 
-  (* [predecessors s] returns all the transitions [tr] such that
-     [target tr = s] *)
+  (** Returns the set of incoming transitions to state [i] *)
   let predecessors g i = g.transition_predecessors.:(i)
 
-  (* Accepting transitions are goto transitions from an initial state to an
-     accepting state, recognizing one of the grammar entrypoint. *)
+  (** Returns the set of accepting transitions: goto transitions from initial
+      to accepting states, recognizing completion of a grammar entrypoint. *)
   let accepting g = g.transition_accepting
 
+  (** Converts a transition to a debug string of the form "source -> target" *)
   let to_string g tr =
     Printf.sprintf "%s -> %s"
       (Lr1.to_string g (source g tr))
       (Lr1.to_string g (target g tr))
 
+  (** [find g src tgt] finds the transition from [src] to [tgt], if one exists.
+      Returns the transition index, assuming at most one transition between any pair. *)
   let find g src tgt =
     let inter = IndexSet.inter (successors g src) (predecessors g tgt) in
     assert (IndexSet.is_empty inter || IndexSet.is_singleton inter);

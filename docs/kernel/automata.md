@@ -20,10 +20,14 @@ type ('g, 'r) t = {
 }
 
 val make : 'g grammar -> 'g Redgraph.graph -> ('g, 'r) branch index -> 'g K.t -> ('g, 'r) t
+(** Returns a closure: given a continuation, produces the corresponding NFA state.
+    States are memoized by hash-consing on the continuation. *)
+
 val from_branches : 'g grammar -> 'g Redgraph.graph -> ('g, 'r) branches -> ('g, 'r) NFA.t vector
+(** Builds initial NFA states for all branches. *)
 ```
 
-Builds the NFA by recursively deriving continuations. Uses `K.derive` to compute transitions, then partitions them by label equivalence (via `IndexRefine.annotated_partition`) to merge transitions with the same filter/captures/usage.
+Builds the NFA by recursively deriving continuations. Uses `K.derive` to compute transitions, then partitions them by label equivalence (via `IndexRefine.annotated_partition`) to merge transitions with the same filter, captures, and usage.
 
 Transitions are lazy — NFA states are only materialized when explored during determinization.
 
@@ -65,42 +69,53 @@ Hash-consing ensures canonical representation of equivalent DFA states.
 
 ### Dataflow module — liveness and register allocation
 
-Performs fixpoint analysis on the DFA to compute:
-- **Liveness**: which captured variables are still needed at each state
-- **Definedness**: which variables have been defined at each state
-- **Register allocation**: maps live variables to register slots
+Performs multi-pass fixpoint analysis on the DFA:
 
-Uses a refinement of Valmari's algorithm for DFA minimization after register allocation, producing a more compact machine.
+1. **Reachability**: which branches are reachable from accepting states
+2. **Usage marking**: marks transitions reachable from accepting states
+3. **Dead-code analysis**: warns on unreachable clauses and shadowing clauses
+4. **Priority splits**: which kernel positions can distinguish clause precedence
+5. **Priority chain construction**: builds [Order_chain] for dynamic ordering of continuations
+6. **Accepted-before**: which branches have been accepted on paths to each state
+7. **Liveness**: which captured variables are still needed at each state
+8. **Definedness**: which variables have been defined at each state
+9. **Variable classes**: partitions captures for register allocation
+10. **Register allocation**: maps live variables to register slots (naive greedy by class)
+
+Register allocation is done lazily based on live ranges. The naive greedy allocation assigns registers according to variable classes, leading to less efficient but more minimizable ("factorizable") code.
 
 ### Machine module — bytecode representation
 
 ```ocaml
-type ('g, 'r, _, _) t = {
-  states: int cardinal;
-  initial: 'dfa index option;
-  accepting: ('dfa index, (clause * priority * register array) list) vector;
-  unhandled: ('dfa index, bool) vector;
-  outgoing: ('dfa index, transition indexset) vector;
-  target: (transition index, 'dfa index) vector;
-  label: (transition index, label) vector;
+type ('g, 'r, 'st, 'tr) t = {
+  initial: 'st index option;
+  source: ('tr, 'st index) vector;
+  target: ('tr, 'st index) vector;
+  label: ('tr, ('g, 'r) label) vector;
+  unhandled: ('st, 'g lr1 indexset) vector;
+  outgoing: ('st, 'tr indexset) vector;
+  accepting: ('st, (('g, 'r) branch index * priority * Register.t Capture.map) list) vector;
+  branches: ('st, (('g, 'r) branch index * bool * Register.t Capture.map) list) vector;
   register_count: int;
   partial_captures: Capture.set;
 }
 
-and label = {
+and ('g, 'r) label = {
   filter: 'g lr1 indexset;
-  moves: (Capture.t, register index) indexmap;
-  captures: (Capture.t, register index) list;
-  clear: Capture.set;
-  priority: priority;
+  moves: Register.t Register.map;
+  captures: (Capture.t * Register.t) list;
+  clear: Register.set;
+  priority: (('g, 'r) branch index * priority * priority) list;
 }
 ```
 
 The final representation is a sparse transition table with a register transfer language:
-- **moves**: transfer register values across transitions
+- **moves**: register-to-register transfers across transitions
 - **captures**: store new captured values into registers
-- **clear**: clear registers that go out of scope
-- **priority**: dynamic priority for resolving clause precedence
+- **clear**: clear registers for captures that go out of scope or are undefined
+- **priority**: dynamic priority remappings for clause precedence. Each element `(c, p1, p2)` means a match of clause `c` at priority `p1` in the source corresponds to priority `p2` in the target.
+
+Minimization uses a refinement of Valmari's algorithm with custom decomposition by accepted actions and register transfer operations.
 
 ## Key concepts
 
@@ -119,9 +134,13 @@ The `stacks` type parameterizes the DFA construction with the actual stack topol
 ```ocaml
 type ('g, 'n) stacks = {
   domain: 'n cardinal;
+  (** Total number of stack positions. *)
   tops: 'n indexset;
+  (** Set of stack top positions — viable positions where the stack can end. *)
   prev: 'n index -> 'n indexset;
+  (** Predecessor positions in the LR automaton for a given stack position. *)
   label: 'n index -> 'g lr1 index;
+  (** The LR(1) state associated with a stack position. *)
 }
 ```
 

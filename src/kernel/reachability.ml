@@ -69,7 +69,7 @@
       - Shortest path analysis computing minimal costs
       - Finite language analysis computing which cells are reachable
 
-    - The [Reversedependencies] module tracks how changes to one cell affect
+    - The [Reverse_dependencies] module tracks how changes to one cell affect
       others, enabling efficient incremental updates during the dataflow
       analysis.
 *)
@@ -350,14 +350,13 @@ let make (type g) (g : g grammar) : g t = (module struct
         | R edge ->
           List.iter (fun {lookahead; state; _} ->
               let base = classes.:(Node.inj_l state) in
-              (* Comment the code below to have a partial order on partitions
-                 (remove the ↑Z in equation (6) *)
-              let base =
-                if lookahead != Terminal.all g
-                then IndexSet.Set.map (IndexSet.inter lookahead) base
-                else base
-              in
-              (* Stop commenting here *)
+              (* Intersect with the lookahead set, implementing the ↑Z operator
+                  from equation (6). When the lookahead is all terminals, the
+                  intersection is a no-op. *)
+               let base =
+                 if lookahead != Terminal.all g
+                 then IndexSet.Set.map (IndexSet.inter lookahead) base
+                 else base
               acc := IndexSet.Set.union (IndexSet.Set.add lookahead base) !acc
             ) (unreduce edge)
       end;
@@ -574,12 +573,19 @@ let make (type g) (g : g grammar) : g t = (module struct
       | Pre_identity
       | Pre_singleton of int
 
-    (* Compute the pre coercion from a partition of the form
+   (* Compute the pre coercion from a partition of the form
          P = first(cost(s, A))
-       to a partition of the form
-         Q = first(ccost(s, A → ϵ•α)))
+        to a partition of the form
+          Q = first(ccost(s, A → ϵ•α)))
 
-       If α starts with a terminal, we look only for the
+        If α starts with a terminal, the inner partition Q is a singleton
+        containing that terminal. We find which class of P contains it,
+        returning [Pre_singleton i] where [i] is the index of that class.
+        If the terminal belongs to no class (unreachable due to conflict
+        resolution), returns [None].
+
+        If α starts with a non-terminal, P and Q are guaranteed to be the
+        same partition, so we return [Pre_identity].
     *)
     let pre outer inner =
       if outer == inner then

@@ -21,7 +21,7 @@
  * SOFTWARE.
  *)
 
-(** DFA construction and analysis for LR error analysis
+(** DFA construction and analysis for LR error pattern matching
 
     This module implements a deterministic finite automaton (DFA) construction for
     analyzing failures of an LR automaton by consuming its stack.
@@ -29,52 +29,62 @@
     Architecture:
 
     - NFA module: Constructs NFA (nondeterministic finite automaton) from
-      regular expressions specifying error patterns.
+      regular expressions specifying error patterns. Transitions are lazy — NFA
+      states are only materialized when explored during determinization. Uses
+      [K.derive] to compute transitions, then partitions them by label equivalence
+      (via [IndexRefine.annotated_partition]) to merge transitions with the same
+      filter, captures, and usage.
 
-    - DFA module: Converts the NFA to a DFA using a variant of power set
-      construction (ordered to respect clause priorities). The DFA states
-      contain:
-      - A kernel of NFA states
+    - DFA module: Converts the NFA to a DFA using a modified power set
+      construction (ordered to respect clause priorities). This is a "power
+      sequence" construction, not a power set — the order of NFA states in each
+      kernel matters for priority resolution. Three key differences from standard
+      subset construction:
+      - NFA states in each kernel are ordered by priority
+      - Only paths corresponding to reachable LR stacks are determinized,
+        omitting transitions to unreachable configurations (automata implication)
+      - Branches that can never fire due to lower priority are implicitly pruned,
+        avoiding combinatorial state explosion
+
+      Hash-consing ensures canonical representation of equivalent DFA states.
+
+      The DFA states contain:
+      - A kernel of NFA states (ordered by priority)
       - Transitions with mappings to relate the kernels of the source and target
         state (to answer questions like which NFA state of the source an NFA
         state of the target comes from?)
 
-    - Dataflow module: Performs dataflow analysis on the DFA to compute:
+    - Dataflow module: Performs multi-pass fixpoint analysis on the DFA:
+      - Reachability of branches from accepting states
+      - Marking of reachable transitions (usage tracking)
+      - Dead-code analysis and unreachable clause warnings
+      - Priority splits for distinguishing clause precedence
+      - Priority chain construction via [Order_chain] for dynamically ordering
+        continuations from the same branch
       - Liveness of captured variables
       - Defined variables at each state
+      - Variable class computation for register allocation
       - Register allocation for captured values
-      - Priority chain for handling clause precedence
 
-    - Machine module: Abstract machine representation that will be used for
-      code generation. Contains:
-      - States and transitions labelled by LR(1)
-      - A register transfer language for implementing captures
-      - Priority remappings (a minimal form of dynamic control flow to remember
-        clauses priority; doing so statically can cause a combinatorial
-        explosion in the number of states)
+      Register allocation is done lazily based on live ranges. The naive greedy
+      allocation assigns registers according to variable classes, leading to less
+      efficient but more minimizable ("factorizable") code.
 
-    Implementation details:
+    - Machine module: Abstract machine representation for code generation.
+      Contains:
+      - Sparse transition table with states and transitions labelled by LR(1)
+      - A register transfer language for implementing captures (moves, captures,
+        clear operations)
+      - Dynamic priority chain: each accepting state stores a list of
+        (clause, priority, registers) tuples; at runtime the first matching
+        clause wins. This avoids statically duplicating states for each priority
+        ordering, which would cause combinatorial state explosion.
+      - Minimization using a refinement of Valmari's algorithm with custom
+        decomposition by accepted actions and register transfer operations.
 
-    - The DFA construction uses hash-consing to ensure canonical representation
-      of equivalent states. The power set construction is affected in three main
-      ways:
-      - NFA states are ordered to represent priorities (a "power seq" construction)
-      - Only paths representing reachable stacks are determinized (a form of automata "implication")
-      - Implicit pruning of branches unreachable because of their low priority
-
-    - The dataflow analysis uses fixpoint iteration to handle mutually recursive
-      definitions of liveness and definedness.
-
-    - Register allocation is done lazily based on live ranges computed from the
-      liveness analysis. The naive allocation assigns registers greedily
-      according to variable classes. It leads to less efficient but more
-      minimisable ("factorizable") code.
-
-    - The priority chain mechanism (Order_chain) handles the complex case of
-      dynamically ordering continuations from the same branch.
-
-    - The minimization in [Dataflow.make] uses a refinement of Valmari's
-      algorithm.
+    The [stacks] type parameterizes the DFA construction with the actual stack
+    topology, allowing the same construction to work over plain LR(1) states
+    or refined LRC states.
 *)
 
 open Utils
@@ -85,11 +95,20 @@ open Info
 open Spec
 open Regexp
 
+(** Stack topology abstraction for DFA construction.
+
+    Allows the same DFA construction to work over plain LR(1) states or
+    refined LRC states. *)
 type ('g, 'n) stacks = {
   domain: 'n cardinal;
+  (** Total number of stack positions. *)
   tops: 'n indexset;
+  (** Set of stack top positions — viable positions where the stack can end. *)
   prev: 'n index -> 'n indexset;
+  (** For a given stack position, returns the set of predecessor positions
+      that can transition to it in the LR automaton. *)
   label: 'n index -> 'g lr1 index;
+  (** Returns the LR(1) state associated with a stack position. *)
 }
 
 type priority = int
@@ -110,13 +129,24 @@ let string_of_cap (i : Capture.t) =
   "v" ^ string_of_index i
 
 module NFA = struct
+  (** Nondeterministic finite automaton from regular expressions.
 
+      Transitions are lazy — NFA states are only materialized when explored
+      during determinization. The [make] function returns a closure over the
+      grammar, redgraph, and branch, producing NFA states on-demand from
+      continuations ([K.t]). *)
   type ('g, 'r) t = {
     uid: int;
+    (** Unique identifier for graph visualization. *)
     k: 'g K.t;
+    (** The continuation (derived regex state) represented by this NFA node. *)
     transitions: ('g Label.t * ('g, 'r) t lazy_t) list;
+    (** Outgoing transitions, each tagged with a label (filter, captures, usage).
+        Targets are lazy to avoid materializing unreachable states. *)
     branch: ('g, 'r) branch index;
+    (** The branch (error pattern) this NFA state belongs to. *)
     mutable mark: unit ref;
+    (** Visitor mark for graph traversal and deduplication. *)
   }
 
   let is_accepting t =
@@ -124,6 +154,8 @@ module NFA = struct
     | K.Accept -> true
     | _ -> false
 
+  (** Dump NFA as a GraphViz dot file. [only_forced] controls whether to
+      only include transitions whose lazy targets have been forced. *)
   let dump g ?(only_forced=true) t oc =
     let p fmt = Printf.fprintf oc fmt in
     p "digraph G {\n";
@@ -158,6 +190,13 @@ module NFA = struct
     let k = ref 0 in
     fun () -> incr k; !k
 
+  (** Build NFA state constructor for a given branch.
+
+      Returns a closure that, given a continuation [k], produces the
+      corresponding NFA state. Transitions are computed via [K.derive],
+      then partitioned by label equivalence using [IndexRefine.annotated_partition]
+      to merge transitions sharing the same filter, captures, and usage.
+      States are memoized using hash-consing on the continuation. *)
   let make (type g) (g : g grammar) rg branch =
     let module KMap = Map.Make(struct
         type t = g Regexp.K.t
@@ -188,34 +227,64 @@ module NFA = struct
     in
     aux
 
+  (** Build NFA states for all branches in [branches].
+
+      For each branch, creates the initial NFA state from the branch's
+      regular expression wrapped as [K.More (re, K.Done)]. *)
   let from_branches info rg branches =
     Vector.mapi (fun br re -> make info rg br (Regexp.K.More (re, Regexp.K.Done)))
       branches.expr
 end
 
 module DFA = struct
+  (** Mapping from target kernel positions to (source position, captures, usage).
+
+      For each position in the target state's kernel, records which position
+      in the source state's kernel it came from, along with the set of captures
+      and usages associated with that transition. *)
   type ('src, 'tgt) mapping = ('tgt, 'src index * (Capture.set * Usage.set)) vector
 
+  (** DFA state.
+
+      Each state has a kernel of NFA states ordered by branch priority,
+      a vector of branch indices, and a boolean vector marking which
+      kernel positions are accepting. *)
   type ('g, 'r, 'dfa, 'n) state = {
     index: 'dfa index;
     branches: ('n, ('g, 'r) branch index) vector;
+    (** Branch index for each position in the kernel. *)
     accepting: 'n Boolvector.t;
+    (** Which kernel positions correspond to accepting NFA states. *)
     mutable transitions : ('g, 'r, 'dfa, 'n) transition list;
+    (** Outgoing transitions, populated during determinization. *)
   }
 
+  (** DFA transition with a label (set of LR1 states), a target state,
+      and a mapping from target kernel positions back to source positions. *)
   and ('g, 'r, 'dfa, 'src) transition = Transition : {
       label: 'g lr1 indexset;
+      (** Set of LR(1) states that trigger this transition. *)
       target: ('g, 'r, 'dfa, 'tgt) state;
+      (** The target DFA state. *)
       mapping: ('src, 'tgt) mapping;
+      (** Maps each target kernel position to its source kernel position
+          and the associated captures/usage. *)
     } -> ('g, 'r, 'dfa, 'src) transition
 
+  (** Erased-phantom packed state, used for vector storage. *)
   type ('g, 'r, 'dfa) packed = Packed : ('g, 'r, 'dfa, 'n) state -> ('g, 'r, 'dfa) packed [@@ocaml.unboxed]
 
+  (** Complete DFA with all states, transitions, and kernel information. *)
   type ('g, 'r, 'dfa) t = {
     initial: 'dfa index;
+    (** Index of the initial state. *)
     states: ('dfa, ('g, 'r, 'dfa) packed) vector;
+    (** All DFA states indexed by their DFA index. *)
     domain: ('dfa, 'g lr1 indexset) vector;
+    (** For each state, the set of LR(1) states for which there exists a
+        reachable stack that can reach this state. *)
     kernels: ('dfa, ('g, 'r) NFA.t array) vector;
+    (** For each state, the array of NFA states in its kernel (ordered by priority). *)
   }
 
   let pp doc =
@@ -270,8 +339,15 @@ module DFA = struct
       ) t.states;
     p "}\n"
 
+  (** Erased-phantom existential wrapper for the DFA. *)
   type ('g, 'r) _t = T : ('g, 'r, 'dfa) t -> ('g, 'r) _t
 
+  (** Determinize NFA branches into a DFA using modified power set construction.
+
+      Takes the grammar, error pattern branches, stack topology, and the
+      initial stack position. Returns a DFA where states are hash-consed
+      by their kernel (ordered array of NFA states). Only transitions
+      corresponding to reachable LR stacks are constructed. *)
   let determinize (type g r s)
       (g : g grammar)
       (branches: (g, r) branches)
@@ -508,21 +584,50 @@ module DFA = struct
 end
 
 module Dataflow = struct
+  (** Multi-pass dataflow analysis on the DFA.
+
+      Computes liveness, definedness, register allocation, and priority
+      chains via fixpoint iteration. The analysis proceeds in passes:
+      1. Reachability of branches from accepting states
+      2. Mark reachable transitions (usage tracking)
+      3. Dead-code analysis and unreachable clause warnings
+      4. Priority splits (which positions can distinguish clause precedence)
+      5. Priority chain construction via [Order_chain]
+      6. Accepted-before computation (for pruning priority changes)
+      7. Liveness analysis (which captures are needed at each state)
+      8. Definedness analysis (which captures have been produced)
+      9. Variable class computation (for register allocation)
+      10. Register allocation (naive greedy by variable class) *)
   type chain = (Order_chain.element * Order_chain.element) list
+  (** A pairing of source and target order chain elements for a transition. *)
 
   type 'n var = ('n, Capture.n) Prod.n
   type 'n _var_classes = { domain: 'n cardinal; mutable classes : 'n var indexset list }
   type var_classes = V : 'n _var_classes -> var_classes [@@ocaml.unboxed]
 
+  (** Results of the dataflow analysis. *)
   type ('g, 'r, 'dfa) t = {
     pairings : ('dfa, (('g, 'r) branch index * chain) list list) vector;
+    (** For each state and each outgoing transition, the priority chain
+        pairings between source and target order chain elements. *)
     accepts : ('dfa, (('g, 'r) branch index * priority) list) vector;
+    (** For each state, the list of accepted branches with their priorities. *)
     liveness : ('dfa, Capture.set array) vector;
+    (** For each state and each kernel position, the set of captures that
+        are live (needed) from this point onward. *)
     defined : ('dfa, Capture.set array) vector;
+    (** For each state and each kernel position, the set of captures that
+        have been defined along some path to this state. *)
     classes : ('dfa, var_classes) vector;
+    (** For each state, the variable classes used for register allocation. *)
     registers : ('dfa, Register.t Capture.map array) vector;
+    (** For each state and each kernel position, the mapping from captures
+        to allocated registers. *)
     register_count : int;
+    (** Total number of registers allocated across all states. *)
     accepted_before : ('dfa, ('g, 'r) branch indexset) vector;
+    (** For each state, the set of branches that have been accepted on
+        some path to this state. Used for pruning priority remappings. *)
   }
 
   let liveness (type g r dfa n) (t : (g, r, dfa) t) (st : (g, r, dfa, n) DFA.state) =
@@ -540,10 +645,13 @@ module Dataflow = struct
     let Refl = assert_equal_cardinal vc.domain (Vector.length st.branches) in
     vc.classes
 
+  (** Reverse mapping: from a target state back to a source state and the
+      associated kernel mapping. Used for backward dataflow analysis. *)
   type ('g, 'r, 'dfa, 'tgt) rev_mapping = Rev_mapping
       :  ('g, 'r, 'dfa, 'src) DFA.state * ('src, 'tgt) DFA.mapping
       -> ('g, 'r, 'dfa, 'tgt) rev_mapping
 
+  (** Packed list of reverse mappings for a DFA state. *)
   type ('g, 'r, 'dfa) packed_rev_mapping = Rev_packed
       :  ('g, 'r, 'dfa, 'n) rev_mapping list
       -> ('g, 'r, 'dfa) packed_rev_mapping [@@ocaml.unboxed]
@@ -598,6 +706,7 @@ module Dataflow = struct
       ) dfa.DFA.states;
     p "}\n"
 
+  (** Reverse the DFA transition graph for backward analysis. *)
   let reverse_transitions dfa =
     let table = Vector.make (DFA.state_count dfa) (Rev_packed []) in
     Vector.iter begin fun (DFA.Packed src) ->
@@ -613,6 +722,12 @@ module Dataflow = struct
     end dfa.states;
     table
 
+  (** Run the full dataflow analysis pipeline on a DFA.
+
+      Executes 10 passes: reachability, usage marking, dead-code analysis,
+      priority splits, priority chain construction, accepted-before, liveness,
+      definedness, variable classes, and register allocation. Returns the
+      complete analysis results. *)
   let make (type g r dfa) branches (dfa : (g, r, dfa) DFA.t) =
     let reverse_transitions = reverse_transitions dfa in
     let iter_reverse_transitions (type n)
@@ -1227,22 +1342,28 @@ module Dataflow = struct
 end
 
 module Machine = struct
+  (** Bytecode representation of the automaton for code generation.
+
+      The machine is a sparse transition table with a register transfer
+      language. Transitions carry labels with filters, captures, register
+      moves, clears, and dynamic priority remappings. *)
   type ('g, 'r) label = {
     filter: 'g lr1 indexset;
-    (** The set of lr1 states that allow this transition to be taken. *)
+    (** The set of LR(1) states that allow this transition to be taken. *)
     captures: (Capture.t * Register.t) list;
-    (** The set of variables captured, and the register in which to store the
-        variable, when the transition is taken. *)
+    (** Variables to capture and the register in which to store them
+        when the transition is taken. *)
     clear: Register.set;
-    (** The set of registers to clear when the transition is taken. *)
+    (** Registers to clear when the transition is taken (for captures
+        that go out of scope or are undefined). *)
     moves: Register.t Register.map;
-    (** Registers to move when taking this transition.
-        The source register is used as a key and the target as a value. *)
+    (** Register-to-register transfers when taking this transition.
+        Keys are source registers, values are target registers. *)
     priority: (('g, 'r) branch index * priority * priority) list;
-    (** Dynamic priority levels to remap.
-        An element (c, p1, p2) means that a match of clause [c] at priority
-        [p1] in the source state corresponds to a match at priority [p2] in
-        the target state. *)
+    (** Dynamic priority remappings for clause precedence.
+        An element (c, p1, p2) means that a match of clause [c] at
+        priority [p1] in the source state corresponds to a match at
+        priority [p2] in the target state. *)
   }
 
   let label_compare t1 t2 =
@@ -1256,42 +1377,50 @@ module Machine = struct
       if c <> 0 then c else
         let c = IndexMap.compare compare_index t1.moves t2.moves in
         if c <> 0 then c else
-          let c = IndexSet.compare t1.clear t1.clear in
+          let c = IndexSet.compare t1.clear t2.clear in
           c
 
-  (* A machine is parameterized by:
-     - ['g] is the grammar (input)
-     - ['r] is the set of rules (input)
-     - ['st] is the set of states (output)
-     - ['tr] is the set of transitions (output)
-  *)
+ (** The machine representation for code generation.
+
+      A sparse transition table with register transfer operations.
+      Parameterized by:
+      - ['g] is the grammar (input)
+      - ['r] is the set of rules (input)
+      - ['st] is the set of states (output)
+      - ['tr] is the set of transitions (output) *)
   type ('g, 'r, 'st, 'tr) t = {
     initial: 'st index option;
+    (** Index of the initial state, or [None] if there are no viable patterns. *)
     source: ('tr, 'st index) vector;
+    (** For each transition, the source state index. *)
     target: ('tr, 'st index) vector;
+    (** For each transition, the target state index. *)
 
     label: ('tr, ('g, 'r) label) vector;
+    (** For each transition, its label (filter, captures, moves, clear, priority). *)
 
-    (* Transitions labelled by Lr1 states in [unhandled st] are reachable
-       (there exists viable stacks that can reach them), but are not defined
-       (there is no [transitions] for them).
-       They should be rejected at runtime. *)
+    (** For each state, the set of LR(1) states for which stacks can reach
+        this state but no transition is defined. These should be rejected
+        at runtime. *)
     unhandled: ('st, 'g lr1 indexset) vector;
 
-    (* [outgoing st] is the set of transitions leaving [st] *)
+    (** For each state, the set of outgoing transition indices. *)
     outgoing: ('st, 'tr indexset) vector;
 
-    (* [accepting.:(st)] lists the clauses accepted when reaching [st].  Each
-       clause comes with a priority level and a mapping indicating in which
-       register captured variables can be found. *)
+    (** For each state, the list of clauses accepted when reaching that state.
+        Each clause comes with a priority level and a register mapping indicating
+        where captured variables can be found. The first matching clause wins. *)
     accepting: ('st, (('g, 'r) branch index * priority * Register.t Capture.map) list) vector;
 
-    (* [branches.:(st)] lists the clauses being recognized in state [st].
-       The boolean indicates if the clause is accepted in this state. *)
+    (** For each state, the list of clauses being recognized in that state.
+        Each entry is (branch index, is_accepting, register mapping). *)
     branches: ('st, (('g, 'r) branch index * bool * Register.t Capture.map) list) vector;
 
     register_count : int;
+    (** Total number of registers used across all states. *)
     partial_captures : Capture.set;
+    (** Set of captures that may be only partially defined (some paths define
+        them, others don't). *)
   }
 
   type ('g, 'r) _t = T : ('g, 'r, 'st, 'tr) t -> ('g, 'r) _t
@@ -1332,6 +1461,14 @@ module Machine = struct
       ) t.label;
     p "}\n"
 
+  (** Minimize the DFA and produce the final machine representation.
+
+      Converts the DFA with dataflow analysis results into a compact machine
+      with sparse transition tables and register transfer language. Uses a
+      refinement of Valmari's algorithm with custom decomposition:
+      - States are refined by accepted actions (clauses and priorities)
+      - Transitions are grouped by LR(1) filter and by register operations
+      Returns [None] for the initial state if no patterns are viable. *)
   let minimize (type g r dfa)
       (branches : (g, r) branches)
       (dfa : (g, r, dfa) DFA.t)

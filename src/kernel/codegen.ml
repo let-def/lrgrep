@@ -44,8 +44,10 @@
 
     Implementation details:
 
-    - The [output_table] function calls [Lrgrep_support.compact] to compress
-      the sparse table, then outputs the resulting bytecode and table structure.
+    - The [output_table] function formats and outputs the already-compacted
+      bytecode and transition table as an OCaml [Lrgrep_runtime.program] record.
+      The actual compaction is performed by [Lrgrep_support.compact] inside
+      [output_rule] before [output_table] is called.
 
     - The [output_execute_function] generates a case analysis matching on:
       - The clause number
@@ -65,9 +67,12 @@
       branches with lookahead constraints, ensuring only the right tokens
       trigger each branch.
 
-    - The code generator proceeds in two phases:
-      1. First, it compacts the state machine and outputs bytecode
-      2. Then, it generates semantic actions with proper variable binding
+    - The [output_rule] function proceeds in three steps:
+      1. Compacts the state machine via [Lrgrep_support.compact] and outputs
+         the bytecode and transition tables
+      2. Generates semantic actions with proper variable binding, including
+         type recovery for captured values
+      3. Outputs a wrapper function to glue the interpreter to user actions
 *)
 
 open Fix.Indexing

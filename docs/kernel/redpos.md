@@ -30,7 +30,7 @@ Iterates all productions, computes the maximum RHS length per nonterminal, then 
 ### Operations
 
 ```ocaml
-val inj    : 'g table -> 'g nonterminal index -> int -> 'g t index  (* (nt, offset) -> index *)
+val inj    : 'g table -> 'g nonterminal index -> int -> 'g t index  (* (nt, offset) -> index; asserts on out-of-range *)
 val prj    : 'g table -> 'g t index -> 'g nonterminal index * int   (* index -> (nt, offset) *)
 val previous : 'g table -> 'g t index -> 'g nonterminal index Either 'g t index
 val previous' : 'g table -> 'g t index Opt.n -> 'g nonterminal index Either 'g t index Opt.n

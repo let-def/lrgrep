@@ -39,10 +39,10 @@
       - Alt: Disjunction of sub-expressions
       - Seq: Concatenation of sub-expressions
       - Star: Kleene star (repetition)
-      - Filter: Look-ahead restriction to a set of LR states
+      - Filter: State guard that restricts matching to a set of LR states
       - Reduce: Reduction operation
-      - Usage: A flag to identify unused constructions and map them to source
-          position to warn the user about unreachable parts of a specification.
+      - Usage: A set that tracks which source constructs are exercised,
+          enabling dead-code warnings for unreachable parts of a specification.
 
     - Label module: A label is a combination of:
       - filter: Which LR states match
@@ -58,7 +58,7 @@
     - Key operations:
       - [derive]: Compute derivatives of regular expressions with respect to LR
         states
-      - [compare]: Compare expressions for equality/hash-consing
+      - [compare]: Compare expressions by unique ID
 
     Implementation details:
 
@@ -107,12 +107,9 @@ end = struct
     fun () -> incr r; Index.of_int n !r
 end
 
-(** The RE module type defines the signature for regular expressions, including
-    types for reductions, unique IDs to identify sub-terms, and the regular
-    expression terms themselves.
-
-    It also includes functions for creating, comparing, and converting regular
-    expressions to a Cmon document. *)
+(** Reductions represent pattern-match operations in regular expressions.
+    Each reduction tracks which reduction targets to match, which captures
+    to bind, and whether to prefer shortest or longest match. *)
 module Reductions = struct
   type 'g t = {
     pattern: 'g Redgraph.target indexset;
@@ -136,7 +133,7 @@ module Reductions = struct
 end
 
 module Expr = struct
-  (** Integers that serves has unique id to identify sub-terms.
+  (** Integer that serves as a unique id to identify sub-terms.
       Thanks to properties of Antimirov's derivatives, no new term is
       introduced during derivation. All terms are produced during initial
       parsing. *)
@@ -152,26 +149,30 @@ module Expr = struct
     position : Syntax.position;
   }
 
-  (** The different constructors of regular expressions*)
+  (** The different constructors of regular expressions *)
   and 'g desc =
     | Set of 'g lr1 indexset * Capture.set
     (** Recognise a set of states, and optionally bind the matching state to
         a variable. *)
     | Alt of 'g t list
-    (** [Alt ts] is the disjunction of sub-terms [ts] (length >= 2).
+    (** [Alt ts] is the disjunction of sub-terms [ts].
         [Alt []] represents the empty language. *)
     | Seq of 'g t list
-    (** [Seq ts] is the concatenation of sub-terms [ts] (length >= 2).
-        [Seq []] represents the {ε}. *)
+    (** [Seq ts] is the concatenation of sub-terms [ts].
+        [Seq []] represents the empty string {ε}. *)
     | Star of 'g t * Syntax.quantifier_kind
-    (** [Star t] is represents the Kleene star of [t] *)
+    (** [Star t qk] is the Kleene star of [t] with quantifier policy [qk]
+        (shortest or longest match). *)
     | Filter of 'g lr1 indexset
+    (** Restrict matching to LR(1) states in the given set. *)
     | Reduce of Capture.set * 'g Reductions.t
-    (** The reduction operator *)
+    (** The reduction operator. The first component is the set of captures
+        to bind, the second is the reduction specification. *)
     | Usage of Usage.set
+    (** Dead-code tracking marker. The set records which source constructs
+        are exercised at this point in the expression. *)
 
-  (** A regular expression term with its unique ID, its description and its
-      position. *)
+  (** An empty expression representing the empty language. *)
   let empty = {uid = 0; desc = Alt[]; position = Lexing.dummy_pos}
 
   (** Introduce a new term, allocating a unique ID *)

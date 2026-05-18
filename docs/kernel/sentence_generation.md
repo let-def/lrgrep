@@ -40,7 +40,7 @@ Algorithm:
 ### Step 3: Cells to terminals
 
 ```ocaml
-val expand_cells : 'g grammar -> (module g Reachability.t_cell) -> cell list -> 'g terminal index list
+val expand_cells : 'g grammar -> (module (g, cell) Reachability.t_cell) -> cell list -> 'g terminal index list
 ```
 
 Recursively expands cells back to terminal symbols. Handles two node types from the cost tree:

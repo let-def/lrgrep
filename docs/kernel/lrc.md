@@ -59,11 +59,19 @@ val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
 
 Computes the subset of LRC states reachable from specific entrypoints. The `some_prefix` function returns a minimal-length path from an entrypoint to any given state (returned in reverse order, excluding the target).
 
+### String conversion
+
+```ocaml
+val to_string : 'g grammar -> ('g, 'g n) t -> 'g n index -> string
+val set_to_string : 'g grammar -> ('g, 'g n) t -> 'g n indexset -> string
+```
+
+Converts LRC states and sets of LRC states to human-readable strings. Format is `lr1_state/class_index`.
+
 ### Debugging
 
 ```ocaml
 val check_deterministic : 'g grammar -> 'g Reachability.t -> unit
-val check_equivalence : ('g, 'g mlrc) t -> ('g, 'g mlrc) t -> bool
 ```
 
 ## Key concepts

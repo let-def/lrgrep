@@ -29,15 +29,19 @@
     as paths through the automaton, enabling efficient lookahead analysis and
     priority computation.
 
-    Proceeds in two steps:
+    Proceeds in three steps:
     - Compute the closure ϵ-reductions (reductions that do not consume any
       input token) for each LR(1) state.
       This analysis is local (it does not depend on the stack, only on the
-      LR(1) state), and form a tree of possible sequence of ϵ-reductions,
-      ending with optionl "pending", non-ϵ, reductions that need to consume
+      LR(1) state), and forms a tree of possible sequences of ϵ-reductions,
+      ending with optional "pending", non-ϵ, reductions that need to consume
       states from the stack to proceed.
       This closure is represented by stack_tree's and reduction_closure's, and
-      simplifies and speedups latter analyses.
+      simplifies and speeds up latter analyses.
+
+    - Build a target trie that maps reduction targets (e.g., a nonterminal to
+      reduce) to the goto transitions where they can occur, enabling reverse
+      lookup from user-specified patterns to graph nodes.
 
     - Construct a graph whose edges are labelled by LR(1) states and which map
       an LR(1) stack suffix to the (sequences of) reductions applicable to
@@ -47,7 +51,7 @@
       applicable, thus a right recursion [A → α A] translates to a cycle.
       The process also keeps track of lookahead symbols permitting each
       reduction to strictly simulate the behavior of an LR(1) automaton that
-      possible went through conflict resolution.
+      possibly went through conflict resolution.
 
     But to recognize a reduction pattern, we have to do the reverse mapping:
     the user provides the target of a reduction (e.g. I want to reduce an
@@ -134,6 +138,7 @@ open Info
 
 (*let printf_debug = false*)
 
+(* Merge reduction steps: combine reductions at the same depth, recursing on deeper levels. *)
 let rec merge_reduction_step map acc = function
   | [] -> (map, acc)
   | [] :: rrs ->
@@ -144,6 +149,7 @@ let rec merge_reduction_step map acc = function
     let map = IndexMap.union augment r map in
     merge_reduction_step map acc rrs
 
+(* Recursively merge all reduction depth layers, dropping empty ones. *)
 let rec merge_reductions = function
   | [] -> []
   | rrs ->
@@ -171,6 +177,7 @@ let group_reductions g = function
     in
     group 0 IndexMap.empty (List.sort compare_items items)
 
+(* Verify that a list of reduction maps is non-empty at the deepest level. *)
 let rec validate = function
   | [] -> true
   | [x] -> not (IndexMap.is_empty x)
@@ -181,6 +188,7 @@ type 'g stack_tree = {
   reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
 }
 
+(* Fold over all reduction maps in a stack tree, traversing all branches. *)
 let fold_stack_reductions f stacks acc =
   let rec aux acc {next; reductions} =
     let acc = f reductions acc in
@@ -200,6 +208,7 @@ type 'g reduction_closure = {
 
 type ('g, 'n) reduction_closures = ('n, 'g reduction_closure) vector
 
+(* Add the intersection of [set] and [la] to the reference [r]. *)
 let add_subset g r set la =
   r := IndexSet.union (Terminal.intersect g set la) !r
 
@@ -251,6 +260,8 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   assert (validate all_reductions);
   {accepting; failing; stacks; all_stacks; all_reductions}
 
+(* Filter reduction lookahead sets to a restricted domain [la].
+   Preserves sharing when no filtering is needed. *)
 let rec filter_reductions g la = function
   | [] -> []
   | r :: rs as rrs ->
@@ -370,6 +381,8 @@ let index_targets (type g) (g : g grammar) rc
 module Step = Unsafe_cardinal()
 type 'g step = 'g Step.t
 
+(* Stream accessor for lazy predecessor lists.
+   Materializes the stream up to index [i] on demand. *)
 let get_stream ?(initial=0) stream =
   let s = ref stream in
   let d = ref initial in
@@ -551,11 +564,14 @@ type 'g action =
   | Advance of 'g step index
   | Switch of ('g lr1, 'g transition list) indexmap
 
+(* Get initial transitions for a given LR(1) state from the graph entry point. *)
 let initial (type g) (gr : g graph) (lr1 : g lr1 index) =
   match IndexMap.find_opt lr1 (Vector.as_array gr).(0) with
   | None -> []
   | Some l -> l
 
+(* Follow a step in the reduction graph.
+   Step 0 returns an empty switch; empty maps advance; non-empty maps switch. *)
 let follow gr step =
   match (step : _ index :> int) with
   | 0 -> Switch IndexMap.empty

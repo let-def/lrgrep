@@ -50,7 +50,7 @@ Key design choice: lookaheads are NOT part of the DFA kernel. Different Andor no
 
 ### Enum module — unaccepted lookahead enumeration
 
-Augments the deterministic graph by tracking which lookahead symbols have NOT yet been accepted at each node. Sink nodes (no successors) with non-empty unaccepted sets describe all possible uncovered failures. Shortest paths to these sinks serve as witnesses for counterexample generation.
+Augments the deterministic graph by tracking which lookahead symbols have NOT yet been accepted at each node. Sink nodes (no successors) with non-empty unaccepted sets describe all possible uncovered failures. Witness paths to these sinks, reconstructed via predecessor tracking, serve as evidence for counterexample generation.
 
 Works with GLR automata: since all applicable reductions are tracked simultaneously, a lookahead is "unaccepted" only if none of the possible reductions accept it.
 
@@ -60,7 +60,7 @@ Computes the coverage of the user's error matching machine by constructing a syn
 
 ### Extract module — counterexample extraction
 
-Extracts concrete counterexamples from the coverage analysis by tracing paths from initial states to uncovered sink nodes, then using `Sentence_generation` to produce terminal sequences.
+Extracts paths from uncovered sink nodes back toward initial states by propagating rejectable lookaheads backward through the enumeration graph. Produces maximal and global prefix lists that callers can feed to `Sentence_generation` for concrete terminal sequences.
 
 ### Report module — user-facing output
 

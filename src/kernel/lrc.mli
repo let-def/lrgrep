@@ -62,7 +62,6 @@
     - [make_minimal]: Build minimal LRC structure with state minimization
     - [from_entrypoints]: Compute reachability from specific entrypoints
     - [check_deterministic]: Verify the LRC automaton is deterministic (for debugging)
-    - [check_equivalence]: Check equivalence of two LRC structures (for debugging)
 
     Tricky details:
 
@@ -84,8 +83,16 @@ open Utils
 open Misc
 open Info
 
+(** Type-level index for LRC states *)
 type 'g n
 
+(** LRC structure mapping between LRC and LR1 states, with transition relations.
+    [lr1_of] maps each LRC state to its underlying LR1 state.
+    [lrcs_of] maps each LR1 state to the set of LRC states refining it.
+    [all_wait] and [all_leaf] are the sets of wait and leaf LRC states respectively.
+    [all_successors] gives, for each LRC state, the set of LRC states that can
+    transition to it.
+    [reachable_from] is the transitive closure of [all_successors]. *)
 type ('g, 'n) t = {
   lr1_of: ('n, 'g lr1 index) vector;
   lrcs_of: ('g lr1, 'n indexset) vector;
@@ -95,8 +102,15 @@ type ('g, 'n) t = {
   reachable_from: ('n, 'n indexset) vector;
 }
 
+(** Build the LRC structure from a grammar and reachability analysis.
+    Iterates over all LR1 states and their lookahead classes, creating an LRC
+    state for each reachable (LR1 state, lookahead class) pair. *)
 val make : 'g grammar -> 'g Reachability.t -> ('g, 'g n) t
+
+(** Convert an LRC state to a string of the form [lr1_state/class_index]. *)
 val to_string : 'g grammar -> ('g, 'g n) t -> 'g n index -> string
+
+(** Convert a set of LRC states to a string representation. *)
 val set_to_string : 'g grammar -> ('g, 'g n) t -> 'g n indexset -> string
 
 type 'n entrypoints = {
@@ -106,15 +120,27 @@ type 'n entrypoints = {
   successors: ('n, 'n indexset) vector;
   predecessors: ('n, 'n indexset) vector;
   some_prefix: 'n index -> int * 'n index list;
-  (** [some_prefix state] returns a prefix to reach [state] from an entrypoin.
+  (** [some_prefix state] returns a prefix to reach [state] from an entrypoint.
       The prefix's length and the sequence of states (excluding [state]) are
       given, starting from the end.
       Thus, [List.rev (state :: some_prefix state)] is a valid prefix. *)
 }
 
+(** Compute the subset of LRC states reachable from specific entrypoints,
+    along with successor/predecessor relations and a [some_prefix] function
+    for minimal-length path reconstruction. *)
 val from_entrypoints : 'g grammar -> ('g, 'n) t -> 'n indexset -> 'n entrypoints
 
+(** Verify that the LRC automaton is deterministic.
+    Emits diagnostics to stderr if a dead-end is found.
+    Intended for debugging. *)
 val check_deterministic : 'g grammar -> 'g Reachability.t -> unit
 
+(** Minimal LRC states, obtained by quotienting equivalent states via
+    Valmari's DFA minimization algorithm. *)
 type 'g mlrc
+
+(** Build a minimal LRC structure by determinizing and minimizing the
+    LRC automaton. States with identical transition behavior are merged,
+    significantly reducing memory usage. *)
 val make_minimal : 'g grammar -> 'g Reachability.t -> ('g, 'g mlrc) t

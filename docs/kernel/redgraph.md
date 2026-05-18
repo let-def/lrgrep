@@ -8,7 +8,7 @@ Maps LR(1) stack suffixes to the viable reductions applicable to each configurat
 
 ## Architecture
 
-### Two-phase construction
+### Three-phase construction
 
 **Phase 1: ε-reduction closure** (per LR(1) state, local analysis)
 
