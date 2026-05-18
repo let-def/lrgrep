@@ -280,6 +280,8 @@ module Vector : sig
      cardinal [n]. *)
   val make : 'n cardinal -> 'a -> ('n, 'a) t
 
+  val make_associate : ('n, _) t -> 'a -> ('n, 'a) t
+
   (**[make' n f] is roughly analogous to [make n (f())], but removes the need
      to exhibit a value of type ['a] when [n] is zero. The function call [f()]
      takes place only if [n] is greater than zero. It takes place at most
@@ -320,6 +322,8 @@ module Vector : sig
   val cast_array : 'n cardinal -> 'a array -> ('n, 'a) t
   val as_array : (_, 'a) t -> 'a array
   val to_list : (_, 'a) t -> 'a list
+  val to_seq : (_, 'a) t -> 'a Seq.t
+  val to_seqi : ('n, 'a) t -> ('n index * 'a) Seq.t
 
   type 'a packed = Packed : (_, 'a) vector -> 'a packed
   val of_array : 'a array -> 'a packed
