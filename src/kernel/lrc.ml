@@ -22,14 +22,49 @@
  *)
 
 (** This module constructs a graph refining the LR automaton to reason about
-  reachable configurations---the pairs of an LR state and a lookahead token, the
-  transitions that allow to go from one to another, in order to determine which
-  ones are reachable from initial states. It includes functionality to compute
-  reachable states, wait states, entry points, predecessors, successors, and
-  prefixes for states in the LR automaton.
-  LRC means "LR with classes", where a class is the partition of lookahead
-  symbols with identical behaviors, as determined by the reachability
-  analysis. *)
+    reachable configurations---the pairs of an LR state and a lookahead token, the
+    transitions that allow to go from one to another, in order to determine which
+    ones are reachable from initial states. It includes functionality to compute
+    reachable states, wait states, entry points, predecessors, successors, and
+    prefixes for states in the LR automaton.
+    LRC means "LR with classes", where a class is the partition of lookahead
+    symbols with identical behaviors, as determined by the reachability
+    analysis.
+
+    This module computes a refinement of LR(1) states by reachable "lookahead-classes".
+    When an LR(1) automaton is pruned to resolve conflicts, some sequence of
+    transitions might become unreachable, while the individual transitions
+    themselves stay reachable.
+    For instance a sequence of states s0 -> s1 -> s2 on the stack might be
+    impossible to reach, while s0 -> s1 and s1 -> s2 are individually reachable
+    because there is lookahead that permit to reach both consecutively.
+    Admittedly, this only happens for severely pruned automaton and not matter
+    much in practice. Most of the time, LRC after minimization coincide with
+    LR(1) states.
+    TODO: Maybe I could drop LRC to simplify things and accept the rare
+    over-approximations of reachable stacks? I should quantify the problem
+    by measuring how often LRC diverge from LR(1).
+
+    Key data structures:
+    - 'g n: type-level index for LRC states
+    - ('g, 'n) t: LRC structure with LR1_of, lrcs_of mappings and transition relations
+    - 'n entrypoints: Reachability info including some_prefix for minimal paths
+
+    Main functions:
+    - make: Build LRC from grammar and reachability analysis
+    - make_minimal: Build minimal LRC via Valmari's algorithm
+    - from_entrypoints: Compute reachability from specific entrypoints
+    - check_deterministic: Verify LRC automaton is deterministic (debugging)
+    - check_equivalence: Check equivalence of two LRC structures (debugging)
+
+    Tricky implementation details:
+    - The [make_minimal] function uses Valmari's algorithm to quotient
+      equivalent LRC states, significantly reducing memory usage.
+    - The [some_prefix] function computes minimal-length paths to each state.
+    - FIXME: Prefixes are minimal in number of symbols, not in number of
+      terminals, which is ultimately what we care about when generating
+      counter-examples. A short prefix can expand to a long sentence.
+*)
 
 open Utils
 open Misc
@@ -177,7 +212,11 @@ type 'n entrypoints = {
   entrypoints: 'n indexset;
   successors: ('n, 'n indexset) vector;
   predecessors: ('n, 'n indexset) vector;
-  some_prefix: 'n index -> 'n index list;
+  some_prefix: 'n index -> int * 'n index list;
+  (** [some_prefix state] returns a prefix to reach [state] from an entrypoin.
+      The prefix's length and the sequence of states (excluding [state]) are
+      given, starting from the end.
+      Thus, [List.rev (state :: some_prefix state)] is a valid prefix. *)
 }
 
 (* Find states reachable from specific states by closing over raw reachability
@@ -214,16 +253,19 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
   (* Wait states that are reachable *)
   let wait = IndexSet.inter lrc_graph.all_wait reachable in
 
-  (* Compute a prefix to reach each state *)
+  (* Compute a prefix to reach each state.
+     The prefix is represented as (length, path) to avoid reconstructing
+     the path when only the length is needed for coverage analysis. *)
   let some_prefix =
     let table = lazy (
-      let table = Vector.make (count lrc_graph) [] in
+      let table = Vector.make (count lrc_graph) (0, []) in
       let todo = ref [] in
       let expand prefix state =
         match Vector.get table state with
-        | [] ->
+        | (0, []) ->
           Vector.set table state prefix;
-          let prefix = state :: prefix in
+          let length, prefix = prefix in
+          let prefix = (length + 1, state :: prefix) in
           let succ = successors.:(state) in
           if IndexSet.is_not_empty succ then
             push todo (succ, prefix)
@@ -231,7 +273,7 @@ let from_entrypoints (type g n) (g: g grammar) lrc_graph entrypoints : n entrypo
       in
       Vector.iteri (fun lr1 lrcs ->
           if Option.is_none (Lr1.incoming g lr1) then
-            expand [] (Option.get (IndexSet.minimum lrcs)))
+            expand (0, []) (Option.get (IndexSet.minimum lrcs)))
         lrc_graph.lrcs_of;
       let propagate (succ, prefix) =
         IndexSet.iter (expand prefix) succ
@@ -503,104 +545,3 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   let open Mlrc.Eq(struct type t = g type n = Min.states let n = Min.states end) in
   let Refl = eq in
   {lr1_of; lrcs_of; all_wait; all_leaf; all_successors; reachable_from}
-
-let transitions_of_states t ss =
-  IndexSet.fold
-    (fun s acc -> IndexMap.update t.lr1_of.:(s) (add_update s) acc)
-    ss IndexMap.empty
-
-let some_prefix g t =
-  let prefix = Vector.make (count t) [] in
-  let rec loop next = function
-    | [] -> if not (list_is_empty next) then loop [] next
-    | xs :: xxs ->
-      let x = List.hd xs in
-      let next =
-        if list_is_empty prefix.:(x)
-        then (
-          prefix.:(x) <- xs;
-          IndexSet.fold (fun x' next -> (x' :: xs) :: next)
-               t.all_successors.:(x) next
-        ) else next
-      in
-      loop next xxs
-  in
-  loop [] (IndexSet.bind (Lr1.entrypoints g) (Vector.get t.lrcs_of)
-           |> IndexSet.to_seq |> Seq.map (fun x -> [x])
-           |> List.of_seq);
-  prefix
-
-let predecessors t =
-  relation_reverse (Vector.length t.all_successors) t.all_successors
-
-let check_prefix g t1 p1 t2 p2 =
-  let l1 = Vector.make (Lr1.cardinal g) [] in
-  let l2 = Vector.make (Lr1.cardinal g) [] in
-  Vector.iteri (fun x p ->
-      let lr1 = t1.lr1_of.:(x) in
-      if list_is_empty l1.:(lr1) then l1.:(lr1) <- p
-    ) p1;
-  Vector.iteri (fun x p ->
-      let lr1 = t2.lr1_of.:(x) in
-      if list_is_empty l2.:(lr1) then l2.:(lr1) <- p
-    ) p2;
-  Index.iter (Lr1.cardinal g) (fun lr1 ->
-      let e1 = list_is_empty l1.:(lr1) in
-      let e2 = list_is_empty l2.:(lr1) in
-      if e1 <> e2 then
-        Printf.eprintf "state %s is unreachable only on %s side\n"
-          (Lr1.to_string g lr1) (if e1 then "left" else "right")
-    )
-
-let check_equivalence g t1 t2 s1 s2 =
-  let table = Hashtbl.create 7 in
-  let successes = ref 0 in
-  let failures = ref 0 in
-  let todo = ref [] in
-  let schedule path s1 s2 =
-    let key = (s1, s2) in
-    if not (Hashtbl.mem table key) then (
-      Hashtbl.add table key ();
-      push todo (path, s1, s2)
-    )
-  in
-  let prefix1 = some_prefix g t1 in
-  let prefix2 = some_prefix g t2 in
-  check_prefix g t1 prefix1 t2 prefix2;
-  let pred1 = predecessors t1 in
-  let pred2 = predecessors t2 in
-  schedule [] s1 s2;
-  let propagate (path, s1, s2) =
-    let m1 = transitions_of_states t1 s1 in
-    let m2 = transitions_of_states t2 s2 in
-    let merge lr1 s1' s2' =
-      begin match s1', s2' with
-      | Some s1', Some s2' ->
-        incr successes;
-        schedule (lr1 :: path)
-          (IndexSet.bind s1' (Vector.get pred1))
-          (IndexSet.bind s2' (Vector.get pred2))
-      | _ ->
-        incr failures;
-        let p l =
-          Printf.eprintf "Suffix %s is reachable only on %s side (%s)\n"
-            (Lr1.list_to_string g (lr1 :: path))
-            (if Option.is_none s1' then "right" else "left")
-            (Lr1.list_to_string g l)
-        in
-        let l =
-          match s1', s2' with
-          | Some s1', _ -> List.map (Vector.get t1.lr1_of) prefix1.:(IndexSet.choose s1')
-          | _, Some s2' -> List.map (Vector.get t2.lr1_of) prefix2.:(IndexSet.choose s2')
-          | _ -> assert false
-        in
-        if l <> [] then
-          p l
-      end;
-      None
-    in
-    ignore (IndexMap.merge merge m1 m2)
-  in
-  fixpoint ~propagate todo;
-  Printf.eprintf "Tested %d successful paths, %d failing paths\n"
-    !successes !failures
