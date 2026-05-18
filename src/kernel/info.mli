@@ -21,12 +21,32 @@
  * SOFTWARE.
  *)
 
-(** This module defines data structures and operations for handling grammar
-  information in a structured way. It includes representations for terminals,
-  non-terminals, productions, and LR states, along with their transitions and
-  reductions. The module is designed to work with Menhir's grammar
-  representation and extends it with additional functionality for
-  convenience. *)
+(** Grammar information interface
+
+    This module exports data structures and operations for handling grammar
+    information. It provides indexed representations of grammars with type-level
+    cardinalities for type-safe access.
+
+    Main components:
+
+    - The [Lift] module takes Menhir's grammar representation and computes
+      all index structures for the grammar.
+
+    - Types for grammar elements with their indices:
+      - [terminal], [nonterminal], [symbol], [production], [item]
+      - [lr0], [lr1]: LR(0) and LR(1) states
+      - [goto_transition], [shift_transition], [transition]: Transitions
+      - [reduction]: Reductions
+
+    - Module interfaces for each grammar element:
+      - [Terminal], [Nonterminal], [Symbol], [Production], [Item]
+      - [Lr0], [Lr1], [Transition], [Reduction]
+
+    Each module provides:
+      - [cardinal]: The size of the index set
+      - [of_int]: Construct an index from an integer
+      - Type-specific functions for accessing properties
+*)
 
 open Utils
 open Misc
@@ -36,11 +56,9 @@ module type GRAMMAR = MenhirSdk.Cmly_api.GRAMMAR
 
 type 'g grammar
 
-module Lift() : sig
+module Load_grammar(G : MenhirSdk.Cmly_api.GRAMMAR) : sig
   type g
-  module Load_grammar(G : MenhirSdk.Cmly_api.GRAMMAR) : sig
-    val grammar : g grammar
-  end
+  val grammar : g grammar
 end
 
 type 'g terminal
@@ -75,6 +93,8 @@ module Terminal : sig
   include INDEXED with type 'g n = 'g terminal
 
   val to_string : 'g grammar -> 'g n index -> string
+  val alias : 'g grammar -> 'g n index -> string option
+
   val all : 'g grammar -> 'g n indexset
   val regular : 'g grammar -> 'g n indexset
 
