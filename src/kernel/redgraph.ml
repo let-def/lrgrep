@@ -1,32 +1,130 @@
 (* MIT License
-
-   Copyright (c) 2025 Frédéric Bour
-
-   Permission is hereby granted, free of charge, to any person obtaining a copy
-   of this software and associated documentation files (the "Software"), to deal
-   in the Software without restriction, including without limitation the rights
-   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-
-   copies of the Software, and to permit persons to whom the Software is
-   furnished to do so, subject to the following conditions:
-
-   The above copyright notice and this permission notice shall be included in all
-   copies or substantial portions of the Software.
-
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+ *
+ * Copyright (c) 2025 Frédéric Bour
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ *
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  *)
 
-(** This module is responsible for computing viable reductions in a LR(1) parser
-    generator. It generates a graph of states, where each state represents a
-    configuration of the parser, including the top of the stack, the rest of the
-    stack, and the current lookahead set. The module also computes transitions
-    between these states based on possible reductions and goto actions.
+(** Reduction graph construction and analysis
+
+    This module builds and manipulates a graph of viable reductions in an LR(1)
+    parser. The reduction graph represents the structure of possible reductions
+    as paths through the automaton, enabling efficient lookahead analysis and
+    priority computation.
+
+    Proceeds in two steps:
+    - Compute the closure ϵ-reductions (reductions that do not consume any
+      input token) for each LR(1) state.
+      This analysis is local (it does not depend on the stack, only on the
+      LR(1) state), and form a tree of possible sequence of ϵ-reductions,
+      ending with optionl "pending", non-ϵ, reductions that need to consume
+      states from the stack to proceed.
+      This closure is represented by stack_tree's and reduction_closure's, and
+      simplifies and speedups latter analyses.
+
+    - Construct a graph whose edges are labelled by LR(1) states and which map
+      an LR(1) stack suffix to the (sequences of) reductions applicable to
+      this configuration.
+      The paths of this graph enumerate all the stack suffixes that can be
+      consumed by reducing. The process is repeated as long as a reduction is
+      applicable, thus a right recursion [A → α A] translates to a cycle.
+      The process also keeps track of lookahead symbols permitting each
+      reduction to strictly simulate the behavior of an LR(1) automaton that
+      possible went through conflict resolution.
+
+    But to recognize a reduction pattern, we have to do the reverse mapping:
+    the user provides the target of a reduction (e.g. I want to reduce an
+    expression), and we need to find the paths that can reach this target.
+    So we introduce a "target" abstraction to which a reduction pattern
+    translate to, a reverse index [target_trie] to go from a pattern to a
+    set of targets, and we associate to each node of the graph the reachable
+    targets.
+
+    Architecture:
+
+    - The graph nodes ("cells") represent configurations of (LR state, reduction
+      position, lookahead set). These are the vertices of the reduction graph.
+
+    - Edges represent transitions: moving from one reduction position to another
+      via goto transitions.
+
+    - The graph is minimization-aware: Valmari's algorithm is used to minimize
+      the graph while preserving the reachability structure needed for
+      computation of minimal costs.
+
+    Key data structures:
+
+    - 'g stack_tree: Represents the tree of possible reduction stacks for a
+      given LR state. Each node contains:
+      - [next]: Subtrees reachable after performing a reduction
+      - [reductions]: Pending non ϵ-reductions at each node, grouped by depth
+
+    - 'g reduction_closure: Complete ϵ-reductions information for an LR state
+      - [accepting], [failing]: Lookaheads that cause acceptance/failure
+      - [stacks]: Stack trees of ϵ-reductions
+      - [all_stacks], [all_reductions]: flattened ϵ-stacks and ϵ-reductions
+
+    - 'g target_trie: Trie for indexing reduction targets reached by sequences of LR(1) states.
+      E.g. if there is a goto transition `s0 -> s1` labelled `expression`, there will be
+        a path `s0 -> s1` labelled `expression target` in the trie.
+      - [sub]: Child nodes for each LR state
+      - [immediates]: States from which the reductions are immediate (ϵ-reductions by definition)
+      - [targets]: Targets reached by the current prefix.
+
+    - 'g graph: The minimized reduction graph, where each cell contains the
+      reductions applicable at that position, and each step contains the
+      transitions from that cell.
+
+    Tricky implementation details:
+
+    - The reduction graph is used to compute lookahead-dependent reduction
+      sequences. Each cell represents either a (state, lookahead) configuration,
+      or an intermediate step in a reduction sequence given by a triple (state,
+      depth, lookahead) (a non-deterministic transition which applies if
+      `state` is `depth` states deep in the stack).
+
+    - The [group_reductions] function groups items being reduced by their depth
+      in the stack, enabling efficient processing of nested reductions.
+
+    - The [index_targets] function creates a trie where each path corresponds
+      to a sequence of goto transitions leading to a target state. The trie
+      nodes mark "immediate" targets (directly reachable via reductions) and
+      track transitions via goto.
+
+    - The reduction graph construction uses a stream-based approach for
+      accessing predecessors, implemented via [get_stream] to avoid
+      recomputing them.
+
+    - The minimization via Valmari's algorithm preserves the reachability
+      structure needed for cost computation while reducing state space.
+
+    - The [step] type represents positions in the reduction graph, and
+      [cells_steps] maps each cell to its step index for efficient cost
+      computation.
+
+    - The [filter_reductions] function updates reduction lookahead sets when
+      the lookahead domain is restricted to preserve LR(1) behaviors.
+
+    - The [follow] function returns either an [Advance] (move to next step)
+      or a [Switch] (transition to different goto targets), enabling the
+      parser to navigate the reduction graph.
 *)
 
 open Fix.Indexing
@@ -35,6 +133,24 @@ open Misc
 open Info
 
 (*let printf_debug = false*)
+
+let rec merge_reduction_step map acc = function
+  | [] -> (map, acc)
+  | [] :: rrs ->
+    merge_reduction_step map acc rrs
+  | (r :: rs) :: rrs ->
+    let acc = if list_is_empty rs then acc else rs :: acc in
+    let augment _ a b = Some (IndexSet.union a b) in
+    let map = IndexMap.union augment r map in
+    merge_reduction_step map acc rrs
+
+let rec merge_reductions = function
+  | [] -> []
+  | rrs ->
+    let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
+    match merge_reductions rrs' with
+    | [] when IndexMap.is_empty r -> []
+    | rs -> r :: rs
 
 (* Step 1: pre-compute closure of ϵ-reductions *)
 
@@ -55,15 +171,31 @@ let group_reductions g = function
     in
     group 0 IndexMap.empty (List.sort compare_items items)
 
+let rec validate = function
+  | [] -> true
+  | [x] -> not (IndexMap.is_empty x)
+  | _ :: xs -> validate xs
+
 type 'g stack_tree = {
-  subs: ('g lr1 index list * 'g terminal indexset * 'g stack_tree) list;
-} [@@ocaml.unboxed]
+  next: ('g lr1 index list * 'g terminal indexset * 'g stack_tree) list;
+  reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
+}
+
+let fold_stack_reductions f stacks acc =
+  let rec aux acc {next; reductions} =
+    let acc = f reductions acc in
+    List.fold_left aux_next acc next
+  and aux_next acc (_, _, stacks') =
+    aux acc stacks'
+  in
+  aux acc stacks
 
 type 'g reduction_closure = {
   accepting: 'g terminal indexset;
   failing: 'g terminal indexset;
-  reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
   stacks: 'g stack_tree;
+  all_stacks: ('g lr1 index list * 'g terminal indexset) list;
+  all_reductions: ('g nonterminal, 'g terminal indexset) indexmap list;
 }
 
 type ('g, 'n) reduction_closures = ('n, 'g reduction_closure) vector
@@ -76,19 +208,21 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
   Vector.init (Lr1.cardinal g) @@ fun lr1 ->
   let accepting = ref IndexSet.empty in
   let failing = ref IndexSet.empty in
-  let items = ref [] in
+  let group_stacks (items, next) =
+    let reductions = group_reductions g items in
+    assert (validate reductions);
+    {reductions; next}
+  in
   let rec pop lookahead acc (item : g item index) = function
-    | [] ->
-      push items (item, lookahead);
-      acc
+    | [] -> ((item, lookahead) :: fst acc, snd acc)
     | hd :: tl as stack ->
       match Item.prev g item with
       | Some item' -> pop lookahead acc item' tl
       | None ->
         let lhs = Production.lhs g (Item.production g item) in
         let stack = Transition.find_goto_target g hd lhs :: stack in
-        let subs = reduce lookahead [] stack in
-        (stack, lookahead, {subs}) :: acc
+        let stacks = group_stacks (reduce lookahead ([],[]) stack) in
+        (fst acc, (stack, lookahead, stacks) :: snd acc)
   and reduce lookahead acc stack =
     let lr1 = List.hd stack in
     add_subset g failing (Lr1.reject g lr1) lookahead;
@@ -100,13 +234,24 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
         pop la acc (Item.last g (Reduction.production g red)) stack
     end (Reduction.from_lr1 g lr1) acc
   in
-  let subs = reduce (Terminal.all g) [] [lr1] in
-  let reductions = group_reductions g !items in
+  let stacks = group_stacks (reduce (Terminal.all g) ([],[]) [lr1]) in
   let failing = !failing in
   let accepting = !accepting in
-  {accepting; failing; reductions; stacks = {subs}}
+  let rec all_stacks la acc {next; _} =
+    List.fold_left (fun acc (stack,la',stacks) ->
+        let la = IndexSet.inter la la' in
+        if IndexSet.is_empty la then acc else
+          all_stacks la ((stack, la) :: acc) stacks
+      ) acc next
+  in
+  let all_stacks = all_stacks (Terminal.all g) [([lr1],Terminal.all g)] stacks in
+  let all_reductions =
+    merge_reductions (fold_stack_reductions List.cons stacks [])
+  in
+  assert (validate all_reductions);
+  {accepting; failing; stacks; all_stacks; all_reductions}
 
-(*let rec filter_reductions g la = function
+let rec filter_reductions g la = function
   | [] -> []
   | r :: rs as rrs ->
     let filtered = ref false in
@@ -121,137 +266,6 @@ let close_lr1_reductions (type g) (g : g grammar) : (g lr1, g reduction_closure)
     if rs == rs' && not !filtered
     then rrs
     else r' :: rs'
-
-let rec filter_stacks g la acc = function
-  | [] -> acc
-  | (x, la') :: xs ->
-    let la' = Terminal.intersect g la la' in
-    let acc =
-      if IndexSet.is_empty la'
-      then acc
-      else (x, la') :: acc
-    in
-    filter_stacks g la' acc xs
-
-let rec merge_reduction_step map acc = function
-  | [] -> (map, acc)
-  | [] :: _ -> assert false
-  | (r :: rs) :: rrs ->
-    let acc = if list_is_empty rs then acc else rs :: acc in
-    let augment _ a b = Some (IndexSet.union a b) in
-    let map = IndexMap.union augment r map in
-    merge_reduction_step map acc rrs
-
-let rec merge_reductions = function
-  | [] -> []
-  | rrs ->
-    let r, rrs' = merge_reduction_step IndexMap.empty [] rrs in
-    r :: merge_reductions rrs'*)
-
-(* Close reductions of goto transitions *)
-(*let close_goto_reductions (type g) (g : g grammar) rcs
-  : (g goto_transition, g reduction_closure) vector
-  =
-  let sentinel = {accepting = IndexSet.empty; failing = IndexSet.empty;
-                  reductions = []; stacks = {sub=[]}} in
-  let table = Vector.make (Transition.goto g) sentinel in
-  Index.rev_iter (Transition.goto g) begin fun gt ->
-    if printf_debug then
-      Printf.printf "## Closing %s\n"
-        (Transition.to_string g (Transition.of_goto g gt));
-    let tr = Transition.of_goto g gt in
-    let src = Transition.source g tr in
-    let tgt = Transition.target g tr in
-    let stacks = ref [] in
-    let reductions = ref [] in
-    let push_reductions = function
-      | [] -> ()
-      | rs -> push reductions rs
-    in
-    let failing = ref IndexSet.empty in
-    let accepting = ref IndexSet.empty in
-    let rec visit_target tgt la =
-      let rc = rcs.:(tgt) in
-      if printf_debug then
-        Printf.printf "- reaching target %s @ %s\n"
-          (Lr1.to_string g tgt)
-          (Terminal.lookaheads_to_string g la);
-      add_subset g failing rc.failing la;
-      add_subset g accepting rc.accepting la;
-      if printf_debug then
-        Printf.printf "importing %d stacks\n" (List.length rc.stacks);
-      stacks := ([tgt], la) :: filter_stacks g la !stacks rc.stacks;
-      match filter_reductions g la rc.reductions with
-      | [] -> ()
-      | r :: rs ->
-        push_reductions rs;
-        if printf_debug then
-          Printf.printf "importing %d reductions\n" (List.length rs);
-        IndexMap.iter visit_nt r
-
-    and visit_nt nt la =
-      let gt' = Transition.find_goto g src nt in
-      if true || Index.compare gt' gt <= 0 then
-        visit_target (Transition.target g (Transition.of_goto g gt')) la
-      else
-        let rc = table.:(gt') in
-        add_subset g failing rc.failing la;
-        add_subset g accepting rc.accepting la;
-        stacks := filter_stacks g la !stacks rc.stacks;
-        push_reductions (filter_reductions g la rc.reductions)
-    in
-    visit_target tgt (Terminal.all g);
-    let failing = !failing in
-    let accepting = !accepting in
-    let stacks = !stacks in
-    let reductions = merge_reductions !reductions in
-    table.:(gt) <- {accepting; failing; reductions; stacks}
-  end;
-  flush stdout;
-  table
-*)
-
-let dump_closure ?(failing=false) g print_label vector =
-  Vector.iteri begin fun st def ->
-    let has_failing = failing && IndexSet.is_not_empty def.failing in
-    let has_reductions = not (list_is_empty def.reductions) in
-    let has_stacks = not (list_is_empty def.stacks.subs) in
-    if has_failing || has_reductions || has_stacks then
-      Printf.fprintf stdout "%s:\n" (print_label st);
-    if has_failing then
-      Printf.fprintf stdout "- failing: %s\n"
-        (string_of_indexset ~index:(Terminal.to_string g) def.failing);
-    if has_reductions then (
-      Printf.fprintf stdout "- reductions:\n";
-      List.iter (fun map ->
-          let first = ref true in
-          IndexMap.iter (fun nt la ->
-              if !first then
-                (Printf.fprintf stdout "  - "; first := false)
-              else
-                Printf.fprintf stdout "    ";
-              Printf.fprintf stdout "%s @ %s\n"
-                (Nonterminal.to_string g nt)
-                (Terminal.lookaheads_to_string g la);
-            ) map
-        ) def.reductions
-    );
-    let rec print_stacks indent = function
-      | {subs = []} -> ()
-      | {subs} ->
-        let indent = "  " ^ indent in
-        List.iter begin fun (stack, la, sub') ->
-          Printf.fprintf stdout "%s- %s @ %s\n"
-            indent
-            (Lr1.list_to_string g stack)
-            (Terminal.lookaheads_to_string g la);
-          print_stacks indent sub'
-        end subs
-    in
-    if has_stacks then
-      Printf.fprintf stdout "- stacks:\n";
-    print_stacks "" def.stacks;
-  end vector
 
 (* Reduction targets indexation *)
 
@@ -312,11 +326,11 @@ let index_targets (type g) (g : g grammar) rc
        - goto transitions reaching this target (found using the goto_sources)
        - composition of both
     *)
-    let rec visit_stacks acc {subs} =
+    let rec visit_stacks acc {next; reductions=_} =
       List.fold_left begin fun acc (stack, la, sub') ->
         let acc = (follow_path (List.rev stack), la) :: acc in
         visit_stacks acc sub'
-      end acc subs
+      end acc next
     in
     let roots = visit_stacks [] rc.:(tgt).stacks in
     (* 1. Register immediates *)
@@ -375,7 +389,11 @@ type 'g transition = {
 
 type 'g graph = ('g step, ('g lr1, 'g transition list) indexmap) vector
 
-let make (type g) (g : g grammar) rc targets : g graph =
+let make (type g)
+    (g : g grammar)
+    (rc : (g, g lr1) reduction_closures)
+    (targets : (g goto_transition, g targets) vector)
+  : g graph =
   let open IndexBuffer in
   let module Cells = Gensym() in
   let module Links = Gen.Make() in
@@ -402,7 +420,8 @@ let make (type g) (g : g grammar) rc targets : g graph =
     in
     let predecessors = get_stream (Lr1.predecessors g src) in
     let tgt = Transition.target g (Transition.of_goto g gt) in
-    explore_transitions cell src reached la predecessors rc.:(tgt).reductions
+    explore_transitions cell src reached la predecessors
+      rc.:(tgt).all_reductions
 
   and explore_transitions cell0 src reached la0 predecessors reductions =
     let result = ref [] in
@@ -429,7 +448,7 @@ let make (type g) (g : g grammar) rc targets : g graph =
   Index.iter (Lr1.cardinal g) begin fun lr1 ->
     let predecessors = get_stream ~initial:(-1) (Lr1.predecessors g lr1) in
     explore_transitions initial lr1 IndexSet.empty (Terminal.regular g) predecessors
-      rc.:(lr1).reductions
+      rc.:(lr1).all_reductions
   end;
   stopwatch 2 "raw redgraph: %d cells, %d links" (cardinal Cells.n) (cardinal Links.n);
   let module Min = Valmari.Minimize(struct
