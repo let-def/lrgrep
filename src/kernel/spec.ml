@@ -55,7 +55,7 @@
         - [priority]: Priority mapping for branch handling
 
     - The import_rules function transforms the user-facing syntax into these
-      internal structures,:
+      internal structures:
       - Parsing clauses and their actions (total/partial/unreachable)
       - Compiling patterns to Expr.t using the [Transl.transl] function
       - Computing priority relationships between branches

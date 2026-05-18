@@ -81,15 +81,18 @@ open Info
 (** Find the transition from LR state [x] to LR state [y].
     Returns a goto transition if [y] is reached via a non-production,
     or a shift transition if [y] is reached via a terminal.
-    Raises [Not_found] indirectly via [assert false] if no incoming
-    transition exists for [y]. *)
+    Raises [Invalid_argument] if [y] is an entrypoint.
+    Raises [Not_found] if there is no transition from [x] to [y]. *)
 let find_transition (type g) (g : g grammar) x y =
   match Lr1.incoming g y with
-  | None -> assert false
+  | None -> invalid_arg "Sentence_generation.find_transition: y is an entrypoint"
   | Some sym ->
     match Symbol.desc g sym with
     | N n -> Transition.of_goto g (Transition.find_goto g x n)
     | T _ ->
+      (* FIXME: IndexSet.choose raises Not_found if the intersection is empty,
+         which could happen with an invalid state sequence. Consider using
+         Transition.find for consistency, or add a more informative error. *)
       IndexSet.choose
         (IndexSet.inter
            (Transition.successors g x)
@@ -204,6 +207,9 @@ let expand_cells (type g cell) (g : g grammar) ((module R) : (g, cell) Reachabil
             (* Otherwise look at all equations that define the cost of the
                goto transition and recursively visit one of minimal cost *)
             let current_cost = Analysis.cost cell in
+            (* FIXME: List.find_map returns the first equation that satisfies
+               all conditions and has matching cost. If multiple equations have
+               the same minimal cost, the choice is arbitrary (first in list). *)
             match
               List.find_map begin fun (red, node') ->
                 if IndexSet.disjoint c_post red.lookahead then

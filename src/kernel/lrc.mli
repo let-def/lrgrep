@@ -75,7 +75,7 @@
       and coverage analysis.
     FIXME someday: Prefixes are minimal in number of symbols, not in number of
     terminals, which is ultimately what we care about when generating
-    counter-examples. A short prefix can expend to a long sentence.
+    counter-examples. A short prefix can expand to a long sentence.
 *)
 
 open Fix.Indexing

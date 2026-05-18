@@ -893,7 +893,7 @@ let make (type g) (g : g grammar) : g t = (module struct
 
     let goto_decode (gt : goto index) =
       let n, pre, post = decode (of_goto gt) in
-      let gt = Index.of_int (Transition.goto g) ((n :> int) - first_goto_cell) in
+      let gt = Index.of_int (Transition.goto g) ((n :> int) - first_goto_node) in
       (gt, pre, post)
 
     let goto_encode i =
@@ -1185,7 +1185,7 @@ let make (type g) (g : g grammar) : g t = (module struct
                 count.:(gt) <- count';
                 assert (count' >= 0);
                 if count' = 0 then
-                  f index true
+                  f (Cell.of_goto gt) true
               )
             ~acc:true ~acc_right:(fun acc right -> acc && Finite.get right)
             ~from_left:(fun ~right ~parent -> if right then f parent true)

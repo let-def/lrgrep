@@ -46,7 +46,7 @@
       - [struct_filter]: Parses a glob pattern into components
       - [normalize_filter]: Normalizes the parsed components
       - [extract]: Given a right-hand side, finds the positions where the
-        pattern matches (dots表示位置 where symbols can vary)
+        pattern matches
 
     - [transl_filter]: Translates filter patterns into sets of LR states that
       satisfy the filter.
@@ -384,7 +384,7 @@ let transl_filter (type g) (g : g grammar) indices position ~lhs ~rhs =
     | None -> Production.all g
     | Some lhs ->
       match Symbol.desc g lhs with
-      | T _ -> error position "left-handside of a filter should be a non-terminal"
+      | T _ -> error position "left-hand side of a filter should be a non-terminal"
       | N n -> indices.Indices.prod_by_lhs.:(n)
   in
   let filter = Globbing.parse g indices rhs in

@@ -37,7 +37,7 @@
       ending with optional "pending", non-ϵ, reductions that need to consume
       states from the stack to proceed.
       This closure is represented by stack_tree's and reduction_closure's, and
-      simplifies and speeds up latter analyses.
+      simplifies and speeds up later analyses.
 
     - Build a target trie that maps reduction targets (e.g., a nonterminal to
       reduce) to the goto transitions where they can occur, enabling reverse
@@ -57,7 +57,7 @@
     the user provides the target of a reduction (e.g. I want to reduce an
     expression), and we need to find the paths that can reach this target.
     So we introduce a "target" abstraction to which a reduction pattern
-    translate to, a reverse index [target_trie] to go from a pattern to a
+    translates to, a reverse index [target_trie] to go from a pattern to a
     set of targets, and we associate to each node of the graph the reachable
     targets.
 

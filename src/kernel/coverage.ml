@@ -72,15 +72,15 @@
     Determinizing with respect to lookahead would cause a combinatorial
     explosion without providing more actionable information.
 
-    The Enum module refines Deter with the unaccepted lookaheads symbols of
-    each node. Since lookaheads are not part of Deter kernel, this is a
-    path-dependent, so the shortest paths witnessing that a given lookahead is
+    The Enum module refines Deter with the unaccepted lookahead symbols of
+    each node. Since lookaheads are not part of the Deter kernel, this is
+    path-dependent: the shortest paths witnessing that a given lookahead is
     unaccepted are remembered.
     What matters is that there is at least one way to reach a given node for a
     given lookahead.
     Since all reductions applicable to a given configuration are tracked
-    simultaneously, this approach also work with GLR automata: we know that
-    lookahead has not been accepted by any of the possible reductions
+    simultaneously, this approach also works with GLR automata: we know that
+    the lookahead has not been accepted by any of the possible reductions
 *)
 
 open Utils
@@ -935,21 +935,23 @@ module Report = struct
       let rec loop_successor prefix la acc (node, goal) =
         let la = IndexSet.inter (graph.unaccepted node) la in
         loop_successors (node :: prefix) la acc goal
-      and loop_successors prefix la acc goal =
-        match graph.predecessors (List.hd prefix) with
-        | [] ->
-          commit_until prefix0 la prefix;
-          (prefix, la) :: acc
-        | predecessors ->
-          let match_goal (next, _cost, goal') =
-            let goal = IndexSet.inter goal' goal in
-            if IndexSet.is_empty goal then None else
-              Some (next, goal)
-          in
-          match List.filter_map match_goal predecessors with
-          | [] -> assert false
-          | [next] -> loop_successor prefix la acc next
-          | nexts -> List.fold_left (loop_successor prefix la) acc nexts
+    and loop_successors prefix la acc goal =
+         match graph.predecessors (List.hd prefix) with
+         | [] ->
+           commit_until prefix0 la prefix;
+           (prefix, la) :: acc
+         | predecessors ->
+           let match_goal (next, _cost, goal') =
+             let goal = IndexSet.inter goal' goal in
+             if IndexSet.is_empty goal then None else
+               Some (next, goal)
+           in
+           match List.filter_map match_goal predecessors with
+           | [] ->
+             (* FIXME: no predecessor has overlapping unaccepted lookaheads with goal — can this happen? *)
+             assert false
+           | [next] -> loop_successor prefix la acc next
+           | nexts -> List.fold_left (loop_successor prefix la) acc nexts
       in
       List.to_seq (loop_successors prefix0 la [] la)
     in

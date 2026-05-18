@@ -1,6 +1,6 @@
 (* MIT License
  *
- * Copyright (c) [Year] [Your Name]
+ * Copyright (c) 2025 Frédéric Bour
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -474,9 +474,11 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
 
       let finals f =
         IndexSet.iter (fun lr1 ->
-            let state = (Hashtbl.find table (lr1, IntSet.singleton 0)) in
-            (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
-            f state
+            match Hashtbl.find_opt table (lr1, IntSet.singleton 0) with
+            | None -> assert false
+            | Some state ->
+              (*Printf.eprintf "Marking entrypoint %d: %s\n" (Index.to_int state) (Lr1.to_string g lr1);*)
+              f state
           ) (Lr1.entrypoints g)
 
       let refinements f =

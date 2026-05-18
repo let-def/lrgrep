@@ -1,4 +1,4 @@
-(* The MIT License (MIT)
+(* MIT License
  *
  * Copyright (c) 2025 Frédéric Bour
  *
@@ -73,7 +73,7 @@
       - The continuation to use when reduction succeeds
 
     - The [Shortest] vs [Longest] policy determines whether the parser should
-      prefer smaller or larger when there are multiple possible reductions.
+      prefer smaller or larger reductions when there are multiple possible reductions.
       This is implemented by ordering the resulting continuations (shortest:
       accept first, longest: accept last).
 

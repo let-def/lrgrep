@@ -407,7 +407,9 @@ module DFA = struct
               in
               kernel_fold
                 (fun i nfa acc ->
-                   if NFA.is_accepting nfa && Boolvector.test branches.is_total nfa.branch then
+                   if Option.is_none !accept &&
+                      NFA.is_accepting nfa &&
+                      Boolvector.test branches.is_total nfa.branch then
                      accept := Some branches.priority.:(nfa.branch);
                    list_rev_mappend (make i) nfa.transitions acc)
                 kernel []
@@ -1303,8 +1305,8 @@ module Dataflow = struct
     in
     (* Pass 10: (Naive) register allocation *)
     let registers : (dfa, Register.t Capture.map array) vector =
-      defined |> Vector.mapi @@ fun i live ->
-      let Vector.Packed live = Vector.of_array live in
+      defined |> Vector.mapi @@ fun i def ->
+      let Vector.Packed live = Vector.of_array def in
       let domain = Vector.length live in
       let V vc = classes.:(i) in
       let Refl = assert_equal_cardinal vc.domain domain in
@@ -1378,7 +1380,18 @@ module Machine = struct
         let c = IndexMap.compare compare_index t1.moves t2.moves in
         if c <> 0 then c else
           let c = IndexSet.compare t1.clear t2.clear in
-          c
+          if c <> 0 then c else
+            (* Compare t1.priority vs t2.priority. Two transitions with identical
+               filter/captures/moves/clear but different priority remappings would
+               be considered equal, potentially causing incorrect DFA minimization. *)
+            let compare_priority (b1,s1,t1) (b2,s2,t2) =
+              let c = Index.compare b1 b2 in
+              if c <> 0 then c else
+                let c = Int.compare s1 s2 in
+                if c <> 0 then c else
+                   Int.compare t1 t2
+            in
+            List.compare compare_priority t1.priority t2.priority
 
   (** The machine representation for code generation.
 
