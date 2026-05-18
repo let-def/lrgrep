@@ -1,7 +1,27 @@
+module type S = sig
+  type 'a elt
+  type ('a, 'b) t = private
+    | Leaf
+    | Node of ('a, 'b) t * 'a elt * 'b * ('a, 'b) t * int
+
+  val empty: ('a, 'b) t
+  val merge: ('a, 'b) t -> ('a, 'b) t -> ('a, 'b) t
+  val singleton : 'a elt -> 'b -> ('a, 'b) t
+  val insert : 'a elt -> 'b -> ('a, 'b) t -> ('a, 'b) t
+
+  val pop : ('a, 'b) t -> ('a elt * 'b * ('a, 'b) t) option
+
+  type ('a, 'b) pop2 =
+    | Head of 'a elt * 'b * 'a elt * 'b * ('a, 'b) t
+    | Tail of 'a elt * 'b
+    | Done
+  val pop2 : ('a, 'b) t -> ('a, 'b) pop2
+end
+
 module Make(T : sig
     type 'a t
     val compare : 'a t -> 'a t -> int
-  end) =
+  end) : S with type 'a elt := 'a T.t =
 struct
   type ('a, 'b) t =
     | Leaf
@@ -56,3 +76,5 @@ struct
       then Head (k, v, lk, lv, merge (merge ll lr) r)
       else Head (k, v, rk, rv, merge (merge rl rr) l)
 end
+
+module Int = Make(struct type _ t = int let compare = compare end)
