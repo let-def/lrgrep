@@ -150,6 +150,10 @@ let filter_map f t =
 let iter f s =
   fold (fun x () -> f x) s ()
 
+let iteri f s =
+  let _ = fold (fun x i -> f i x; i + 1) s 0 in
+  ()
+
 let rec rev_iter f = function
   | N -> ()
   | C (base, ss, qs) ->
@@ -178,6 +182,12 @@ let exists f t =
   match fold (fun elt () -> if f elt then raise Found) t () with
   | () -> false
   | exception Found -> true
+
+let for_all f t =
+  let exception Found in
+  match fold (fun elt () -> if not (f elt) then raise Found) t () with
+  | () -> true
+  | exception Found -> false
 
 let is_singleton s =
   match s with
@@ -665,3 +675,26 @@ let split_by_run cls = function
   | set ->
     let (key, tail, result) = split_by_run cls set in
     (key, tail) :: result
+
+let map_to_array t f =
+  match minimum t with
+  | None -> [||]
+  | Some x ->
+    let n = cardinal t in
+    let y = f x in
+    let result = Array.make n y in
+    let _ = fold (fun x i -> if i > 0 then result.(i) <- f x; i + 1) t 0 in
+    result
+
+let rec rank addr mask acc = function
+  | N -> acc
+  | C (base, _, _) when base > addr -> acc
+  | C (base, ss, qs) when base < addr ->
+    rank addr mask (acc + Bit_lib.pop_count ss) qs
+  | C (_, ss, _) ->
+    acc + Bit_lib.pop_count (ss land mask)
+
+let rank i t =
+  let ioffset = i mod word_size in
+  let iaddr = i - ioffset and imask = 1 lsl ioffset in
+  rank iaddr (imask - 1) 0 t
