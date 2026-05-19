@@ -98,9 +98,8 @@ rule error_messages = parse error
   }
 
 (* https://github.com/ocaml/ocaml/issues/5068 *)
-| [_*  / _* _ . UIDENT _* |  _* / _* _ . TYPE _* | _* / _* _ . REC _*]
-  { "Expecting `type' or a module name beginning with an uppercase letter"
-  }
+(*| [_*  / _* _ . UIDENT _* |  _* / _* _ . TYPE _* | _* / _* _ . REC _*]
+  { "Expecting `type' or a module name beginning with an uppercase letter"} *)
 
 (* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
 | [_* / _* . seq_expr _*] @ MODULE
@@ -334,10 +333,10 @@ rule error_messages = parse error
 | [_* /function_type: optlabel tuple_type . MINUSGREATER function_type]
   { "Expected `->` after parameter" }
 
-| /atomic_type: mod_ext_longident DOT . delimited_type_supporting_local_open
+(*| /atomic_type: mod_ext_longident DOT . delimited_type_supporting_local_open
   /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident DOT . LIDENT
   /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
-  { "Expected identifier or type after `.`" }
+  { "Expected identifier or type after `.`" }*)
 
 | /tuple_type: atomic_type STAR . reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element)
 | /reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element): reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element) STAR . atomic_type
@@ -782,9 +781,9 @@ rule error_messages = parse error
 | [_* /simple_expr: LPAREN MODULE ext list(attribute) module_expr COLON module_type . RPAREN]
   { "Expected closing `)` after parenthesized module with type annotation" }
 
-| [_* /fun_expr: LET OPEN BANG ext list(attribute) module_expr . IN seq_expr]
+(*| [_* /fun_expr: LET OPEN BANG ext list(attribute) module_expr . IN seq_expr]
 | [_* /fun_expr: LET OPEN ext list(attribute) module_expr . IN seq_expr]
-  { "Expected `in` after module expression" }
+  { "Expected `in` after module expression" }*)
 
 | /fun_expr: LET OPEN BANG ext list(attribute) module_expr IN . seq_expr
 | /fun_expr: let_bindings(ext) IN . seq_expr
@@ -1012,8 +1011,8 @@ rule error_messages = parse error
 | /labeled_simple_expr: LABEL . simple_expr
   { "Expected expression after label in labeled simple expression" }
 
-| [_* /fun_expr: let_bindings(ext) . IN seq_expr]
-  { "Expected `in` after let bindings" }
+(*| [_* /fun_expr: let_bindings(ext) . IN seq_expr]
+  { "Expected `in` after let bindings" }*)
 
 | /fun_expr: fun_expr STAR . fun_expr
   /fun_expr: fun_expr STAR . FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
@@ -1319,8 +1318,8 @@ rule error_messages = parse error
 | [_* /module_binding_body: COLON module_type . EQUAL module_expr]
   { "Expected `=` after module type" }
 
-| [_* /fun_expr: LET MODULE ext list(attribute) module_name module_binding_body . IN seq_expr]
-  { "Expected `in` after module binding" }
+(*| [_* /fun_expr: LET MODULE ext list(attribute) module_name module_binding_body . IN seq_expr]
+  { "Expected `in` after module binding" }*)
 
 | [_* /module_binding_body: functor_arg . module_binding_body]
   { "Expected module binding body after functor argument" }
@@ -1369,8 +1368,8 @@ rule error_messages = parse error
 | [_* /generalized_constructor_arguments: COLON constructor_arguments . MINUSGREATER atomic_type]
   { "Expected `->` after constructor arguments" }
 
-| [_* /fun_expr: LET EXCEPTION ext list(attribute) constr_ident generalized_constructor_arguments list(attribute) . IN seq_expr]
-  { "Expected `in` after exception binding" }
+(*| [_* /fun_expr: LET EXCEPTION ext list(attribute) constr_ident generalized_constructor_arguments list(attribute) . IN seq_expr]
+  { "Expected `in` after exception binding" }*)
 
 | [_* /let_bindings(ext): LET ext list(attribute) rec_flag . let_binding_body list(post_item_attribute)]
   { "Expected let binding after `let`" }
@@ -1592,11 +1591,11 @@ rule error_messages = parse error
 | [_* /class_expr: LET OPEN BANG list(attribute) . mod_longident IN class_expr]
   { "Expected module path after `let open !`" }
 
-| [_* /class_signature: LET OPEN list(attribute) mod_longident . IN class_signature
+(*| [_* /class_signature: LET OPEN list(attribute) mod_longident . IN class_signature
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
 | [_* /class_signature: LET OPEN BANG list(attribute) mod_longident . IN class_signature
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
-  { "Expected `.` or `in` after module path in `let open`" }
+  { "Expected `.` or `in` after module path in `let open`" }*)
 
 | [_* /constrain_field: core_type . EQUAL core_type]
   { "Expected `=` after type in `constraint` field" }
@@ -1782,9 +1781,9 @@ rule error_messages = parse error
 | [_* /let_bindings(no_ext): LET PERCENT attr_id list(attribute) rec_flag . let_binding_body list(post_item_attribute)]
   { "Expected let binding after extension name" }
 
-| [_* /class_expr: LET OPEN BANG list(attribute) mod_longident . IN class_expr
+(*| [_* /class_expr: LET OPEN BANG list(attribute) mod_longident . IN class_expr
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
-  { "Expected `.` or `in` after module path" }
+  { "Expected `.` or `in` after module path" }*)
 
 | /class_expr: LET OPEN BANG list(attribute) mod_longident IN . class_expr
 | /class_expr: let_bindings(no_ext) IN . class_expr
@@ -1804,12 +1803,12 @@ rule error_messages = parse error
 | /class_fun_def: labeled_simple_pattern MINUSGREATER . class_expr
   { "Expected class expression after `->`" }
 
-| [_* /class_expr: let_bindings(no_ext) . IN class_expr]
-  { "Expected `in` after let bindings" }
+(*| [_* /class_expr: let_bindings(no_ext) . IN class_expr]
+  { "Expected `in` after let bindings" }*)
 
-| [_* /class_expr: LET OPEN list(attribute) mod_longident . IN class_expr
+(*| [_* /class_expr: LET OPEN list(attribute) mod_longident . IN class_expr
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
-  { "Expected `in` after module path" }
+  { "Expected `in` after module path" }*)
 
 | [_* /let_bindings(no_ext): LET list(attribute) rec_flag . let_binding_body list(post_item_attribute)]
   { "Expected a binding pattern after `let`" }
@@ -2081,3 +2080,4 @@ rule error_messages = parse error
       /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters . LIDENT type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
       /signature_item: TYPE ext list(attribute) type_parameters . type_longident PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
   { "Expected type identifier after type parameters" }
+
