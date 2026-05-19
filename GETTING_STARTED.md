@@ -11,7 +11,7 @@ LRgrep solves this by providing a declarative domain-specific language (DSL) tha
 At the heart of LRgrep is a compiler that transforms a high-level error specification into a runtime pattern matcher. An LRgrep specification is compiled into a recognizer that operates on the parser's stack at failure points.
 
 As a guiding example, we will use this simple arithmetic grammar:
-```
+```menhir
 %left PLUS MINUS
 %left TIMES DIV
 %nonassoc UMINUS
@@ -32,7 +32,7 @@ An LRgrep specification (typically stored in a `.lrgrep` file) consists of one o
 
 Patterns are regular expressions built from grammar symbols and enhanced with two domain-specific constructs:
 
-- **Filters** (`/ item`): Impose constraints on what the parser expects next without consuming stack elements. An *item* (or LR(0) item) is a production with a dot `.` inserted at a specific position, representing a partially recognized rule. For example, `expr: LPAREN . expr RPAREN` means an opening parenthesis has been read and an expression is expected. Filters support globbing: `_` matches any single symbol, `_*` matches any sequence, and the left-hand side (`expr:` in this case) can be ommitted. Thus, `/ _* . expr _*` matches any situation where an expression is a legal continuation, regardless of surrounding context.
+- **Filters** (`/ item`): Impose constraints on what the parser expects next without consuming stack elements. An *item* (or LR(0) item) is a production with a dot `.` inserted at a specific position, representing a partially recognized rule. For example, `expr: LPAREN . expr RPAREN` means an opening parenthesis has been read and an expression is expected. Filters support globbing: `_` matches any single symbol, `_*` matches any sequence, and the left-hand side (`expr:` in this case) can be omitted. Thus, `/ _* . expr _*` matches any situation where an expression is a legal continuation, regardless of surrounding context.
 - **Reductions** (`[ pattern ]`): Match stack segments that can be reduced to a given non-terminal, regardless of whether the parser has performed those reductions yet. This bridges the gap between the raw stack and the grammatical structure the user intends. For example, given the input `(1 + 2`, the parser's stack ends with `LPAREN expr PLUS INT`. Without reduction, the immediate context focuses only on the trailing `INT`. The pattern `[expr]` matches both `INT` and `expr PLUS INT` because both can be reduced to an expression. Composed with a filter as in `[expr / LPAREN expr . RPAREN]`, this pattern specifically targets expressions that follow an opening parenthesis and expect a closing one, enabling precise, context-aware messages.
 
 ### Compilation
@@ -40,7 +40,7 @@ Given a compiled Menhir grammar (`parser.cmly`) and a specification (`errors.lrg
 ```bash
 lrgrep compile -g parser.cmly -s errors.lrgrep -o errors.ml
 ```
-The resulting module exports functions (one per rule) that accept the parser's environment and the offending token, returning the semantic value of the clause that matchedx (or `None` if there was no match). The compiler also validates the specification against the grammar, to ensure that generation is sound.
+The resulting module exports functions (one per rule) that accept the parser's environment and the offending token, returning the semantic value of the matched clause (or `None` if there was no match). The compiler also validates the specification against the grammar to ensure that code generation is sound.
 
 > **Example: Arithmetic Calculator**
 >
@@ -51,7 +51,7 @@ The resulting module exports functions (one per rule) that accept the parser's e
 > | lpos=LPAREN; [expr / LPAREN expr . RPAREN]
 >   { "Expecting a closing parenthesis (opened at " ^ print_loc $startpos(lpos) ^ ")" }
 > ```
-> This specification covers common arithmetic mistakes by combining stack reductions (`[expr]`), contextual filters (`/ LPAREN expr . RPAREN`) to produce targeted suggestions. It also shows that semantic values and locations can be extracted from the stack to report the location of the opening parenthesis.
+> This specification covers common arithmetic mistakes by combining stack reductions (`[expr]`) and contextual filters (`/ LPAREN expr . RPAREN`) to produce targeted suggestions. It also demonstrates how semantic values and source locations can be extracted from the stack to report the exact position of the opening parenthesis.
 
 ---
 
@@ -76,7 +76,7 @@ let print_syntax_error (env : _ MI.env) (triple : triple) =
     eprintf "Syntax error (uncovered situation).\n%!"
 
 let parse (input : unit -> Parser.token * position * position) =
-  (* Remembering the last token *)
+  (* Remember the last token *)
   let last_triple = ref None in
   let input' () =
     let result = input () in
@@ -91,14 +91,14 @@ let parse (input : unit -> Parser.token * position * position) =
       print_syntax_error env triple;
       None
     | _ ->
-      (* The first checkpoint of the handler is guaranteed to be in
-         `InputNeeded` state *)
+      (* The first checkpoint passed to the handler is guaranteed to be
+         in the `InputNeeded` state *)
       assert false
   in
   MI.loop_handle_undo succeed fail input' Parser.Incremental.main
 ```
 
-When the parser encounters an illegal token, `loop_handle_undo` yields the last checkpoint of the form `InputNeeded env` (the state of the parser immediately before seeing the token). The environment `env` represents the parser's stack and state just before the failure. By passing `env` and the offending token to the compiled LRgrep function, you obtain an explanation tailored to this exact syntactic context.
+When the parser encounters an illegal token, `loop_handle_undo` yields the last checkpoint of the form `InputNeeded env` (the state of the parser immediately before consuming the token). The environment `env` represents the parser's stack and state just before the failure. By passing `env` and the offending token to the compiled LRgrep function, you obtain an explanation tailored to this exact syntactic context.
 
 ---
 
@@ -113,7 +113,7 @@ $ lrgrep enumerate -g parser.cmly -e
 ...
 ## Pattern 3
 
-| [_* /expr: LPAREN expr . RPAREN]
+| [_* / expr: LPAREN expr . RPAREN]
 
 ### Sample 0
 
@@ -132,17 +132,14 @@ As you add patterns, the LRgrep compiler automatically performs **coverage** and
 - **Coverage** ensures that every reachable error configuration is matched by at least one clause. If a situation is missed, the compiler reports the exact stack pattern needed to cover it and provides a sample sentence to exercise it.
 - **Redundancy** warns when a clause matches no new configurations because earlier clauses already handle them. This keeps the specification minimal and prevents conflicting or overlapping messages.
 
-These checks enable a feedback-driven workflow: write a few high-level patterns, compile, address uncovered cases, and repeat until the specification is both exhaustive and irredundant. This naturally encourages starting with broad patterns and gradually specializing them as edge cases  emerge.
+These checks enable a feedback-driven workflow: write a few high-level patterns, compile, address uncovered cases, and repeat until the specification is both exhaustive and irredundant. This naturally encourages starting with broad patterns and gradually specializing them as edge cases emerge.
 
-They also help to maintain a specification up to date when the grammar evolves.
-
-By default, only a warning is emitted for incomplete coverage:
-```
+They also help keep a specification up to date when the grammar evolves. By default, only a warning is emitted for incomplete coverage:
+```bash
 $ lrgrep compile -g parser.cmly -s errors.lrgrep
 lrgrep: warning: rule error_message has only partial coverage (use --cover-report <file> to get more information)
 ```
-
-`--cover-report report.md` produces a markdown report in the same format as the enumeration above.
+Passing `--cover-report report.md` produces a Markdown report in the same format as the enumeration output above, making it easy to incrementally complete the specification.
 
 ---
 
@@ -153,7 +150,7 @@ While enumeration and coverage work *top-down* (starting from the grammar to gua
 The `interpret` command provides a lightweight debugger for your error specification. Given a grammar and an invalid input sentence, it simulates parsing, displays the failure point, reconstructs the parser's stack, and indicates which LRgrep patterns match it:
 
 ```bash
-lrgrep -- interpret -g _build/default/examples/calc/parser.cmly
+lrgrep interpret -g parser.cmly
 $ LPAREN INT PLUS
 Parser stack (most recent first):
 		[_* / expr: expr PLUS . expr]
@@ -163,10 +160,9 @@ Parser stack (most recent first):
 -              	main
 Rejected lookahead symbols:
   DIV, EOL, PLUS, RPAREN, TIMES
-$
 ```
 
-Suggest that handling `[_* / expr: expr PLUS . expr]` would match our sample `LPAREN INT PLUS` sentence.
+This output suggests that adding a clause matching `[_* / expr: expr PLUS . expr]` would correctly handle the sample input.
 
 The interpreter is useful for customizing and refining error messages. It lets you:
 - Observe how the parser interprets ambiguous or malformed input.
