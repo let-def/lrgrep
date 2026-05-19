@@ -13,7 +13,7 @@ build: [
 depends: [
   "ocaml" {>= "4.13.0"}
   "dune" {>= "2.0.0"}
-  "menhir" {>= "20231231"}
+  "menhir" {>= "20260209"}
   "cmon" {>= "0.2"}
 ]
-synopsis: "Analyse the stack of a Menhir-generated LR parser using regular expressions"
+synopsis: "Detailed error messages for Menhir-generated parsers"

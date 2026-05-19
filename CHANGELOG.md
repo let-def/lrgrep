@@ -1,3 +1,21 @@
+# Beta 0.4, Tue May 19 03:50:57 PM JST 2026
+
+First publicly announced release.
+
+New features:
+- enumeration and coverage are now precise (and reasonably fast)
+- reports can be provided in a low-level JSON format, to be post-processed by jq;
+  the format is not stable yet
+- "Getting started" guide
+- `lrgrep.top` provides a functor to customize lexical syntax
+- application to OCaml with exhaustive coverage (builtin and https://github.com/let-def/lrgrep-ocaml)
+- prototype on OxCaml
+
+Still pending:
+- prototype on latest OxCaml
+- sample applications to (Mini-)Elm and Catala have not been merged yet
+- guards for detecting "unreachable actions" are not yet supported
+
 # Alpha 0.3, Mon Jan 26 10:05:28 PM CET 2026
 
 First release published on Opam.
