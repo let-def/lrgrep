@@ -1,0 +1,5 @@
+File "input02.in" (2:0-3):
+Syntax error.
+The start of a declaration has been read (1:0-3):
+  let
+An identifier is now expected.

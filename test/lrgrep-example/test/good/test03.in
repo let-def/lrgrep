@@ -1,0 +1,2 @@
+let x = 0 (* a comment in the middle *) + 2
+let y = (x+1)*2

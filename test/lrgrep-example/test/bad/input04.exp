@@ -1,0 +1,5 @@
+File "input04.in" (1:8-9):
+Syntax error.
+The start of a declaration has been read (1:0-7):
+  let x =
+An expression is now expected.

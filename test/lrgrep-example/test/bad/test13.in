@@ -1,0 +1,8 @@
+let main =
+  let x = 3;
+  let y = 4
+  let z = 5
+  (* The trailing semicolon on line 2 causes the next line to be read as a
+     local declaration, which it must be anyway. Removing the semicolon would
+     not be a good suggestion, because a global declaration [let x = 3] would
+     not be accepted in this context. *)

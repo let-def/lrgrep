@@ -21,7 +21,7 @@ type 'a checkpoint = 'a I.checkpoint
    the lexer. *)
 
 let print_syntax_error (content : string) (triple : triple) (env : _ env) =
-  Errors.content := Some content; (* TODO *)
+  Errors.content := Some content;
   match Errors.error_message env triple with
   | Some msg ->
       (* This syntax error has an explanation. Print it. *)
@@ -30,8 +30,7 @@ let print_syntax_error (content : string) (triple : triple) (env : _ env) =
       (* This syntax error has no explanation. This should never happen
          if [lrgrep] has reported that we have complete coverage of the
          error situations. *)
-      eprintf "Syntax error (no explanation).\n%!";
-      exit 2
+      eprintf "Syntax error (no explanation).\n%!"
 
 (* -------------------------------------------------------------------------- *)
 
@@ -40,7 +39,7 @@ let print_syntax_error (content : string) (triple : triple) (env : _ env) =
 
 let print_positions triple =
   let (_, startp, endp) = triple in
-  eprintf "%s" (MenhirLib.LexerUtil.range (startp, endp))
+  eprintf "%s" (Errors.file_name_and_range (startp, endp))
 
 (* -------------------------------------------------------------------------- *)
 
@@ -92,7 +91,7 @@ let fail content (last : unit -> triple) (checkpoint : _ checkpoint) (_) =
   match checkpoint with
   | InputNeeded env ->
       let triple = last() in
-      print_positions triple; (* TODO make sure positions are correct *)
+      print_positions triple;
       print_syntax_error content triple env;
       exit 1
   | _ ->
@@ -106,7 +105,7 @@ let process (filename : string) =
   (* Read the file's entire content and create a lexing buffer. *)
   let content, lexbuf = MenhirLib.LexerUtil.read filename in
   (* Create an initial checkpoint for the parser. *)
-  let start = Parser.Incremental.main (lexeme_start_p lexbuf) in
+  let start = Parser.Incremental.file (lexeme_start_p lexbuf) in
   (* Package our lexer and lexing buffer as a [next] function. *)
   let (next : unit -> triple) = I.lexer_lexbuf_to_supplier Lexer.token lexbuf in
   (* Remember the last token that was produced. *)

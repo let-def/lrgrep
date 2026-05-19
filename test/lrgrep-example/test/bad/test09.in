@@ -1,0 +1,4 @@
+let x = 3;
+let y = 4
+(* The trailing semicolon on line 1 causes the next line to be
+   mistakenly read as a local declaration. *)

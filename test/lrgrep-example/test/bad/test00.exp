@@ -1,0 +1,5 @@
+File "test00.in" (1:13-14):
+Syntax error.
+An expression and a binary operator have been read (1:9-13):
+  1+2-
+An expression is now expected.

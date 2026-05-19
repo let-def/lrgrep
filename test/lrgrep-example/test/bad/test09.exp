@@ -1,0 +1,7 @@
+File "test09.in" (4:0-0):
+Syntax error.
+A local declaration has been read (2:0-9):
+  let y = 4
+The keyword `in` is now expected.
+Suggestion: deleting the semicolon that precedes this declaration (1:9-10)
+would allow it to be interpreted as a global declaration.

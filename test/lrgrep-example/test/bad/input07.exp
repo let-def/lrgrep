@@ -1,0 +1,6 @@
+File "input07.in" (1:11-12):
+Syntax error.
+A declaration has been read (1:0-11):
+  let x = 1+2
+If this declaration is complete, then
+another declaration (or the end of the file) is now expected.

@@ -1,0 +1,5 @@
+File "test13.in" (4:2-5):
+Syntax error.
+A local declaration has been read (3:2-11):
+  let y = 4
+The keyword `in` is now expected.

@@ -1,0 +1,5 @@
+File "input05.in" (2:15-17):
+Syntax error.
+An expression and a binary operator have been read (2:10-14):
+  1+2-
+An expression is now expected.

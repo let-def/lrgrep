@@ -1,0 +1,6 @@
+File "input09.in" (2:0-3):
+Syntax error.
+An opening parenthesis and an expression have been read (1:8-12):
+  (1+2
+If this expression is complete,
+a closing parenthesis is now expected.

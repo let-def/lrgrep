@@ -1,0 +1,5 @@
+File "input10.in" (2:16-17):
+Syntax error.
+A local declaration and the keyword `in` have been read (2:3-15):
+  let y = 0 in
+An expression is now expected.

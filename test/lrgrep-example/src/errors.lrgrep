@@ -1,22 +1,52 @@
+(* -------------------------------------------------------------------------- *)
+
+(* Auxiliary functions, for use in the semantic actions. *)
+
 {
 
   open Lexing
   open Printf
+  let lowercase = String.lowercase_ascii
 
-  (* This function is analagous to [MenhirLib.LexerUtil.range] but does not
-     print the file name or the trailing colon and newline. *)
-  let range' (pos1, pos2) =
+  (* Concatenation with a newline in the middle. *)
+
+  let (^/^) s1 s2 = s1 ^ "\n" ^ s2
+
+  (* Recognizing dummy positions. (Which a good lexer should not produce.) *)
+
+  let is_dummy (pos1, pos2) =
+    pos1 == dummy_pos || pos2 == dummy_pos
+
+  (* [range (pos1, pos2)] renders a line number and character range, based on
+     the start and end positions [pos1] and [pos2], as a string, in a compact
+     format. *)
+
+  let range ((pos1, pos2) as positions) =
+    if is_dummy positions then "?" else
     let line = pos1.pos_lnum in
     let char1 = pos1.pos_cnum - pos1.pos_bol in
     let char2 = pos2.pos_cnum - pos1.pos_bol in (* yes, [pos1.pos_bol] *)
-    sprintf "line %d, characters %d-%d"
+    sprintf "%d:%d-%d"
       line char1 char2
       (* use [char1 + 1] and [char2 + 1] if *not* using Caml mode *)
 
-  (* This global reference gives us access to the content of the current
-     file. Using global mutable state is not very elegant. An alternative
-     would be to parameterize every semantic action (below) with [content].
-     TODO do this, once lrgrep supports it *)
+  (* [file_name_and_range (pos1, pos2)] renders a file name, line number and
+     character range, based on the start and end positions [pos1] and [pos2],
+     as a string, in a compact format.
+
+     It is analagous to [MenhirLib.LexerUtil.range] but prints the line number
+     and character range in a more compact format. *)
+
+  let file_name_and_range ((pos1, _) as positions) =
+    if is_dummy positions then "At an unknown location:\n" else
+    let file = pos1.pos_fname in
+    sprintf "File \"%s\" (%s):\n" file (range positions)
+
+  (* This global reference gives us access to the content of the current file.
+     Using global mutable state is not very elegant, but avoids the noise that
+     would be caused by explicit parameter passing. An alternative would be to
+     parameterize every auxiliary function and every semantic action with the
+     content of the file. *)
 
   let content =
     ref None
@@ -32,77 +62,169 @@
     |> compress
     |> shorten 32
 
-  (* [read thing w] indicates that a "thing" has been read, displays the
-     positions, and displays the corresponding input slice. *)
+  (* Names for various syntactic elements. *)
 
-  let read (thing : string) (w : position * position) =
-    sprintf "%s has been read (%s):\n  %s\n"
-      thing (range' w) (slice w)
+  type thing =
+    | Atom  of string        (* example: "A thing" *)
+    | Conj  of thing * thing
+    | Start of thing
 
-  let lparen w =
-    read "An opening parenthesis" w
+  let atom s = Atom s
+  let (++) thing1 thing2 = Conj (thing1, thing2)
+  let start thing = Start thing
 
-  let expr w =
-    read "An expression" w
+  let rec show thing : string =
+    match thing with
+    | Atom s ->
+        s
+    | Conj (thing1, thing2) ->
+        show thing1 ^ " and " ^ lowercase (show thing2)
+    | Start thing ->
+        "The start of " ^ lowercase (show thing)
 
-  let binop w =
-    read "A binary operator" w
+  let rec number thing : int =
+    match thing with
+    | Atom _ ->
+        1
+    | Conj (thing1, thing2) ->
+        number thing1 + number thing2
+    | Start thing ->
+        assert (number thing = 1);
+        1
 
-  let comma w =
-    read "A comma" w
+  let binop  = atom "A binary operator"
+  let decl   = atom "A declaration"
+  let equal  = atom "An equals sign"
+  let expr   = atom "An expression"
+  let ident  = atom "An identifier"
+  let letk   = atom "A `let` keyword"
+  let ldecl  = atom "A local declaration"
+  let lparen = atom "An opening parenthesis"
+  let leti   = atom "The keyword `in`"
+
+  (* [read thing w] indicates that a thing has been read, displays the
+     positions [w], and displays the corresponding input slice. *)
+
+  let read (thing : thing) (w : position * position) =
+    sprintf "%s %s been read (%s):\n  %s\n"
+      (show thing)
+      (if number thing > 1 then "have" else "has")
+      (range w) (slice w)
 
 }
 
-rule error_message = parse error (main)
+(* -------------------------------------------------------------------------- *)
 
-| e=expr; o=PLUS / _* . expr _*
-| e=expr; o=MINUS / _* . expr _*
-| e=expr; o=DIV / _* . expr _*
-| e=expr; o=TIMES / _* . expr _*
+(* A mapping of syntax error situations to syntax error messages. *)
+
+rule error_message = parse error (file)
+
+| / . file
+    (* Nothing has been read, and `file` is expected. This means that
+       begins with an unacceptable token. (This token cannot be EOF,
+       which in this state is acceptable.) *)
     {
-      expr $positions(e) ^
-      binop $positions(o) ^
+      "A declaration is now expected."
+    }
+
+| l=LET
+    (* A `let` keyword has been read. *)
+    {
+      read (start decl) $positions(l) ^
+      "An identifier is now expected."
+    }
+
+| l=LET; i=IDENT
+    (* A `let` keyword and an identifier have been read. *)
+    {
+      read (start decl) ($startpos(l), $endpos(i)) ^
+      "An equals sign `=` is now expected."
+    }
+
+| l=LET; IDENT; e=EQUAL
+    (* A `let` keyword, an identifier, and an equals sign have been read. *)
+    {
+      read (start decl) ($startpos(l), $endpos(e)) ^
+      "An expression is now expected."
+    }
+
+| d=[declaration]
+    (* (Some input that can be reduced to) a declaration has been read. *)
+    {
+      read decl $positions(d) ^
+      "If this declaration is complete, then" ^/^
+      "another declaration (or the end of the file) is now expected."
+    }
+
+| [declaration]; s=SEMI; l=LET; b=[binding]
+    (* This clause is a special case of the next clause, where we recognize a
+       larger context, and are able to print an extra suggestion. If desired,
+       it could be removed. *)
+    (* Something that could form a toplevel declaration, such as `let x = y`,
+       has been read, and following this, a semicolon and a `let` binding have
+       been read, say, `let z = 0`. Because of the semicolon, this binding has
+       been interpreted as the start of a local declaration, as if the
+       sequence `y; let z = 0 ...` was logically nested inside the toplevel
+       declaration `let x = ...`. Yet, at this point, the parser has failed:
+       the keyword `in` is expected and it is not there. *)
+    (* One could, if desired, add the item:
+         /expr: LET binding . IN expr
+       inside the second pair of square brackets above. *)
+     (* Quite likely, the semicolon should be removed; then the second `let`
+        binding would be interpreted as a toplevel declaration. We make this
+        suggestion. *)
+    {
+      read ldecl ($startpos(l), $endpos(b)) ^
+      "The keyword `in` is now expected." ^/^
+      sprintf "Suggestion: deleting the semicolon that precedes this declaration (%s)"
+        (range $positions(s)) ^/^
+      "would allow it to be interpreted as a global declaration."
+    }
+
+| l=LET; b=[binding]
+    (* A `let` keyword, an identifier, an equals sign, and an expression have
+       been read. Furthermore, we are in a context where a local declaration
+       is expected. (The situation where a toplevel declaration is expected is
+       covered by the previous clause, because `LET binding` can then be reduced
+       to `declaration`.) *)
+    (* One could, if desired, add the item:
+         /expr: LET binding . IN expr
+       inside the square brackets above. *)
+    {
+      read ldecl ($startpos(l), $endpos(b)) ^
+      "The keyword `in` is now expected."
+    }
+
+| l=LET; b=binding; i=IN
+    {
+      read (ldecl ++ leti) ($startpos(l), $endpos(i)) ^
+      "An expression is now expected."
+    }
+
+| e=expr; o=PLUS
+| e=expr; o=MINUS
+| e=expr; o=DIV
+| e=expr; o=TIMES
+| e=expr; o=SEMI
+    (* An expression, followed with a binary operator, has been read. *)
+    {
+      read (expr ++ binop) ($startpos(e), $endpos(o)) ^
       "An expression is now expected."
     }
 
 | l=LPAREN / _* . expr _*
+    (* An opening parenthesis has been read, in a context where an expression
+       is now expected. *)
     {
-      lparen $positions(l) ^
+      read lparen $positions(l) ^
       "An expression is now expected."
     }
 
-| l=LPAREN; e=[expr / _* . RPAREN]
+| l=LPAREN; e=[expr]
+    (* An opening parenthesis followed with (some input that can be reduced to)
+       an expression has been read. *)
     {
-      lparen $positions(l) ^
-      expr $positions(e) ^
-      "If this expression is complete,\na closing parenthesis or a comma is now expected."
-    }
-
-| l=LPAREN; e=expr; c=COMMA / _* . expr _*
-    {
-      lparen $positions(l) ^
-      expr $positions(e) ^
-      comma $positions(c) ^
-      "An expression is now expected."
-    }
-
-| l=LPAREN; e1=expr; c=COMMA; e2=[expr / _* . RPAREN]
-    {
-      lparen $positions(l) ^
-      expr $positions(e1) ^
-      comma $positions(c) ^
-      expr $positions(e2) ^
-      "A closing parenthesis is now expected."
-    }
-
-| e=[expr / _* . EOF]
-    {
-      expr $positions(e) ^
-      "If this expression is complete, the end of the file is now expected."
-    }
-
-| / _* . main
-    (* The file is empty or begins with an unacceptable token. *)
-    {
-      "An expression is now expected."
+      read (lparen ++ expr) ($startpos(l), $endpos(e)) ^
+      "If this expression is complete," ^/^
+      "a closing parenthesis is now expected."
     }

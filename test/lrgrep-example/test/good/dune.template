@@ -1,0 +1,6 @@
+(rule (target NAME.out) (deps NAME.in)
+  (action
+    (with-outputs-to NAME.out
+      (with-accepted-exit-codes 0 (run ../../src/main.exe %{deps})))))
+
+(rule (alias test) (action (diff NAME.exp NAME.out)))
