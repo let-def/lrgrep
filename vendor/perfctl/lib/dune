@@ -1,4 +1,0 @@
-(library
- (name perfctl)
- (public_name perfctl)
- (libraries unix))

@@ -410,6 +410,12 @@ let stopwatch_perf_step i =
     !result
   | _ -> None
 
+(* Stub Perfctl *)
+module Perfctl = struct
+  let enable () = ()
+  let disable () = ()
+end
+
 let stopwatch level fmt =
   if level <= !verbosity_level then (
     let delta = stopwatch_delta level in
