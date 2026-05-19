@@ -1,4 +1,149 @@
+{
+  let rec longident_to_string = function
+    | Longident.Lident n -> n
+    | Longident.Lapply (a, b) ->
+      longident_to_string a ^ "(" ^ longident_to_string b ^ ")"
+    | Longident.Ldot (a, n) ->
+      longident_to_string a ^ "." ^ n
+
+  let report_currified_constructor ?outer inner (token : Parser_raw.token) =
+    let token = match token with
+      | UNDERSCORE -> "_"
+      | LIDENT u | UIDENT u -> u
+      | LPAREN -> "..."
+      | _ -> assert false
+    in
+    let inner_msg = longident_to_string inner ^ " (..., " ^ token ^ ")" in
+    "Issue #10990: arguments of n-ary constructors should be put between parentheses, e.g. " ^
+    match outer with
+    | Some outer -> longident_to_string outer ^ " (" ^ inner_msg ^ ")"
+    | None -> inner_msg
+
+  let str_line pos = string_of_int pos.Lexing.pos_lnum
+  let str_col pos = string_of_int (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
+
+  let line_and_char pos = "line " ^ str_line pos ^ ", character " ^ str_col pos
+}
+
 rule error_messages = parse error
+
+(*************************************************************)
+(* Hand-crafed part, fine-grained or specific error messages *)
+(*************************************************************)
+
+| e=fun_expr; SEMI @ ELSE
+  %partial {
+    match e with
+    | {pexp_desc = Pexp_ifthenelse(_, _, None); _} -> (
+      Some ("The semicolon " ^ line_and_char $startpos(e)
+            ^ " terminates the `if ... then ...` expression. \
+            Remove it to add an else branch.")
+      )
+    | _ -> None
+  }
+
+(* A list of type parameters that is not followed by the path of a type constructore *)
+(* (from "Misleading syntax error message for incorrect module definition", ocaml issue #12280) *)
+| LPAREN; typs=reversed_separated_nontrivial_llist(COMMA,core_type); rp=RPAREN /atomic_type: LPAREN _ RPAREN . _*
+  %partial {
+    match List.rev typs with
+    | [] | [_] -> None
+    | typs -> Some Ast_helper.(
+      Printf.sprintf
+        "The preceding type ending %s is incomplete.\n\
+         It's missing a type constructor after the parameters, for instance: %s.\n\
+         If you meant to write a tuple, use '*': %s."
+        (line_and_char $endpos(rp))
+        (Format.asprintf "%a" Pprintast.core_type
+          (Typ.constr (Location.mknoloc (Longident.Lident "t")) typs))
+        (Format.asprintf "%a" Pprintast.core_type
+          (Typ.tuple typs))
+    )
+  }
+
+| LIDENT / label_declaration: mutable_flag _ . COLON _* @ EQUAL
+  { "Expecting ':' to declare the type of a record field, not '='" }
+
+(* let x = 5 ; let y = 6 let z = 7 *)
+
+| [structure_item]; semi=SEMI; [let_bindings(ext)]
+  { "Might be due to the semicolon " ^ line_and_char $startpos(semi) }
+
+| loc=_ / fun_expr : _* . fun_expr; [let_bindings(ext)]
+  { "Expecting 'in' after let binding(s) in an expression. \n\
+     This might be due to the unterminated expression at " ^
+     line_and_char $endpos(loc) }
+
+| item=structure_item; [let_bindings(ext)] @ IN
+  { "A 'let ... in' expression is not allowed immediately after a definition. \n\
+    This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endpos(item) }
+
+(* Replace builtin grammatical rule reporting unclosed parenthesis *)
+| lp=LPAREN; [_* / _* . RPAREN _*]
+  { "Unclosed parenthesis at " ^ line_and_char $startpos(lp) }
+
+| pos=[_* / LET _* . IN _*]
+| pos=[_* / let_bindings(ext) _* . IN _*]
+| pos=[_* / let_bindings(no_ext) _* . IN _*]
+  { "Expecting `in' to continue let-binding at " ^ line_and_char $startpos(pos) }
+
+(* https://github.com/ocaml/ocaml/issues/11108
+   Report when a keyword has been typed in a context where a lowercase
+   identifier is expected. *)
+| [_* / _* _ . LIDENT _*]
+  %partial { match Lexer_raw.as_keyword token with
+    | None -> None
+    | Some kw ->
+      Some ("`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)")
+  }
+
+(* https://github.com/ocaml/ocaml/issues/5068 *)
+| [_*  / _* _ . UIDENT _* |  _* / _* _ . TYPE _* | _* / _* _ . REC _*]
+  { "Expecting `type' or a module name beginning with an uppercase letter"
+  }
+
+(* https://discuss.ocaml.org/t/syntax-error-compiling-code-with-functor-module/6352 *)
+| [_* / _* . seq_expr _*] @ MODULE
+  {  "`module' keyword cannot appear in an expression, \
+       use `(module M)' to pack a first class-module \
+       or `let module M = ... in ...' to define a local module"
+  }
+
+(* https://github.com/ocaml/ocaml/issues/11445 *)
+
+| [constructor_arguments] @ MINUSGREATER
+  { "Issue #11445: in constructor arguments, \
+     arrow types should be wrapped between parentheses"
+  }
+
+| outer=constr_longident; inner=constr_longident;
+  [_ / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  { report_currified_constructor ~outer inner token }
+
+| constr_longident; [simple_expr]
+  @ first(simple_expr)
+  { (* Expliquer le raisonnement *)
+    (* Plusieurs niveaux d'explications ? *)
+    (* Message court identifiant la situation *)
+    (* Hint pour détailler. (Rappel de la syntaxe) *)
+    "Application of n-ary constructors cannot be currified, \
+     arguments should be wrapped between parentheses and comma separated" }
+
+| inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  { report_currified_constructor inner token }
+
+| / . atomic_type @ LBRACKETATAT
+  { "[@@ ...] attribute should be placed after a type (note that it attaches to the item, not to the type)" }
+
+| / . atomic_type @ LBRACKETAT
+  { "[@ ...] attribute should be placed after a type" }
+
+(************************************************)
+(* Coarse-grained but exhaustive error messages *)
+(************************************************)
 
 | /ext: PERCENT . attr_id
 | /fun_seq_expr: fun_expr SEMI PERCENT . attr_id seq_expr
