@@ -15,3 +15,9 @@
  (name ocaml_parser)
  (modules lexer parser grammar_data)
   (libraries menhirLib compiler-libs.common))
+
+(rule
+  (targets errors.ml coverage.md)
+  (deps    parser.cmly errors.lrgrep)
+  (action
+     (run lrgrep -g parser.cmly -s errors.lrgrep compile -o errors.ml --cover-report coverage.md)))
