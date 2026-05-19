@@ -93,6 +93,7 @@
         1
 
   let binop  = atom "A binary operator"
+  let minus  = atom "A minus operator"
   let decl   = atom "A declaration"
   let equal  = atom "An equals sign"
   let expr   = atom "An expression"
@@ -198,6 +199,12 @@ rule error_message = parse error (file)
 | l=LET; b=binding; i=IN
     {
       read (ldecl ++ leti) ($startpos(l), $endpos(i)) ^
+      "An expression is now expected."
+    }
+
+| o=MINUS /expr: MINUS . expr
+    {
+      read minus ($startpos(o), $endpos(o)) ^
       "An expression is now expected."
     }
 
