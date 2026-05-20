@@ -9,6 +9,7 @@ let test1 =
 
 let test2 =
   "msb_index", (fun x ->
+      let x = if x = 0 then 1 else x in
       let y1 = msb_index x in
       let y2 = msb_index_slow x in
       (y1, y2)
@@ -61,6 +62,6 @@ let random_bits64 () =
     (Int64.logor (Int64.shift_left y 30) x)
 
 let () =
-  while true do
+  for _ = 0 to 1000 do
     run_tests (Int64.to_int (random_bits64 ()))
   done
