@@ -615,7 +615,7 @@ Examples:
         let Andor.Graph agr = Andor.make grammar rcs stacks rtable in
         let Deter.Graph dgr = Deter.make grammar rcs stacks rtable agr in
         let Cover.Graph cgr = Cover.coverage grammar branches machine stacks agr dgr in
-        if not (List.is_empty cgr.sinks) then (
+        if not (list_is_empty cgr.sinks) then (
           begin match cover_report with
             | None -> ()
             | (Some (report, _)) ->

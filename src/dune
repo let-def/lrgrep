@@ -1,6 +1,7 @@
 (executable
  (name lrgrep)
  (public_name lrgrep)
+ (modules lrgrep)
  (libraries lrgrep_top))
 
 (executable

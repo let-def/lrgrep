@@ -64,7 +64,7 @@ type 'sentence block = {
 
 (*let group_lines lines =
   let cons acc result =
-    if List.is_empty acc
+    if list_is_empty acc
     then result
     else Text (List.rev acc) :: result
   in
