@@ -853,11 +853,6 @@ Examples:
         "--items", Arg.Set opt_interpret_items," Annotate each state with its items";
       ]
         ~commit:interpret_command;
-      (* command "recover" "Generate an error-resilient parser for the grammar" []
-           ~commit:(not_implemented "recover");
-         command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
-           ~commit:(not_implemented "complete");
-      *)
       command "enumerate" "Generate a negative testsuite (sentences that cover possible failures)" [
         "-a", Arg.Set opt_enum_all, " Cover all filter-reduce patterns";
         "-e", Arg.String (push opt_enum_entrypoints),
@@ -867,6 +862,13 @@ Examples:
         "-o", Arg.Set_string opt_import_output, "<file.lrgrep> Output destination";
         "--shortest", Arg.Set opt_import_shortest, " Shortest matching strategy";
       ] ~anon:set_import_message_file ~commit:import_command;
+      command "menhir-to-tree-sitter" "Generate a tree-sitter template implementing a menhir grammar" [
+      ] ~commit:(fun () -> Treesitter_gen.import !!grammar);
+      (* command "recover" "Generate an error-resilient parser for the grammar" []
+           ~commit:(not_implemented "recover");
+         command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []
+           ~commit:(not_implemented "complete");
+      *)
     ]
 
   let () =

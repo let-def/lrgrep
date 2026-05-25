@@ -102,6 +102,8 @@ module Terminal : sig
       excluding EOF, ERROR, and pseudo-terminals *)
   val regular : 'g grammar -> 'g n indexset
 
+  val kind : 'g grammar -> 'g n index -> [`REGULAR | `PSEUDO | `EOF | `ERROR]
+
   (** [semantic_value term] is [Some typ] if terminal [term] has a semantic
       value of type [typ], or [None] for unparameterized terminals. *)
   val semantic_value : 'g grammar -> 'g n index -> string option

@@ -567,6 +567,10 @@ module Terminal = struct
   (** Returns the set of regular terminals, excluding EOF, ERROR, and pseudo-terminals *)
   let regular g = g.terminal_regular
 
+  let kind g i =
+    let open (val g.raw) in
+    Terminal.kind (Terminal.of_int (Index.to_int i))
+
   (** Returns the semantic value type of a terminal *)
   let semantic_value g i =
     let open (val g.raw) in
