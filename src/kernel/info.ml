@@ -145,6 +145,10 @@ type 'g grammar = {
   reduction_production : ('g reduction, 'g production index) vector;
   reduction_lookaheads : ('g reduction, 'g terminal indexset) vector;
   reduction_from_lr1 : ('g lr1, 'g reduction indexset) vector;
+  conflicts_silent_transition : ('g lr1, ('g terminal index * 'g lr1 index) list) vector;
+  conflicts_silent_reduction : ('g lr1, ('g terminal index * 'g production index list) list) vector;
+  conflicts_severe_reduction : ('g lr1, ('g terminal index * 'g production index list) list) vector;
+  conflicts_extra_reductions : ('g lr1, ('g terminal index * 'g production index) list) vector;
 }
 
 let raw g = g.raw
@@ -495,6 +499,28 @@ struct
         ) raw
   end
 
+  module Conflicts = struct
+    let map2 f g (x, y) = (f x, g y)
+
+    let silent_transition = Vector.init Lr1.n begin fun lr1 ->
+        G.Lr1.silent_transition_conflicts (Lr1.to_g lr1)
+        |> List.map (map2 Terminal.of_g Lr1.of_g)
+      end
+    let silent_reduction  = Vector.init Lr1.n begin fun lr1 ->
+        G.Lr1.silent_reduction_conflicts (Lr1.to_g lr1)
+        |> List.map (map2 Terminal.of_g (List.map Production.of_g))
+      end
+    let severe_reduction = Vector.init Lr1.n begin fun lr1 ->
+        G.Lr1.severe_reduction_conflicts (Lr1.to_g lr1)
+        |> List.map (map2 Terminal.of_g (List.map Production.of_g))
+      end
+
+    let extra_reductions = Vector.init Lr1.n begin fun lr1 ->
+        G.Lr1.extra_reductions (Lr1.to_g lr1)
+        |> List.map (map2 Terminal.of_g Production.of_g)
+      end
+  end
+
   let grammar = {
     raw = (module G);
     terminal_n              = Terminal.n;
@@ -537,6 +563,10 @@ struct
     reduction_production    = Reduction.production;
     reduction_lookaheads    = Reduction.lookaheads;
     reduction_from_lr1      = Reduction.from_lr1;
+    conflicts_silent_transition = Conflicts.silent_transition;
+    conflicts_silent_reduction  = Conflicts.silent_reduction;
+    conflicts_severe_reduction  = Conflicts.severe_reduction;
+    conflicts_extra_reductions  = Conflicts.extra_reductions;
   }
 end
 module type INDEXED = sig
@@ -966,6 +996,20 @@ module Lr1 = struct
     match Lr1.default_reduction (Lr1.of_int (i : _ index :> int)) with
     | None -> None
     | Some p -> Some (Index.of_int (Vector.length g.production_rhs) (Production.to_int p))
+end
+
+module Conflicts = struct
+  let silent_transition_conflicts g lr1 =
+   g.conflicts_silent_transition.:(lr1)
+
+  let silent_reduction_conflicts g lr1 =
+   g.conflicts_silent_reduction.:(lr1)
+
+  let severe_reduction_conflicts g lr1 =
+   g.conflicts_severe_reduction.:(lr1)
+
+  let extra_reductions g lr1 =
+   g.conflicts_extra_reductions.:(lr1)
 end
 
 (** Reduction information.

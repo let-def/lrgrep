@@ -363,6 +363,13 @@ module Lr1 : sig
   val default_reduction : 'g grammar -> 'g n index -> 'g production index option
 end
 
+module Conflicts : sig
+  val silent_transition_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g lr1 index) list
+  val silent_reduction_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index list) list
+  val severe_reduction_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index list) list
+  val extra_reductions : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index) list
+end
+
 module Transition : sig
   (** [goto g] is the cardinality of the set of goto transitions in grammar [g] *)
   val goto : 'g grammar -> 'g goto_transition cardinal
