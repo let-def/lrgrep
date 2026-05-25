@@ -161,6 +161,128 @@ module Doc = struct
   let render o n doc = render (ref false) o n doc
 end
 
+
+(* How do we represent conflicts?
+
+   If some state present a conflict, we start by building a map of preserved
+   actions by lookahead symbol.
+*)
+
+
+module Conflict = struct
+
+  type 'g actions = {
+    shift: 'g item indexset;
+    reduce: 'g item indexset;
+  }
+
+  let get_actions map t =
+    match IndexMap.find_opt t map with
+    | Some a -> a
+    | None -> {shift = IndexSet.empty; reduce = IndexSet.empty}
+
+  let add_shift g tr map =
+    match Symbol.desc g (Transition.symbol g tr) with
+    | N _ -> map
+    | T term ->
+      let items = Lr1.items g (Transition.target g tr) in
+      IndexSet.iter (fun item -> assert (Item.position g item > 0)) items;
+      let actions = get_actions map term in
+      assert (IndexSet.is_empty actions.shift);
+      IndexMap.add term {actions with shift = items} map
+
+  let add_reduction g red map =
+    let prod = Reduction.production g red in
+    let item = Item.make g prod (Production.length g prod) in
+    IndexSet.fold begin fun term map ->
+      let actions = get_actions map term in
+      let reduce = IndexSet.add item actions.reduce in
+      IndexMap.add term {actions with reduce = reduce} map
+    end (Reduction.lookaheads g red) map
+
+  let remove_reduce g map (term, prod) =
+    let actions = get_actions map term in
+    let item = Item.make g prod (Production.length g prod) in
+    let reduce = IndexSet.remove item actions.reduce in
+    assert (reduce != actions.reduce);
+    IndexMap.add term {actions with reduce} map
+
+  type relation =
+    | Shift_over_reduce
+    | Reduce_over_shift
+    | Reduce_reduce
+
+  type 'g edge = {
+    source: 'g item index;
+    target: 'g item index;
+    relation: relation;
+  }
+
+  let register_removed_shift g map register (term, lr1) =
+    let actions = get_actions map term in
+    assert (IndexSet.is_empty actions.shift);
+    IndexSet.iter begin fun source ->
+      IndexSet.iter begin fun target ->
+        register {source; target; relation = Reduce_over_shift}
+      end actions.reduce
+    end (Lr1.items g lr1)
+
+  let register_removed_reduce g map register (term, prods) =
+    let actions = get_actions map term in
+    assert (IndexSet.is_empty actions.shift);
+    List.iter begin fun prod ->
+      let source = Item.make g prod (Production.length g prod) in
+      IndexSet.iter begin fun target ->
+        register {source; target; relation = Shift_over_reduce}
+      end actions.shift;
+      IndexSet.iter begin fun target ->
+        register {source; target; relation = Reduce_reduce}
+      end actions.reduce
+    end prods
+
+  let process_lr1 g register lr1 =
+    match
+      Conflicts.silent_transition_conflicts g lr1,
+      Conflicts.silent_reduction_conflicts g lr1
+    with
+    | [], [] -> ()
+    | removed_shift, removed_reduce ->
+      let actions =
+        IndexMap.empty
+        |> IndexSet.fold (add_shift g) (Transition.successors g lr1)
+        |> IndexSet.fold (add_reduction g) (Reduction.from_lr1 g lr1)
+      in
+      (* Remove extra ones *)
+      let actions =
+        List.fold_left (remove_reduce g)
+          actions (Conflicts.extra_reductions g lr1)
+      in
+      (* Register conflicts *)
+      List.iter
+        (register_removed_shift g actions register)
+        removed_shift;
+      List.iter
+        (register_removed_reduce g actions register)
+        removed_reduce
+
+  let solve (type g) (g : g grammar) =
+    (* Collect all conflicts by item *)
+    let conflicts = Vector.make (Item.cardinal g) [] in
+    let register edge =
+      conflicts.@(edge.source) <- List.cons edge
+    in
+    Index.iter (Lr1.cardinal g) (process_lr1 g register);
+    (* Generate SCC of the graph induced by conflicts *)
+    let (module SCC) =
+      Tarjan.indexed_scc (Item.cardinal g)
+        ~succ:(fun f i -> List.iter (fun edge -> f edge.target) conflicts.:(i))
+    in
+    (* There should be no cycles at this point, otherwise we have an untranslatable conflict *)
+    assert (Vector.for_all IndexSet.is_singleton SCC.nodes);
+    ()
+
+end
+
 module Converter = struct
   let (!!) = Doc.text
   let (^^) = Doc.join
