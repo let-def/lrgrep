@@ -863,7 +863,7 @@ Examples:
         "--shortest", Arg.Set opt_import_shortest, " Shortest matching strategy";
       ] ~anon:set_import_message_file ~commit:import_command;
       command "menhir-to-tree-sitter" "Generate a tree-sitter template implementing a menhir grammar" [
-      ] ~commit:(fun () -> Treesitter_gen.import !!grammar);
+      ] ~commit:(fun () -> Treesitter_gen.import !!grammar !!parser_name);
       (* command "recover" "Generate an error-resilient parser for the grammar" []
            ~commit:(not_implemented "recover");
          command "complete" "Generate an OCaml module that produces syntactic completion for the grammar" []

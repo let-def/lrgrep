@@ -318,7 +318,7 @@ module Converter = struct
     in
     (Option.get !entrypoint, rules)
 
-  let convert_syntax ga =
+  let convert_syntax ga basename =
     let entrypoint, rules = import_nonterminals ga in
     (*let entrypoint =
       if List.exists (fun (nt, _) -> mangled ga.g nt = "start") rules then
@@ -331,7 +331,6 @@ module Converter = struct
           ) rules
         |> Option.get
       in*)
-    let basename = Filename.remove_extension (Filename.basename Sys.argv.(1)) in
     Doc.list [
       !!"export default {\n";
       Doc.indent 2 @@ Doc.list [
@@ -350,7 +349,7 @@ module Converter = struct
     ]
 end
 
-let import g =
+let import g basename =
   let ga = analyze g in
-  let doc = Converter.convert_syntax ga in
+  let doc = Converter.convert_syntax ga basename in
   Doc.render (output_substring stdout) 0 doc
