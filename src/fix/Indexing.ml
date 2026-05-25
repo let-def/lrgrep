@@ -279,6 +279,14 @@ module Index = struct
       yield i
     done
 
+  let fold (n : 'n cardinal) (acc : 'acc) (f : 'acc -> 'n index -> 'acc) =
+    let n = cardinal n in
+    let acc = ref acc in
+    for i = 0 to n - 1 do
+      acc := f !acc i
+    done;
+    !acc
+
   let seq_init n f =
     if n < 0 then
       invalid_arg "seq_init: n < 0"

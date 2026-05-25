@@ -209,6 +209,8 @@ module Index : sig
      [\[0, n)], in decreasing order. *)
   val rev_iter : 'n cardinal -> ('n index -> unit) -> unit
 
+  val fold : 'n cardinal -> 'acc -> ('acc -> 'n index -> 'acc) -> 'acc
+
   (** [pred i] is the index immediately before [i], if [i] is non-zero *)
   val pred : 'n index -> 'n index option
 
