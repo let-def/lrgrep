@@ -528,12 +528,12 @@ module Converter = struct
     | T t -> !!(import_terminal g t)
     | N nt -> !!"$." ^^ !!(mangled g nt)
 
-  let import_producer g prod =
+  let import_producer not_optional g prod =
     match Symbol.desc g prod with
     | T t -> !!(import_terminal g t)
     | N n ->
       let doc = !!"$." ^^ !!(mangled g n) in
-      if Nonterminal.nullable g n
+      if Nonterminal.nullable g n && not not_optional
       then Doc.wrap !!"optional(" !!")" doc
       else doc
 
@@ -547,83 +547,56 @@ module Converter = struct
     | T _ -> false
     | N n -> Nonterminal.nullable g n
 
-  let import_producers ga syms tail =
-    match List.filter (symbol_nonnull ga) syms, tail with
-    | [], Some tail -> tail
-    | [], _ -> assert false
-    | [x], None -> import_raw_producer ga.g x
-    | xs, _ ->
-      let first =
-        if List.for_all (symbol_nullable ga.g) xs
-        then import_raw_producer ga.g
-        else import_producer ga.g
-      in
-      let rhs = Doc.concat !!"," ~first (import_producer ga.g) xs in
-      let rhs = match tail with
-        | None -> rhs
-        | Some tail -> rhs ^^ !!"," ^^ tail
-      in
-      Doc.wrap !!"seq(" !!")" rhs
-
-  let import_rank (kind, level) doc =
-    let lhs =
-      Printf.sprintf "%s(%d,"
-        (match kind with
-         | `Neutral -> "prec"
-         | `Left    -> "prec.left"
-         | `Right   -> "prec.right"
-         | `Invalid -> "prec")
-        (level + 1)
-    in
-    Doc.wrap !!lhs !!")" doc
-
-  let import_production ga prod =
+  let import_production ga ranks assocs prod =
     assert ga.nonnull_prod.?(prod);
-    let rhs = Production.rhs ga.g prod in
-    import_producers ga (Array.to_list rhs) None
-
-    (*let index = Production.to_int br.production in
-    let vars =
-      let get_rank (p,v) =
-        (p, Conflicts.solution.scc_rank.(Conflicts.solution.scc_of.(v)))
-      in
-      Conflicts.vars.(index)
-      |> List.sort (fun (p0,_) (p1,_) -> Int.compare p0 p1)
-      |> List.map get_rank
+    let rhs = (Production.rhs ga.g prod) in
+    let not_optional = ref (Array.for_all (symbol_nullable ga.g) rhs) in
+    let tail = ref [] in
+    let last_rank = ref (-1, Conflict.Invalid) in
+    let flush_tail () =
+      match !tail with
+      | [] -> !!"seq()"
+      | [x] -> x
+      | xs -> Doc.wrap !!"seq(" !!")" (Doc.concat !!"," Fun.id xs)
     in
-    let rec merge_ranks = function
-      | (p1,r1) :: (p2,r2) :: rest when r1 = r2 ->
-        merge_ranks ((p1,r1) :: rest)
-      | [] -> []
-      | r :: rs -> r :: merge_ranks rs
+    let flush_rank () =
+      match !tail, !last_rank with
+      | [], _ | _, (-1, _) -> ()
+      | _ ->
+        let level, assoc = !last_rank in
+        let assoc = match assoc with
+          | Left -> "prec.left"
+          | Right -> "prec.right"
+          | Invalid -> "prec.invalid"
+          | Prec-> "prec"
+        in
+        tail := [Doc.wrap !!(Printf.sprintf "%s(%d," assoc level) !!")" (flush_tail ())]
     in
-    let rec shift_ranks = function
-      | [] -> None
-      | (p,r) :: rest ->
-        match shift_ranks rest with
-        | None -> Some (r, [])
-        | Some (r', rest) -> Some (r, (p,r') :: rest)
+    let add_sym rank sym =
+      if symbol_nonnull ga sym then (
+        if rank <> !last_rank then flush_rank ();
+        tail := import_producer !not_optional ga.g sym :: !tail;
+        not_optional := false
+      );
+      last_rank := rank
+      (* Logic:
+         - if sym is not non_null, skip
+         - if (rank, assoc) <> last_rank, tail <> [] then flush_rank ()
+         - last_rank := rank, assoc
+         - if nullable && !optional
+           then tail = option(sym) :: tail
+           else tail = sym :: tail
+         - optional := false
+      *)
     in
-    let pos = ref (Array.length br.rhs) in
-    let extract pos' =
-      let result = ref [] in
-      while !pos > pos' do
-        decr pos;
-        result := br.rhs.(!pos) :: !result
-      done;
-      !result
-      in*)
-    (*match shift_ranks (merge_ranks vars) with
-    | None -> import_producers (extract 0) None
-    | Some (rank, ranks) ->
-      let tail = List.fold_right (fun (p, r) tail ->
-          Some (import_rank r (import_producers (extract p) tail))
-        ) ranks None
-      in
-      import_rank rank (import_producers (extract 0) tail)*)
+    for pos = Array.length rhs - 1 downto 0 do
+      let item = Item.make ga.g prod (pos + 1) in
+      add_sym (ranks.:(item), assocs.:(item)) rhs.(pos)
+    done;
+    flush_rank ();
+    flush_tail ()
 
-
-  let import_nonterminals ga =
+  let import_nonterminals ga ranks assocs =
     (* Pre-compute productions defining a non-terminal *)
     let nt_prods = Vector.make (Nonterminal.cardinal ga.g) IndexSet.empty in
     let entrypoint = ref None in
@@ -647,11 +620,13 @@ module Converter = struct
         if IndexSet.is_empty prods then None else Some begin
             let rhs =
               if IndexSet.is_singleton prods then
-                import_production ga (IndexSet.choose prods)
+                import_production ga ranks assocs (IndexSet.choose prods)
+
               else
                 Doc.wrap !!"choice(\n" !!"\n)"
                   (Doc.indent 2 (Doc.concat !!",\n"
-                                   (import_production ga) (IndexSet.elements prods)))
+                                   (import_production ga ranks assocs)
+                                   (IndexSet.elements prods)))
             in
             (nt, rhs)
           end
@@ -659,8 +634,8 @@ module Converter = struct
     in
     (Option.get !entrypoint, rules)
 
-  let convert_syntax ga basename =
-    let entrypoint, rules = import_nonterminals ga in
+  let convert_syntax ga ranks assocs basename =
+    let entrypoint, rules = import_nonterminals ga ranks assocs in
     (*let entrypoint =
       if List.exists (fun (nt, _) -> mangled ga.g nt = "start") rules then
         "start"
@@ -692,6 +667,6 @@ end
 
 let import g basename =
   let ga = analyze g in
-  let _ranks, _assocs = Conflict.solve g in
-  let doc = Converter.convert_syntax ga basename in
+  let ranks, assocs = Conflict.solve g in
+  let doc = Converter.convert_syntax ga ranks assocs basename in
   Doc.render (output_substring stdout) 0 doc
