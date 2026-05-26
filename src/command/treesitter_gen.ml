@@ -298,6 +298,7 @@ module Conflict = struct
     | Right
     | Prec
     | Invalid
+    | Neutral
 
   let solve (type g) (g : g grammar) =
     (* Collect all conflicts by item *)
@@ -313,63 +314,98 @@ module Conflict = struct
       Tarjan.indexed_scc (Item.cardinal g)
         ~succ:(fun f i -> List.iter (fun edge -> f edge.target) successors.:(i))
     in
-    (* There should be no cycles at this point, otherwise we have an untranslatable conflict.
-       ... Actually, there can be cycles because both a shift [A → α a .] and a
-       reduce [A → a α] are represented by the same item.
-       assert (Vector.for_all IndexSet.is_singleton SCC.nodes); *)
-    (* This could be sufficient, but the solution produced would be naive and
-       inelegant.  We will try to merge items of the same production to give
-       them a single precedence level:
-       - identify relation between items: SR (Shift/Reduce), RS (Reduce/Shift)
-         and RR (Reduce/Reduce) sets.
-       - from these sets, we can deduce the directly unmergeable items.
-       - this is a conflict graph, that we can use to color items
-       - from the coloring we get a global view of mergeable items *)
-    let scc_sr = Vector.make SCC.n IndexSet.empty in
-    let scc_rs = Vector.make SCC.n IndexSet.empty in
-    let scc_rr = Vector.make SCC.n IndexSet.empty in
-    Vector.iteri begin fun scc nodes ->
-      let sr = ref IndexSet.empty in
-      let rs = ref IndexSet.empty in
-      let rr = ref IndexSet.empty in
-      let self_sr = ref false in
-      let self_rs = ref false in
-      let self_rr = ref false in
-      IndexSet.iter begin fun node ->
-        List.iter begin fun edge ->
-          let scc' = SCC.component.:(edge.source) in
-          if Index.equal scc scc' then (
-            match edge.relation with
-            | Shift_over_reduce -> self_sr := true
-            | Reduce_over_shift -> self_rs := true
-            | Reduce_reduce     -> self_rr := true
-          ) else (
-            let inherited =
-              IndexSet.union
-                (IndexSet.union scc_sr.:(scc') scc_rs.:(scc'))
-                (IndexSet.add scc' scc_rr.:(scc'))
-            in
-            match edge.relation with
-            | Shift_over_reduce ->
-              sr := IndexSet.union !sr inherited
-            | Reduce_over_shift ->
-              rs := IndexSet.union !rs inherited
-            | Reduce_reduce     ->
-              rr := IndexSet.union !rr inherited
-          )
-        end predecessors.:(node)
-      end nodes;
-      let union () = IndexSet.add scc (IndexSet.union !sr (IndexSet.union !rs !rr)) in
-      begin match !self_sr, !self_rs, !self_rr with
-        | false, false, false -> ()
-        | true , false, false -> sr := union ()
-        | false, true , false -> rs := union ()
+    (* Associativity is enforced in non-trivial components *)
+    let assocs =
+      Vector.mapi begin fun scc nodes ->
+        let self_sr = ref false in
+        let self_rs = ref false in
+        let self_rr = ref false in
+        IndexSet.iter begin fun node ->
+          List.iter begin fun edge ->
+            let scc' = SCC.component.:(edge.source) in
+            if Index.equal scc scc' then (
+              match edge.relation with
+              | Shift_over_reduce -> self_sr := true
+              | Reduce_over_shift -> self_rs := true
+              | Reduce_reduce     -> self_rr := true
+            )
+          end predecessors.:(node)
+        end nodes;
+        match !self_sr, !self_rs, !self_rr with
+        | false, false, false -> Neutral
+        | true , false, false -> Right
+        | false, true , false -> Left
         | _ -> invalid_arg "cyclic precedences"
-      end;
-      scc_sr.:(scc) <- !sr;
-      scc_rs.:(scc) <- !rs;
-      scc_rr.:(scc) <- !rr;
+      end SCC.nodes;
+    in
+    let ranks = Vector.make SCC.n 0 in
+    (* Refine associativity for other components *)
+    Vector.iteri begin fun scc nodes ->
+      let assoc = match assocs.:(scc) with
+        | Neutral ->
+          let left = ref 0 in
+          let right = ref 0 in
+          let visit edge node =
+            let scc' = SCC.component.:(node) in
+            if not (Index.equal scc scc') then
+              match edge.relation, assocs.:(scc') with
+              | Shift_over_reduce, (Neutral | Right) -> incr right
+              | Reduce_over_shift, (Neutral | Left) -> incr left
+              | _ -> ()
+          in
+          let visit_source edge = visit edge edge.source in
+          let visit_target edge = visit edge edge.target in
+          let visit_all arr f node = List.iter f arr.:(node) in
+          IndexSet.iter (visit_all predecessors visit_source) nodes;
+          IndexSet.iter (visit_all successors visit_target) nodes;
+          if !left > !right
+          then Left
+          else Right
+        | assoc -> assoc
+      in
+      assocs.:(scc) <- assoc;
+      let rank = IndexSet.fold begin fun node rank ->
+          List.fold_left begin fun rank edge ->
+            let scc' = SCC.component.:(edge.source) in
+            if Index.equal scc scc' then
+              rank
+            else
+              let rank' = ranks.:(scc') in
+              let rank' = match assocs.:(scc'), assoc with
+                | Left, Left  | Right, Right -> rank'
+                | Left, Right | Right, Left -> rank' + 1
+                | _ -> assert false
+              in
+              Int.max rank rank'
+          end rank predecessors.:(node)
+        end nodes 0
+      in
+      ranks.:(scc) <- rank
     end SCC.nodes;
+    let it_ranks = Vector.make (Item.cardinal g) (-1) in
+    let it_assoc = Vector.make (Item.cardinal g) Prec in
+    Vector.iteri begin fun scc nodes ->
+      let rank = ranks.:(scc) and assoc = assocs.:(scc) in
+      IndexSet.iter begin fun node ->
+        it_ranks.:(node) <- rank;
+        it_assoc.:(node) <- assoc;
+      end nodes
+    end SCC.nodes;
+    Index.iter (Production.cardinal g) begin fun prod ->
+      let rank = ref (-1) in
+      let assoc = ref Prec in
+      for i = Production.length g prod - 1 downto 1 do
+        let item = Item.make g prod i in
+        if it_ranks.:(item) = -1 then (
+          it_ranks.:(item) <- !rank;
+          it_assoc.:(item) <- !assoc;
+        ) else (
+          rank := it_ranks.:(item);
+          assoc := it_assoc.:(item);
+        )
+      done
+    end;
+    (it_ranks, it_assoc)
 
     (* (\* Generate conflict graphs *\) *)
     (* let conflicts = Vector.init SCC.n begin fun scc -> *)
@@ -571,7 +607,8 @@ module Converter = struct
           | Left -> "prec.left"
           | Right -> "prec.right"
           | Invalid -> "prec.invalid"
-          | Prec-> "prec"
+          | Prec -> "prec"
+          | Neutral -> "prec"
         in
         tail := [Doc.wrap !!(Printf.sprintf "%s(%d," assoc level) !!")" (flush_tail ())]
     in
