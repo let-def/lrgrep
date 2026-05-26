@@ -364,7 +364,7 @@ module Lr1 : sig
 end
 
 module Conflicts : sig
-  val silent_transition_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g lr1 index) list
+  val silent_transition_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * ('g lr1, 'g lr0) Sum.n index) list
   val silent_reduction_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index list) list
   val severe_reduction_conflicts : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index list) list
   val extra_reductions : 'g grammar -> 'g lr1 index -> ('g terminal index * 'g production index) list

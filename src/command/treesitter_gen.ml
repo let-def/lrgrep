@@ -218,14 +218,16 @@ module Conflict = struct
     relation: relation;
   }
 
-  let register_removed_shift g map register (term, lr1) =
+  let register_removed_shift g map register (term, state) =
     let actions = get_actions map term in
     assert (IndexSet.is_empty actions.shift);
     IndexSet.iter begin fun source ->
       IndexSet.iter begin fun target ->
         register {source; target; relation = Reduce_over_shift}
       end actions.reduce
-    end (Lr1.items g lr1)
+    end (match Sum.prj (Lr1.cardinal g) state with
+        | L lr1 -> Lr1.items g lr1
+        | R lr0 -> Lr0.items g lr0)
 
   let register_removed_reduce g map register (term, prods) =
     let actions = get_actions map term in

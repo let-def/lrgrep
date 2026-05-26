@@ -145,7 +145,7 @@ type 'g grammar = {
   reduction_production : ('g reduction, 'g production index) vector;
   reduction_lookaheads : ('g reduction, 'g terminal indexset) vector;
   reduction_from_lr1 : ('g lr1, 'g reduction indexset) vector;
-  conflicts_silent_transition : ('g lr1, ('g terminal index * 'g lr1 index) list) vector;
+  conflicts_silent_transition : ('g lr1, ('g terminal index * ('g lr1, 'g lr0) Sum.n index) list) vector;
   conflicts_silent_reduction : ('g lr1, ('g terminal index * 'g production index list) list) vector;
   conflicts_severe_reduction : ('g lr1, ('g terminal index * 'g production index list) list) vector;
   conflicts_extra_reductions : ('g lr1, ('g terminal index * 'g production index) list) vector;
@@ -504,7 +504,12 @@ struct
 
     let silent_transition = Vector.init Lr1.n begin fun lr1 ->
         G.Lr1.silent_transition_conflicts (Lr1.to_g lr1)
-        |> List.map (map2 Terminal.of_g Lr1.of_g)
+        |> List.map (fun (t, lr) ->
+            Terminal.of_g t,
+            match lr with
+            | Either.Right lr1 -> Sum.inj_l (Lr1.of_g lr1)
+            | Either.Left lr0 -> Sum.inj_r Lr1.n (Lr0.of_g lr0)
+          )
       end
     let silent_reduction  = Vector.init Lr1.n begin fun lr1 ->
         G.Lr1.silent_reduction_conflicts (Lr1.to_g lr1)
