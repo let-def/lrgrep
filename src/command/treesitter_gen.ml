@@ -368,138 +368,139 @@ module Conflict = struct
       scc_rs.:(scc) <- !rs;
       scc_rr.:(scc) <- !rr;
     end SCC.nodes;
-    (* Generate conflict graphs *)
-    let conflicts = Vector.init SCC.n begin fun scc ->
-        (* What is incompatible ?
-           -> sccs that are reachable via rr
-           -> sccs that are reachable via sr and rs *)
-        IndexSet.fused_inter_union ~acc:scc_rr.:(scc) scc_sr.:(scc) scc_rs.:(scc)
-      end
-    in
-    (* Make the graph undirected *)
-    begin
-      let conflicts' = Vector.make SCC.n IndexSet.empty in
-      Vector.rev_iteri begin fun scc sccs ->
-        IndexSet.iter (fun scc' -> conflicts'.@(scc') <- IndexSet.add scc) sccs
-      end conflicts;
-      Vector.iteri begin fun scc sccs' ->
-        conflicts.@(scc) <- IndexSet.union sccs'
-      end conflicts';
-    end;
-    (* Sanity check: no loops *)
-    Vector.iteri (fun scc sccs -> assert (not (IndexSet.mem scc sccs))) conflicts;
-    (* Coloration *)
-    let colors = Vector.make SCC.n (-1) in
-    (* Process sccs with more constraints first; Welsh-Powell heuristic *)
-    let arr = Vector.as_array (Vector.mapi (fun scc sccs -> (scc, IndexSet.cardinal sccs, sccs)) conflicts) in
-    Array.sort (fun (_,c1,_) (_,c2,_) -> Int.compare c2 c1) arr;
-    Array.iter begin fun (scc,count,sccs) ->
-      if count > 0 then begin
-        let check_color c = IndexSet.for_all (fun scc' -> colors.:(scc') <> c) sccs in
-        let c = ref 0 in
-        while not (check_color !c) do incr c done;
-        colors.:(scc) <- !c;
-      end
-    end arr;
-    (* Now we are ready to merge items :) *)
-    let uf = UF.make (Item.cardinal g) in
-    Index.iter (Production.cardinal g) begin fun prod ->
-      let color = ref (-1) in
-      for i = 1 to Production.length g prod do
-        let item = Item.make g prod i in
-        if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin
-          let scc = SCC.component.:(item) in
-          let color' = colors.:(scc) in
-          if color' = -1
-          then colors.:(scc) <- !color
-          else color := color'
-        end
-      done;
-      color := (-1);
-      let ritem = ref None in
-      for i = 1 to Production.length g prod do
-        let item = Item.make g prod i in
-        if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin
-          let scc = SCC.component.:(item) in
-          let color' = colors.:(scc) in
-          if color' = !color then begin
-            match !ritem with
-            | None -> ()
-            | Some item' -> UF.union uf item item'
-          end;
-          color := color';
-          ritem := Some item;
-        end
-      done
-    end;
-    (* Ok, the union-find gives merged items... *)
-    (* Compute a last SCC before attributing ranks *)
-    let successors2 = Vector.make (Item.cardinal g) [] in
-    Vector.iteri begin fun item successors ->
-      let item' = UF.find uf item in
-      successors2.@(item') <- List.cons successors
-    end successors;
-    let (module SCC2) = Tarjan.indexed_scc (Item.cardinal g)
-        ~succ:(fun f i -> List.iter (List.iter (fun edge -> f edge.target)) successors2.:(i))
-    in
-    (* Now we have all that is needed to compute ranks *)
-    let ranks = Vector.make SCC2.n 0 in
-    let assocs =
-      (* For each SCC, compute the rank based on predecessors (and built-in nodes) *)
-      Vector.mapi begin fun scc nodes ->
-        let level = ref (-1) in
-        let self_sr = ref false in
-        let self_rs = ref false in
-        let self_rr = ref false in
-        IndexSet.iter begin fun node ->
-          List.iter begin fun edge ->
-            let scc' = SCC2.component.:(edge.source) in
-            if Index.equal scc scc' then (
-              match edge.relation with
-              | Shift_over_reduce -> self_sr := true
-              | Reduce_over_shift -> self_rs := true
-              | Reduce_reduce     -> self_rr := true
-            ) else
-              level := Int.max !level ranks.:(scc')
-          end predecessors.:(node)
-        end nodes;
-        let assoc = match !self_sr, !self_rs, !self_rr with
-          | false, false, false -> Prec
-          | true , false, false -> Right
-          | false, true , false -> Left
-          | _ ->
-            Printf.eprintf "self_sr:%b self_rs:%b self_rr:%b\n"
-              !self_sr !self_rs !self_rr;
-            Invalid
-        in
-        ranks.:(scc) <- (!level + 1);
-        assoc
-      end SCC2.nodes
-    in
-    let it_ranks = Vector.make (Item.cardinal g) (-1) in
-    let it_assoc = Vector.make (Item.cardinal g) Prec in
-    Vector.iteri begin fun scc nodes ->
-      let rank = ranks.:(scc) and assoc = assocs.:(scc) in
-      IndexSet.iter begin fun node ->
-        it_ranks.:(node) <- rank;
-        it_assoc.:(node) <- assoc;
-      end nodes
-    end SCC2.nodes;
-    Index.iter (Production.cardinal g) begin fun prod ->
-      let rank = ref (-1) in
-      let assoc = ref Prec in
-      for i = Production.length g prod - 1 downto 1 do
-        let item = Item.make g prod i in
-        if it_ranks.:(item) = -1 then (
-          it_ranks.:(item) <- !rank;
-          it_assoc.:(item) <- !assoc;
-        ) else (
-          rank := it_ranks.:(item);
-          assoc := it_assoc.:(item);
-        )
-      done
-    end;
-    (it_ranks, it_assoc)
+
+    (* (\* Generate conflict graphs *\) *)
+    (* let conflicts = Vector.init SCC.n begin fun scc -> *)
+    (*     (\* What is incompatible ? *)
+    (*        -> sccs that are reachable via rr *)
+    (*        -> sccs that are reachable via sr and rs *\) *)
+    (*     IndexSet.fused_inter_union ~acc:scc_rr.:(scc) scc_sr.:(scc) scc_rs.:(scc) *)
+    (*   end *)
+    (* in *)
+    (* (\* Make the graph undirected *\) *)
+    (* begin *)
+    (*   let conflicts' = Vector.make SCC.n IndexSet.empty in *)
+    (*   Vector.rev_iteri begin fun scc sccs -> *)
+    (*     IndexSet.iter (fun scc' -> conflicts'.@(scc') <- IndexSet.add scc) sccs *)
+    (*   end conflicts; *)
+    (*   Vector.iteri begin fun scc sccs' -> *)
+    (*     conflicts.@(scc) <- IndexSet.union sccs' *)
+    (*   end conflicts'; *)
+    (* end; *)
+    (* (\* Sanity check: no loops *\) *)
+    (* Vector.iteri (fun scc sccs -> assert (not (IndexSet.mem scc sccs))) conflicts; *)
+    (* (\* Coloration *\) *)
+    (* let colors = Vector.make SCC.n (-1) in *)
+    (* (\* Process sccs with more constraints first; Welsh-Powell heuristic *\) *)
+    (* let arr = Vector.as_array (Vector.mapi (fun scc sccs -> (scc, IndexSet.cardinal sccs, sccs)) conflicts) in *)
+    (* Array.sort (fun (_,c1,_) (_,c2,_) -> Int.compare c2 c1) arr; *)
+    (* Array.iter begin fun (scc,count,sccs) -> *)
+    (*   if count > 0 then begin *)
+    (*     let check_color c = IndexSet.for_all (fun scc' -> colors.:(scc') <> c) sccs in *)
+    (*     let c = ref 0 in *)
+    (*     while not (check_color !c) do incr c done; *)
+    (*     colors.:(scc) <- !c; *)
+    (*   end *)
+    (* end arr; *)
+    (* (\* Now we are ready to merge items :) *\) *)
+    (* let uf = UF.make (Item.cardinal g) in *)
+    (* Index.iter (Production.cardinal g) begin fun prod -> *)
+    (*   let color = ref (-1) in *)
+    (*   for i = 1 to Production.length g prod do *)
+    (*     let item = Item.make g prod i in *)
+    (*     if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin *)
+    (*       let scc = SCC.component.:(item) in *)
+    (*       let color' = colors.:(scc) in *)
+    (*       if color' = -1 *)
+    (*       then colors.:(scc) <- !color *)
+    (*       else color := color' *)
+    (*     end *)
+    (*   done; *)
+    (*   color := (-1); *)
+    (*   let ritem = ref None in *)
+    (*   for i = 1 to Production.length g prod do *)
+    (*     let item = Item.make g prod i in *)
+    (*     if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin *)
+    (*       let scc = SCC.component.:(item) in *)
+    (*       let color' = colors.:(scc) in *)
+    (*       if color' = !color then begin *)
+    (*         match !ritem with *)
+    (*         | None -> () *)
+    (*         | Some item' -> UF.union uf item item' *)
+    (*       end; *)
+    (*       color := color'; *)
+    (*       ritem := Some item; *)
+    (*     end *)
+    (*   done *)
+    (* end; *)
+    (* (\* Ok, the union-find gives merged items... *\) *)
+    (* (\* Compute a last SCC before attributing ranks *\) *)
+    (* let successors2 = Vector.make (Item.cardinal g) [] in *)
+    (* Vector.iteri begin fun item successors -> *)
+    (*   let item' = UF.find uf item in *)
+    (*   successors2.@(item') <- List.cons successors *)
+    (* end successors; *)
+    (* let (module SCC2) = Tarjan.indexed_scc (Item.cardinal g) *)
+    (*     ~succ:(fun f i -> List.iter (List.iter (fun edge -> f edge.target)) successors2.:(i)) *)
+    (* in *)
+    (* (\* Now we have all that is needed to compute ranks *\) *)
+    (* let ranks = Vector.make SCC2.n 0 in *)
+    (* let assocs = *)
+    (*   (\* For each SCC, compute the rank based on predecessors (and built-in nodes) *\) *)
+    (*   Vector.mapi begin fun scc nodes -> *)
+    (*     let level = ref (-1) in *)
+    (*     let self_sr = ref false in *)
+    (*     let self_rs = ref false in *)
+    (*     let self_rr = ref false in *)
+    (*     IndexSet.iter begin fun node -> *)
+    (*       List.iter begin fun edge -> *)
+    (*         let scc' = SCC2.component.:(edge.source) in *)
+    (*         if Index.equal scc scc' then ( *)
+    (*           match edge.relation with *)
+    (*           | Shift_over_reduce -> self_sr := true *)
+    (*           | Reduce_over_shift -> self_rs := true *)
+    (*           | Reduce_reduce     -> self_rr := true *)
+    (*         ) else *)
+    (*           level := Int.max !level ranks.:(scc') *)
+    (*       end predecessors.:(node) *)
+    (*     end nodes; *)
+    (*     let assoc = match !self_sr, !self_rs, !self_rr with *)
+    (*       | false, false, false -> Prec *)
+    (*       | true , false, false -> Right *)
+    (*       | false, true , false -> Left *)
+    (*       | _ -> *)
+    (*         Printf.eprintf "self_sr:%b self_rs:%b self_rr:%b\n" *)
+    (*           !self_sr !self_rs !self_rr; *)
+    (*         Invalid *)
+    (*     in *)
+    (*     ranks.:(scc) <- (!level + 1); *)
+    (*     assoc *)
+    (*   end SCC2.nodes *)
+    (* in *)
+    (* let it_ranks = Vector.make (Item.cardinal g) (-1) in *)
+    (* let it_assoc = Vector.make (Item.cardinal g) Prec in *)
+    (* Vector.iteri begin fun scc nodes -> *)
+    (*   let rank = ranks.:(scc) and assoc = assocs.:(scc) in *)
+    (*   IndexSet.iter begin fun node -> *)
+    (*     it_ranks.:(node) <- rank; *)
+    (*     it_assoc.:(node) <- assoc; *)
+    (*   end nodes *)
+    (* end SCC2.nodes; *)
+    (* Index.iter (Production.cardinal g) begin fun prod -> *)
+    (*   let rank = ref (-1) in *)
+    (*   let assoc = ref Prec in *)
+    (*   for i = Production.length g prod - 1 downto 1 do *)
+    (*     let item = Item.make g prod i in *)
+    (*     if it_ranks.:(item) = -1 then ( *)
+    (*       it_ranks.:(item) <- !rank; *)
+    (*       it_assoc.:(item) <- !assoc; *)
+    (*     ) else ( *)
+    (*       rank := it_ranks.:(item); *)
+    (*       assoc := it_assoc.:(item); *)
+    (*     ) *)
+    (*   done *)
+    (* end; *)
+    (* (it_ranks, it_assoc) *)
 end
 
 module Converter = struct
