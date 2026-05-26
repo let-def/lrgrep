@@ -382,6 +382,24 @@ module Conflict = struct
       in
       ranks.:(scc) <- rank
     end SCC.nodes;
+    (* Cleanup unused associativity *)
+    Vector.iteri begin fun scc nodes ->
+      let used =
+        let rank = ranks.:(scc) in
+        let visit node =
+          ranks.:(SCC.component.:(node)) = rank
+        in
+        let visit_source edge = visit edge.source in
+        let visit_target edge = visit edge.target in
+        let visit_all arr f node = List.exists f arr.:(node) in
+        (* Associativity is used if we have one successor or predecessor with
+           the same rank *)
+        IndexSet.exists (visit_all predecessors visit_source) nodes ||
+        IndexSet.exists (visit_all successors visit_target) nodes
+      in
+      if not used then
+        assocs.:(scc) <- Prec;
+    end SCC.nodes;
     let it_ranks = Vector.make (Item.cardinal g) (-1) in
     let it_assoc = Vector.make (Item.cardinal g) Prec in
     Vector.iteri begin fun scc nodes ->
