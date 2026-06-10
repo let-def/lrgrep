@@ -161,6 +161,181 @@ module Doc = struct
   let render o n doc = render (ref false) o n doc
 end
 
+module Bridges = struct
+  type 'b bridge = {
+    mutable burned: bool;
+    mutable succ_l: 'b IndexSet.t;
+    mutable succ_r: 'b IndexSet.t;
+    mutable pred_l: 'b IndexSet.t;
+    mutable pred_r: 'b IndexSet.t;
+  }
+
+  let new_bridge () = {
+    burned = false;
+    succ_l = IndexSet.empty;
+    succ_r = IndexSet.empty;
+    pred_l = IndexSet.empty;
+    pred_r = IndexSet.empty;
+  }
+
+  let make_base (type n b) (c : n cardinal) : (n, (n, b) Sum.n bridge) vector =
+    Vector.init c  (fun _ -> new_bridge ())
+
+  let connect_l ia ba ib bb =
+    ba.succ_l <- IndexSet.add ib ba.succ_l;
+    bb.pred_l <- IndexSet.add ia bb.pred_l
+
+  let connect_r ia ba ib bb =
+    ba.succ_r <- IndexSet.add ib ba.succ_r;
+    bb.pred_r <- IndexSet.add ia bb.pred_r
+
+  let add_bridge (type n b)
+      (base : (n, (n, b) Sum.n bridge) vector)
+      (gen : (b, (n, b) Sum.n bridge) IndexBuffer.Gen.t)
+      ia ib
+    =
+    let open IndexBuffer in
+    let b = new_bridge () in
+    let i = Sum.inj_r (Vector.length base) (Gen.add gen b) in
+    let connect i' =
+      let b' = base.:(i') in
+      let i' = Sum.inj_l i' in
+      if IndexSet.is_not_empty b'.succ_l || IndexSet.is_not_empty b'.pred_l then (
+        connect_l i b i' b';
+        connect_l i' b' i b;
+      );
+      if IndexSet.is_not_empty b'.succ_r || IndexSet.is_not_empty b'.pred_r then (
+        connect_r i b i' b';
+        connect_r i' b' i b;
+      )
+    in
+    connect ia;
+    connect ib;
+    (i, b)
+
+  let connect_l (type n b) (base : (n, (n, b) Sum.n bridge) vector) ia ib =
+    connect_l (Sum.inj_l ia) base.:(ia) (Sum.inj_l ib) base.:(ib)
+
+  let connect_r (type n b) (base : (n, (n, b) Sum.n bridge) vector) ia ib =
+    connect_r (Sum.inj_l ia) base.:(ia) (Sum.inj_l ib) base.:(ib)
+
+  let solve (type b) (burnable : b index -> bool) (bridges : (b, b bridge) vector) =
+    let cleanable = ref [] in
+    let eliminate i =
+      let b = bridges.:(i) in
+      begin
+        if IndexSet.is_empty b.pred_l && IndexSet.is_empty b.succ_l then
+          (* Merge R *)
+          IndexSet.rev_iter begin fun i_0 ->
+            let b_0 = bridges.:(i_0) in
+            IndexSet.rev_iter begin fun i_1 ->
+              let b_1 = bridges.:(i_1) in
+              b_0.succ_r <- IndexSet.add i_1 b_0.succ_r;
+              b_1.pred_r <- IndexSet.add i_0 b_1.pred_r;
+            end b.succ_r
+          end b.pred_r
+        else if IndexSet.is_empty b.pred_r && IndexSet.is_empty b.succ_r then
+          (* Merge L *)
+          IndexSet.rev_iter begin fun i_0 ->
+            let b_0 = bridges.:(i_0) in
+            IndexSet.rev_iter begin fun i_1 ->
+              let b_1 = bridges.:(i_1) in
+              b_0.succ_l <- IndexSet.add i_1 b_0.succ_l;
+              b_1.pred_l <- IndexSet.add i_0 b_1.pred_l;
+            end b.succ_l
+          end b.pred_l
+        else if not (IndexSet.is_empty b.pred_l && IndexSet.is_empty b.pred_r) ||
+                not (IndexSet.is_empty b.succ_l && IndexSet.is_empty b.succ_r) then
+          (* Burn (Mixed LR) *)
+          b.burned <- true
+      end; (* Unregister *)
+      begin
+        IndexSet.iter begin fun pred ->
+          let b' = bridges.:(pred) in
+          b'.succ_l <- IndexSet.remove i b'.succ_l;
+          if IndexSet.is_empty b'.succ_l && IndexSet.is_empty b'.succ_r then
+            push cleanable pred;
+        end b.pred_l;
+        IndexSet.iter begin fun succ ->
+          let b' = bridges.:(succ) in
+          b'.pred_l <- IndexSet.remove i b'.pred_l;
+          if IndexSet.is_empty b'.pred_l && IndexSet.is_empty b'.pred_r then
+            push cleanable succ;
+        end b.succ_l;
+        IndexSet.iter begin fun pred ->
+          let b' = bridges.:(pred) in
+          b'.succ_r <- IndexSet.remove i b'.succ_r;
+          if IndexSet.is_empty b'.succ_l && IndexSet.is_empty b'.succ_r then
+            push cleanable pred;
+        end b.pred_r;
+        IndexSet.iter begin fun succ ->
+          let b' = bridges.:(succ) in
+          b'.pred_r <- IndexSet.remove i b'.pred_r;
+          if IndexSet.is_empty b'.pred_l && IndexSet.is_empty b'.pred_r then
+            push cleanable succ;
+        end b.succ_r
+      end;
+      b.pred_l <- IndexSet.empty;
+      b.succ_l <- IndexSet.empty;
+      b.pred_r <- IndexSet.empty;
+      b.succ_r <- IndexSet.empty;
+    in
+    Vector.iteri (fun i b ->
+        if (IndexSet.is_empty b.succ_l && IndexSet.is_empty b.succ_r) ||
+           (IndexSet.is_empty b.pred_l && IndexSet.is_empty b.pred_r) then
+          eliminate i
+      ) bridges;
+    let rec cleanup () =
+      match !cleanable with
+      | [] -> ()
+      | cleanable' ->
+        cleanable := [];
+        List.iter eliminate cleanable';
+        cleanup ()
+    in
+    cleanup ();
+    let eval i =
+      let b = bridges.:(i) in
+      IndexSet.cardinal b.pred_l * IndexSet.cardinal b.succ_r +
+      IndexSet.cardinal b.pred_r * IndexSet.cardinal b.succ_l
+    in
+    let select (w, _ as candidate) i =
+      let w' = eval i in
+      if w' > w then
+        (w', i)
+      else
+        candidate
+    in
+    let oc = open_out "bridges.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
+    let edge label i j = p "  b%d -> b%d[label=%S];" (Index.to_int i) (Index.to_int j) label in
+    Vector.iteri begin fun i b ->
+      if burnable i then (
+        IndexSet.iter (edge "L" i) b.succ_l;
+        IndexSet.iter (edge "R" i) b.succ_r;
+      )
+    end bridges;
+    p "}";
+    let rec eliminate_remaining = function
+      | [] -> ()
+      | x :: xs ->
+        let _, selected = List.fold_left select (eval x, x) xs in
+        eliminate selected;
+        cleanup ();
+        let remaining = List.filter (fun x -> if eval x = 0 then (eliminate x; false) else true) (x :: xs) in
+        eliminate_remaining remaining
+    in
+    let candidates =
+      Vector.fold_lefti (fun acc i b ->
+          cons_if (burnable i &&
+                   not (IndexSet.is_empty b.pred_l && IndexSet.is_empty b.pred_r))
+            i acc)
+        [] bridges
+    in
+    eliminate_remaining candidates
+
+end
 
 (* How do we represent conflicts?
 
@@ -266,33 +441,6 @@ module Conflict = struct
         (register_removed_reduce g actions register)
         removed_reduce
 
-  module UF : sig
-    type 'n t
-    val make : 'n cardinal -> 'n t
-    val find : 'n t -> 'n index -> 'n index
-    val union : 'n t -> 'n index -> 'n index -> unit
-  end = struct
-    type 'n t = ('n, 'n index) vector
-    let make n = Vector.init n Fun.id
-
-    let rec find t i =
-      let i' = t.:(i) in
-      if i != i' then
-        let i'' = find t i' in
-        if i'' != i' then
-          t.:(i) <- i'';
-        i''
-      else
-        i'
-
-    let union t i j =
-      let i = find t i and j = find t j in
-      if i < j then
-        t.:(j) <- i
-      else if j < i then
-        t.:(i) <- j
-  end
-
   type associativity =
     | Left
     | Right
@@ -301,18 +449,64 @@ module Conflict = struct
     | Neutral
 
   let solve (type g) (g : g grammar) =
+    let items = Item.cardinal g in
     (* Collect all conflicts by item *)
-    let successors = Vector.make (Item.cardinal g) [] in
-    let predecessors = Vector.make (Item.cardinal g) [] in
+    let successors = Vector.make items [] in
+    let predecessors = Vector.make items [] in
+    (* Lift representation to bridge base *)
+    let module B = IndexBuffer.Gen.Make() in
+    let base = Bridges.make_base items in
+    (* Initialize arrays *)
     let register edge =
       successors.@(edge.source) <- List.cons edge;
-      predecessors.@(edge.target) <- List.cons edge
+      predecessors.@(edge.target) <- List.cons edge;
+      match edge.relation with
+      | Shift_over_reduce -> Bridges.connect_r base edge.source edge.target
+      | Reduce_over_shift -> Bridges.connect_l base edge.source edge.target
+      | Reduce_reduce ->
+        Bridges.connect_l base edge.source edge.target;
+        Bridges.connect_r base edge.source edge.target
     in
     Index.iter (Lr1.cardinal g) (process_lr1 g register);
+    (* Represent merging candidates as bridges *)
+    let bridges = B.get_generator () in
+    let item_bridges = Vector.make items [] in
+    let _ = Index.fold items None begin fun acc item ->
+        if List.is_empty successors.:(item) &&
+           List.is_empty predecessors.:(item) then
+          (* Skip unused items *)
+          acc
+        else (
+          begin match acc with
+            | Some item'
+              when (Index.equal (Item.production g item) (Item.production g item'))       ->
+              (* Item from same production: new bridge! *)
+              let _, b = Bridges.add_bridge base bridges item item' in
+              item_bridges.@(item) <- List.cons (b, item');
+              item_bridges.@(item') <- List.cons (b, item)
+            | _ -> ()
+          end;
+          Some item
+        )
+      end
+    in
+    let bridges = IndexBuffer.Gen.freeze bridges in
+    Bridges.solve
+      (fun i -> match Sum.prj items i with L _ -> false | R _ -> true)
+      (Vector.concat base bridges);
+    let burned = ref 0 in
+    Vector.iter (fun b -> if b.Bridges.burned then incr burned) bridges;
+    Printf.eprintf "Bridges burned: %d/%d\n" !burned (Vector.length_as_int bridges);
     (* Generate SCC of the graph induced by conflicts *)
     let (module SCC) =
-      Tarjan.indexed_scc (Item.cardinal g)
-        ~succ:(fun f i -> List.iter (fun edge -> f edge.target) successors.:(i))
+      Tarjan.indexed_scc items
+        ~succ:(fun f i ->
+            List.iter (fun edge -> f edge.target) successors.:(i);
+            List.iter (fun (bridge,target) ->
+                if not bridge.Bridges.burned then
+                  f target
+              ) item_bridges.:(i)
+          )
     in
     (* Associativity is enforced in non-trivial components *)
     let assocs =
@@ -400,8 +594,8 @@ module Conflict = struct
       if not used then
         assocs.:(scc) <- Prec;
     end SCC.nodes;
-    let it_ranks = Vector.make (Item.cardinal g) (-1) in
-    let it_assoc = Vector.make (Item.cardinal g) Prec in
+    let it_ranks = Vector.make items (-1) in
+    let it_assoc = Vector.make items Prec in
     Vector.iteri begin fun scc nodes ->
       let rank = ranks.:(scc) and assoc = assocs.:(scc) in
       IndexSet.iter begin fun node ->
@@ -424,139 +618,6 @@ module Conflict = struct
       done
     end;
     (it_ranks, it_assoc)
-
-    (* (\* Generate conflict graphs *\) *)
-    (* let conflicts = Vector.init SCC.n begin fun scc -> *)
-    (*     (\* What is incompatible ? *)
-    (*        -> sccs that are reachable via rr *)
-    (*        -> sccs that are reachable via sr and rs *\) *)
-    (*     IndexSet.fused_inter_union ~acc:scc_rr.:(scc) scc_sr.:(scc) scc_rs.:(scc) *)
-    (*   end *)
-    (* in *)
-    (* (\* Make the graph undirected *\) *)
-    (* begin *)
-    (*   let conflicts' = Vector.make SCC.n IndexSet.empty in *)
-    (*   Vector.rev_iteri begin fun scc sccs -> *)
-    (*     IndexSet.iter (fun scc' -> conflicts'.@(scc') <- IndexSet.add scc) sccs *)
-    (*   end conflicts; *)
-    (*   Vector.iteri begin fun scc sccs' -> *)
-    (*     conflicts.@(scc) <- IndexSet.union sccs' *)
-    (*   end conflicts'; *)
-    (* end; *)
-    (* (\* Sanity check: no loops *\) *)
-    (* Vector.iteri (fun scc sccs -> assert (not (IndexSet.mem scc sccs))) conflicts; *)
-    (* (\* Coloration *\) *)
-    (* let colors = Vector.make SCC.n (-1) in *)
-    (* (\* Process sccs with more constraints first; Welsh-Powell heuristic *\) *)
-    (* let arr = Vector.as_array (Vector.mapi (fun scc sccs -> (scc, IndexSet.cardinal sccs, sccs)) conflicts) in *)
-    (* Array.sort (fun (_,c1,_) (_,c2,_) -> Int.compare c2 c1) arr; *)
-    (* Array.iter begin fun (scc,count,sccs) -> *)
-    (*   if count > 0 then begin *)
-    (*     let check_color c = IndexSet.for_all (fun scc' -> colors.:(scc') <> c) sccs in *)
-    (*     let c = ref 0 in *)
-    (*     while not (check_color !c) do incr c done; *)
-    (*     colors.:(scc) <- !c; *)
-    (*   end *)
-    (* end arr; *)
-    (* (\* Now we are ready to merge items :) *\) *)
-    (* let uf = UF.make (Item.cardinal g) in *)
-    (* Index.iter (Production.cardinal g) begin fun prod -> *)
-    (*   let color = ref (-1) in *)
-    (*   for i = 1 to Production.length g prod do *)
-    (*     let item = Item.make g prod i in *)
-    (*     if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin *)
-    (*       let scc = SCC.component.:(item) in *)
-    (*       let color' = colors.:(scc) in *)
-    (*       if color' = -1 *)
-    (*       then colors.:(scc) <- !color *)
-    (*       else color := color' *)
-    (*     end *)
-    (*   done; *)
-    (*   color := (-1); *)
-    (*   let ritem = ref None in *)
-    (*   for i = 1 to Production.length g prod do *)
-    (*     let item = Item.make g prod i in *)
-    (*     if not (List.is_empty successors.:(item) && List.is_empty predecessors.:(item)) then begin *)
-    (*       let scc = SCC.component.:(item) in *)
-    (*       let color' = colors.:(scc) in *)
-    (*       if color' = !color then begin *)
-    (*         match !ritem with *)
-    (*         | None -> () *)
-    (*         | Some item' -> UF.union uf item item' *)
-    (*       end; *)
-    (*       color := color'; *)
-    (*       ritem := Some item; *)
-    (*     end *)
-    (*   done *)
-    (* end; *)
-    (* (\* Ok, the union-find gives merged items... *\) *)
-    (* (\* Compute a last SCC before attributing ranks *\) *)
-    (* let successors2 = Vector.make (Item.cardinal g) [] in *)
-    (* Vector.iteri begin fun item successors -> *)
-    (*   let item' = UF.find uf item in *)
-    (*   successors2.@(item') <- List.cons successors *)
-    (* end successors; *)
-    (* let (module SCC2) = Tarjan.indexed_scc (Item.cardinal g) *)
-    (*     ~succ:(fun f i -> List.iter (List.iter (fun edge -> f edge.target)) successors2.:(i)) *)
-    (* in *)
-    (* (\* Now we have all that is needed to compute ranks *\) *)
-    (* let ranks = Vector.make SCC2.n 0 in *)
-    (* let assocs = *)
-    (*   (\* For each SCC, compute the rank based on predecessors (and built-in nodes) *\) *)
-    (*   Vector.mapi begin fun scc nodes -> *)
-    (*     let level = ref (-1) in *)
-    (*     let self_sr = ref false in *)
-    (*     let self_rs = ref false in *)
-    (*     let self_rr = ref false in *)
-    (*     IndexSet.iter begin fun node -> *)
-    (*       List.iter begin fun edge -> *)
-    (*         let scc' = SCC2.component.:(edge.source) in *)
-    (*         if Index.equal scc scc' then ( *)
-    (*           match edge.relation with *)
-    (*           | Shift_over_reduce -> self_sr := true *)
-    (*           | Reduce_over_shift -> self_rs := true *)
-    (*           | Reduce_reduce     -> self_rr := true *)
-    (*         ) else *)
-    (*           level := Int.max !level ranks.:(scc') *)
-    (*       end predecessors.:(node) *)
-    (*     end nodes; *)
-    (*     let assoc = match !self_sr, !self_rs, !self_rr with *)
-    (*       | false, false, false -> Prec *)
-    (*       | true , false, false -> Right *)
-    (*       | false, true , false -> Left *)
-    (*       | _ -> *)
-    (*         Printf.eprintf "self_sr:%b self_rs:%b self_rr:%b\n" *)
-    (*           !self_sr !self_rs !self_rr; *)
-    (*         Invalid *)
-    (*     in *)
-    (*     ranks.:(scc) <- (!level + 1); *)
-    (*     assoc *)
-    (*   end SCC2.nodes *)
-    (* in *)
-    (* let it_ranks = Vector.make (Item.cardinal g) (-1) in *)
-    (* let it_assoc = Vector.make (Item.cardinal g) Prec in *)
-    (* Vector.iteri begin fun scc nodes -> *)
-    (*   let rank = ranks.:(scc) and assoc = assocs.:(scc) in *)
-    (*   IndexSet.iter begin fun node -> *)
-    (*     it_ranks.:(node) <- rank; *)
-    (*     it_assoc.:(node) <- assoc; *)
-    (*   end nodes *)
-    (* end SCC2.nodes; *)
-    (* Index.iter (Production.cardinal g) begin fun prod -> *)
-    (*   let rank = ref (-1) in *)
-    (*   let assoc = ref Prec in *)
-    (*   for i = Production.length g prod - 1 downto 1 do *)
-    (*     let item = Item.make g prod i in *)
-    (*     if it_ranks.:(item) = -1 then ( *)
-    (*       it_ranks.:(item) <- !rank; *)
-    (*       it_assoc.:(item) <- !assoc; *)
-    (*     ) else ( *)
-    (*       rank := it_ranks.:(item); *)
-    (*       assoc := it_assoc.:(item); *)
-    (*     ) *)
-    (*   done *)
-    (* end; *)
-    (* (it_ranks, it_assoc) *)
 end
 
 module Converter = struct

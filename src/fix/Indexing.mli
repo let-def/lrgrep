@@ -327,6 +327,8 @@ module Vector : sig
   val to_seq : (_, 'a) t -> 'a Seq.t
   val to_seqi : ('n, 'a) t -> ('n index * 'a) Seq.t
 
+  val concat : ('n, 'a) t -> ('m, 'a) t -> (('n, 'm) Sum.n, 'a) t
+
   type 'a packed = Packed : (_, 'a) vector -> 'a packed
   val of_array : 'a array -> 'a packed
   val of_list : 'a list -> 'a packed
