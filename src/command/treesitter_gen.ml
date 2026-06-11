@@ -370,6 +370,7 @@ end
 
 module Bridges = struct
   type 'b bridge = {
+    id: int;
     mutable burned: bool;
     mutable succ_l: 'b IndexSet.t;
     mutable succ_r: 'b IndexSet.t;
@@ -377,7 +378,10 @@ module Bridges = struct
     mutable pred_r: 'b IndexSet.t;
   }
 
+  let count = ref 0
+
   let new_bridge () = {
+    id = (incr count; !count);
     burned = false;
     succ_l = IndexSet.empty;
     succ_r = IndexSet.empty;
@@ -399,25 +403,33 @@ module Bridges = struct
   let add_bridge (type n b)
       (base : (n, (n, b) Sum.n bridge) vector)
       (gen : (b, (n, b) Sum.n bridge) IndexBuffer.Gen.t)
-      ia ib
+      i0 i1
     =
     let open IndexBuffer in
     let b = new_bridge () in
     let i = Sum.inj_r (Vector.length base) (Gen.add gen b) in
-    let connect i' =
-      let b' = base.:(i') in
-      let i' = Sum.inj_l i' in
-      if IndexSet.is_not_empty b'.succ_l || IndexSet.is_not_empty b'.pred_l then (
-        connect_l i b i' b';
-        connect_l i' b' i b;
-      );
-      if IndexSet.is_not_empty b'.succ_r || IndexSet.is_not_empty b'.pred_r then (
-        connect_r i b i' b';
-        connect_r i' b' i b;
-      )
-    in
-    connect ia;
-    connect ib;
+    let b0 = base.:(i0) and b1 = base.:(i1) in
+    let i0 = Sum.inj_l i0 and i1 = Sum.inj_l i1 in
+    let l0 = IndexSet.is_not_empty b0.pred_l in
+    let r0 = IndexSet.is_not_empty b0.pred_r in
+    let l1 = IndexSet.is_not_empty b1.pred_l in
+    let r1 = IndexSet.is_not_empty b1.pred_r in
+    if l0 then (
+      connect_l i0 b0 i b;
+      connect_l i b i1 b1;
+    );
+    if r0 then (
+      connect_r i0 b0 i b;
+      connect_r i b i1 b1;
+    );
+    if l1 then (
+      connect_l i1 b1 i b;
+      connect_l i b i0 b0;
+    );
+    if r1 then (
+      connect_r i1 b1 i b;
+      connect_r i b i0 b0;
+    );
     (i, b)
 
   let connect_l (type n b) (base : (n, (n, b) Sum.n bridge) vector) ia ib =
@@ -716,6 +728,9 @@ module Conflict = struct
           )
     in
     (* Associativity is enforced in non-trivial components *)
+    let oc = open_out_bin "conflicts.dot" in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
+    p "digraph G {";
     let assocs =
       Vector.mapi begin fun scc nodes ->
         let self_sr = ref false in
@@ -736,9 +751,31 @@ module Conflict = struct
         | false, false, false -> Neutral
         | true , false, false -> Right
         | false, true , false -> Left
-        | _ -> invalid_arg "cyclic precedences"
+        | _ ->
+          IndexSet.iter begin fun node ->
+            p "  p%d[label=%S];" (Index.to_int node) (Item.to_string g node);
+            List.iter begin fun edge ->
+              let scc' = SCC.component.:(edge.source) in
+              if Index.equal scc scc' then (
+                p "  p%d -> p%d[label=%S];" (Index.to_int edge.source) (Index.to_int node)
+                  (match edge.relation with
+                   | Shift_over_reduce -> "R"
+                   | Reduce_over_shift -> "L"
+                   | Reduce_reduce -> "LR")
+              )
+            end predecessors.:(node);
+            List.iter (fun (bridge,_target) ->
+                if not bridge.Bridges.burned then (
+                  p "  p%d -> b%d [dir=both];\n" (Index.to_int node) bridge.id;
+                );
+              ) item_bridges.:(node)
+          end nodes;
+          Invalid
+          (*invalid_arg "cyclic precedences"*)
       end SCC.nodes;
     in
+    p "}";
+    close_out oc;
     let ranks = Vector.make SCC.n 0 in
     (* Refine associativity for other components *)
     Vector.iteri begin fun scc nodes ->
