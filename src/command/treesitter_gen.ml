@@ -577,7 +577,7 @@ module Conflict = struct
     in
     let bridge_count, bridges = Merger.solve merger in
     let burned = ref 0 in
-    Index.iter bridge_count (fun b -> if Boolvector.test bridges b then incr burned);
+    Index.iter bridge_count (fun b -> if bridges.?(b) then incr burned);
     Printf.eprintf "Bridges burned: %d/%d\n" !burned (cardinal bridge_count);
     (* Generate SCC of the graph induced by conflicts *)
     let (module SCC) =
@@ -585,7 +585,7 @@ module Conflict = struct
         ~succ:(fun f i ->
             List.iter (fun edge -> f edge.target) successors.:(i);
             List.iter (fun (bridge,target) ->
-                if not (Boolvector.test bridges bridge) then
+                if not bridges.?(bridge) then
                   f target
               ) item_bridges.:(i)
           )
@@ -628,7 +628,7 @@ module Conflict = struct
               )
             end predecessors.:(node);
             List.iter (fun (bridge,_target) ->
-                if not (Boolvector.test bridges bridge) then (
+                if not bridges.?(bridge) then (
                   p "  p%d -> b%d [dir=both];\n" (Index.to_int node) (Index.to_int bridge);
                 );
               ) item_bridges.:(node)
