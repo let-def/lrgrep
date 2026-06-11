@@ -279,6 +279,12 @@ end = struct
      (no_pred_l && no_succ_l) || (no_pred_r && no_succ_r)) &&
     not (no_pred_l && no_pred_r && no_succ_l && no_succ_r)
 
+  let eliminated edges i =
+    IndexSet.is_empty edges.pred_l.:(i) &&
+    IndexSet.is_empty edges.pred_r.:(i) &&
+    IndexSet.is_empty edges.succ_l.:(i) &&
+    IndexSet.is_empty edges.succ_r.:(i)
+
   let solve t =
       let empty = Vector.make t.count IndexSet.empty in
       let edges = {
@@ -301,13 +307,11 @@ end = struct
           p "  p%d -> p%d [label=%S];" (Index.to_int i) (Index.to_int j) label
         in
         Index.iter (Vector.length edges.pred_l) begin fun i ->
-          if IndexSet.is_not_empty edges.pred_l.:(i) ||
-             IndexSet.is_not_empty edges.pred_r.:(i) ||
-             IndexSet.is_not_empty edges.succ_l.:(i) ||
-             IndexSet.is_not_empty edges.succ_r.:(i) then
+          if not (eliminated edges i) then (
             pnode i;
-          IndexSet.iter (pedge i "L") edges.succ_l.:(i);
-          IndexSet.iter (pedge i "R") edges.succ_r.:(i)
+            IndexSet.iter (pedge i "L") edges.succ_l.:(i);
+            IndexSet.iter (pedge i "R") edges.succ_r.:(i)
+          );
         end;
         p "}";
         close_out oc
@@ -385,10 +389,7 @@ end = struct
       let remaining = ref [] in
       Index.iter t.count (fun b ->
           let i = Sum.inj_r n b in
-          if IndexSet.is_not_empty edges.pred_l.:(i) ||
-             IndexSet.is_not_empty edges.pred_r.:(i) ||
-             IndexSet.is_not_empty edges.succ_l.:(i) ||
-             IndexSet.is_not_empty edges.succ_r.:(i) then
+          if not (eliminated edges i) then
             push remaining i
         );
       Printf.eprintf "remaining: %d\n" (List.length !remaining);
@@ -399,10 +400,11 @@ end = struct
          - try again *)
       (* Improve heuristic, avoid "crossing" candidates *)
       let eval i =
-        IndexSet.cardinal edges.pred_l.:(i) *
-        IndexSet.cardinal edges.succ_r.:(i) +
-        IndexSet.cardinal edges.pred_r.:(i) *
-        IndexSet.cardinal edges.succ_l.:(i)
+        let pl = IndexSet.cardinal edges.pred_l.:(i) in
+        let sr = IndexSet.cardinal edges.succ_r.:(i) in
+        let pr = IndexSet.cardinal edges.pred_r.:(i) in
+        let sl = IndexSet.cardinal edges.succ_l.:(i) in
+        pl * sr + pr * sl + Int.max pl sr + Int.max pr sl
       in
       let rec loop = function
         | [] -> ()
@@ -414,7 +416,7 @@ end = struct
           let _, x = List.fold_left select (eval x, x) xs in
           burn_bridge x;
           cleanup ();
-          let remaining = List.filter (fun x -> eval x > 0) remaining in
+          let remaining = List.filter (fun x -> not (eliminated edges x)) remaining in
           loop remaining
       in
       loop !remaining;
