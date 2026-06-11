@@ -161,6 +161,213 @@ module Doc = struct
   let render o n doc = render (ref false) o n doc
 end
 
+module Merger : sig
+
+  type ('n, 'b) _t
+  type 'n t = T : ('n, 'b) _t -> 'n t
+
+  val make : 'n cardinal -> 'n t
+  val link_left : ('n, 'b) _t -> 'n index -> 'n index -> unit
+  val link_right : ('n, 'b) _t -> 'n index -> 'n index -> unit
+  val bridge : ('n, 'b) _t -> 'n index -> 'n index -> 'b index
+
+  val solve : ('n, 'b) _t -> 'b Boolvector.t
+end = struct
+
+  type ('n, 'm) edges = {
+    succ_l: ('n, 'm indexset) vector;
+    succ_r: ('n, 'm indexset) vector;
+    pred_l: ('n, 'm indexset) vector;
+    pred_r: ('n, 'm indexset) vector;
+  }
+
+  type ('n, 'b) _t = {
+    edges: ('n, ('n, 'b) Sum.n) edges;
+    bridges: ('n, ('n, 'b) Sum.n indexset) vector;
+    count: 'b cardinal;
+    fresh: unit -> 'b index;
+  }
+
+  type 'n t = T : ('n, 'b) _t -> 'n t
+
+  let make_edges (type n) (n : n cardinal) =
+    let succ_l = Vector.make n IndexSet.empty in
+    let succ_r = Vector.make n IndexSet.empty in
+    let pred_l = Vector.make n IndexSet.empty in
+    let pred_r = Vector.make n IndexSet.empty in
+    {succ_l; succ_r; pred_l; pred_r}
+
+  let make (type n) (n : n cardinal) =
+    let module B = Gensym() in
+    let edges = make_edges n in
+    let bridges = Vector.make n IndexSet.empty in
+    T {edges; bridges; count=B.n; fresh=B.fresh}
+
+  let bridge t i1 i2 =
+    let b = t.fresh () in
+    let n = Vector.length t.edges.pred_l in
+    t.bridges.@(i1) <- IndexSet.add (Sum.inj_r n b);
+    t.bridges.@(i2) <- IndexSet.add (Sum.inj_r n b);
+    b
+
+  let link_left t i1 i2 =
+    t.edges.succ_l.@(i1) <- IndexSet.add (Sum.inj_l i2);
+    t.edges.pred_l.@(i2) <- IndexSet.add (Sum.inj_l i1)
+
+  let link_right t i1 i2 =
+    t.edges.succ_r.@(i1) <- IndexSet.add (Sum.inj_l i2);
+    t.edges.pred_r.@(i2) <- IndexSet.add (Sum.inj_l i1)
+
+  let link_l v i1 i2 =
+    v.succ_l.@(i1) <- IndexSet.add i2;
+    v.pred_l.@(i2) <- IndexSet.add i1
+
+  let link_r v i1 i2 =
+    v.succ_r.@(i1) <- IndexSet.add i2;
+    v.pred_r.@(i2) <- IndexSet.add i1
+
+  let iter' i s f =
+    IndexSet.iter (fun i' -> if not (Index.equal i i') then f i) s
+
+  (* Iterate connections node *)
+  let iter_connections unregister v i =
+    IndexSet.iter (unregister v.pred_l) v.succ_l.:(i);
+    IndexSet.iter (unregister v.pred_r) v.succ_r.:(i);
+    IndexSet.iter (unregister v.succ_l) v.pred_l.:(i);
+    IndexSet.iter (unregister v.succ_r) v.pred_r.:(i)
+
+  (* Connect predecessors to successors *)
+  let eliminate unregister v bridges i =
+    let pred_l = v.pred_l.:(i) and succ_l = v.succ_l.:(i) in
+    let pred_r = v.pred_r.:(i) and succ_r = v.succ_r.:(i) in
+    let self_l = IndexSet.mem i pred_l in
+    let self_r = IndexSet.mem i pred_r in
+    (* Follow left links *)
+    iter' i pred_l begin fun prev_l ->
+      iter' i succ_l begin fun next_l ->
+        link_l v prev_l next_l;
+        if self_r then
+          link_r v prev_l next_l;
+      end;
+      IndexSet.iter begin fun bridge ->
+        link_l v prev_l bridge;
+        if self_r then
+          link_r v prev_l bridge;
+      end bridges;
+    end;
+    (* Follow right links *)
+    iter' i pred_r begin fun prev_r ->
+      iter' i succ_r begin fun next_r ->
+        link_r v prev_r next_r;
+        if self_l then
+          link_l v prev_r next_r;
+      end;
+      IndexSet.iter begin fun bridge ->
+        link_r v prev_r bridge;
+        if self_l then
+          link_l v prev_r bridge;
+      end bridges;
+    end;
+    iter_connections unregister v i
+
+  (* Trivial bridges:
+     - strictly-l or strictly-r: doesn't contribute to LR cycles
+     - 0-in-degree or 0-out-degree (Khan algorithm) *)
+  let can_eliminate edges i =
+    let no_pred_l = IndexSet.is_empty edges.pred_l.:(i) in
+    let no_pred_r = IndexSet.is_empty edges.pred_r.:(i) in
+    let no_succ_l = IndexSet.is_empty edges.succ_l.:(i) in
+    let no_succ_r = IndexSet.is_empty edges.succ_r.:(i) in
+    (* equiv: (no_pred_l || no_succ_r) && (no_pred_r || no_succ_l) *)
+    ((no_pred_l && no_pred_r) || (no_succ_l && no_succ_r) ||
+     (no_pred_l && no_succ_l) || (no_pred_r && no_succ_r)) &&
+    not (no_pred_l && no_pred_r && no_succ_l && no_succ_r)
+
+  let solve t =
+      let empty = Vector.make t.count IndexSet.empty in
+      let edges = {
+        succ_l = Vector.concat t.edges.succ_l empty;
+        succ_r = Vector.concat t.edges.succ_r empty;
+        pred_l = Vector.concat t.edges.pred_l empty;
+        pred_r = Vector.concat t.edges.pred_r empty;
+      } in
+      let n = Vector.length t.edges.pred_l in
+      Index.iter n (fun i0 ->
+          let i = Sum.inj_l i0 in
+          let unregister_node arr j = arr.@(j) <- IndexSet.remove i in
+          eliminate unregister_node edges t.bridges.:(i0) i
+        );
+      let burned = Boolvector.make t.count false in
+      let todo = ref [] in
+      let unregister_bridge i arr j =
+        let s = IndexSet.remove i arr.:(j) in
+        arr.:(j) <- s;
+        if IndexSet.is_empty s && can_eliminate edges i then
+          push todo i
+      in
+      let burn_bridge i =
+        match Sum.prj n i with
+        | L _ -> assert false
+        | R b ->
+          Boolvector.set burned b;
+          iter_connections (unregister_bridge i) edges i
+      in
+      let eliminate_bridge i =
+        eliminate (unregister_bridge i) edges IndexSet.empty i
+      in
+      let rec cleanup () =
+        match !todo with
+        | [] -> ()
+        | todo' ->
+          todo := [];
+          List.iter eliminate_bridge todo';
+          cleanup ()
+      in
+      Index.iter t.count (fun b ->
+          let i = Sum.inj_r n b in
+          if can_eliminate edges i then
+            eliminate_bridge i
+        );
+      cleanup ();
+      (* Collect remaining bridges *)
+      let remaining = ref [] in
+      Index.iter t.count (fun b ->
+          let i = Sum.inj_r n b in
+          if IndexSet.is_not_empty edges.pred_l.:(i) ||
+             IndexSet.is_not_empty edges.pred_r.:(i) ||
+             IndexSet.is_not_empty edges.succ_l.:(i) ||
+             IndexSet.is_not_empty edges.succ_r.:(i) then
+            push remaining i
+        );
+      (* Core loop:
+         - pick a remaining candidate maximizing some heuristic
+         - burn it
+         - cleanup remaining candidates
+         - try again *)
+      (* Improve heuristic, avoid "crossing" candidates *)
+      let eval i =
+        IndexSet.cardinal edges.pred_l.:(i) *
+        IndexSet.cardinal edges.succ_r.:(i) +
+        IndexSet.cardinal edges.pred_r.:(i) *
+        IndexSet.cardinal edges.succ_l.:(i)
+      in
+      let rec loop = function
+        | [] -> ()
+        | x :: xs as remaining ->
+          let select (hx, _ as acc) y =
+            let hy = eval y in
+            if hy > hx then (hy, y) else acc
+          in
+          let _, x = List.fold_left select (eval x, x) xs in
+          burn_bridge x;
+          cleanup ();
+          let remaining = List.filter (fun x -> eval x > 0) remaining in
+          loop remaining
+      in
+      loop !remaining;
+      burned
+end
+
 module Bridges = struct
   type 'b bridge = {
     mutable burned: bool;
