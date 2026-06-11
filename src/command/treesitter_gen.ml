@@ -631,8 +631,7 @@ module Conflict = struct
                 );
               ) item_bridges.:(node)
           end nodes;
-          Invalid
-          (*invalid_arg "cyclic precedences"*)
+          invalid_arg "cyclic precedences"
       end SCC.nodes;
     in
     p "}";
@@ -784,7 +783,7 @@ module Converter = struct
     in
     let flush_rank () =
       match !tail, !last_rank with
-      | [], _ | _, (-1, _) -> ()
+      | [], _ | _, (-1, _) | _, (0, (Prec | Neutral)) -> ()
       | _ ->
         let level, assoc = !last_rank in
         let assoc = match assoc with
