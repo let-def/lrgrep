@@ -171,7 +171,7 @@ module Merger : sig
   val link_right : ('n, 'b) _t -> 'n index -> 'n index -> unit
   val bridge : ('n, 'b) _t -> 'n index -> 'n index -> 'b index
 
-  val solve : ('n, 'b) _t -> 'b cardinal * 'b Boolvector.t
+  val solve : ('n, 'b) _t -> 'b cardinal * 'b indexset
 end = struct
 
   type ('n, 'm) edges = {
@@ -298,6 +298,11 @@ end = struct
         | L i -> "N" ^ string_of_index i
         | R i -> "B" ^ string_of_index i
       in
+      let get_bridge i =
+        match Sum.prj n i with
+        | L _ -> assert false
+        | R b -> b
+      in
       let dump_graph name =
         let oc = open_out name in
         let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
@@ -318,24 +323,27 @@ end = struct
       in
       dump_graph "g0_input.dot";
       (* Link bridges *)
-      Vector.iteri (fun i bs ->
-          if IndexSet.cardinal bs > 0 then
-            Printf.eprintf "bridges: %d\n" (IndexSet.cardinal bs);
+      let bridge_col = ref [] in
+      Vector.iteri begin fun i bs ->
+        if IndexSet.is_not_empty bs then begin
+          if not (IndexSet.is_singleton bs) then
+            bridge_col := IndexSet.map get_bridge bs :: !bridge_col;
+          Printf.eprintf "bridges: %d\n" (IndexSet.cardinal bs);
           let i = Sum.inj_l i in
           link2 edges i edges.pred_l.:(i) link_l bs;
           link2 edges i edges.pred_r.:(i) link_r bs;
           link2 edges i bs link_l edges.succ_l.:(i);
           link2 edges i bs link_r edges.succ_r.:(i);
-          IndexSet.iter (fun b ->
-              Printf.eprintf "node %s has links (%d,%d,%d,%d)\n"
-                (node_name b)
-                (IndexSet.cardinal edges.pred_l.:(b))
-                (IndexSet.cardinal edges.pred_r.:(b))
-                (IndexSet.cardinal edges.succ_l.:(b))
-                (IndexSet.cardinal edges.succ_r.:(b))
-
-            ) bs;
-        ) t.bridges;
+          IndexSet.iter begin fun b ->
+            Printf.eprintf "node %s has links (%d,%d,%d,%d)\n"
+              (node_name b)
+              (IndexSet.cardinal edges.pred_l.:(b))
+              (IndexSet.cardinal edges.pred_r.:(b))
+              (IndexSet.cardinal edges.succ_l.:(b))
+              (IndexSet.cardinal edges.succ_r.:(b))
+          end bs;
+        end;
+      end t.bridges;
       dump_graph "g1_bridged.dot";
       (* Eliminate nodes *)
       Index.iter n (fun i0 ->
@@ -347,7 +355,7 @@ end = struct
           eliminate unregister_node edges i
         );
       dump_graph "g2_eliminated.dot";
-      let burned = Boolvector.make t.count false in
+      let burned = ref IndexSet.empty in
       let todo = ref [] in
       let unregister_bridge i arr j =
         assert (IndexSet.mem i arr.:(j));
@@ -360,15 +368,13 @@ end = struct
         eliminate (unregister_bridge i) edges i
       in
       let burn_bridge i =
-        match Sum.prj n i with
-        | L _ -> assert false
-        | R b ->
-          Boolvector.set burned b;
-          iter_connections (unregister_bridge i) edges i;
-          edges.pred_l.:(i) <- IndexSet.empty;
-          edges.pred_r.:(i) <- IndexSet.empty;
-          edges.succ_l.:(i) <- IndexSet.empty;
-          edges.succ_r.:(i) <- IndexSet.empty
+        let b = get_bridge i in
+        burned := IndexSet.add b !burned;
+        iter_connections (unregister_bridge i) edges i;
+        edges.pred_l.:(i) <- IndexSet.empty;
+        edges.pred_r.:(i) <- IndexSet.empty;
+        edges.succ_l.:(i) <- IndexSet.empty;
+        edges.succ_r.:(i) <- IndexSet.empty
       in
       let rec cleanup () =
         match !todo with
@@ -399,28 +405,85 @@ end = struct
          - cleanup remaining candidates
          - try again *)
       (* Improve heuristic, avoid "crossing" candidates *)
-      let eval i =
+      let eval2 b =
+        let i = Sum.inj_r n b in
         let pl = IndexSet.cardinal edges.pred_l.:(i) in
         let sr = IndexSet.cardinal edges.succ_r.:(i) in
         let pr = IndexSet.cardinal edges.pred_r.:(i) in
         let sl = IndexSet.cardinal edges.succ_l.:(i) in
+        pl + sr + pr + sl
+      in
+      let evals bs =
+        let evala arr =
+          IndexSet.empty
+          |> IndexSet.fold (fun b s -> IndexSet.union arr.:(Sum.inj_r n b) s) bs
+          |> IndexSet.cardinal
+        in
+        let pl = evala edges.pred_l in
+        let sr = evala edges.succ_r in
+        let pr = evala edges.pred_r in
+        let sl = evala edges.succ_l in
         pl * sr + pr * sl + Int.max pl sr + Int.max pr sl
+      in
+      (* UF *)
+      let repr = Vector.init t.count Fun.id in
+      let rec find i =
+        let i' = repr.:(i) in
+        if i = i' then i else
+          let i'' = find i' in
+          if i' <> i'' then
+            repr.:(i) <- i'';
+          i''
+      in
+      let union i j =
+        let i = find i and j = find j in
+        if i <> j then repr.:(i) <- j
+      in
+      let cluster = Vector.make t.count IndexSet.empty in
+      let group remaining =
+        (* Reset UF *)
+        let clear b =
+          repr.:(b) <- b;
+          cluster.:(b) <- IndexSet.empty
+        in
+        List.iter (fun i -> clear (get_bridge i)) remaining;
+        bridge_col := List.filter_map (fun b ->
+            let b = IndexSet.diff b !burned in
+            if IndexSet.is_empty b then None else (
+              IndexSet.iter clear b;
+              Some b
+            )
+          ) !bridge_col;
+        List.iter (fun bs -> IndexSet.iter (union (IndexSet.choose bs)) bs) !bridge_col;
+        List.iter (fun x -> let x = get_bridge x in cluster.@(find x) <- IndexSet.add x) remaining;
+        List.filter_map (fun x -> let x = get_bridge x in if x = find x then Some cluster.:(x) else None) remaining
       in
       let rec loop = function
         | [] -> ()
-        | x :: xs as remaining ->
-          let select (hx, _ as acc) y =
-            let hy = eval y in
-            if hy > hx then (hy, y) else acc
-          in
-          let _, x = List.fold_left select (eval x, x) xs in
-          burn_bridge x;
-          cleanup ();
-          let remaining = List.filter (fun x -> not (eliminated edges x)) remaining in
-          loop remaining
+        | remaining ->
+          match group remaining with
+          | [] -> assert false
+          | x :: xs ->
+            let select (hx, _ as acc) y =
+              let hy = evals y in
+              if hy > hx then (hy, y) else acc
+            in
+            let _, xs = List.fold_left select (evals x, x) xs in
+            let x = IndexSet.choose x in
+            let x =
+              if IndexSet.is_singleton xs then x
+              else (
+                (* Select best representative *)
+                snd (IndexSet.fold (fun b (c, _ as acc) -> let c' = eval2 b in if c' > c then (c', b) else acc) xs (0, x))
+              )
+            in
+            burn_bridge (Sum.inj_r n x);
+            cleanup ();
+            let remaining = List.filter (fun x -> not (eliminated edges x)) remaining in
+            loop remaining
       in
       loop !remaining;
-      (t.count, burned)
+      (t.count, !burned)
 end
 
 (* How do we represent conflicts?
@@ -584,7 +647,7 @@ module Conflict = struct
     in
     let bridge_count, bridges = Merger.solve merger in
     let burned = ref 0 in
-    Index.iter bridge_count (fun b -> if bridges.?(b) then incr burned);
+    Index.iter bridge_count (fun b -> if IndexSet.mem b bridges then incr burned);
     Printf.eprintf "Bridges burned: %d/%d\n" !burned (cardinal bridge_count);
     (* Generate SCC of the graph induced by conflicts *)
     let (module SCC) =
@@ -592,7 +655,7 @@ module Conflict = struct
         ~succ:(fun f i ->
             List.iter (fun edge -> f edge.target) successors.:(i);
             List.iter (fun (bridge,target) ->
-                if not bridges.?(bridge) then
+                if not (IndexSet.mem bridge bridges) then
                   f target
               ) item_bridges.:(i)
           )
@@ -635,7 +698,7 @@ module Conflict = struct
               )
             end predecessors.:(node);
             List.iter (fun (bridge,_target) ->
-                if not bridges.?(bridge) then (
+                if not (IndexSet.mem bridge bridges) then (
                   p "  p%d -> b%d [dir=both];\n" (Index.to_int node) (Index.to_int bridge);
                 );
               ) item_bridges.:(node)
