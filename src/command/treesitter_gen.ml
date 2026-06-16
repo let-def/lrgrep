@@ -446,15 +446,23 @@ module Conflict = struct
     match Symbol.desc g (Transition.symbol g tr) with
     | N _ -> map
     | T term ->
-      let items = Lr1.items g (Transition.target g tr) in
-      IndexSet.iter (fun item -> assert (Item.position g item > 0)) items;
+      let items = Lr1.items g (Transition.source g tr) in
+      let items = IndexSet.filter (fun it ->
+          let prod, pos = Item.desc g it in
+          let rhs = Production.rhs g prod in
+          pos < Array.length rhs &&
+          match Symbol.desc g rhs.(pos) with
+          | T term' -> Index.equal term term'
+          | N nt -> IndexSet.mem term (Nonterminal.first g nt)
+        ) items
+      in
       let actions = get_actions map term in
       assert (IndexSet.is_empty actions.shift);
       IndexMap.add term {actions with shift = items} map
 
   let add_reduction g red map =
     let prod = Reduction.production g red in
-    let item = Item.make g prod (Production.length g prod) in
+    let item = Item.make g prod (Production.length g prod - 1) in
     IndexSet.fold begin fun term map ->
       let actions = get_actions map term in
       let reduce = IndexSet.add item actions.reduce in
@@ -463,8 +471,7 @@ module Conflict = struct
 
   let remove_reduce g map (term, prod) =
     let actions = get_actions map term in
-    let item = Item.make g prod (Production.length g prod) in
-    let reduce = IndexSet.remove item actions.reduce in
+    let reduce = IndexSet.remove (Item.last g prod) actions.reduce in
     assert (reduce != actions.reduce);
     IndexMap.add term {actions with reduce} map
 
@@ -493,7 +500,7 @@ module Conflict = struct
   let register_removed_reduce g map register (term, prods) =
     let actions = get_actions map term in
     List.iter begin fun prod ->
-      let source = Item.make g prod (Production.length g prod) in
+      let source = Item.last g prod in
       IndexSet.iter begin fun target ->
         register {source; target; relation = Shift_over_reduce}
       end actions.shift;
@@ -786,8 +793,7 @@ module Converter = struct
     let flush_rank () =
       match !tail, !last_rank with
       | [], _ | _, (-1, _) | _, (0, (Prec | Neutral)) -> ()
-      | _ ->
-        let level, assoc = !last_rank in
+      | _, (level, assoc) ->
         let assoc = match assoc with
           | Left -> "prec.left"
           | Right -> "prec.right"
