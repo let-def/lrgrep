@@ -1,5 +1,5 @@
 (library
  (name lrgrep_top)
  (public_name lrgrep.top)
- (modules lrgrep_top message_file interpreter treesitter_gen)
+ (modules lrgrep_top message_file interpreter treesitter_gen bridge_burner bridge_maker)
  (libraries cmon fix front kernel menhirSdk support utils valmari))
