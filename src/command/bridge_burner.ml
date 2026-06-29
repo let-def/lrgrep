@@ -101,7 +101,7 @@ let clear_relations t b =
   clear_relation t b t.bridges t.bridges
 
 let contract t b =
-  IndexSet.iter (remove_element t b t.bridges) t.bridges.:(b);
+  assert (IndexSet.is_empty t.bridges.:(b));
   let pred_l = t.pred_l.:(b) in
   let succ_l = t.succ_l.:(b) in
   let pred_r = t.pred_r.:(b) in
