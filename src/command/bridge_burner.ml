@@ -101,7 +101,6 @@ let clear_relations t b =
   clear_relation t b t.bridges t.bridges
 
 let contract t b =
-  assert (IndexSet.is_empty t.bridges.:(b));
   let pred_l = t.pred_l.:(b) in
   let succ_l = t.succ_l.:(b) in
   let pred_r = t.pred_r.:(b) in
@@ -139,19 +138,20 @@ let uf_union t i j =
   let i = uf_find t i and j = uf_find t j in
   if i <> j then t.repr.:(i) <- j
 
-let fold_clusters t remaining acc f =
+let fold_clusters t ~iter acc f =
   (* Reset *)
-  List.iter (fun b -> t.repr.:(b) <- b; t.cluster.:(b) <- IndexSet.empty) remaining;
+  iter (fun b -> t.repr.:(b) <- b; t.cluster.:(b) <- IndexSet.empty);
   (* Union *)
-  List.iter (fun b -> IndexSet.iter (uf_union t b) t.bridges.:(b)) remaining;
+  iter (fun b -> IndexSet.iter (uf_union t b) t.bridges.:(b));
   (* Cluster *)
-  List.iter (fun b -> t.cluster.@(uf_find t b) <- IndexSet.add b) remaining;
+  iter (fun b -> t.cluster.@(uf_find t b) <- IndexSet.add b);
   (* Return *)
-  List.fold_left (fun acc b ->
-      if Index.equal b (uf_find t b)
-      then f t.cluster.:(b) acc
-      else acc
-    ) acc remaining
+  let acc = ref acc in
+  iter begin fun b ->
+    if Index.equal b (uf_find t b) then
+      acc := f t.cluster.:(b) !acc
+  end;
+  !acc
 
 let solve t =
   let n = Vector.length t.bridges in
@@ -183,27 +183,42 @@ let solve t =
     then x
     else snd (IndexSet.fold (select eval_element) cluster (0, x))
   in
-  (* Phase 1: break internal loops *)
+  let iter remaining f = List.iter f remaining in
+  (* Phase 1: simplify trivial clusters, break ones with internal loops *)
   begin
     let break_internal cluster acc =
       if IndexSet.is_singleton cluster then
         acc
       else if
+        (* Contract trivial cluster *)
+        let in_l_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.pred_l.:(b)) cluster in
+        let in_r_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.pred_r.:(b)) cluster in
+        let out_l_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.succ_l.:(b)) cluster in
+        let out_r_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.succ_r.:(b)) cluster in
+        (in_l_0 && in_r_0) || (out_l_0 && out_r_0) || (in_l_0 && out_l_0) || (in_r_0 && out_r_0)
+      then (
+        IndexSet.iter (contract t) cluster;
+        List.filter (fun b -> not (IndexSet.mem b cluster)) acc
+      ) else if
+        (* Check for internal loops *)
         IndexSet.for_all (fun b -> IndexSet.disjoint cluster t.pred_l.:(b)) cluster &&
-        IndexSet.for_all (fun b -> IndexSet.disjoint cluster t.pred_r.:(b)) cluster then
+        IndexSet.for_all (fun b -> IndexSet.disjoint cluster t.pred_r.:(b)) cluster
+      then
         acc
-      else
+      else (
+        (* Internal loop *)
         let b = pick_in_cluster cluster in
         burn t b;
         IndexSet.fold List.cons (IndexSet.remove b cluster) acc
+      )
     in
     let rec loop = function
       | [] -> ()
       | remaining ->
-        loop (fold_clusters t remaining [] break_internal)
+        flush_pending t;
+        loop (fold_clusters t ~iter:(iter remaining) [] break_internal)
     in
     loop (get_remaining ());
-    flush_pending t;
   end;
   (* Cluster simplification loop *)
   let eval_cluster_rel cluster arr =
@@ -220,8 +235,8 @@ let solve t =
     pl * sr + pr * sl + Int.max pl sr + Int.max pr sl
   in
   let rec loop remaining =
-    let _, cluster = fold_clusters t remaining ((-1), IndexSet.empty)
-        (select eval_cluster)
+    let _, cluster =
+      fold_clusters t ~iter:(iter remaining) ((-1), IndexSet.empty) (select eval_cluster)
     in
     if IndexSet.is_not_empty cluster then (
       let b = pick_in_cluster cluster in
