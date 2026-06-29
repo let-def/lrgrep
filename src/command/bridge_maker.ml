@@ -44,8 +44,8 @@ let link_left t i1 i2 =
   t.edges.pred_l.@(i2) <- IndexSet.add (Sum.inj_l i1)
 
 let link_right t i1 i2 =
-  t.edges.succ_l.@(i1) <- IndexSet.add (Sum.inj_l i2);
-  t.edges.pred_l.@(i2) <- IndexSet.add (Sum.inj_l i1)
+  t.edges.succ_r.@(i1) <- IndexSet.add (Sum.inj_l i2);
+  t.edges.pred_r.@(i2) <- IndexSet.add (Sum.inj_l i1)
 
 let link2 t s1 link s2 =
   if IndexSet.is_not_empty s2 then
