@@ -198,9 +198,11 @@ module Conflict = struct
       assert (IndexSet.is_empty actions.shift);
       IndexMap.add term {actions with shift = items} map
 
+  let item_for_reducing g prod =
+    Item.make g prod (Production.length g prod - 1)
+
   let add_reduction g red map =
-    let prod = Reduction.production g red in
-    let item = Item.make g prod (Production.length g prod - 1) in
+    let item = item_for_reducing g (Reduction.production g red) in
     IndexSet.fold begin fun term map ->
       let actions = get_actions map term in
       let reduce = IndexSet.add item actions.reduce in
@@ -209,7 +211,7 @@ module Conflict = struct
 
   let remove_reduce g map (term, prod) =
     let actions = get_actions map term in
-    let reduce = IndexSet.remove (Item.last g prod) actions.reduce in
+    let reduce = IndexSet.remove (item_for_reducing g prod) actions.reduce in
     assert (reduce != actions.reduce);
     IndexMap.add term {actions with reduce} map
 
@@ -238,7 +240,7 @@ module Conflict = struct
   let register_removed_reduce g map register (term, prods) =
     let actions = get_actions map term in
     List.iter begin fun prod ->
-      let source = Item.last g prod in
+      let source = item_for_reducing g prod in
       IndexSet.iter begin fun target ->
         register {source; target; relation = Shift_over_reduce}
       end actions.shift;
@@ -279,6 +281,65 @@ module Conflict = struct
     | Invalid
     | Neutral
 
+  let dump_scc (type g) path (g : g grammar) successors bridges =
+    let oc = lazy (
+      let oc = open_out_bin path in
+      output_string oc "digraph G {\n";
+      output_string oc "  rankdir=LR;\n";
+      output_string oc "  node[shape=rect];\n";
+      oc
+    ) in
+    let (module SCC) =
+      Tarjan.indexed_scc (Item.cardinal g)
+        ~succ:(fun f i ->
+            successors i (fun edge -> f edge.target);
+            bridges i (fun (_b,target) -> f target)
+          )
+    in
+    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') (Lazy.force oc) fmt in
+    Vector.iteri begin fun scc nodes ->
+      let self_sr = ref false in
+      let self_rs = ref false in
+      let self_rr = ref false in
+      IndexSet.iter begin fun node ->
+        successors node begin fun edge ->
+          let scc' = SCC.component.:(edge.target) in
+          if Index.equal scc scc' then (
+            match edge.relation with
+            | Shift_over_reduce -> self_sr := true
+            | Reduce_over_shift -> self_rs := true
+            | Reduce_reduce     -> self_rr := true
+          )
+        end
+      end nodes;
+      match !self_sr, !self_rs, !self_rr with
+      | false, false, false -> ()
+      | true , false, false -> ()
+      | false, true , false -> ()
+      | _ ->
+        IndexSet.iter begin fun node ->
+          p "  p%d[label=%S];" (Index.to_int node) (Item.to_string g node);
+          successors node begin fun edge ->
+            let scc' = SCC.component.:(edge.target) in
+            if Index.equal scc scc' then (
+              p "  p%d -> p%d[label=%S];" (Index.to_int edge.source) (Index.to_int edge.target)
+                (match edge.relation with
+                 | Shift_over_reduce -> "R"
+                 | Reduce_over_shift -> "L"
+                 | Reduce_reduce -> "LR")
+            )
+          end;
+          bridges node begin fun (bridge,_target) ->
+            p "  p%d -> b%d [dir=both];\n" (Index.to_int node) (Index.to_int bridge);
+          end
+        end nodes;
+        prerr_endline "cyclic precedences"
+    end SCC.nodes;
+    if Lazy.is_val oc then (
+      p "}";
+      close_out (Lazy.force oc)
+    )
+
   let solve (type g) (g : g grammar) =
     let items = Item.cardinal g in
     (* Collect all conflicts by item *)
@@ -300,6 +361,9 @@ module Conflict = struct
         Bridge_maker.link_left maker edge.source edge.target
     in
     Index.iter (Lr1.cardinal g) (process_lr1 g register);
+    dump_scc "raw.dot" g begin fun node f ->
+      List.iter f successors.:(node)
+    end begin fun _ _ -> () end;
     (* Represent merging candidates as bridges *)
     let item_bridges = Vector.make items [] in
     let _ = Index.fold items None begin fun acc item ->
@@ -337,10 +401,10 @@ module Conflict = struct
               ) item_bridges.:(i)
           )
     in
+    dump_scc "conflicts.dot" g
+      (fun i f -> List.iter f successors.:(i))
+      (fun i f -> List.iter (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg) item_bridges.:(i));
     (* Associativity is enforced in non-trivial components *)
-    let oc = open_out_bin "conflicts.dot" in
-    let p fmt = Printf.kfprintf (fun oc -> output_char oc '\n') oc fmt in
-    p "digraph G {";
     let assocs =
       Vector.mapi begin fun scc nodes ->
         let self_sr = ref false in
@@ -361,30 +425,9 @@ module Conflict = struct
         | false, false, false -> Neutral
         | true , false, false -> Right
         | false, true , false -> Left
-        | _ ->
-          IndexSet.iter begin fun node ->
-            p "  p%d[label=%S];" (Index.to_int node) (Item.to_string g node);
-            List.iter begin fun edge ->
-              let scc' = SCC.component.:(edge.source) in
-              if Index.equal scc scc' then (
-                p "  p%d -> p%d[label=%S];" (Index.to_int edge.source) (Index.to_int node)
-                  (match edge.relation with
-                   | Shift_over_reduce -> "R"
-                   | Reduce_over_shift -> "L"
-                   | Reduce_reduce -> "LR")
-              )
-            end predecessors.:(node);
-            List.iter (fun (bridge,_target) ->
-                if not (IndexSet.mem bridge burned) then (
-                  p "  p%d -> b%d [dir=both];\n" (Index.to_int node) (Index.to_int bridge);
-                );
-              ) item_bridges.:(node)
-          end nodes;
-          invalid_arg "cyclic precedences"
+        | _ -> invalid_arg "cyclic precedences"
       end SCC.nodes;
     in
-    p "}";
-    close_out oc;
     let ranks = Vector.make SCC.n 0 in
     (* Refine associativity for other components *)
     Vector.iteri begin fun scc nodes ->
