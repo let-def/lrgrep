@@ -279,7 +279,6 @@ module Conflict = struct
     | Right
     | Prec
     | Invalid
-    | Neutral
 
   let dump_scc (type g) path (g : g grammar) successors bridges =
     let oc = lazy (
@@ -405,113 +404,79 @@ module Conflict = struct
       (fun i f -> List.iter f successors.:(i))
       (fun i f -> List.iter (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg) item_bridges.:(i));
     (* Associativity is enforced in non-trivial components *)
-    let assocs =
-      Vector.mapi begin fun scc nodes ->
-        let self_sr = ref false in
-        let self_rs = ref false in
-        let self_rr = ref false in
+    let it_ranks = Vector.make items 0 in
+    let it_assoc = Vector.make items Prec in
+    Vector.iteri begin fun scc nodes ->
+        let self_l = ref false in
+        let self_r = ref false in
+        let pred_n = ref (-1) in
+        let pred_l = ref false in
+        let pred_r = ref false in
         IndexSet.iter begin fun node ->
-          List.iter begin fun edge ->
-            let scc' = SCC.component.:(edge.source) in
-            if Index.equal scc scc' then (
-              match edge.relation with
-              | Shift_over_reduce -> self_sr := true
-              | Reduce_over_shift -> self_rs := true
-              | Reduce_reduce     -> self_rr := true
+          List.iter begin fun {source; relation; _} ->
+            let scc' = SCC.component.:(source) in
+            if Index.equal scc scc' then
+              match relation with
+              | Shift_over_reduce -> self_r := true
+              | Reduce_over_shift -> self_l := true
+              | Reduce_reduce ->
+                prerr_endline "tree-sitter gen: broken invariant: reduce-reduce conflict in a single component";
+                self_l := true;
+                self_r := true;
+            else (
+              let rank = it_ranks.:(source) in
+              if rank > !pred_n then
+                (pred_n := rank; pred_l := false; pred_r := false);
+              if rank = !pred_n then (
+                begin match relation with
+                  | Shift_over_reduce -> pred_r := true
+                  | Reduce_over_shift -> pred_l := true
+                  | Reduce_reduce -> pred_l := true; pred_r := true
+                end;
+                begin match it_assoc.:(source) with
+                  | Left -> pred_l := true;
+                  | Right -> pred_r := true;
+                  | Prec | Invalid -> pred_l := true; pred_r := true
+                end;
+              )
             )
           end predecessors.:(node)
         end nodes;
-        match !self_sr, !self_rs, !self_rr with
-        | false, false, false -> Neutral
-        | true , false, false -> Right
-        | false, true , false -> Left
-        | _ -> invalid_arg "cyclic precedences"
-      end SCC.nodes;
-    in
-    let ranks = Vector.make SCC.n 0 in
-    (* Refine associativity for other components *)
-    Vector.iteri begin fun scc nodes ->
-      let assoc = match assocs.:(scc) with
-        | Neutral ->
-          let left = ref 0 in
-          let right = ref 0 in
-          let visit edge node =
-            let scc' = SCC.component.:(node) in
-            if not (Index.equal scc scc') then
-              match edge.relation, assocs.:(scc') with
-              | Shift_over_reduce, (Neutral | Right) -> incr right
-              | Reduce_over_shift, (Neutral | Left) -> incr left
-              | _ -> ()
-          in
-          let visit_source edge = visit edge edge.source in
-          let visit_target edge = visit edge edge.target in
-          let visit_all arr f node = List.iter f arr.:(node) in
-          IndexSet.iter (visit_all predecessors visit_source) nodes;
-          IndexSet.iter (visit_all successors visit_target) nodes;
-          if !left > !right
-          then Left
-          else Right
-        | assoc -> assoc
-      in
-      assocs.:(scc) <- assoc;
-      let rank = IndexSet.fold begin fun node rank ->
-          List.fold_left begin fun rank edge ->
-            let scc' = SCC.component.:(edge.source) in
-            if Index.equal scc scc' then
-              rank
-            else
-              let rank' = ranks.:(scc') in
-              let rank' = match assocs.:(scc'), assoc with
-                | Left, Left  | Right, Right -> rank'
-                | Left, Right | Right, Left -> rank' + 1
-                | _ -> assert false
-              in
-              Int.max rank rank'
-          end rank predecessors.:(node)
-        end nodes 0
-      in
-      ranks.:(scc) <- rank
-    end SCC.nodes;
-    (* Cleanup unused associativity *)
-    Vector.iteri begin fun scc nodes ->
-      let used =
-        let rank = ranks.:(scc) in
-        let visit node =
-          ranks.:(SCC.component.:(node)) = rank
+        let assoc =
+          if !self_l && !self_r then (
+            prerr_endline "tree-sitter gen: broken invariant: cyclic precedence";
+            Invalid
+          ) else if !self_l then
+            Left
+          else if !self_r then
+            Right
+          else if !pred_l && !pred_r then
+            Prec
+          else if !pred_l then
+            Left
+          else if !pred_r then
+            Right
+          else
+            Prec
         in
-        let visit_source edge = visit edge.source in
-        let visit_target edge = visit edge.target in
-        let visit_all arr f node = List.exists f arr.:(node) in
-        (* Associativity is used if we have one successor or predecessor with
-           the same rank *)
-        IndexSet.exists (visit_all predecessors visit_source) nodes ||
-        IndexSet.exists (visit_all successors visit_target) nodes
-      in
-      if not used then
-        assocs.:(scc) <- Prec;
+        let rank =
+          if (!self_l && !self_r) || (!pred_l && !pred_r) then
+            !pred_n + 1
+          else if (!self_l && !pred_l) || (!self_r && !pred_r) then
+            !pred_n
+          else
+            !pred_n + 1
+        in
+        IndexSet.iter (fun it ->
+            it_assoc.:(it) <- assoc;
+            it_ranks.:(it) <- rank;
+          ) nodes;
     end SCC.nodes;
-    let it_ranks = Vector.make items (-1) in
-    let it_assoc = Vector.make items Prec in
-    Vector.iteri begin fun scc nodes ->
-      let rank = ranks.:(scc) and assoc = assocs.:(scc) in
-      IndexSet.iter begin fun node ->
-        it_ranks.:(node) <- rank;
-        it_assoc.:(node) <- assoc;
-      end nodes
-    end SCC.nodes;
-    Index.iter (Production.cardinal g) begin fun prod ->
-      let rank = ref (-1) in
-      let assoc = ref Prec in
-      for i = Production.length g prod - 1 downto 1 do
-        let item = Item.make g prod i in
-        if it_ranks.:(item) = -1 then (
-          it_ranks.:(item) <- !rank;
-          it_assoc.:(item) <- !assoc;
-        ) else (
-          rank := it_ranks.:(item);
-          assoc := it_assoc.:(item);
-        )
-      done
+    (* Clear unused items by setting rank to -1 *)
+    Index.iter items begin fun it ->
+      if List.is_empty predecessors.:(it) &&
+         List.is_empty successors.:(it) then
+        it_ranks.:(it) <- (-1);
     end;
     (it_ranks, it_assoc)
 end
@@ -575,39 +540,31 @@ module Converter = struct
     in
     let flush_rank () =
       match !tail, !last_rank with
-      | [], _ | _, (-1, _) | _, (0, (Prec | Neutral)) -> ()
+      | [], _ | _, (-1, _) -> ()
       | _, (level, assoc) ->
         let assoc = match assoc with
           | Left -> "prec.left"
           | Right -> "prec.right"
           | Invalid -> "prec.invalid"
           | Prec -> "prec"
-          | Neutral -> "prec"
         in
         tail := [Doc.wrap !!(Printf.sprintf "%s(%d," assoc level) !!")" (flush_tail ())]
     in
     let add_sym rank sym =
+      if fst rank > (-1) && rank <> !last_rank then flush_rank ();
       if symbol_nonnull ga sym then (
-        if rank <> !last_rank then flush_rank ();
         tail := import_producer !not_optional ga.g sym :: !tail;
         not_optional := false
       );
-      last_rank := rank
-      (* Logic:
-         - if sym is not non_null, skip
-         - if (rank, assoc) <> last_rank, tail <> [] then flush_rank ()
-         - last_rank := rank, assoc
-         - if nullable && !optional
-           then tail = option(sym) :: tail
-           else tail = sym :: tail
-         - optional := false
-      *)
+      if fst rank > (-1) then
+        last_rank := rank
     in
     for pos = Array.length rhs - 1 downto 0 do
-      let item = Item.make ga.g prod (pos + 1) in
+      let item = Item.make ga.g prod pos in
       add_sym (ranks.:(item), assocs.:(item)) rhs.(pos)
     done;
-    flush_rank ();
+    if !last_rank <> (0, Prec) then
+      flush_rank ();
     flush_tail ()
 
   let import_nonterminals ga ranks assocs =
