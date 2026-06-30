@@ -180,20 +180,21 @@ module Conflict = struct
     | Some a -> a
     | None -> {shift = IndexSet.empty; reduce = IndexSet.empty}
 
+  let items_for_shifting g source term =
+    Lr1.items g source |> IndexSet.filter (fun it ->
+        let prod, pos = Item.desc g it in
+        let rhs = Production.rhs g prod in
+        pos < Array.length rhs &&
+        match Symbol.desc g rhs.(pos) with
+        | T term' -> Index.equal term term'
+        | N nt -> IndexSet.mem term (Nonterminal.first g nt)
+      )
+
   let add_shift g tr map =
     match Symbol.desc g (Transition.symbol g tr) with
     | N _ -> map
     | T term ->
-      let items = Lr1.items g (Transition.source g tr) in
-      let items = IndexSet.filter (fun it ->
-          let prod, pos = Item.desc g it in
-          let rhs = Production.rhs g prod in
-          pos < Array.length rhs &&
-          match Symbol.desc g rhs.(pos) with
-          | T term' -> Index.equal term term'
-          | N nt -> IndexSet.mem term (Nonterminal.first g nt)
-        ) items
-      in
+      let items = items_for_shifting g (Transition.source g tr) term in
       let actions = get_actions map term in
       assert (IndexSet.is_empty actions.shift);
       IndexMap.add term {actions with shift = items} map
@@ -226,16 +227,14 @@ module Conflict = struct
     relation: relation;
   }
 
-  let register_removed_shift g map register (term, state) =
+  let register_removed_shift g map register source (term, _) =
     let actions = get_actions map term in
     assert (IndexSet.is_empty actions.shift);
     IndexSet.iter begin fun source ->
       IndexSet.iter begin fun target ->
         register {source; target; relation = Reduce_over_shift}
       end actions.reduce
-    end (match Sum.prj (Lr1.cardinal g) state with
-        | L lr1 -> Lr1.items g lr1
-        | R lr0 -> Lr0.items g lr0)
+    end (items_for_shifting g source term)
 
   let register_removed_reduce g map register (term, prods) =
     let actions = get_actions map term in
@@ -268,7 +267,7 @@ module Conflict = struct
       in
       (* Register conflicts *)
       List.iter
-        (register_removed_shift g actions register)
+        (register_removed_shift g actions register lr1)
         removed_shift;
       List.iter
         (register_removed_reduce g actions register)
