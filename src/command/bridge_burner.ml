@@ -183,9 +183,7 @@ let solve t =
   (* Phase 1: simplify trivial clusters, break ones with internal loops *)
   begin
     let break_internal cluster acc =
-      if IndexSet.is_singleton cluster then
-        acc
-      else if
+      if
         (* Contract trivial cluster *)
         let in_l_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.pred_l.:(b)) cluster in
         let in_r_0 = IndexSet.for_all (fun b -> IndexSet.is_empty t.pred_r.:(b)) cluster in
