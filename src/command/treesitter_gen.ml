@@ -360,7 +360,7 @@ module Conflict = struct
         Bridge_maker.link_left maker edge.source edge.target
     in
     Index.iter (Lr1.cardinal g) (process_lr1 g register);
-    dump_scc "raw.dot" g begin fun node f ->
+    if false then dump_scc "raw.dot" g begin fun node f ->
       List.iter f successors.:(node)
     end begin fun _ _ -> () end;
     (* Represent merging candidates as bridges *)
@@ -400,7 +400,7 @@ module Conflict = struct
               ) item_bridges.:(i)
           )
     in
-    dump_scc "conflicts.dot" g
+    if false then dump_scc "conflicts.dot" g
       (fun i f -> List.iter f successors.:(i))
       (fun i f -> List.iter (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg) item_bridges.:(i));
     (* Associativity is enforced in non-trivial components *)

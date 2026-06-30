@@ -159,10 +159,10 @@ let create_problem (type n b) (t : (n, b) _t) =
         acc
     end [] t.bridges
   in
-  dump_graph "g1_bridged.dot" edges node_name;
+  if false then dump_graph "g1_bridged.dot" edges node_name;
   (* Eliminate nodes *)
   Index.iter n (fun i0 -> contract edges (Sum.inj_l i0));
-  dump_graph "g2_eliminated.dot" edges node_name;
+  if false then dump_graph "g2_eliminated.dot" edges node_name;
   let burner = Bridge_burner.make t.count in
   List.iter begin fun bs ->
     IndexSet.iter (fun x -> IndexSet.iter (Bridge_burner.link_b burner x) bs) bs
