@@ -34,16 +34,12 @@ let make (type b) (n : b cardinal) = {
 }
 
 let link_l (type b) (t : b problem) (x : b index) (y : b index) =
-  if not (Index.equal x y) then begin
-    t.succ_l.@(x) <- IndexSet.add y;
-    t.pred_l.@(y) <- IndexSet.add x
-  end
+  t.succ_l.@(x) <- IndexSet.add y;
+  t.pred_l.@(y) <- IndexSet.add x
 
 let link_r (type b) (t : b problem) (x : b index) (y : b index) =
-  if not (Index.equal x y) then begin
-    t.succ_r.@(x) <- IndexSet.add y;
-    t.pred_r.@(y) <- IndexSet.add x
-  end
+  t.succ_r.@(x) <- IndexSet.add y;
+  t.pred_r.@(y) <- IndexSet.add x
 
 let link_b (type b) (t : b problem) (x : b index) (y : b index) =
   if not (Index.equal x y) then begin
