@@ -199,8 +199,7 @@ module Conflict = struct
       assert (IndexSet.is_empty actions.shift);
       IndexMap.add term {actions with shift = items} map
 
-  let item_for_reducing g prod =
-    Item.make g prod (Production.length g prod - 1)
+  let item_for_reducing = Item.last
 
   let add_reduction g red map =
     let item = item_for_reducing g (Reduction.production g red) in
@@ -558,6 +557,7 @@ module Converter = struct
       if fst rank > (-1) then
         last_rank := rank
     in
+    last_rank := (let last = Item.last ga.g prod in (ranks.:(last), assocs.:(last)));
     for pos = Array.length rhs - 1 downto 0 do
       let item = Item.make ga.g prod pos in
       add_sym (ranks.:(item), assocs.:(item)) rhs.(pos)
