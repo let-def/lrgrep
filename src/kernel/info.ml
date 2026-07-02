@@ -832,6 +832,18 @@ module Production = struct
 
   (** Returns the set of all productions *)
   let all g = g.production_all
+
+  (** Converts an item to standard notation string, e.g. "A:B . c d" *)
+  let to_string g prod =
+    let b = Buffer.create 63 in
+    Buffer.add_string b (Nonterminal.to_string g (lhs g prod));
+    Buffer.add_char b ':';
+    let add_sym sym =
+      Buffer.add_char b ' ';
+      Buffer.add_string b (Symbol.to_string g sym);
+    in
+    Array.iter add_sym (rhs g prod);
+    Buffer.contents b
 end
 
 (** Explicit representation of LR(0) items.
@@ -847,7 +859,8 @@ module Item = struct
       at position [pos]. Raises [Invalid_argument] if [pos] is out of bounds. *)
   let make g prod pos =
     if pos < 0 || pos > Production.length g prod then
-      invalid_arg "Info.Item.make: pos out of bounds";
+      Printf.ksprintf invalid_arg "Info.Item.make (%s) (%d): pos out of bounds"
+        (Production.to_string g prod) pos;
     Index.of_int (cardinal g) (g.item_offsets.:(prod) + pos)
 
   (** Creates an item with the dot at the end of the production (fully recognized) *)
