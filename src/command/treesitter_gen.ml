@@ -483,13 +483,15 @@ module Converter = struct
   let (!!) = Doc.text
   let (^^) = Doc.join
 
+  let explicit_terminals = true
+
   let bind_rule lhs rhs =
     !!lhs ^^ !!": $ => " ^^ rhs ^^ !!",\n"
 
   let mangled g nt =
     Symbol.to_string ~mangled:true g (Symbol.inj_n g nt)
 
-  let import_terminal g term =
+  let terminal_body g term =
     match Terminal.kind g term with
     | `EOF -> "token(\"EOF\")"
     | _ ->
@@ -499,6 +501,11 @@ module Converter = struct
       if rhs = "" || rhs.[0] <> '"'
       then Printf.sprintf "token(%S)" rhs
       else Printf.sprintf "token(%s)" rhs
+
+  let import_terminal g term =
+    if explicit_terminals
+    then Printf.sprintf "$.%s" (Terminal.to_string g term)
+    else terminal_body g term
 
   let import_raw_producer g prod =
     match Symbol.desc g prod with
@@ -624,10 +631,22 @@ module Converter = struct
         !!"rules: {\n";
         Doc.indent 2 @@ Doc.list [
           bind_rule "start" !!("$." ^ mangled ga.g entrypoint);
-          Doc.list_map
-            (fun (lhs, rhs) -> bind_rule (mangled ga.g lhs) rhs)
-            (List.of_seq rules);
-          (*Doc.list (List.filter_map import_token symbols);*)
+          List.of_seq rules
+          |> List.rev_map (fun (lhs, rhs) -> bind_rule (mangled ga.g lhs) rhs)
+          |> Doc.list;
+          if explicit_terminals then
+            let acc = ref [] in
+            Index.rev_iter (Terminal.cardinal ga.g) begin fun term ->
+              match Terminal.kind ga.g term with
+              | `REGULAR | `EOF ->
+                push acc (bind_rule
+                            (Terminal.to_string ga.g term)
+                            !!(terminal_body ga.g term))
+              | _ -> ();
+            end;
+            Doc.list !acc
+          else
+            Doc.empty
         ];
         !!"}\n";
       ];
