@@ -26,7 +26,11 @@ module Make (Set : DECOMPOSABLE) : S with type 'a t := 'a Set.t = struct
 
   let compute_parts xs =
     let heap, _ = List.fold_left
-        (fun (h, i) s -> Heap.insert s (IntSet.singleton i) h, i + 1)
+        (fun (h, i as acc) s ->
+           if Set.is_empty s then
+             acc
+           else
+             Heap.insert s (IntSet.singleton i) h, i + 1)
         (Heap.empty, 0) xs
     in
     let rec aux parts heap =
