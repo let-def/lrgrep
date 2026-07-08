@@ -155,7 +155,7 @@ Examples:
   let opt_dump_dot = ref false
 
   let print_version_num () =
-    print_endline "0.2";
+    print_endline "0.10";
     exit 0
 
   let print_version_string () =
