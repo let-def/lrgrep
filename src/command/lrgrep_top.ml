@@ -155,7 +155,11 @@ Examples:
   let opt_dump_dot = ref false
 
   let print_version_num () =
-    print_endline "0.10";
+    (* dune subst my substitute this string before release *)
+    let version = "%%VERSION%%" in
+    (* check if it has been substituted *)
+    let version = if version.[0] = '%' then "(dev)" else version in
+    print_endline version;
     exit 0
 
   let print_version_string () =
