@@ -330,7 +330,6 @@ module Conflict = struct
             p "  p%d -> b%d [dir=both];\n" (Index.to_int node) (Index.to_int bridge);
           end
         end nodes;
-        prerr_endline "cyclic precedences"
     end SCC.nodes;
     if Lazy.is_val oc then (
       p "}";
