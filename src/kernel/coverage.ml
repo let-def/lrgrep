@@ -219,8 +219,8 @@ module Andor = struct
           if c <> 0 then c else
             IndexSet.compare s1 s2
       end) in
-    let module Nodes = Gen.Make() in
-    let nodes = Nodes.get_generator () in
+    let open Gensym() in
+    let nodes = PDyn.make () in
     let table = Vector.make stacks.domain Map.empty in
     let todo = ref [] in
     let get_state lrc rpos active =
@@ -240,7 +240,8 @@ module Andor = struct
       match Map.find_opt key map with
       | Some ix -> (accept, ix)
       | None ->
-        let ix = Gen.add nodes {lrc; rpos; active; successors = [||]} in
+        let ix = fresh () in
+        PDyn.set nodes ix {lrc; rpos; active; successors = [||]};
         table.:(lrc) <- Map.add key ix map;
         push todo ix;
         (accept, ix)
@@ -253,7 +254,7 @@ module Andor = struct
       let propagations = ref 0 in
       let propagate source =
         incr propagations;
-        let snode = Gen.get nodes source in
+        let snode = PDyn.get nodes source in
         assert (Array.length snode.successors = 0);
         let lrc = snode.lrc in
         match Opt.prj snode.rpos with
@@ -291,9 +292,9 @@ module Andor = struct
       let counter = ref 0 in
       fixpoint ~counter ~propagate todo;
       stopwatch 1 "Andor construction: %d iterations, %d propagations, %d nodes"
-        !counter !propagations (cardinal Nodes.n);
+        !counter !propagations (cardinal n);
     end;
-    let nodes = Gen.freeze nodes in
+    let nodes = PDyn.contents nodes n in
     Graph {initials; nodes}
 end
 
@@ -337,8 +338,8 @@ module Deter = struct
     : (g, lrc, n) graph
     =
     let open IndexBuffer in
-    let module Nodes = Gen.Make() in
-    let nodes = Nodes.get_generator () in
+    let open Gensym () in
+    let nodes = PDyn.make () in
     let table = Vector.make stacks.domain IndexSet.Map.empty in
     let todo = ref [] in
     let get_state ker =
@@ -349,10 +350,9 @@ module Deter = struct
       match IndexSet.Map.find_opt ker map with
       | Some ix -> ix
       | None ->
-        let r = Gen.reserve nodes in
-        let index = Gen.index r in
+        let index = fresh () in
         let node = {index; ker; successors = [||]; top = IndexSet.empty; accept = IndexSet.empty} in
-        Gen.commit nodes r node;
+        PDyn.set nodes index node;
         table.:(lrc) <- IndexSet.Map.add ker node map;
         push todo node;
         node
@@ -398,8 +398,8 @@ module Deter = struct
     let counter = ref 0 in
     fixpoint ~counter ~propagate todo;
     stopwatch 1 "Deter construction: %d iterations, %d initials, %d nodes"
-      !counter (IndexMap.cardinal initials) (cardinal Nodes.n);
-    let nodes = Gen.freeze nodes in
+      !counter (IndexMap.cardinal initials) (cardinal n);
+    let nodes = PDyn.contents nodes n in
     Graph {initials; nodes}
 
   (** Compute the set of LR(0) states reachable from a Deter node.
@@ -566,8 +566,8 @@ module Cover = struct
       (dgr : (g, lrc, ao, en) Deter._graph)
     =
     let open IndexBuffer in
-    let module Ker = Gen.Make() in
-    let ker = Ker.get_generator () in
+    let open Gensym() in
+    let ker = PDyn.make () in
     let unaccepted = Dyn.make IndexSet.empty in
     let delta = Dyn.make IndexSet.empty in
     let predecessors = Dyn.make [] in
@@ -579,7 +579,8 @@ module Cover = struct
       match IndexMap.find_opt mac map with
       | Some index -> index
       | None ->
-        let index = Gen.add ker (Prod.inj maco mac pos) in
+        let index = fresh () in
+        PDyn.set ker index (Prod.inj maco mac pos);
         table.:(pos) <- IndexMap.add mac index map;
         index
     in
@@ -605,7 +606,7 @@ module Cover = struct
           (fun lrc -> IndexSet.empty, get (find_target trs lrc) (Sum.inj_l lrc))
     in
     let initialize node =
-      let mac, pos = Prod.prj maco (Gen.get ker node) in
+      let mac, pos = Prod.prj maco (PDyn.get ker node) in
       let trs = match Opt.prj mac with
         | None -> IndexSet.empty
         | Some mac -> machine.outgoing.:(mac)
@@ -627,7 +628,7 @@ module Cover = struct
     in
     let todo = ref [] in
     let update target set =
-      let mac, pos = Prod.prj maco (Gen.get ker target) in
+      let mac, pos = Prod.prj maco (PDyn.get ker target) in
       let set =
         match Sum.prj stacks.domain pos with
         | L _ -> set
@@ -686,12 +687,12 @@ module Cover = struct
     stopwatch 1 "Cover (%d iterations, %d propagations, %d uncovered states)"
       !counter !propagations (List.length !uncovered);
     let enum = {
-      Enum.domain = Ker.n;
+      Enum.domain = n;
       predecessors = Dyn.get predecessors;
       unaccepted = Dyn.get unaccepted;
     } in
     let position ix =
-      let _, pos = Prod.prj maco (Gen.get ker ix) in
+      let _, pos = Prod.prj maco (PDyn.get ker ix) in
       pos
     in
     Graph {enum; position; sinks = !uncovered; unaccepted = Dyn.get unaccepted}

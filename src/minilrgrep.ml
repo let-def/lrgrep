@@ -230,7 +230,7 @@ module Reduction_DFA = struct
       in
       ({stack; lookaheads; child} :: suffixes, targets)
 
-  include IndexBuffer.Gen.Make()
+  include Gensym()
 
   (** Description of a DFA state.
 
@@ -248,8 +248,9 @@ module Reduction_DFA = struct
 
   (** Construct the DFA *)
   let initial, states =
+    let open IndexBuffer in
     (* Generator for DFA states *)
-    let states = get_generator () in
+    let states = PDyn.make () in
     (* Hashtable to memoize visited states. *)
     let table = Hashtbl.create 7 in
     (* Recursive function to visit and process states *)
@@ -258,19 +259,19 @@ module Reduction_DFA = struct
       match Hashtbl.find_opt table nstates with
       | Some index -> index
       | None ->
-        let slot = IndexBuffer.Gen.reserve states in
-        Hashtbl.add table nstates (IndexBuffer.Gen.index slot);
+        let index = fresh () in
+        Hashtbl.add table nstates index;
         let suffixes, transitions =
           List.fold_left fold_transitions ([], IndexMap.empty) nstates
         in
         let transitions = IndexMap.map visit transitions in
-        IndexBuffer.Gen.commit states slot {suffixes; transitions};
-        IndexBuffer.Gen.index slot
+        PDyn.set states index {suffixes; transitions};
+        index
     in
     (* Start exploration from the initial state *)
     let initial = visit [Reduction_NFA.Initial] in
     (* Freeze the DFA states *)
-    let states = IndexBuffer.Gen.freeze states in
+    let states = PDyn.contents states n in
     (initial, states)
 
   (** Record the time taken for DFA construction *)
@@ -436,11 +437,12 @@ end
 *)
 module Suffix = struct
   (** Start timing the suffix computation *)
-  include IndexBuffer.Gen.Make()
+  open IndexBuffer
+  include Gensym()
   type set = n indexset
 
   (** Generator for the finite set of suffixes *)
-  let desc = get_generator ()
+  let desc = PDyn.make ()
 
   (** Map each DFA state to a set of suffix indices it recognizes *)
   let of_dfa =
@@ -450,7 +452,8 @@ module Suffix = struct
         match Hashtbl.find_opt table suffix with
         | Some is -> IndexSet.union is acc
         | None ->
-          let index = IndexBuffer.Gen.add desc (dfa, suffix) in
+          let index = fresh () in
+          PDyn.set desc index (dfa, suffix);
           let is =
             List.fold_left visit_suffix (IndexSet.singleton index)
               suffix.Reduction_DFA.child
@@ -466,7 +469,7 @@ module Suffix = struct
   let to_dfa = lazy_lookup (fun () -> Misc.relation_reverse n of_dfa)
 
   (** Freeze the suffix descriptions *)
-  let desc = IndexBuffer.Gen.freeze desc
+  let desc = PDyn.contents desc n
 
   let () = stopwatch 2 "Generated set of all suffixes (%d unique suffixes)" (cardinal n)
 

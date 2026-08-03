@@ -409,10 +409,11 @@ let make (type g)
   : g graph =
   let open IndexBuffer in
   let module Cells = Gensym() in
-  let module Links = Gen.Make() in
+  let module Links = Gensym() in
   let cells : (Cells.n, g lr1 indexset) Dyn.t = Dyn.make IndexSet.empty in
   let open struct type label = g lr1 index * g target indexset * int * Cells.n index * Cells.n index * g lr1 indexset end in
-  let links : (Links.n, label) Gen.t = Links.get_generator () in
+  let links : (Links.n, label) PDyn.t = PDyn.make () in
+  let add_link tr = PDyn.set links (Links.fresh ()) tr in
   let table = Vector.make (Nonterminal.cardinal g) IndexSet.Map.empty in
   let get_cell nt la =
     let map0 = table.:(nt) in
@@ -455,8 +456,8 @@ let make (type g)
       end goto
     end reductions;
     match !result with
-    | [] -> ignore (Gen.add links (src, reached, 0, cell0, sink, IndexSet.empty));
-    | result -> List.iter (fun tr -> ignore (Gen.add links tr)) result
+    | [] -> add_link (src, reached, 0, cell0, sink, IndexSet.empty);
+    | result -> List.iter add_link result
   in
   Index.iter (Lr1.cardinal g) begin fun lr1 ->
     let predecessors = get_stream ~initial:(-1) (Lr1.predecessors g lr1) in
@@ -485,9 +486,9 @@ let make (type g)
       type transitions = Links.n
       let transitions = Links.n
 
-      let source tr = let (_,_,_,x,_,_) = Gen.get links tr in x
-      let target tr = let (_,_,_,_,x,_) = Gen.get links tr in x
-      let label tr = Gen.get links tr
+      let source tr = let (_,_,_,x,_,_) = PDyn.get links tr in x
+      let target tr = let (_,_,_,_,x,_) = PDyn.get links tr in x
+      let label tr = PDyn.get links tr
 
       let initials f = f initial
       let finals f = Index.iter Cells.n f

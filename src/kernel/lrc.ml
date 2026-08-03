@@ -373,10 +373,10 @@ type 'g mlrc = 'g Mlrc.t
      Valmari's DFA minimization to merge equivalent states. *)
 let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachability.t) : (g, g mlrc) t =
   let open IndexBuffer in
-  let module State = Gen.Make() in
-  let module Transitions = Gen.Make() in
-  let states = State.get_generator () in
-  let transitions = Transitions.get_generator () in
+  let module State = Gensym() in
+  let module Transitions = Gensym() in
+  let states = PDyn.make () in
+  let transitions = PDyn.make () in
   let table = Hashtbl.create 7 in
   let todo = ref [] in
   let visit lr1 classes =
@@ -385,13 +385,14 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
     match Hashtbl.find_opt table key with
     | Some index -> index
     | None ->
-      let index = Gen.add states key in
+      let index = State.fresh () in
+      PDyn.set states index key;
       Hashtbl.add table key index;
       push todo index;
       index
   in
   let propagate index =
-    let (target, post_class_indices) = Gen.get states index in
+    let (target, post_class_indices) = PDyn.get states index in
     IndexSet.iter begin fun tr ->
       let source = Transition.source g tr in
       let node = Reachability.Tree.leaf tr in
@@ -427,7 +428,7 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
       in
       if not (IntSet.is_empty pre_class_indices) then
         let index' = visit source pre_class_indices in
-        ignore (Gen.add transitions (index, index'))
+        PDyn.set transitions (Transitions.fresh ()) (index, index');
     end (Transition.predecessors g target)
   in
   let fast_map s f =
@@ -466,9 +467,9 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
       type t = g lr1 index
       let compare = Index.compare
     end)(struct
-      let source tr = fst (Gen.get transitions tr)
-      let target tr = snd (Gen.get transitions tr)
-      let label tr = fst (Gen.get states (source tr))
+      let source tr = fst (PDyn.get transitions tr)
+      let target tr = snd (PDyn.get transitions tr)
+      let label tr = fst (PDyn.get states (source tr))
 
       let initials f = IndexSet.iter f all_leaf
 
@@ -498,7 +499,7 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
   (* Lr1 of each state *)
   let lr1_of =
     Vector.init Min.states
-      (fun st -> fst (Gen.get states (Min.represent_state st)))
+      (fun st -> fst (PDyn.get states (Min.represent_state st)))
   in
   (* Lrcs of each lr1 state *)
   let lrcs_of = Vector.make (Lr1.cardinal g) IndexSet.empty in
@@ -510,7 +511,7 @@ let make_minimal (type g) (g : g grammar) ((module Reachability) : g Reachabilit
       | None -> ()
       | Some mst ->
         let st' = Min.represent_state mst in
-        assert (st = st' || fst (Gen.get states st) = lr1_of.:(mst))
+        assert (st = st' || fst (PDyn.get states st) = lr1_of.:(mst))
     );
   let all_wait = IndexSet.filter_map Min.transport_state all_wait in
   let all_leaf = IndexSet.filter_map Min.transport_state all_leaf in

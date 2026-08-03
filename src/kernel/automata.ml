@@ -354,7 +354,8 @@ module DFA = struct
       (stacks: (g, s) stacks) initial : (g, r) _t
     =
     let module Construction = struct
-      include IndexBuffer.Gen.Make()
+      open IndexBuffer
+      include Gensym()
 
       type 'n prestate = {
         index: n index;
@@ -368,7 +369,7 @@ module DFA = struct
 
       type prepacked = Prepacked : 'n prestate -> prepacked [@@ocaml.unboxed]
 
-      let prestates = get_generator ()
+      let prestates = PDyn.make ()
 
       let compare_kernel g1 g2 = array_compare NFA.compare g1 g2
       module KernelMap = Map.Make(struct type t = (g, r) NFA.t array let compare = compare_kernel end)
@@ -433,13 +434,13 @@ module DFA = struct
             IndexRefine.iter_merged_decomposition rev_transitions
               (fun label targets -> push raw_transitions (process_class label targets));
             let raw_transitions = !raw_transitions in
-            let reservation = IndexBuffer.Gen.reserve prestates in
+            let index = fresh () in
             let state = {
-              index = IndexBuffer.Gen.index reservation;
+              index;
               kernel; accept = !accept;
               raw_transitions;
             } in
-            IndexBuffer.Gen.commit prestates reservation (Prepacked state);
+            PDyn.set prestates index (Prepacked state);
             dfa := KernelMap.add (Vector.as_array kernel) (Prepacked state) !dfa;
             state
         in
@@ -465,7 +466,7 @@ module DFA = struct
         let accepting = Vector.make (branch_count branches) [] in
         let todo = ref [] in
         let schedule bound i set =
-          let Prepacked t as packed = IndexBuffer.Gen.get prestates i in
+          let Prepacked t as packed = PDyn.get prestates i in
           if min_clause t <= bound then
             let set = IndexSet.diff set visited.*(i) in
             if IndexSet.is_not_empty set then (
@@ -531,7 +532,7 @@ module DFA = struct
           loop bound
         with Index.End_of_set -> ()
 
-      let prestates = IndexBuffer.Gen.freeze prestates
+      let prestates = PDyn.contents prestates n
 
       let domain =
         Vector.init n (fun i -> IndexSet.map stacks.label visited.*(i))
@@ -1496,10 +1497,10 @@ module Machine = struct
       }
 
       open IndexBuffer
-      include Gen.Make()
+      include Gensym()
 
       let vector =
-        let gen = get_generator () in
+        let gen = PDyn.make () in
         let process_transition source src_regs
             (DFA.Transition {label=filter; mapping; target; _}) pairings =
           let tgt_regs = Dataflow.registers dataflow target in
@@ -1535,7 +1536,7 @@ module Machine = struct
             ) pairings
           in
           let label = {filter; captures; moves; clear; priority} in
-          ignore (Gen.add gen {source; target = target.index; label})
+          PDyn.set gen (fresh ()) {source; target = target.index; label}
         in
         let process_state (DFA.Packed source) pairings =
           List.iter2
@@ -1544,7 +1545,7 @@ module Machine = struct
             source.transitions pairings
         in
         Vector.iter2 process_state dfa.states dataflow.pairings;
-        Gen.freeze gen
+        PDyn.contents gen n
     end in
     let partial_captures =
       let acc = !partial_captures in
