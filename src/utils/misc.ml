@@ -311,6 +311,15 @@ let list_foralli f l =
   in
   loop 0 l
 
+let list_rev_filter f xs =
+  let rec loop acc = function
+    | [] -> acc
+    | x :: xs ->
+      let acc = if f x then x :: acc else acc in
+      loop acc xs
+  in
+  loop [] xs
+
 let rec list_rev_iter f = function
   | x1 :: x2 :: x3 :: x4 :: xs ->
     list_rev_iter f xs;
@@ -336,6 +345,20 @@ let rec list_drop n = function
 let rec list_take n = function
   | x :: xs when n > 0 -> x :: list_take (n - 1) xs
   | _ -> []
+
+let list_uniq ?(equal=(=)) = function
+  | [] -> []
+  | [x] -> [x]
+  | x :: xs ->
+    let rec loop acc x = function
+      | [] -> List.rev (x :: acc)
+      | y :: xs ->
+        if equal x y then
+          loop acc x xs
+        else
+          loop (x :: acc) y xs
+    in
+    loop [] x xs
 
 let rec fixpoint ?counter ~propagate todo = match !todo with
   | [] -> ()

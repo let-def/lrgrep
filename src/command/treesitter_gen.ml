@@ -336,6 +336,11 @@ module Conflict = struct
       close_out (Lazy.force oc)
     )
 
+  let production_has_precedence _g _p =
+    false
+    (*let (module G) = raw g in
+      Option.is_some (G.Production.precedence (G.Production.of_int (Index.to_int p)))*)
+
   let solve (type g) (g : g grammar) =
     let items = Item.cardinal g in
     (* Collect all conflicts by item *)
@@ -370,8 +375,14 @@ module Conflict = struct
         else (
           begin match acc with
             | Some item'
-              when Index.equal (Item.production g item) (Item.production g item') ->
-              (* Item from same production: new bridge! *)
+              when
+                let prod = Item.production g item in
+                (* Item from same production... *)
+                Index.equal prod (Item.production g item') &&
+                (* and is not the reduction of a production with a prec declaration *)
+                not (Index.equal item (item_for_reducing g prod) &&
+                     production_has_precedence g prod)
+              ->
               let b = Bridge_maker.bridge maker item' item in
               (*Printf.eprintf "bridge %s <->\n       %s\n" (Item.to_string g item) (Item.to_string g item');*)
               item_bridges.@(item) <- List.cons (b, item');
@@ -383,6 +394,14 @@ module Conflict = struct
       end
     in
     let bridge_count, pb = Bridge_maker.create_problem maker in
+    Vector.iteri begin fun item bridges ->
+      let prod = Item.production g item in
+      if Nonterminal.to_string g (Production.lhs g prod) = "fun_expr" &&
+         Array.exists (fun sym -> Symbol.to_string g sym = "fun_expr")
+           (Production.rhs g prod)
+      then
+        List.iter (fun (b,_) -> Bridge_burner.make_strong pb b) bridges
+    end item_bridges;
     let burned = Bridge_burner.solve pb in
     Printf.eprintf "Bridges burned: %d/%d\n"
       (IndexSet.cardinal burned) (cardinal bridge_count);

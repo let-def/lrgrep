@@ -9,6 +9,7 @@ type 'b problem = {
   mutable succ_l: ('b, 'b indexset) vector;
   mutable succ_r: ('b, 'b indexset) vector;
   mutable bridges: ('b, 'b indexset) vector;
+  mutable strong: 'b indexset;
 
   (* Worklist for immediate simplifications (Khan's algorithm *)
   mutable pending_trivial: 'b index list;
@@ -27,6 +28,7 @@ let make (type b) (n : b cardinal) = {
   succ_l  = Vector.make n IndexSet.empty;
   succ_r  = Vector.make n IndexSet.empty;
   bridges = Vector.make n IndexSet.empty;
+  strong = IndexSet.empty;
   pending_trivial = [];
   burned  = IndexSet.empty;
   repr = Vector.init n Fun.id;
@@ -46,6 +48,9 @@ let link_b (type b) (t : b problem) (x : b index) (y : b index) =
     t.bridges.@(x) <- IndexSet.add y;
     t.bridges.@(y) <- IndexSet.add x
   end
+
+let make_strong (type b) (t : b problem) (x : b index) =
+  t.strong <- IndexSet.add x t.strong
 
 let is_trivial (type b) (t : b problem) (b : b index) =
   IndexSet.is_empty t.bridges.:(b) && begin
@@ -171,7 +176,8 @@ let solve t =
     IndexSet.cardinal t.pred_l.:(x) +
     IndexSet.cardinal t.pred_r.:(x) +
     IndexSet.cardinal t.succ_l.:(x) +
-    IndexSet.cardinal t.succ_r.:(x)
+    IndexSet.cardinal t.succ_r.:(x) -
+    if IndexSet.mem x t.strong then 100000 else 0
   in
   let pick_in_cluster cluster =
     let x = IndexSet.choose cluster in
@@ -227,6 +233,7 @@ let solve t =
     let sl = eval_cluster_rel cluster t.succ_l in
     let sr = eval_cluster_rel cluster t.succ_r in
     pl * sr + pr * sl + Int.max pl sr + Int.max pr sl
+    - if IndexSet.subset cluster t.strong then 100000 else 0
   in
   let rec loop remaining =
     let _, cluster =
