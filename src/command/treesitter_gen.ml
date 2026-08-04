@@ -170,6 +170,24 @@ end
 
 module Conflict = struct
 
+  type 'g position = ('g symbol, 'g production) Sum.n
+
+  let position_cardinal g =
+    Sum.cardinal (Symbol.cardinal g) (Production.cardinal g)
+
+  let position_to_string g p =
+    match Sum.prj (Symbol.cardinal g) p with
+    | L t -> Symbol.to_string g t
+    | R p -> Item.to_string g (Item.last g p)
+
+  let position_of_item g it =
+    let prod, pos = Item.desc g it in
+    if pos = Production.length g prod then
+      Sum.inj_r (Symbol.cardinal g) prod
+    else
+      let rhs = Production.rhs g prod in
+      Sum.inj_l rhs.(pos)
+
   type 'g actions = {
     shift: 'g item indexset;
     reduce: 'g item indexset;
@@ -343,30 +361,33 @@ module Conflict = struct
 
   let solve (type g) (g : g grammar) =
     let items = Item.cardinal g in
+    let positions = position_cardinal g in
     (* Collect all conflicts by item *)
     let successors = Vector.make items [] in
     let predecessors = Vector.make items [] in
     (* Lift representation to bridge base *)
-    let Bridge_maker.T maker = Bridge_maker.make items in
+    let Bridge_maker.T maker = Bridge_maker.make positions in
     (* Initialize arrays *)
     let register edge =
       successors.@(edge.source) <- List.cons edge;
       predecessors.@(edge.target) <- List.cons edge;
+      let source = position_of_item g edge.source in
+      let target = position_of_item g edge.target in
       match edge.relation with
-      | Shift_over_reduce ->
-        Bridge_maker.link_right maker edge.source edge.target
+      | Shift_over_reduce -> Bridge_maker.link_right maker source target
       | Reduce_over_shift ->
-        Bridge_maker.link_left maker edge.source edge.target
+        Bridge_maker.link_left maker source target
       | Reduce_reduce ->
-        Bridge_maker.link_right maker edge.source edge.target;
-        Bridge_maker.link_left maker edge.source edge.target
+        Bridge_maker.link_right maker source target;
+        Bridge_maker.link_left maker source target
     in
     Index.iter (Lr1.cardinal g) (process_lr1 g register);
-    if false then dump_scc "raw.dot" g begin fun node f ->
-      List.iter f successors.:(node)
-    end begin fun _ _ -> () end;
+    if false then
+      dump_scc "raw.dot" g
+        (fun node f -> List.iter f successors.:(node))
+        (fun _ _ -> ());
     (* Represent merging candidates as bridges *)
-    let item_bridges = Vector.make items [] in
+    let item_bridges = Vector.make positions [] in
     let _ = Index.fold items None begin fun acc item ->
         if List.is_empty successors.:(item) &&
            List.is_empty predecessors.:(item) then
@@ -383,10 +404,13 @@ module Conflict = struct
                 not (Index.equal item (item_for_reducing g prod) &&
                      production_has_precedence g prod)
               ->
-              let b = Bridge_maker.bridge maker item' item in
-              (*Printf.eprintf "bridge %s <->\n       %s\n" (Item.to_string g item) (Item.to_string g item');*)
-              item_bridges.@(item) <- List.cons (b, item');
-              item_bridges.@(item') <- List.cons (b, item)
+              let pos' = position_of_item g item' in
+              let pos = position_of_item g item in
+              let b = Bridge_maker.bridge maker pos' pos in
+              (*Printf.eprintf "bridge %s <->\n       %s\n"
+                (Item.to_string g item) (Item.to_string g item');*)
+              item_bridges.@(pos) <- List.cons (b, item');
+              item_bridges.@(pos') <- List.cons (b, item)
             | _ -> ()
           end;
           Some item
@@ -394,14 +418,14 @@ module Conflict = struct
       end
     in
     let bridge_count, pb = Bridge_maker.create_problem maker in
-    Vector.iteri begin fun item bridges ->
+    (*Vector.iteri begin fun item bridges ->
       let prod = Item.production g item in
       if Nonterminal.to_string g (Production.lhs g prod) = "fun_expr" &&
          Array.exists (fun sym -> Symbol.to_string g sym = "fun_expr")
            (Production.rhs g prod)
       then
         List.iter (fun (b,_) -> Bridge_burner.make_strong pb b) bridges
-    end item_bridges;
+    end item_bridges;*)
     let burned = Bridge_burner.solve pb in
     Printf.eprintf "Bridges burned: %d/%d\n"
       (IndexSet.cardinal burned) (cardinal bridge_count);
@@ -413,12 +437,15 @@ module Conflict = struct
             List.iter (fun (bridge,target) ->
                 if not (IndexSet.mem bridge burned) then
                   f target
-              ) item_bridges.:(i)
+              ) item_bridges.:(position_of_item g i)
           )
     in
     if false then dump_scc "conflicts.dot" g
       (fun i f -> List.iter f successors.:(i))
-      (fun i f -> List.iter (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg) item_bridges.:(i));
+      (fun i f -> List.iter
+          (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg)
+          item_bridges.:(position_of_item g i)
+      );
     (* Associativity is enforced in non-trivial components *)
     let it_ranks = Vector.make items 0 in
     let it_assoc = Vector.make items Prec in
