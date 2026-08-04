@@ -205,7 +205,7 @@ module Conflict = struct
         pos < Array.length rhs &&
         match Symbol.desc g rhs.(pos) with
         | T term' -> Index.equal term term'
-        | N nt -> IndexSet.mem term (Nonterminal.first g nt)
+        | N _ -> false (*IndexSet.mem term (Nonterminal.first g nt)*)
       )
 
   let add_shift g tr map =
@@ -431,21 +431,23 @@ module Conflict = struct
       (IndexSet.cardinal burned) (cardinal bridge_count);
     (* Generate SCC of the graph induced by conflicts *)
     let (module SCC) =
-      Tarjan.indexed_scc items
-        ~succ:(fun f i ->
-            List.iter (fun edge -> f edge.target) successors.:(i);
-            List.iter (fun (bridge,target) ->
-                if not (IndexSet.mem bridge burned) then
-                  f target
-              ) item_bridges.:(position_of_item g i)
-          )
+      Tarjan.indexed_scc items ~succ:begin fun f i ->
+        List.iter (fun edge -> f edge.target) successors.:(i);
+        List.iter begin fun (bridge,target) ->
+          if not (IndexSet.mem bridge burned) then
+            f target
+        end item_bridges.:(position_of_item g i)
+      end
     in
-    if false then dump_scc "conflicts.dot" g
-      (fun i f -> List.iter f successors.:(i))
-      (fun i f -> List.iter
-          (fun (b,_ as arg) -> if not (IndexSet.mem b burned) then f arg)
-          item_bridges.:(position_of_item g i)
-      );
+    if false then
+      dump_scc "conflicts.dot" g
+        (fun i f -> List.iter f successors.:(i))
+        begin fun i f ->
+          List.iter
+            (fun (b,_ as arg) ->
+               if not (IndexSet.mem b burned) then f arg)
+            item_bridges.:(position_of_item g i)
+        end;
     (* Associativity is enforced in non-trivial components *)
     let it_ranks = Vector.make items 0 in
     let it_assoc = Vector.make items Prec in
