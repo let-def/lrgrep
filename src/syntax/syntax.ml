@@ -136,6 +136,8 @@ type rule = {
       e.g the [x y] in [rule foo x y = ...] *)
   clauses : clause_group list;
   (** The list of clauses to match *)
+  definitions : ocaml_code option;
+  (** Local definitions available in the scope of the semantic actions *)
 }
 
 (** An .lrgrep file is an header containing some OCaml code, one or more entries,
@@ -254,13 +256,14 @@ let cmon_clause {patterns; action} =
   ]
 
 (** Convert a rule to a Cmon value. *)
-let cmon_rule {error; startsymbols; name; args; clauses} =
+let cmon_rule {error; startsymbols; name; args; clauses; definitions} =
   Cmon.record [
     "startsymbols", Cmon.list_map (cmon_positioned Cmon.string) startsymbols;
     "error", cmon_positioned Cmon.bool error;
     "name", Cmon.string name;
     "args", Cmon.list_map Cmon.string args;
     "clauses", Cmon.list_map (Cmon.list_map cmon_clause) clauses;
+    "definitions", cmon_option cmon_ocamlcode definitions;
   ]
 
 (** Convert a lexer definition to a Cmon value. *)

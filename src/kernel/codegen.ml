@@ -111,8 +111,8 @@ let output_wrapper out {Syntax.name; args; _} =
   let args = String.concat " " args in
   Code_printer.fmt out
     "let %s %s _lrgrep_env _lrgrep_lookahead = (\n\
-    \  List.find_map\n\
-    \    (fun m -> lrgrep_execute_%s %s m _lrgrep_lookahead)\n\
+    \  let lrgrep_execute = lrgrep_execute_%s %s _lrgrep_lookahead in
+    \  List.find_map lrgrep_execute\n\
     \    (lrgrep_run lrgrep_program_%s _lrgrep_env)\n\
      )\n"
     name args
@@ -312,11 +312,20 @@ let output_rule (type g r) (g : g grammar) {parser_name; _} (rule : Syntax.rule)
     let output_execute_function out =
       Code_printer.fmt out
         "let lrgrep_execute_%s %s\n\
-        \  (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
         \  ((token : %s.MenhirInterpreter.token), _startloc_token_, _endloc_token_)\n\
-        \  : _ option = match __clause, token with\n"
+        \  =\n"
         rule.name (String.concat " " rule.args)
-        parser_name parser_name;
+        parser_name;
+      begin match rule.definitions with
+      | None -> ()
+      | Some (loc, body) ->
+         Code_printer.print out "  let open ((struct\n";
+         Code_printer.fmt out ~loc "%s end)) in\n" body;
+      end;
+      Code_printer.fmt out
+        "fun (__clause, (__registers : %s.MenhirInterpreter.element Lrgrep_runtime.register_values))\n\
+         \  : _ option ->\n"  parser_name;
+      Code_printer.fmt out "  match __clause, token with\n";
       let output_clause_branches clause brs =
         let captures = clauses.captures.:(clause) in
         Code_printer.fmt out " ";

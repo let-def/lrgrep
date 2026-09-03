@@ -79,9 +79,11 @@ startsymbols:
 ;
 
 rule:
-| "rule" name=ident args=ident* "=" "parse" error=positioned(boption("error")) startsymbols=startsymbols
+| "rule" name=ident args=ident* "="
+    definitions=ACTION?
+    "parse" error=positioned(boption("error")) startsymbols=startsymbols
   clauses=clause_group*
-  { {startsymbols; error; name; args; clauses} }
+  { {startsymbols; error; name; args; clauses; definitions} }
 ;
 
 case_patterns:
