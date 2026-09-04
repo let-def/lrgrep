@@ -267,16 +267,6 @@ Examples:
     | Some _ -> lazy Language.parser_name
 
   let spec = lazy (
-    let print_parse_error_and_exit lexbuf exn =
-      let bt = Printexc.get_raw_backtrace () in
-      match exn with
-      | Front.Parser.Error ->
-        let pos = Lexing.lexeme_start_p lexbuf in
-        Syntax.error pos "syntax error."
-      | Front.Lexer.Error {msg; pos} ->
-        Syntax.error pos "%s." msg
-      | _ -> Printexc.raise_with_backtrace exn bt
-    in
     let parse_spec path =
       match open_in_bin path with
       | exception exn ->
@@ -286,11 +276,12 @@ Examples:
         let lexbuf = Lexing.from_channel ~with_positions:true ic in
         let lexbuf = Front.Lexer.prepare_lexbuf state lexbuf in
         Lexing.set_filename lexbuf path;
-        let result =
-          try Front.Parser.parse_lexer_definition (Front.Lexer.main state) lexbuf
-          with exn -> print_parse_error_and_exit lexbuf exn
-        in
-        result
+        match Front.Front_driver.parse_lexer_definition state lexbuf with
+        | Ok ast -> ast
+        | Error (pos, Some msg) -> Syntax.error pos "%s" msg
+        | Error (pos, None) -> Syntax.error pos "syntax error."
+        | exception Front.Lexer.Error {msg; pos} ->
+          Syntax.error pos "%s." msg
     in
     let file = get_spec_file () in
     let result = parse_spec file in

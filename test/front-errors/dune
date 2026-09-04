@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (libraries front))
+
+(rule (alias runtest) (action (run ./main.exe)))

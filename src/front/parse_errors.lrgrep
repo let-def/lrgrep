@@ -1,0 +1,76 @@
+{
+}
+
+rule error_messages = parse error (parse_lexer_definition)
+
+(*************************************************************)
+(* Rule header: name, parameters, '=', 'parse'                *)
+(*************************************************************)
+
+(* [ident] absorbs the keywords "rule"/"parse"/"error" too (see parser.mly:
+   [ident: IDENT | RULE | PARSE | ERROR]), so a missing '=' after a rule's
+   name/parameters often first manifests several tokens later, once the
+   parser runs out of things that still look like identifiers - e.g.
+   'rule foo parse error | ...' silently reads 'parse' and 'error' as two
+   more parameters, and only breaks at the following '|'. *)
+| [_* /rule: RULE ident list(ident) . EQUAL option(ACTION) PARSE positioned(boption(ERROR)) startsymbols list(clause_group)]
+  { "Missing '=' after the rule's name and parameters. Note: 'parse', \
+     'error' and 'rule' are themselves valid parameter names here, so if \
+     you wrote e.g. 'rule foo parse error ...', 'parse' and 'error' were \
+     consumed as extra parameters instead of the keywords you meant - \
+     write 'rule foo = parse ...' instead." }
+
+| [_* /rule: RULE ident list(ident) EQUAL option(ACTION) . PARSE positioned(boption(ERROR)) startsymbols list(clause_group)]
+  { "Expected the 'parse' keyword here (optionally preceded by \
+     '{ <ocaml definitions> }'). A rule has the shape: \
+     'rule <name> <params>* = [{ <definitions> }] parse [error] \
+     [(<start symbols>)] <clauses>*'." }
+
+(*************************************************************)
+(* Unclosed brackets                                           *)
+(*************************************************************)
+
+| [_* /regleaf: LBRACKET regexp . RBRACKET]
+  { "Unclosed '['. Expected ']' to close this reduce-pattern \
+     ('[ <pattern> ]')." }
+
+| [_* /regleaf: ident EQUAL LBRACKET regexp . RBRACKET]
+  { "Unclosed '['. Expected ']' to close this captured reduce-pattern \
+     ('name = [ <pattern> ]')." }
+
+| [_* /regleaf: LPAREN regexp . RPAREN]
+  { "Unclosed '('. Expected ')' to close this grouped sub-pattern." }
+
+| [_* /symbol: ident LPAREN loption(separated_nonempty_list(COMMA,symbol)) . RPAREN]
+  { "Unclosed '(' in a parameterized symbol's argument list, e.g. \
+     'name(arg1, arg2)'. Expected ')' (or ',' to continue the list)." }
+
+| [_* /startsymbols: LPAREN separated_nonempty_list(COMMA,positioned(ident)) . RPAREN]
+  { "Unclosed '(' in the list of start symbols after 'parse'. \
+     Expected ')' (or ',' to continue the list)." }
+
+(*************************************************************)
+(* Clauses: missing action, misplaced '%partial'                *)
+(*************************************************************)
+
+| [_* /clause: BAR case_patterns . case_action]
+  { "Missing action for this clause. Every '| <pattern>' must be followed \
+     by an action: '{ <ocaml expr> }', '%partial { <ocaml expr option> }', \
+     or 'UNREACHABLE'." }
+
+| [_* /case_action: PARTIAL . ACTION]
+  { "'%partial' must be followed by an action block: \
+     '%partial { <ocaml expr option> }'." }
+
+(*************************************************************)
+(* Whole-file structure                                        *)
+(*************************************************************)
+
+| [_* /parse_lexer_definition: header . nonempty_list(rule) header EOF]
+  { "A '.lrgrep' file needs at least one rule ('rule <name> = parse ...'); \
+     this file has none, or ends before any rule is written." }
+
+| [_* /parse_lexer_definition: header nonempty_list(rule) header . EOF]
+  { "Unexpected token after this rule's clauses. Expected another \
+     '| <pattern> <action>' clause, a '%shortest [ ... ]' group, a new \
+     'rule ...', a trailing '{ <ocaml code> }', or the end of the file." }

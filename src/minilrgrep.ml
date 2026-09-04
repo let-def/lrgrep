@@ -511,12 +511,12 @@ let ast = match spec_file with
     (* Parse the specification file into an abstract syntax tree (AST) *)
     let ast =
       Lexing.set_filename lexbuf spec_file;
-      try Front.Parser.parse_lexer_definition (Front.Lexer.main state) lexbuf
-      with
-      | Front.Lexer.Error {msg; pos} ->
+      match Front.Front_driver.parse_lexer_definition state lexbuf with
+      | Ok ast -> ast
+      | Error (pos, Some msg) -> Syntax.error pos "%s" msg
+      | Error (pos, None) -> Syntax.error pos "syntax error"
+      | exception Front.Lexer.Error {msg; pos} ->
         Syntax.error pos "%s" msg
-      | Front.Parser.Error ->
-        Syntax.error lexbuf.lex_start_p "syntax error"
     in
     (* Close the input channel *)
     close_in_noerr ic;
