@@ -74,3 +74,59 @@ rule error_messages = parse error (parse_lexer_definition)
   { "Unexpected token after this rule's clauses. Expected another \
      '| <pattern> <action>' clause, a '%shortest [ ... ]' group, a new \
      'rule ...', a trailing '{ <ocaml code> }', or the end of the file." }
+
+(*************************************************************)
+(* Trailing commas/separators with nothing following            *)
+(*************************************************************)
+
+| /separated_nonempty_list(COMMA,symbol): symbol COMMA . separated_nonempty_list(COMMA,symbol)
+  { "Expected another symbol after ',' in this argument list \
+     (or remove the trailing ',')." }
+
+| /separated_nonempty_list(COMMA,positioned(ident)): positioned(ident) COMMA . separated_nonempty_list(COMMA,positioned(ident))
+  { "Expected another start-symbol name after ',' \
+     (or remove the trailing ',')." }
+
+| /separated_nonempty_list(COMMA,positioned(symbol)): positioned(symbol) COMMA . separated_nonempty_list(COMMA,positioned(symbol))
+  { "Expected another symbol after ',' in this lookahead list \
+     (or remove the trailing ',')." }
+
+| /regseq_loop: regseq_loop SEMI . regterm
+  { "Expected another pattern after ';' (or remove the trailing ';')." }
+
+(*************************************************************)
+(* Rule header: what comes right after a keyword/opener          *)
+(*************************************************************)
+
+| /rule: RULE . ident list(ident) EQUAL option(ACTION) PARSE positioned(boption(ERROR)) startsymbols list(clause_group)
+  { "Expected the rule's name after 'rule'." }
+
+| /startsymbols: LPAREN . separated_nonempty_list(COMMA,positioned(ident)) RPAREN
+  { "Expected a start-symbol name after '(' here \
+     (the list of start symbols cannot be empty)." }
+
+| /clause_group: SHORTEST . LBRACKET list(clause) RBRACKET
+  { "Expected '[' after '%shortest'. '%shortest [ <clauses> ]' groups a \
+     set of clauses to be tried with the shortest-match policy." }
+
+| [_* /clause_group: SHORTEST LBRACKET list(clause) . RBRACKET]
+  { "Expected a clause ('| <pattern> <action>') or ']' to close this \
+     '%shortest [ ... ]' group." }
+
+(*************************************************************)
+(* Filters ('/ ...') and captures ('name = ...')                *)
+(*************************************************************)
+
+| /regfilter: SLASH . nonempty_list(positioned(filter_symbol))
+  /regfilter: SLASH . wild_symbol COLON nonempty_list(positioned(filter_symbol))
+  { "Expected a filter after '/': '.', '_*', a symbol name, or \
+     'name: ...' to label the stack slot being matched." }
+
+| /regfilter: SLASH wild_symbol COLON . nonempty_list(positioned(filter_symbol))
+  { "Expected at least one filter symbol after ':' \
+     (e.g. '.', '_*', or a symbol name)." }
+
+| /regleaf: ident EQUAL . wild_symbol
+  /regleaf: ident EQUAL . LBRACKET regexp RBRACKET
+  { "Expected a symbol or '[' after 'name ='. A capture is written \
+     'name = <symbol>' or 'name = [ <pattern> ]'." }

@@ -90,7 +90,62 @@ let driver () : bool =
        "ERROR 3.0: Unexpected token after this rule's clauses. Expected \
         another '| <pattern> <action>' clause, a '%shortest [ ... ]' \
         group, a new 'rule ...', a trailing '{ <ocaml code> }', or the \
-        end of the file.") ]
+        end of the file.");
+
+      (* Trailing ',' with nothing after, in a symbol's argument list. *)
+      ("rule foo = parse error\n| [seq(a, b,)\n  { \"x\" }\n",
+       "ERROR 2.12: Expected another symbol after ',' in this argument \
+        list (or remove the trailing ',').");
+
+      (* Trailing ',' with nothing after, in the start-symbols list. *)
+      ("rule foo = parse error (a, b,)\n| { \"x\" }\n",
+       "ERROR 1.29: Expected another start-symbol name after ',' \
+        (or remove the trailing ',').");
+
+      (* Trailing ',' with nothing after, in an '@' lookahead list. *)
+      ("rule foo = parse error\n| OPAREN @ a, b,\n  { \"x\" }\n",
+       "ERROR 3.8: Expected another symbol after ',' in this lookahead \
+        list (or remove the trailing ',').");
+
+      (* Trailing ';' with nothing after, in a sequence pattern. *)
+      ("rule foo = parse error\n| OPAREN;\n  { \"x\" }\n",
+       "ERROR 3.8: Expected another pattern after ';' \
+        (or remove the trailing ';').");
+
+      (* 'rule' with no name at all. *)
+      ("rule = parse error\n| { \"x\" }\n",
+       "ERROR 1.5: Expected the rule's name after 'rule'.");
+
+      (* Empty start-symbols list: 'parse ()'. *)
+      ("rule foo = parse error ()\n| { \"x\" }\n",
+       "ERROR 1.24: Expected a start-symbol name after '(' here \
+        (the list of start symbols cannot be empty).");
+
+      (* '%shortest' not followed by '['. *)
+      ("rule foo = parse error\n%shortest\n",
+       "ERROR 3.0: Expected '[' after '%shortest'. '%shortest \
+        [ <clauses> ]' groups a set of clauses to be tried with the \
+        shortest-match policy.");
+
+      (* Unclosed '%shortest [ ... '. *)
+      ("rule foo = parse error\n%shortest [\n  | OPAREN { \"x\" }\n",
+       "ERROR 4.0: Expected a clause ('| <pattern> <action>') or ']' to \
+        close this '%shortest [ ... ]' group.");
+
+      (* '/' not followed by a filter. *)
+      ("rule foo = parse error\n| OPAREN /\n  { \"x\" }\n",
+       "ERROR 3.8: Expected a filter after '/': '.', '_*', a symbol \
+        name, or 'name: ...' to label the stack slot being matched.");
+
+      (* 'name:' (in a filter) not followed by any filter symbol. *)
+      ("rule foo = parse error\n| OPAREN /a:\n  { \"x\" }\n",
+       "ERROR 3.8: Expected at least one filter symbol after ':' \
+        (e.g. '.', '_*', or a symbol name).");
+
+      (* 'name =' (a capture) not followed by a symbol or '['. *)
+      ("rule foo = parse error\n| c =\n  { \"x\" }\n",
+       "ERROR 3.8: Expected a symbol or '[' after 'name ='. A capture \
+        is written 'name = <symbol>' or 'name = [ <pattern> ]'.") ]
   in
   List.for_all (fun (input, expected) ->
       let actual = format input in
