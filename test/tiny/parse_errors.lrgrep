@@ -1,0 +1,9 @@
+rule error_message = parse error
+| OPAREN ; [chars]
+{ "Unclosed '('" }
+
+| / . sentence
+{ "Expecting '(' followed by characters" }
+
+| / _* . EOF
+{ "Expecting end of input" }
