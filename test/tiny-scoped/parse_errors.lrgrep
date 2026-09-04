@@ -1,0 +1,33 @@
+(* Test for rule-definition scopes.
+ *
+ * The scope [ { let n = ref 0 ... } ] is meant to introduce a definition that is:
+ *   - in scope for every clause of the rule,
+ *   - re-evaluated (fresh) on every invocation of the rule, and
+ *   - shared across the clauses that are tried during a single invocation, so
+ *     that a side-effect in one clause can be observed by a later clause.
+ *
+ * The clauses below rely on that last property: the always-matching partial
+ * clause sets [n] to 1, and the succeeding clauses assert [n] is 1 and set it
+ * to 2. If the scope is re-created per clause (rather than shared for the whole
+ * invocation) these assertions fail and the driver crashes.
+ *)
+rule error_message = {
+  let () = print_endline "-> enter error_message"
+  let n = ref 0
+  let flag = ref false
+} parse error
+(* (R2) always matches, never succeeds: check the ref starts at 0, set it to 1. *)
+|  %partial { print_endline "--> line 19"; assert (!n = 0); n := 1; None }
+(* (R6) a partial that (via a lookahead) sets [flag] only when the failing token
+        is EOF; never succeeds. *)
+| OPAREN ; [chars] @ EOF %partial { print_endline "--> line 22"; flag := true; None }
+(* (R6) a partial whose success depends on a ref: succeeds iff [flag] was set by
+        the previous clause. *)
+| OPAREN ; [chars] %partial { print_endline "--> line 25"; if !flag then Some "A (eof, flag set)" else None }
+(* (R3)/(R5) the total rule for the "unclosed '('" situation: assert the ref was
+        left at 1 by the always-partial, then set it to 2. *)
+| OPAREN ; [chars] { print_endline "--> line 28"; assert (!n = 1); n := 2; "A: unclosed '('" }
+(* (R4) a %partial rule that succeeds, for the "expecting '('" situation. *)
+| / . sentence %partial { print_endline "--> line 30"; assert (!n = 1); n := 2; Some "B: expecting '('" }
+(* (R5) a total rule that succeeds, for the "expecting EOF" situation. *)
+| / _* . EOF { print_endline "--> line 32"; assert (!n = 1); n := 2; "C: expecting EOF" }
