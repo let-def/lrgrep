@@ -53,48 +53,43 @@ let parse
   | _ -> assert false
 
 
-let run input =
+(* [format input] is the exact one-line output produced for [input]: it is the
+   same string that [run] prints. *)
+let format input =
   match parse Parser.Incremental.sentence input with
-  | Ok _ -> Printf.printf "%s => OK\n" input
-  | Error e -> Printf.printf "%s => ERROR %s\n" input e
+  | Ok _ -> "=> OK"
+  | Error e -> "=> ERROR " ^ e
+
+let run input =
+  Printf.printf "%s\n" (format input)
 
 (* -------------------------------------------------------------------------- *)
 
 (* Test driver. *)
 
-(* [check input expectation] runs the parser on [input] and verifies that the
-   result matches [expectation]. It prints the produced output as well as a
-   PASS/FAIL verdict, and returns [true] when the expectation is met. *)
+(* Each test case is an input together with the exact output we expect to be
+   produced for it. The expectation is checked literally: the produced output
+   must be equal to the expected one, character for character. This in
+   particular verifies that the syntax error message produced by the [lrgrep]
+   specification ([parse_errors.lrgrep]) is the one we intend. *)
 
-let check (input : string) (expectation : (char list, string) result -> bool) : bool =
-  let result = parse Parser.Incremental.sentence input in
-  let verdict = expectation result in
-  (* Show the actual output, mirroring [run]. *)
-  run input;
-  Printf.printf "%s: %s\n" input (if verdict then "PASS" else "FAIL");
-  verdict
-
-(* [is_ok] holds when the parse succeeds. *)
-let is_ok : (char list, string) result -> bool = function
-  | Ok _ -> true
-  | Error _ -> false
-
-(* [is_error] holds when the parse fails. *)
-let is_error : (char list, string) result -> bool = function
-  | Ok _ -> false
-  | Error _ -> true
-
-(* [driver] runs a few well-known inputs and checks that the parser accepts the
-   well-formed ones and rejects the malformed ones. It returns [true] when all
-   checks pass. *)
 let driver () : bool =
   let cases =
-    [ ("()", is_ok);
-      ("(a)", is_ok);
-      ("(", is_error);
-      ("(a", is_error) ]
+    [ ("()", "=> OK");
+      ("(a)", "=> OK");
+      (* The closing ')' is missing, and the error is reported at end of input
+         ('$'); the lrgrep rule [OPAREN ; [chars]] produces "Unclosed '('" ). *)
+      ("(", "=> ERROR Error at '$': Unclosed '('");
+      ("(a", "=> ERROR Error at '$': Unclosed '('") ]
   in
-  List.for_all (fun (input, expectation) -> check input expectation) cases
+  List.for_all (fun (input, expected) ->
+      let actual = format input in
+      let verdict = actual = expected in
+      Printf.printf "input:    %s\n" input;
+      Printf.printf "expected: %s\n" expected;
+      Printf.printf "actual:   %s\n%!" actual;
+      Printf.printf "=> %s\n%!" (if verdict then "PASS" else "FAIL");
+      verdict) cases
 
 let () =
   match Sys.argv with
