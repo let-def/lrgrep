@@ -381,6 +381,11 @@ rule error_messages = {
   /nonempty_type_kind: PRIVATE . LBRACE label_declarations RBRACE
   { "Expected type after `private`" }
 
+(* New in 5.5.1: `type t = external "name"` (an externally-implemented
+   type, e.g. for an FFI type known only by name). *)
+| /nonempty_type_kind: EXTERNAL . STRING
+  { "Expected a quoted external name after `external`" }
+
 | /function_type: LIDENT COLON . tuple_type MINUSGREATER function_type
   /function_type: LIDENT COLON . atomic_type _*
   { "Expected type after `:` in function type" }
