@@ -2,11 +2,11 @@
   let rec longident_to_string = function
     | Longident.Lident n -> n
     | Longident.Lapply (a, b) ->
-      longident_to_string a ^ "(" ^ longident_to_string b ^ ")"
+      longident_to_string a.txt ^ "(" ^ longident_to_string b.txt ^ ")"
     | Longident.Ldot (a, n) ->
-      longident_to_string a ^ "." ^ n
+      longident_to_string a.txt ^ "." ^ n.txt
 
-  let report_currified_constructor ?outer inner (token : Parser_raw.token) =
+  let report_currified_constructor ?outer inner (token : Parser.token) =
     let token = match token with
       | UNDERSCORE -> "_"
       | LIDENT u | UIDENT u -> u
@@ -57,7 +57,7 @@ rule error_messages = parse error
         (Format.asprintf "%a" Pprintast.core_type
           (Typ.constr (Location.mknoloc (Longident.Lident "t")) typs))
         (Format.asprintf "%a" Pprintast.core_type
-          (Typ.tuple typs))
+          (Typ.tuple (List.map (fun t -> (None,t)) typs)))
     )
   }
 
@@ -91,7 +91,7 @@ rule error_messages = parse error
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
 | [_* / _* _ . LIDENT _*]
-  %partial { match Lexer_raw.as_keyword token with
+  %partial { match Lexer.as_keyword token with
     | None -> None
     | Some kw ->
       Some ("`" ^ kw ^ "' is a keyword and cannot appear in this context (try " ^ kw ^ "_)")
