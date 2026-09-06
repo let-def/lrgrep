@@ -2110,6 +2110,7 @@ rule error_messages = {
 | [_* /extension: LBRACKETPERCENT attr_id payload . RBRACKET]
   { "Expected closing `]` after extension" }
 
+
 | /labeled_tuple_pat_element_list(pattern): TILDE LIDENT . COMMA _*
   /reversed_labeled_tuple_pattern(pattern): TILDE LIDENT . COMMA DOTDOT
   { "Expected `,` in labeled tuple pattern" }
