@@ -845,6 +845,8 @@ rule error_messages = parse error
   { "Expected type binding after type identifier in constraint" }
 
 | /with_constraint: TYPE type_parameters label_longident COLONEQUAL . alias_type
+  { "Expected type after `:=` in `with type` constraint" }
+
 | [_* /with_constraint: TYPE type_parameters label_longident with_type_binder . alias_type reversed_llist(preceded(CONSTRAINT,constrain))]
   { "Expected type after `=` in `with type` constraint" }
 
