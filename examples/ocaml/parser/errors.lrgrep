@@ -1224,6 +1224,14 @@ rule error_messages = parse error
       /reversed_labeled_tuple_pattern(pattern_no_exn): pattern_no_exn . COMMA DOTDOT]
   { "Expected `=` (or `,`) after pattern" }
 
+(* Promoted ahead of the "already complete" rule right below (stress-test
+   finding: `module M = struct let x = 1` missing `end` used to always
+   lose to that rule, reporting on the inner `let` being "complete"
+   instead of the actually-missing `end`). Rule unchanged, only its
+   priority relative to the one below moved. *)
+| [_* /module_expr: STRUCT list(attribute) structure . END]
+  { "Expected structure item or closing `end` in structure" }
+
 (* Bug #1 (stress-test report): a complete *structure-level* let-binding
    (which never takes `in`) reaches the same LALR state as an *expression*
    let-binding that is still waiting for `in`, because the automaton has not
@@ -1282,6 +1290,18 @@ rule error_messages = parse error
 | /simple_expr: simple_expr DOTOP LBRACKET . separated_or_terminated_nonempty_list(SEMI,expr) RBRACKET
   { "Expected expression list after `.<op>[`" }
 
+(* Stress-test finding: add the opening-bracket location for the plain
+   list-literal case specifically (the corpus-tested one), the same way
+   the parenthesis rule near the top of this file does - without touching
+   the 5 DOTOP-index-operator alternatives right below, which keep their
+   existing (location-less) message unchanged; enumerating a distinct
+   "which LBRACKET is the relevant one" for each of those individually
+   wasn't judged worth the added complexity here. *)
+| lb=LBRACKET; [_* /simple_expr: LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
+  { with_sub "Expected closing `]` after expression list"
+      [ mkloc $startpos(lb) $endpos(lb), "opened here" ]
+  }
+
 | [_* /fun_expr: simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET _*
       /simple_expr: simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
 | [_* /fun_expr: simple_expr DOT mod_longident DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET _*
@@ -1289,7 +1309,6 @@ rule error_messages = parse error
 | [_* /simple_expr: mod_longident DOT LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
 | [_* /simple_expr: simple_expr DOT mod_longident DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
 | [_* /simple_expr: simple_expr DOTOP LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
-| [_* /simple_expr: LBRACKET separated_or_terminated_nonempty_list(SEMI,expr) . RBRACKET]
   { "Expected closing `]` after expression list" }
 
 | /fun_expr: simple_expr DOTOP LBRACE . separated_or_terminated_nonempty_list(SEMI,expr) _*
@@ -1366,8 +1385,12 @@ rule error_messages = parse error
 | /letop_bindings: letop_bindings ANDOP . letop_binding_body
   { "Expected let binding after `and<op>`" }
 
+| la=LBRACKETBAR; [_* /simple_expr: LBRACKETBAR separated_or_terminated_nonempty_list(SEMI,expr) . BARRBRACKET]
+  { with_sub "Expected closing `|]` after expression list"
+      [ mkloc $startpos(la) $endpos(la), "opened here" ]
+  }
+
 | [_* /simple_expr: mod_longident DOT LBRACKETBAR separated_or_terminated_nonempty_list(SEMI,expr) . BARRBRACKET]
-| [_* /simple_expr: LBRACKETBAR separated_or_terminated_nonempty_list(SEMI,expr) . BARRBRACKET]
   { "Expected closing `|]` after expression list" }
 
 | /simple_expr: mod_longident DOT LBRACELESS . separated_or_terminated_nonempty_list(SEMI,object_expr_field) GREATERRBRACE
@@ -1412,8 +1435,10 @@ rule error_messages = parse error
 | [_* /simple_expr: BEGIN ext list(attribute) seq_expr . END]
   { "Expected closing `end` after expression in begin expression" }
 
-| [_* /simple_expr: LBRACE record_expr_content . RBRACE]
-  { "Expected closing `}` after record content" }
+| lc=LBRACE; [_* /simple_expr: LBRACE record_expr_content . RBRACE]
+  { with_sub "Expected closing `}` after record content"
+      [ mkloc $startpos(lc) $endpos(lc), "opened here" ]
+  }
 
 | [_* /fun_expr: LET OPEN ext list(attribute) . module_expr IN seq_expr]
   { "Expected module expression after `let open`" }
@@ -1967,9 +1992,6 @@ rule error_messages = parse error
 | [_* /item_extension: LBRACKETPERCENTPERCENT attr_id payload . RBRACKET]
 | [_* /extension: LBRACKETPERCENT attr_id payload . RBRACKET]
   { "Expected closing `]` after extension" }
-
-| [_* /module_expr: STRUCT list(attribute) structure . END]
-  { "Expected structure item or closing `end` in structure" }
 
 | /labeled_tuple_pat_element_list(pattern): TILDE LIDENT . COMMA _*
   /reversed_labeled_tuple_pattern(pattern): TILDE LIDENT . COMMA DOTDOT
