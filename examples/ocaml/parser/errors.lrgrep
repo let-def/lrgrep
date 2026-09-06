@@ -193,7 +193,9 @@ rule error_messages = parse error
       (* Message court identifiant la situation *)
       (* Hint pour détailler. (Rappel de la syntaxe) *)
       Some "Application of n-ary constructors cannot be currified, \
-            arguments should be wrapped between parentheses and comma separated"
+            arguments should be wrapped between parentheses and comma \
+            separated (or, if this follows the right-hand side of a \
+            `let`/`let*` binding, `in` may be missing)"
   }
 
 | inner=constr_longident;
