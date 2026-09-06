@@ -603,6 +603,17 @@ rule error_messages = parse error
   /simple_expr: mod_longident DOT LBRACKETBAR . BARRBRACKET
   { "Expected expression list or `|]` after `[|`" }
 
+| [_* /fun_expr: simple_expr reversed_nonempty_llist(labeled_simple_expr) .
+      /reversed_nonempty_llist(labeled_simple_expr): reversed_nonempty_llist(labeled_simple_expr) . labeled_simple_expr]
+  @ LESSMINUS
+  { "Expected a structure item or end of file (`<-` only follows a mutable-field access like `r.field` or an indexing operation like `a.(i)`; a plain function application is never a valid target)" }
+
+| [_* /fun_expr: simple_expr DOT label_longident . LESSMINUS fun_expr
+      /fun_expr: simple_expr DOT label_longident . LESSMINUS FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
+      /simple_expr: simple_expr DOT label_longident .]
+  @ MINUSGREATER
+  { "Expected `<-` (not `->`) to assign to this mutable field" }
+
 | /fun_expr: _* LESSMINUS . fun_expr
   /fun_expr: _* LESSMINUS . FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
   { "Expected expression after `<-`" }
