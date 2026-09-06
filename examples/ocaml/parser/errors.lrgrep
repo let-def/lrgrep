@@ -2170,11 +2170,42 @@ rule error_messages = {
       /reversed_separated_nontrivial_llist(COMMA,core_type): core_type . COMMA core_type]
   { "Expected closing `)` or `,` in type list" }
 
+(* A bare (unqualified) type name is still ambiguous at this exact point
+   between a plain declaration (wants `=`, in a .ml; `=` or `:=` in a
+   .mli) and a type extension (wants `+=`) - the automaton hasn't reduced
+   into type_longident yet, so both/all interpretations are simultaneously
+   live items in one state. Once a qualified path has been shifted
+   (below), only the extension reading survives, and type_longident has
+   already reduced by the point the error is detected - so its value can
+   no longer be inspected there (LRGrep's reduction capture only exposes
+   locations, never values, confirmed via src/kernel/transl.ml's Reduce
+   case: it only ever creates Start_loc/End_loc registers); only the
+   token shape at this earlier, still-unreduced point lets the cases be
+   told apart at all. The .mli (interface) alternatives are listed first:
+   their item set is a superset of the .ml one (both share the plain-vs-
+   extension ambiguity, .mli additionally has the `:=` substitution
+   reading), and LRGrep matches a bracket if its items are present
+   *at least*, so the narrower .ml bracket below would otherwise also
+   (wrongly) match .mli states and shadow this one. *)
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+  { "Expected `=`, `:=`, or `+=` after type name" }
+
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
+      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+  { "Expected `=` or `+=` after type name" }
+
 | [_* /structure_item: TYPE ext list(attribute) type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
 | [_* /structure_item: TYPE ext list(attribute) NONREC type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
 | [_* /signature_item: TYPE ext list(attribute) type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
 | [_* /signature_item: TYPE ext list(attribute) NONREC type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
-  { "Expected `=` or `+=` after type name" }
+  { "Expected `+=` after type name" }
 
 | [_* /structure_item: TYPE ext list(attribute) type_parameters type_longident PLUSEQ private_flag . reversed_bar_llist(extension_constructor) list(post_item_attribute)]
 | [_* /structure_item: TYPE ext list(attribute) NONREC type_parameters type_longident PLUSEQ private_flag . reversed_bar_llist(extension_constructor) list(post_item_attribute)]
