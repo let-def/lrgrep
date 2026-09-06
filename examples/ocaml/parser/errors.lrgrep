@@ -1272,6 +1272,7 @@ rule error_messages = parse error
    instead of the actually-missing `end`). Rule unchanged, only its
    priority relative to the one below moved. *)
 | op=STRUCT; list(attribute); [_* /module_expr: STRUCT list(attribute) structure . END]
+| op=STRUCT; [_* /module_expr: STRUCT list(attribute) structure . END]
   { with_sub "Expected structure item or closing `end` in structure"
       [ mkloc $startpos(op) $endpos(op), "opened here" ]
   }
@@ -1793,6 +1794,8 @@ rule error_messages = parse error
   { "Expected another type after `=` in `constraint` field" }
 
 | op=OBJECT; list(attribute); class_self_type; [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
+| op=OBJECT; list(attribute); [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
+| op=OBJECT; [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
   { with_sub "Expected a class type field or a closing `end` in class type body"
       [ mkloc $startpos(op) $endpos(op), "opened here" ]
   }
@@ -2021,6 +2024,8 @@ rule error_messages = parse error
   { "Expected a type after `constraint`" }
 
 | op=OBJECT; list(attribute); class_self_pattern; [_* /class_simple_expr: OBJECT list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+| op=OBJECT; list(attribute); [_* /class_simple_expr: OBJECT list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+| op=OBJECT; [_* /class_simple_expr: OBJECT list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
   { with_sub "Expected a class field or a closing `end` in class body"
       [ mkloc $startpos(op) $endpos(op), "opened here" ]
   }
@@ -2057,6 +2062,9 @@ rule error_messages = parse error
   { "Expected a type after `:` in `object (self : ty)`" }
 
 | op=OBJECT; ext; list(attribute); class_self_pattern; [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+| op=OBJECT; ext; list(attribute); [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+| op=OBJECT; ext; [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+| op=OBJECT; [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
   { with_sub "Expected closing `end` after object expression"
       [ mkloc $startpos(op) $endpos(op), "opened here" ]
   }
@@ -2112,6 +2120,7 @@ rule error_messages = parse error
   { "Expected a constructor after `+=` in type extension" }
 
 | op=SIG; list(attribute); [_* /module_type: SIG list(attribute) signature . END]
+| op=SIG; [_* /module_type: SIG list(attribute) signature . END]
   { with_sub "Expected closing `end` or a signature item"
       [ mkloc $startpos(op) $endpos(op), "opened here" ]
   }
