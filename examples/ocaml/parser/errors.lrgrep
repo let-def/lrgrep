@@ -268,8 +268,8 @@ rule error_messages = parse error
 
 | /reversed_labeled_tuple_body: TILDE . LIDENT _*
   /reversed_labeled_tuple_body: TILDE . LPAREN _*
-(* | /labeled_simple_pattern: TILDE . LPAREN label_let_pattern RPAREN
-     /labeled_simple_pattern: TILDE . LIDENT *)
+| /labeled_simple_pattern: TILDE . LPAREN label_let_pattern RPAREN
+  /labeled_simple_pattern: TILDE . LIDENT
   { "Expected parameter name or `(` after `~`" }
 
 | /labeled_simple_expr: TILDE LPAREN . LIDENT type_constraint RPAREN
@@ -391,7 +391,7 @@ rule error_messages = parse error
   { "Expected type after `:`" }
 
 | [_* /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint . RPAREN _*]
-(*| [_* /labeled_simple_pattern: TILDE LPAREN label_let_pattern . RPAREN]*)
+| [_* /labeled_simple_pattern: TILDE LPAREN label_let_pattern . RPAREN]
   { "Expected closing `)` after labeled parameter" }
 
 | /reversed_labeled_tuple_body: TILDE LPAREN LIDENT type_constraint RPAREN . COMMA _*
@@ -661,20 +661,20 @@ rule error_messages = parse error
   /reversed_labeled_tuple_pattern(pattern_no_exn): TILDE LIDENT . COMMA DOTDOT
   { "Expected `,` or closing `)` after labeled pattern" }
 
-(*| /labeled_simple_pattern: TILDE LPAREN . label_let_pattern RPAREN
-  { "Expected labeled parameter after `~(`" }*)
+| /labeled_simple_pattern: TILDE LPAREN . label_let_pattern RPAREN
+  { "Expected labeled parameter after `~(`" }
 
 | /label_let_pattern: LIDENT COLON . core_type
   { "Expected type after `:` in labeled parameter" }
 
-(*| /labeled_simple_pattern: QUESTION . LPAREN label_let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
+| /labeled_simple_pattern: QUESTION . LPAREN label_let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
   /labeled_simple_pattern: QUESTION . LIDENT
 | /labeled_simple_pattern: OPTLABEL . LPAREN let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
   /labeled_simple_pattern: OPTLABEL . pattern_var
   { "Expected labeled parameter after `?`" }
 
 | /labeled_simple_pattern: QUESTION LPAREN . label_let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
-  { "Expected labeled parameter after `?(`" }*)
+  { "Expected labeled parameter after `?(`" }
 
 | /option(preceded(EQUAL,seq_expr)): EQUAL . seq_expr
   { "Expected expression after `=` in optional labeled parameter" }
@@ -902,15 +902,15 @@ rule error_messages = parse error
 | [_* /class_expr: FUN list(attribute) . class_fun_def]
   { "Expected parameter after `fun`" }
 
-(*| /labeled_simple_pattern: OPTLABEL LPAREN . let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
-  { "Expected parameter after `?(`" }*)
+| /labeled_simple_pattern: OPTLABEL LPAREN . let_pattern option(preceded(EQUAL,seq_expr)) RPAREN
+  { "Expected parameter after `?(`" }
 
 | /let_pattern: pattern COLON . core_type
   { "Expected type after `:` in let pattern" }
 
-(*| [_* /labeled_simple_pattern: OPTLABEL LPAREN let_pattern option(preceded(EQUAL,seq_expr)) . RPAREN]
+| [_* /labeled_simple_pattern: OPTLABEL LPAREN let_pattern option(preceded(EQUAL,seq_expr)) . RPAREN]
 | [_* /labeled_simple_pattern: QUESTION LPAREN label_let_pattern option(preceded(EQUAL,seq_expr)) . RPAREN]
-  { "Expected closing `)` after optional labeled parameter" }*)
+  { "Expected closing `)` after optional labeled parameter" }
 
 | /constr_extra_nonprefix_ident: LPAREN . RPAREN
   /constr_longident: LPAREN . COLONCOLON RPAREN
@@ -935,8 +935,8 @@ rule error_messages = parse error
 | [_* /fun_param_as_list: LPAREN TYPE nonempty_list(mkrhs(LIDENT)) . RPAREN]
   { "Expected closing `)` after polymorphic type variables" }
 
-(*| /labeled_simple_pattern: LABEL . simple_pattern
-  { "Expected pattern after label in labeled simple pattern" }*)
+| /labeled_simple_pattern: LABEL . simple_pattern
+  { "Expected pattern after label in labeled simple pattern" }
 
 | [_* /fun_expr: FUN ext list(attribute) fun_params option(preceded(COLON,atomic_type)) . MINUSGREATER fun_body]
   { "Expected `->` after function parameters" }
@@ -1332,7 +1332,7 @@ rule error_messages = parse error
   { "Expected constructor or operator after `(`" }
 
 | /constr_ident: LPAREN COLONCOLON . RPAREN
-| /mk_longident(mod_ext_longident,__anonymous_43): LPAREN COLONCOLON . RPAREN
+| /mk_longident(mod_ext_longident,__anonymous_42): LPAREN COLONCOLON . RPAREN
   { "Expected closing `)` after `::`" }
 
 | /generalized_constructor_arguments: OF . constructor_arguments
@@ -1460,9 +1460,9 @@ rule error_messages = parse error
 | /constr_longident: mod_longident DOT . LPAREN COLONCOLON RPAREN
   /mk_longident(mod_longident,UIDENT): mod_longident DOT . UIDENT
 | /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident DOT . UIDENT
-  /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident DOT . ident
-  /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident DOT . LPAREN COLONCOLON RPAREN
-  /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident DOT . val_extra_ident
+  /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident DOT . ident
+  /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident DOT . LPAREN COLONCOLON RPAREN
+  /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident DOT . val_extra_ident
   { "Expected identifier or `(::)` after `.`" }
 
 | /constr_longident: mod_longident DOT LPAREN . COLONCOLON RPAREN
@@ -1796,12 +1796,12 @@ rule error_messages = parse error
 | /class_simple_expr: LBRACKET reversed_separated_nonempty_llist(COMMA,core_type) RBRACKET . class_longident
   { "Expected class name after class parameters" }
 
-(*| [_* /class_fun_def: labeled_simple_pattern . MINUSGREATER class_expr
+| [_* /class_fun_def: labeled_simple_pattern . MINUSGREATER class_expr
       /class_fun_def: labeled_simple_pattern . class_fun_def]
-  { "Expected `->` after parameter in class definition" }*)
+  { "Expected `->` after parameter in class definition" }
 
-(*| /class_fun_def: labeled_simple_pattern MINUSGREATER . class_expr
-  { "Expected class expression after `->`" }*)
+| /class_fun_def: labeled_simple_pattern MINUSGREATER . class_expr
+  { "Expected class expression after `->`" }
 
 (*| [_* /class_expr: let_bindings(no_ext) . IN class_expr]
   { "Expected `in` after let bindings" }*)
@@ -1835,8 +1835,8 @@ rule error_messages = parse error
 | [_* /class_fun_binding: COLON class_type . EQUAL class_expr]
   { "Expected `=` after class type" }
 
-(*| [_* /class_fun_binding: labeled_simple_pattern . class_fun_binding]
-  { "Expected `=`, `:` or another binding pattern in class definition" }*)
+| [_* /class_fun_binding: labeled_simple_pattern . class_fun_binding]
+  { "Expected `=`, `:` or another binding pattern in class definition" }
 
 | [_* /list(and_class_declaration): AND list(attribute) virtual_flag formal_class_parameters . LIDENT class_fun_binding list(post_item_attribute) list(and_class_declaration)]
   { "Expected identifier after class parameters" }
@@ -1945,19 +1945,19 @@ rule error_messages = parse error
   { "Expected module path" }
 
 | /constr_extra_nonprefix_ident: LPAREN . RPAREN
-  /mk_longident(mod_ext_longident,__anonymous_43): LPAREN . COLONCOLON RPAREN
+  /mk_longident(mod_ext_longident,__anonymous_42): LPAREN . COLONCOLON RPAREN
   /val_extra_ident: LPAREN . operator RPAREN
   { "Expected operator, `::`, or `)`" }
 
 | [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
-      /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident . DOT _*]
+      /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident . DOT _*]
   { "Expected `.` after module path" }
 
-| /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident DOT LPAREN . COLONCOLON RPAREN
+| /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident DOT LPAREN . COLONCOLON RPAREN
   /val_extra_ident: LPAREN . operator RPAREN
   { "Expected operator or `::` after `.(`" }
 
-| /mk_longident(mod_ext_longident,__anonymous_43): mod_ext_longident DOT LPAREN COLONCOLON . RPAREN
+| /mk_longident(mod_ext_longident,__anonymous_42): mod_ext_longident DOT LPAREN COLONCOLON . RPAREN
   { "Expected `)` after `::`" }
 
 | [_* /parse_any_longident: any_longident . EOF]
