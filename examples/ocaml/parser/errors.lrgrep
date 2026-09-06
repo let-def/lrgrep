@@ -118,33 +118,6 @@ rule error_messages = parse error
       [ mkloc $startpos(lp) $endpos(lp), "opened here" ]
   }
 
-(* Bug #1 (stress-test report): a complete *structure-level* let-binding
-   (which never takes `in`) reaches the same LALR state as an *expression*
-   let-binding that is still waiting for `in`, because the automaton has not
-   yet decided between reducing to `structure_item` (no `in` needed) or
-   shifting `IN` (expression let). By the time any error rule is consulted,
-   the actual lookahead is guaranteed not to be IN/AND (those would have
-   shifted instead of erroring), so whenever the "already a complete
-   structure_item" alternative is also present in the same item set, the
-   generic "expecting `in'" rule below is simply wrong: this let-binding
-   was never going to take an `in`. Intercept this specific, unambiguous
-   case first and say so, instead of falling through to the generic rule
-   (which would still match and win, since it does not check for this). *)
-| pos=[_* / fun_expr: let_bindings(ext) . IN seq_expr
-           / structure_item: let_bindings(ext) .]
-  { with_sub
-    "This `let' binding is already complete: `in' is only required when \
-     `let' introduces a local expression, not a standalone definition."
-    [ mkloc $startpos(pos) $startpos(pos), "this definition starts here" ]
-  }
-
-| pos=[_* / LET _* . IN _*]
-| pos=[_* / let_bindings(ext) _* . IN _*]
-| pos=[_* / let_bindings(no_ext) _* . IN _*]
-  { with_sub "Expecting `in' to continue let-binding"
-      [ mkloc $startpos(pos) $startpos(pos), "this let-binding starts here" ]
-  }
-
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
@@ -711,6 +684,20 @@ rule error_messages = parse error
 | /reversed_preceded_or_separated_nonempty_llist(BAR,match_case): reversed_preceded_or_separated_nonempty_llist(BAR,match_case) BAR . match_case
   { "Expected pattern after `|`" }
 
+(* Stress-test finding: a *complete* match_case (pattern -> body all present)
+   reduces the same way whether or not the author intended another `|
+   pattern -> ...` to follow - the list production genuinely can end here.
+   Left unhandled, recovery keeps reducing all the way up past the whole
+   match/function/try and often back to the same `let_bindings(ext)`
+   ambiguity as the "already complete" rule further down this file, which
+   then reports on the wrong construct entirely (e.g. `let f = function |
+   0 -> 1  2 -> 2` - missing `|` before the second case - blaming the
+   outer `let` instead of the missing `|` right where the mismatch is).
+   Catch it here, at the actual point of ambiguity, instead. *)
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): BAR match_case .]
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): reversed_preceded_or_separated_nonempty_llist(BAR,match_case) BAR match_case .]
+  { "Expected `|` to introduce another case, or the match/function/try expression ends here" }
+
 | /pattern_no_exn: pattern_no_exn AS . val_ident
 | /option(preceded(AS,mkrhs(LIDENT))): AS . LIDENT
   { "Expected identifier after `as`" }
@@ -1200,6 +1187,48 @@ rule error_messages = parse error
       /letop_binding_body: pattern_no_exn . EQUAL seq_expr
       /reversed_labeled_tuple_pattern(pattern_no_exn): pattern_no_exn . COMMA DOTDOT]
   { "Expected `=` (or `,`) after pattern" }
+
+(* Bug #1 (stress-test report): a complete *structure-level* let-binding
+   (which never takes `in`) reaches the same LALR state as an *expression*
+   let-binding that is still waiting for `in`, because the automaton has not
+   yet decided between reducing to `structure_item` (no `in` needed) or
+   shifting `IN` (expression let). By the time any error rule is consulted,
+   the actual lookahead is guaranteed not to be IN/AND (those would have
+   shifted instead of erroring), so whenever the "already a complete
+   structure_item" alternative is also present in the same item set, the
+   generic "expecting `in'" rule below is simply wrong: this let-binding
+   was never going to take an `in`. Intercept this specific, unambiguous
+   case first and say so, instead of falling through to the generic rule
+   (which would still match and win, since it does not check for this).
+
+   This rule (and the generic "expecting `in'" rule right after it) used to
+   sit much earlier in this file, immediately after the "unclosed
+   parenthesis" rule. Moved down here, below "Expected `=` (or `,`) after
+   pattern", after round-2 stress-testing found both rules were shadowing
+   that more specific one for a *punning* let-binding (`let_binding_body:
+   val_ident .`, i.e. a bare identifier that never got a real `=`) followed
+   by a token that can't continue it - e.g. `let f ?:x = x` (`?:` lexes as
+   one PREFIXOP token; `f` reduces via punning; "already complete"/"expecting
+   `in'" both fired instead of the correct "expected `=` after pattern").
+   Confirmed this reordering doesn't affect the original trigger cases
+   (`let x = 5 )`-shaped stray tokens, and missing-`|`-in-a-match-arm cases):
+   none of those ever reach the "Expected `=`" rule's item pattern - they
+   all have a genuine `=` already consumed, so that rule simply doesn't
+   match for them and priority falls through to here exactly as before. *)
+| pos=[_* / fun_expr: let_bindings(ext) . IN seq_expr
+           / structure_item: let_bindings(ext) .]
+  { with_sub
+    "This `let' binding is already complete: `in' is only required when \
+     `let' introduces a local expression, not a standalone definition."
+    [ mkloc $startpos(pos) $startpos(pos), "this definition starts here" ]
+  }
+
+| pos=[_* / LET _* . IN _*]
+| pos=[_* / let_bindings(ext) _* . IN _*]
+| pos=[_* / let_bindings(no_ext) _* . IN _*]
+  { with_sub "Expecting `in' to continue let-binding"
+      [ mkloc $startpos(pos) $startpos(pos), "this let-binding starts here" ]
+  }
 
 | [_* /fun_expr: simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list(SEMI,expr) . RPAREN _*
       /simple_expr: simple_expr DOTOP LPAREN separated_or_terminated_nonempty_list(SEMI,expr) . RPAREN]
