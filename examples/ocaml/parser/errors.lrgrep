@@ -2225,6 +2225,11 @@ rule error_messages = parse error
 
 | [_* /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
       /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
+  @ OF
+  { "Expected `.` to continue a module path, or `|` to introduce another constructor" }
+
+| [_* /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
+      /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
 | [_* /mk_longident(mod_longident,LIDENT): mod_longident . DOT LIDENT
       /mk_longident(mod_longident,UIDENT): mod_longident . DOT UIDENT]
 | [_* /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT
