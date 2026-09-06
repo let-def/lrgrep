@@ -23,6 +23,33 @@
   let str_col pos = string_of_int (pos.Lexing.pos_cnum - pos.Lexing.pos_bol)
 
   let line_and_char pos = "line " ^ str_line pos ^ ", character " ^ str_col pos
+
+  let mkloc loc_start loc_end : Location.t =
+    { loc_start; loc_end; loc_ghost = false }
+
+  (* ---------------------------------------------------------------------
+     Structured sub-messages, upstream-shaped but self-contained for now.
+
+     Upstream, [Location.errorf ~loc ~sub:[Location.msg ~loc:loc' "..."] "..."]
+     is how e.g. [Syntaxerr.Unclosed] reports a secondary location (see
+     [prepare_error] in parsing/parse.ml). [Parse_errors.error_messages]
+     only returns a plain [string] today (matching
+     [Syntaxerr.Custom of Location.t * string]), so there is nowhere to
+     put a real secondary [Location.t] yet - it can only be folded into
+     the main message's text.
+
+     [with_sub] is the single seam where that happens: every rule below
+     that wants a secondary location already builds a proper
+     [(Location.t * string) list], it just goes through [with_sub] to be
+     flattened into text. If/when [Syntaxerr.Custom] (or its eventual
+     upstream replacement) grows a [sub] field, [with_sub]'s body is the
+     only thing that needs to change - to pass [(msg, subs)] through
+     as-is instead of flattening - not the ~6 call sites below. *)
+  let with_sub msg subs =
+    List.fold_left
+      (fun msg (loc, hint) ->
+         msg ^ "\n" ^ hint ^ ", at " ^ line_and_char loc.Location.loc_start ^ ".")
+      msg subs
 }
 
 rule error_messages = parse error
@@ -35,9 +62,12 @@ rule error_messages = parse error
   %partial {
     match e with
     | {pexp_desc = Pexp_ifthenelse(_, _, None); _} -> (
-      Some ("The semicolon " ^ line_and_char $startpos(e)
-            ^ " terminates the `if ... then ...` expression. \
-            Remove it to add an else branch.")
+      Some (with_sub
+        "`else' cannot be attached to this `if ... then ...' expression"
+        [ mkloc $endpos(e) $endpos(e),
+          "the semicolon here terminates the `if ... then ...' expression; \
+           remove it to attach an `else' branch" ]
+      )
       )
     | _ -> None
   }
@@ -66,21 +96,27 @@ rule error_messages = parse error
 
 (* let x = 5 ; let y = 6 let z = 7 *)
 
-| [structure_item]; semi=SEMI; [let_bindings(ext)]
-  { "Might be due to the semicolon " ^ line_and_char $startpos(semi) }
+| [structure_item]; semi=SEMI; [let_bindings(ext) / _* . IN _*]
+  { with_sub "Expecting `in' to complete local-let binding"
+      [ mkloc $startpos(semi) $endpos(semi), "this semicolon may be the cause" ]
+  }
 
 | loc=_ / fun_expr : _* . fun_expr; [let_bindings(ext)]
-  { "Expecting 'in' after let binding(s) in an expression. \n\
-     This might be due to the unterminated expression at " ^
-     line_and_char $endpos(loc) }
+  { with_sub "Expecting `in' after let-binding(s) in an expression"
+      [ mkloc $startpos(loc) $endpos(loc), "this expression looks unterminated" ]
+  }
 
 | item=structure_item; [let_bindings(ext)] @ IN
-  { "A 'let ... in' expression is not allowed immediately after a definition. \n\
-    This can be solved by inserting ';;' or 'let () = ' after " ^ line_and_char $endpos(item) }
+  { with_sub "A `let ... in' expression is not allowed immediately after a definition"
+      [ mkloc $endpos(item) $endpos(item),
+        "insert `;;' or `let () = ' here to start a new expression" ]
+  }
 
 (* Replace builtin grammatical rule reporting unclosed parenthesis *)
 | lp=LPAREN; [_* / _* . RPAREN _*]
-  { "Unclosed parenthesis at " ^ line_and_char $startpos(lp) }
+  { with_sub "Unclosed parenthesis"
+      [ mkloc $startpos(lp) $endpos(lp), "opened here" ]
+  }
 
 (* Bug #1 (stress-test report): a complete *structure-level* let-binding
    (which never takes `in`) reaches the same LALR state as an *expression*
@@ -94,16 +130,20 @@ rule error_messages = parse error
    was never going to take an `in`. Intercept this specific, unambiguous
    case first and say so, instead of falling through to the generic rule
    (which would still match and win, since it does not check for this). *)
-| [_* / fun_expr: let_bindings(ext) . IN seq_expr
-      / structure_item: let_bindings(ext) .]
-  { "This `let' binding is already complete: `in' is only required when \
+| pos=[_* / fun_expr: let_bindings(ext) . IN seq_expr
+           / structure_item: let_bindings(ext) .]
+  { with_sub
+    "This `let' binding is already complete: `in' is only required when \
      `let' introduces a local expression, not a standalone definition."
+    [ mkloc $startpos(pos) $startpos(pos), "this definition starts here" ]
   }
 
 | pos=[_* / LET _* . IN _*]
 | pos=[_* / let_bindings(ext) _* . IN _*]
 | pos=[_* / let_bindings(no_ext) _* . IN _*]
-  { "Expecting `in' to continue let-binding at " ^ line_and_char $startpos(pos) }
+  { with_sub "Expecting `in' to continue let-binding"
+      [ mkloc $startpos(pos) $startpos(pos), "this let-binding starts here" ]
+  }
 
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
