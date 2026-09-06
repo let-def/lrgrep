@@ -7,6 +7,7 @@ license: "ISC"
 dev-repo: "git+https://github.com/let-def/lrgrep.git"
 build: [
   ["dune" "subst"] {dev}
+  ["ocaml" "-e" "ignore (Sys.command \"dune build --auto-promote @bootstrap\")"]
   ["dune" "build" "-p" name "-j" jobs]
   ["dune" "runtest" "-p" name "-j" jobs] {with-test}
 ]
