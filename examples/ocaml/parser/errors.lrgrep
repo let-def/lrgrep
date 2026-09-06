@@ -1037,7 +1037,7 @@ rule error_messages = parse error
   { "Expected closing `)` after polymorphic type variables" }
 
 | /labeled_simple_pattern: LABEL . simple_pattern
-  { "Expected pattern after label in labeled simple pattern" }
+  { "Expected a pattern after `~label:` (or `?label:`) in a labeled parameter" }
 
 | [_* /fun_expr: FUN ext list(attribute) fun_params option(preceded(COLON,atomic_type)) . MINUSGREATER fun_body]
   { "Expected `->` after function parameters" }
@@ -1110,7 +1110,7 @@ rule error_messages = parse error
   { "Expected expression after optional label" }
 
 | /labeled_simple_expr: LABEL . simple_expr
-  { "Expected expression after label in labeled simple expression" }
+  { "Expected an expression after `~label:` in a labeled argument" }
 
 (*| [_* /fun_expr: let_bindings(ext) . IN seq_expr]
   { "Expected `in` after let bindings" }*)
@@ -1733,7 +1733,7 @@ rule error_messages = parse error
 
 | [_* /class_self_type: LPAREN core_type . RPAREN]
 | [_* /class_self_pattern: LPAREN pattern COLON core_type . RPAREN]
-  { "Expected closing `)` after class self type" }
+  { "Expected closing `)` after the type in `object (self : ty)`" }
 
 | /class_sig_field: VAL list(attribute) mutable_virtual_flags LIDENT COLON . core_type list(post_item_attribute)
   { "Expected type after `:` in class type value" }
@@ -2043,10 +2043,10 @@ rule error_messages = parse error
       /class_self_pattern: LPAREN pattern . COLON core_type RPAREN
       /labeled_tuple_pat_element_list(pattern): pattern . COMMA _*
       /reversed_labeled_tuple_pattern(pattern): pattern . COMMA DOTDOT]
-  { "Expected closing `)`, `:`, or `,` in class self pattern" }
+  { "Expected closing `)`, `:`, or `,` after `self` in `object (self)`" }
 
 | /class_self_pattern: LPAREN pattern COLON . core_type RPAREN
-  { "Expected type after `:` in class self pattern" }
+  { "Expected a type after `:` in `object (self : ty)`" }
 
 | op=OBJECT; ext; list(attribute); class_self_pattern; [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
   { with_sub "Expected closing `end` after object expression"
