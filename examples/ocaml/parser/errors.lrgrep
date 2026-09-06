@@ -2181,24 +2181,28 @@ rule error_messages = {
    locations, never values, confirmed via src/kernel/transl.ml's Reduce
    case: it only ever creates Start_loc/End_loc registers); only the
    token shape at this earlier, still-unreduced point lets the cases be
-   told apart at all. The .mli (interface) alternatives are listed first:
-   their item set is a superset of the .ml one (both share the plain-vs-
-   extension ambiguity, .mli additionally has the `:=` substitution
-   reading), and LRGrep matches a bracket if its items are present
-   *at least*, so the narrower .ml bracket below would otherwise also
-   (wrongly) match .mli states and shadow this one. *)
-| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
-| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+   told apart at all.
+
+   Rather than hand-merging the simultaneous items into one big
+   AND-bracket per case, exploit the implication between them instead: a
+   bare type name that can be followed by `:=` (only ever true in a
+   .mli, for a `type t := ...` substitution) can *always* also be
+   followed by `=` and `+=` at this exact position - and a bare name
+   that can be followed by `=` can *always* also be followed by `+=`.
+   So each rule below just checks its own single, most-specific
+   property, in decreasing order of specificity - each item then
+   directly names the very operator its own message mentions, instead of
+   needing three-item conjunctions verified only indirectly through
+   `interpret --items`. Whichever check matches first is, by this
+   implication chain, exactly as precise as the hand-merged version
+   (confirmed: identical bytecode size and zero corpus differences
+   either way). *)
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)]
+| [_* /generic_type_declaration(no_nonrec_flag,type_subst_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . COLONEQUAL nonempty_type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)]
   { "Expected `=`, `:=`, or `+=` after type name" }
 
-| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
-| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)
-      /mk_longident(mod_ext_longident,LIDENT): LIDENT .]
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)]
+| [_* /generic_type_declaration(nonrec_flag,type_kind): TYPE ext list(attribute) NONREC type_parameters LIDENT . type_kind reversed_llist(preceded(CONSTRAINT,constrain)) list(post_item_attribute)]
   { "Expected `=` or `+=` after type name" }
 
 | [_* /structure_item: TYPE ext list(attribute) type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
