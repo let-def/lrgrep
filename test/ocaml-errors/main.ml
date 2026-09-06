@@ -55,7 +55,29 @@ let driver () : bool =
          bug (it didn't exist at all before, so this case couldn't have run
          until that fix landed). *)
       ("type t = { type : int }\n",
-       "ERROR `type' is a keyword and cannot appear in this context (try type_)") ]
+       "ERROR `type' is a keyword and cannot appear in this context (try type_)");
+
+      (* First-class-module parameter type `(module M : S) -> t`: missing
+         module type after `:`, and missing `->` after the closing `)`. *)
+      ("type t = (module M :\n",
+       "ERROR Expected module type after `:` in `(module M : ...)` parameter type");
+      ("type t = (module M : S) int\n",
+       "ERROR Expected `->` after type");
+
+      (* Parenthesized polymorphic parameter type `('a 'b. t) -> u`: missing
+         `.` after the type variables, missing type after `.`, and missing
+         closing `)`. *)
+      ("type t = ('a 'b -> int) -> int\n",
+       "ERROR Expected `.` after type parameters");
+      ("type t = ('a. int) ->\n",
+       "ERROR Expected type after `->`");
+      ("type t = ('a. int -> int\n",
+       "ERROR Expected closing `)` after polymorphic type");
+
+      (* Same polymorphic-type-annotated parameter, but on a pattern rather
+         than in a function type: `(x : 'a 'b. t)`. *)
+      ("let f (x : 'a . int\n",
+       "ERROR Expected closing `)` after polymorphic type") ]
   in
   List.for_all (fun (input, expected) ->
       let actual = format input in
