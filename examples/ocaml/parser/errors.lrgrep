@@ -1154,6 +1154,20 @@ rule error_messages = parse error
 | /let_binding_body_no_punning: simple_pattern_not_ident COLON core_type EQUAL . seq_expr
 | /let_binding_body_no_punning: pattern_no_exn EQUAL . seq_expr
 | /letop_binding_body: pattern_no_exn EQUAL . seq_expr
+  @ QUOTE
+  { "Expected expression, but `'` starts either a character literal \
+     (needs a closing quote, e.g. `'a'`) or a type variable (only valid \
+     where a type is expected)" }
+
+| /fun_expr: fun_expr EQUAL . fun_expr
+  /fun_expr: fun_expr EQUAL . FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
+| /strict_binding: EQUAL . seq_expr
+| /let_binding_body_no_punning: val_ident COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: val_ident COLON reversed_nonempty_llist(typevar) DOT core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: val_ident type_constraint EQUAL . seq_expr
+| /let_binding_body_no_punning: simple_pattern_not_ident COLON core_type EQUAL . seq_expr
+| /let_binding_body_no_punning: pattern_no_exn EQUAL . seq_expr
+| /letop_binding_body: pattern_no_exn EQUAL . seq_expr
   { "Expected expression after `=`" }
 
 | /fun_expr: fun_expr COLONEQUAL . fun_expr
