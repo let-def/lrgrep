@@ -1229,8 +1229,10 @@ rule error_messages = parse error
    lose to that rule, reporting on the inner `let` being "complete"
    instead of the actually-missing `end`). Rule unchanged, only its
    priority relative to the one below moved. *)
-| [_* /module_expr: STRUCT list(attribute) structure . END]
-  { "Expected structure item or closing `end` in structure" }
+| op=STRUCT; list(attribute); [_* /module_expr: STRUCT list(attribute) structure . END]
+  { with_sub "Expected structure item or closing `end` in structure"
+      [ mkloc $startpos(op) $endpos(op), "opened here" ]
+  }
 
 (* Bug #1 (stress-test report): a complete *structure-level* let-binding
    (which never takes `in`) reaches the same LALR state as an *expression*
@@ -1432,8 +1434,10 @@ rule error_messages = parse error
   /fun_expr: IF ext list(attribute) seq_expr THEN fun_expr ELSE . FUNCTION ext list(attribute) reversed_preceded_or_separated_nonempty_llist(BAR,match_case)
   { "Expected expression after `else`" }
 
-| [_* /simple_expr: BEGIN ext list(attribute) seq_expr . END]
-  { "Expected closing `end` after expression in begin expression" }
+| beg=BEGIN; ext; list(attribute); [_* /simple_expr: BEGIN ext list(attribute) seq_expr . END]
+  { with_sub "Expected closing `end` after expression in begin expression"
+      [ mkloc $startpos(beg) $endpos(beg), "opened here" ]
+  }
 
 | lc=LBRACE; [_* /simple_expr: LBRACE record_expr_content . RBRACE]
   { with_sub "Expected closing `}` after record content"
@@ -1746,8 +1750,10 @@ rule error_messages = parse error
 | /constrain_field: core_type EQUAL . core_type
   { "Expected another type after `=` in `constraint` field" }
 
-| [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
-  { "Expected a class type field or a closing `end` in class type body" }
+| op=OBJECT; list(attribute); class_self_type; [_* /class_signature: OBJECT list(attribute) class_self_type list(text_csig(class_sig_field)) . END]
+  { with_sub "Expected a class type field or a closing `end` in class type body"
+      [ mkloc $startpos(op) $endpos(op), "opened here" ]
+  }
 
 | [_* /list(and_class_type_declaration): AND list(attribute) virtual_flag formal_class_parameters . LIDENT EQUAL class_signature list(post_item_attribute) list(and_class_type_declaration)]
   { "Expected class type name in class type declarations" }
@@ -1972,8 +1978,10 @@ rule error_messages = parse error
 | [_* /class_field: CONSTRAINT list(attribute) . constrain_field list(post_item_attribute)]
   { "Expected a type after `constraint`" }
 
-| [_* /class_simple_expr: OBJECT list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
-  { "Expected a class field or a closing `end` in class body" }
+| op=OBJECT; list(attribute); class_self_pattern; [_* /class_simple_expr: OBJECT list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+  { with_sub "Expected a class field or a closing `end` in class body"
+      [ mkloc $startpos(op) $endpos(op), "opened here" ]
+  }
 
 | [_* /class_fun_binding: COLON class_type . EQUAL class_expr]
   { "Expected `=` after class type" }
@@ -2006,8 +2014,10 @@ rule error_messages = parse error
 | /class_self_pattern: LPAREN pattern COLON . core_type RPAREN
   { "Expected type after `:` in class self pattern" }
 
-| [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
-  { "Expected closing `end` after object expression" }
+| op=OBJECT; ext; list(attribute); class_self_pattern; [_* /simple_expr: OBJECT ext list(attribute) class_self_pattern list(text_cstr(class_field)) . END]
+  { with_sub "Expected closing `end` after object expression"
+      [ mkloc $startpos(op) $endpos(op), "opened here" ]
+  }
 
 | /reversed_labeled_tuple_body: TILDE LIDENT . COMMA _*
   { "Expected `,` after labeled element" }
@@ -2059,8 +2069,10 @@ rule error_messages = parse error
 | [_* /signature_item: TYPE ext list(attribute) NONREC type_parameters type_longident PLUSEQ private_flag . reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
   { "Expected a constructor after `+=` in type extension" }
 
-| [_* /module_type: SIG list(attribute) signature . END]
-  { "Expected closing `end` or a signature item" }
+| op=SIG; list(attribute); [_* /module_type: SIG list(attribute) signature . END]
+  { with_sub "Expected closing `end` or a signature item"
+      [ mkloc $startpos(op) $endpos(op), "opened here" ]
+  }
 
 | [_* /fun_expr: WHILE ext list(attribute) . seq_expr DO seq_expr DONE]
   { "Expected expression after `while`" }
