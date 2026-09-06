@@ -82,6 +82,24 @@ rule error_messages = parse error
 | lp=LPAREN; [_* / _* . RPAREN _*]
   { "Unclosed parenthesis at " ^ line_and_char $startpos(lp) }
 
+(* Bug #1 (stress-test report): a complete *structure-level* let-binding
+   (which never takes `in`) reaches the same LALR state as an *expression*
+   let-binding that is still waiting for `in`, because the automaton has not
+   yet decided between reducing to `structure_item` (no `in` needed) or
+   shifting `IN` (expression let). By the time any error rule is consulted,
+   the actual lookahead is guaranteed not to be IN/AND (those would have
+   shifted instead of erroring), so whenever the "already a complete
+   structure_item" alternative is also present in the same item set, the
+   generic "expecting `in'" rule below is simply wrong: this let-binding
+   was never going to take an `in`. Intercept this specific, unambiguous
+   case first and say so, instead of falling through to the generic rule
+   (which would still match and win, since it does not check for this). *)
+| [_* / fun_expr: let_bindings(ext) . IN seq_expr
+      / structure_item: let_bindings(ext) .]
+  { "This `let' binding is already complete: `in' is only required when \
+     `let' introduces a local expression, not a standalone definition."
+  }
+
 | pos=[_* / LET _* . IN _*]
 | pos=[_* / let_bindings(ext) _* . IN _*]
 | pos=[_* / let_bindings(no_ext) _* . IN _*]
