@@ -58,6 +58,14 @@ rule error_messages = parse error
 (* Hand-crafed part, fine-grained or specific error messages *)
 (*************************************************************)
 
+| [_* /generic_constructor_declaration(BAR): BAR constr_ident . generalized_constructor_arguments list(attribute)]
+| [_* /generic_constructor_declaration(epsilon): constr_ident . generalized_constructor_arguments list(attribute)]
+  %partial {
+    match token with
+    | Parser.BARBAR | Parser.OF -> None
+    | _ -> Some "Expected `of` to introduce constructor arguments, or `:` for a GADT-style declaration"
+  }
+
 | e=fun_expr; SEMI @ ELSE
   %partial {
     match e with
