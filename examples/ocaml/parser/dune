@@ -9,12 +9,12 @@
 
 (menhir
   (modules parser)
-  (flags :standard --table --lalr --cmly))
+  (flags :standard --table --lalr --cmly --inspection))
 
 (library
  (name ocaml_parser)
- (modules lexer parser grammar_data)
-  (libraries menhirLib compiler-libs.common))
+ (modules lexer parser parser_types grammar_data errors)
+  (libraries menhirLib compiler-libs.common lrgrep.runtime))
 
 (rule
   (targets errors.ml coverage.md)

@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (libraries ocaml_parser))
+
+(rule (alias runtest) (action (run ./main.exe)))
