@@ -151,14 +151,38 @@ rule error_messages = parse error
   @ UNDERSCORE, LIDENT, UIDENT, LPAREN
   { report_currified_constructor ~outer inner token }
 
-| constr_longident; [simple_expr]
+(* Stress-test finding: `true`/`false` lex as UIDENT-shaped constructor
+   tokens (they *are*, internally, the two constructors of `bool`), so
+   they satisfy `constr_longident` below just like a real data constructor
+   - but a user can never plausibly mean "over-applied constructor" when
+   the head is `true`/`false`. Left unguarded, this rule wrongly wins over
+   much more relevant messages for e.g. `while true a b done` (missing
+   `do`) or `if true a b then ...` (missing `then`), reporting on an
+   n-ary-constructor mistake that cannot exist here instead. Decline for
+   `true`/`false` specifically and let evaluation fall through to
+   whatever more specific rule applies further down this file (e.g. the
+   `WHILE ... seq_expr . DO` rule for the while-loop case).
+
+   Does NOT cover every false positive of this rule: `let* x = Some 1`
+   (missing `in`) still gets misdiagnosed as an over-applied `Some`,
+   because `Some` genuinely is a real constructor and "applied to two
+   arguments" is, syntactically, indistinguishable from someone writing
+   `Some 1 x` on purpose - fixing that would need the same kind of
+   "was there a missing `in`" reasoning as the `let_bindings(ext)` rules
+   above, not a simple identity check on the constructor name. *)
+| constr=constr_longident; [simple_expr]
   @ first(simple_expr)
-  { (* Expliquer le raisonnement *)
-    (* Plusieurs niveaux d'explications ? *)
-    (* Message court identifiant la situation *)
-    (* Hint pour détailler. (Rappel de la syntaxe) *)
-    "Application of n-ary constructors cannot be currified, \
-     arguments should be wrapped between parentheses and comma separated" }
+  %partial {
+    match constr with
+    | Longident.Lident ("true" | "false") -> None
+    | _ ->
+      (* Expliquer le raisonnement *)
+      (* Plusieurs niveaux d'explications ? *)
+      (* Message court identifiant la situation *)
+      (* Hint pour détailler. (Rappel de la syntaxe) *)
+      Some "Application of n-ary constructors cannot be currified, \
+            arguments should be wrapped between parentheses and comma separated"
+  }
 
 | inner=constr_longident;
   [_* / pattern_gen: constr_longident pattern .]
