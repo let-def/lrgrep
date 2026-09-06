@@ -1,4 +1,9 @@
 {
+  let inside_open_letop = ref false
+  let reset_open_letop_flag () =
+    let v = !inside_open_letop in
+    inside_open_letop := false;
+    v
   let rec longident_to_string = function
     | Longident.Lident n -> n
     | Longident.Lapply (a, b) ->
@@ -194,20 +199,24 @@ rule error_messages = parse error
    `Some 1 x` on purpose - fixing that would need the same kind of
    "was there a missing `in`" reasoning as the `let_bindings(ext)` rules
    above, not a simple identity check on the constructor name. *)
+| LETOP; val_ident; EQUAL; constr_longident; [simple_expr]
+  @ first(simple_expr)
+  %partial { inside_open_letop := true; None }
+
 | constr=constr_longident; [simple_expr]
   @ first(simple_expr)
   %partial {
+    let in_letop = reset_open_letop_flag () in
     match constr with
     | Longident.Lident ("true" | "false") -> None
     | _ ->
-      (* Expliquer le raisonnement *)
-      (* Plusieurs niveaux d'explications ? *)
-      (* Message court identifiant la situation *)
-      (* Hint pour détailler. (Rappel de la syntaxe) *)
-      Some "Application of n-ary constructors cannot be currified, \
-            arguments should be wrapped between parentheses and comma \
-            separated (or, if this follows the right-hand side of a \
-            `let`/`let*` binding, `in` may be missing)"
+      Some ("Application of n-ary constructors cannot be currified, \
+             arguments should be wrapped between parentheses and comma \
+             separated"
+            ^ (if in_letop then
+                 " (this follows the right-hand side of a `let`/`let*` \
+                    binding, so `in` may be missing)"
+               else ""))
   }
 
 | inner=constr_longident;
