@@ -219,13 +219,51 @@ rule error_messages = parse error
                else ""))
   }
 
-| inner=constr_longident;
+(* Same bracket target as the general rule just below, but with the stack
+   immediately below `inner` unreduced-and-visible: `LET ext attrs rec_flag`
+   (a `let`/`let ... in` binding's own pattern) or `AND attrs` (a
+   continuing `and`-binding's pattern). Patterns can never contain a
+   nested let-binding, so if we're specifically here, the rule below's
+   `->`-hedge would be actively wrong (this position wants `=`, not `->`)
+   - hence a higher-priority, unhedged rule carved out first. *)
+| LET; ext; list(attribute); rec_flag; inner=constr_longident;
   [_* / pattern_gen: constr_longident pattern .]
   @ UNDERSCORE, LIDENT, UIDENT, LPAREN
   %partial {
     match inner with
     | Longident.Lident "()" -> None
     | _ -> Some (report_currified_constructor inner token)
+  }
+
+| AND; list(attribute); inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  %partial {
+    match inner with
+    | Longident.Lident "()" -> None
+    | _ -> Some (report_currified_constructor inner token)
+  }
+
+(* Everywhere else this bracket can fire (match/function/try arms, i.e.
+   `match_case`'s pattern, reached via MATCH/FUNCTION/TRY or a continuing
+   BAR) the real problem is sometimes not an over-applied constructor but
+   a missing `->` before what looks like another argument, e.g.
+   `| Some y  String.length y` (see the LET/AND carve-outs above for why
+   this hedge can't just be added unconditionally to every call site of
+   `report_currified_constructor`). Combining this bracket with the
+   "Expected closing `->`..." rule's own target into one AND-bracket was
+   tried and is `unreachable`: they are sequential states along the same
+   reduction chain (this one fires before `pattern_gen` reduces into
+   `pattern`, that one only after), not simultaneously true of one
+   parser state, so a hedge is the only available fix. *)
+| inner=constr_longident;
+  [_* / pattern_gen: constr_longident pattern .]
+  @ UNDERSCORE, LIDENT, UIDENT, LPAREN
+  %partial {
+    match inner with
+    | Longident.Lident "()" -> None
+    | _ -> Some (report_currified_constructor inner token
+                  ^ " (or, if this pattern is meant to end here, `->' may be missing)")
   }
 
 | / . atomic_type @ LBRACKETATAT
