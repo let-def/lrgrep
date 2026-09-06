@@ -326,6 +326,17 @@ let lax_delim raw_name =
 let is_keyword name =
   Hashtbl.mem keyword_table name
 
+(* Reverse lookup: is this token one of the currently-active keywords,
+   and if so, under what spelling? Used by errors.lrgrep to name the
+   actual keyword when it was used where a plain identifier was
+   expected. *)
+let as_keyword token =
+  Hashtbl.to_seq keyword_table
+  |> Seq.find_map (function
+       | (text, Some token') when token = token' -> Some text
+       | _ -> None
+     )
+
 let find_keyword lexbuf name =
   match Hashtbl.find keyword_table name with
   | Some x -> x
