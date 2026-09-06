@@ -2075,7 +2075,7 @@ rule error_messages = parse error
 | [_* /structure_item: TYPE ext list(attribute) NONREC type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor) list(post_item_attribute)]
 | [_* /signature_item: TYPE ext list(attribute) type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
 | [_* /signature_item: TYPE ext list(attribute) NONREC type_parameters type_longident . PLUSEQ private_flag reversed_bar_llist(extension_constructor_declaration) list(post_item_attribute)]
-  { "Expected `+=` after type path" }
+  { "Expected `=` or `+=` after type name" }
 
 | [_* /structure_item: TYPE ext list(attribute) type_parameters type_longident PLUSEQ private_flag . reversed_bar_llist(extension_constructor) list(post_item_attribute)]
 | [_* /structure_item: TYPE ext list(attribute) NONREC type_parameters type_longident PLUSEQ private_flag . reversed_bar_llist(extension_constructor) list(post_item_attribute)]
