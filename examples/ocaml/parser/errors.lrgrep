@@ -169,7 +169,11 @@ rule error_messages = parse error
 | outer=constr_longident; inner=constr_longident;
   [_ / pattern_gen: constr_longident pattern .]
   @ UNDERSCORE, LIDENT, UIDENT, LPAREN
-  { report_currified_constructor ~outer inner token }
+  %partial {
+    match outer, inner with
+    | Longident.Lident "()", _ | _, Longident.Lident "()" -> None
+    | _ -> Some (report_currified_constructor ~outer inner token)
+  }
 
 (* Stress-test finding: `true`/`false` lex as UIDENT-shaped constructor
    tokens (they *are*, internally, the two constructors of `bool`), so
@@ -209,7 +213,11 @@ rule error_messages = parse error
 | inner=constr_longident;
   [_* / pattern_gen: constr_longident pattern .]
   @ UNDERSCORE, LIDENT, UIDENT, LPAREN
-  { report_currified_constructor inner token }
+  %partial {
+    match inner with
+    | Longident.Lident "()" -> None
+    | _ -> Some (report_currified_constructor inner token)
+  }
 
 | / . atomic_type @ LBRACKETATAT
   { "[@@ ...] attribute should be placed after a type (note that it attaches to the item, not to the type)" }
