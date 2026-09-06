@@ -230,6 +230,12 @@ rule error_messages = parse error
 | [_* /atomic_type: mod_ext_longident . DOT delimited_type_supporting_local_open
       /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
       /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
+  @ BARBAR
+  { "Expected `|` (a single pipe) to introduce another variant constructor, not `||`" }
+
+| [_* /atomic_type: mod_ext_longident . DOT delimited_type_supporting_local_open
+      /mk_longident(mod_ext_longident,LIDENT): mod_ext_longident . DOT LIDENT
+      /mk_longident(mod_ext_longident,UIDENT): mod_ext_longident . DOT UIDENT]
   { "Expected `.` to complete module path" }
 
 | /operator: DOTOP . LPAREN _*
