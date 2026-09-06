@@ -118,6 +118,18 @@ rule error_messages = parse error
       [ mkloc $startpos(lp) $endpos(lp), "opened here" ]
   }
 
+(* Promoted ahead of the generic "keyword used where identifier expected"
+   rule right below (stress-test finding: a stray `end`/`private`/etc.
+   right after `method` used to always lose to that rule, which suggested
+   the nonsensical "try end_" - `end` here was never meant to be an
+   identifier, the real problem is the missing method name). This rule
+   already existed further down the file; moving it here doesn't change
+   its own meaning, just its priority relative to the generic one. *)
+| [_* /class_sig_field: METHOD list(attribute) private_virtual_flags . LIDENT COLON possibly_poly(core_type) list(post_item_attribute)]
+| [_* /method_: list(attribute) virtual_with_private_flag . LIDENT COLON possibly_poly(core_type)]
+| [_* /method_: list(attribute) private_flag . LIDENT _*]
+  { "Expected method name after `method`" }
+
 (* https://github.com/ocaml/ocaml/issues/11108
    Report when a keyword has been typed in a context where a lowercase
    identifier is expected. *)
@@ -1662,11 +1674,6 @@ rule error_messages = parse error
 
 | /class_sig_field: VAL list(attribute) mutable_virtual_flags LIDENT COLON . core_type list(post_item_attribute)
   { "Expected type after `:` in class type value" }
-
-| [_* /class_sig_field: METHOD list(attribute) private_virtual_flags . LIDENT COLON possibly_poly(core_type) list(post_item_attribute)]
-| [_* /method_: list(attribute) virtual_with_private_flag . LIDENT COLON possibly_poly(core_type)]
-| [_* /method_: list(attribute) private_flag . LIDENT _*]
-  { "Expected method name after `method`" }
 
 | /class_sig_field: METHOD list(attribute) private_virtual_flags LIDENT . COLON possibly_poly(core_type) list(post_item_attribute)
 | /method_: list(attribute) virtual_with_private_flag LIDENT . COLON possibly_poly(core_type)
