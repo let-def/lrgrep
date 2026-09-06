@@ -1,9 +1,4 @@
 {
-  let inside_open_letop = ref false
-  let reset_open_letop_flag () =
-    let v = !inside_open_letop in
-    inside_open_letop := false;
-    v
   let rec longident_to_string = function
     | Longident.Lident n -> n
     | Longident.Lapply (a, b) ->
@@ -57,7 +52,17 @@
       msg subs
 }
 
-rule error_messages = parse error
+rule error_messages = {
+  (* Rule-scoped: freshly re-created on every invocation of [error_messages]
+     and shared across every clause tried during that invocation, so the
+     LETOP-hedge scan below can set this flag and the consuming clause can
+     read it without any risk of leaking into an unrelated later parse. *)
+  let inside_open_letop = ref false
+  let reset_open_letop_flag () =
+    let v = !inside_open_letop in
+    inside_open_letop := false;
+    v
+} parse error
 
 (*************************************************************)
 (* Hand-crafed part, fine-grained or specific error messages *)
