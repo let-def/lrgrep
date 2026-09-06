@@ -749,6 +749,7 @@ rule error_messages = parse error
    0 -> 1  2 -> 2` - missing `|` before the second case - blaming the
    outer `let` instead of the missing `|` right where the mismatch is).
    Catch it here, at the actual point of ambiguity, instead. *)
+| [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): match_case .]
 | [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): BAR match_case .]
 | [_* / reversed_preceded_or_separated_nonempty_llist(BAR,match_case): reversed_preceded_or_separated_nonempty_llist(BAR,match_case) BAR match_case .]
   { "Expected `|` to introduce another case, or the match/function/try expression ends here" }
