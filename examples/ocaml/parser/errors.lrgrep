@@ -473,6 +473,15 @@ rule error_messages = {
 | /generalized_constructor_arguments: COLON constructor_arguments MINUSGREATER . atomic_type
 | /function_type: LIDENT COLON tuple_type MINUSGREATER . function_type
 | /function_type: LIDENT COLON atomic_type STAR reversed_separated_nonempty_llist(STAR,labeled_tuple_typ_element) MINUSGREATER . function_type
+(* Parenthesized polymorphic parameter type, e.g. `('a 'b. 'a -> 'b) -> t`,
+   both unlabeled and labeled. *)
+| /function_type: LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN MINUSGREATER . function_type
+| /function_type: optlabel LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN MINUSGREATER . function_type
+| /function_type: LIDENT COLON LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN MINUSGREATER . function_type
+(* First-class-module parameter type, e.g. `(module M : S) -> t`, both
+   unlabeled and labeled. *)
+| /function_type: LPAREN MODULE ext list(attribute) UIDENT COLON module_type RPAREN MINUSGREATER . function_type
+| /function_type: LIDENT COLON LPAREN MODULE ext list(attribute) UIDENT COLON module_type RPAREN MINUSGREATER . function_type
   { "Expected type after `->`" }
 
 | [_* /function_type: optlabel . tuple_type MINUSGREATER function_type]
@@ -618,6 +627,12 @@ rule error_messages = {
 
 | /simple_pattern_not_ident: LPAREN MODULE ext list(attribute) module_name COLON . module_type RPAREN
   { "Expected module type after `:` in parenthesized module pattern" }
+
+(* First-class-module parameter type, e.g. `(module M : S) -> t`, both
+   unlabeled and labeled. *)
+| /function_type: LPAREN MODULE ext list(attribute) UIDENT COLON . module_type RPAREN MINUSGREATER function_type
+| /function_type: LIDENT COLON LPAREN MODULE ext list(attribute) UIDENT COLON . module_type RPAREN MINUSGREATER function_type
+  { "Expected module type after `:` in `(module M : ...)` parameter type" }
 
 | /module_type: MODULE . TYPE OF list(attribute) module_expr
   { "Expected `type` after `module` in module type" }
@@ -1304,6 +1319,13 @@ rule error_messages = {
 | [_* /possibly_poly(core_type_no_attr): reversed_nonempty_llist(typevar) . DOT alias_type]
 | [_* /generalized_constructor_arguments: COLON reversed_nonempty_llist(typevar) . DOT _*]
 | [_* /possibly_poly(core_type): reversed_nonempty_llist(typevar) . DOT core_type]
+(* Parenthesized polymorphic parameter type/pattern, e.g. `('a 'b. 'a -> 'b)
+   -> t` or `(x : 'a 'b. 'a -> 'b)`. *)
+| [_* /function_type: LPAREN reversed_nonempty_llist(typevar) . DOT core_type RPAREN MINUSGREATER function_type]
+| [_* /function_type: optlabel LPAREN reversed_nonempty_llist(typevar) . DOT core_type RPAREN MINUSGREATER function_type]
+| [_* /function_type: LIDENT COLON LPAREN reversed_nonempty_llist(typevar) . DOT core_type RPAREN MINUSGREATER function_type]
+| [_* /simple_param_pattern: LPAREN pattern COLON reversed_nonempty_llist(typevar) . DOT core_type RPAREN]
+| [_* /simple_param_pattern: LABEL LPAREN pattern COLON reversed_nonempty_llist(typevar) . DOT core_type RPAREN]
   { "Expected `.` after type parameters" }
 
 | /let_binding_body_no_punning: val_ident COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
@@ -1314,7 +1336,19 @@ rule error_messages = {
 | /possibly_poly(core_type): reversed_nonempty_llist(typevar) DOT . core_type
 | /method_: list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
 | /method_: BANG list(attribute) private_flag LIDENT COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT . core_type EQUAL seq_expr
+| /function_type: LPAREN reversed_nonempty_llist(typevar) DOT . core_type RPAREN MINUSGREATER function_type
+| /function_type: optlabel LPAREN reversed_nonempty_llist(typevar) DOT . core_type RPAREN MINUSGREATER function_type
+| /function_type: LIDENT COLON LPAREN reversed_nonempty_llist(typevar) DOT . core_type RPAREN MINUSGREATER function_type
+| /simple_param_pattern: LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT . core_type RPAREN
+| /simple_param_pattern: LABEL LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT . core_type RPAREN
   { "Expected type after `.`" }
+
+| [_* /function_type: LPAREN reversed_nonempty_llist(typevar) DOT core_type . RPAREN MINUSGREATER function_type]
+| [_* /function_type: optlabel LPAREN reversed_nonempty_llist(typevar) DOT core_type . RPAREN MINUSGREATER function_type]
+| [_* /function_type: LIDENT COLON LPAREN reversed_nonempty_llist(typevar) DOT core_type . RPAREN MINUSGREATER function_type]
+| [_* /simple_param_pattern: LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT core_type . RPAREN]
+| [_* /simple_param_pattern: LABEL LPAREN pattern COLON reversed_nonempty_llist(typevar) DOT core_type . RPAREN]
+  { "Expected closing `)` after polymorphic type" }
 
 | [_* /let_binding_body_no_punning: val_ident COLON TYPE nonempty_list(mkrhs(LIDENT)) DOT core_type . EQUAL seq_expr]
 | [_* /let_binding_body_no_punning: val_ident COLON reversed_nonempty_llist(typevar) DOT core_type . EQUAL seq_expr]
@@ -1934,6 +1968,11 @@ rule error_messages = {
 
 | [_* /class_type: tuple_type . MINUSGREATER class_type]
 | [_* /function_type: LIDENT COLON tuple_type . MINUSGREATER function_type]
+| [_* /function_type: LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN . MINUSGREATER function_type]
+| [_* /function_type: optlabel LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN . MINUSGREATER function_type]
+| [_* /function_type: LIDENT COLON LPAREN reversed_nonempty_llist(typevar) DOT core_type RPAREN . MINUSGREATER function_type]
+| [_* /function_type: LPAREN MODULE ext list(attribute) UIDENT COLON module_type RPAREN . MINUSGREATER function_type]
+| [_* /function_type: LIDENT COLON LPAREN MODULE ext list(attribute) UIDENT COLON module_type RPAREN . MINUSGREATER function_type]
   { "Expected `->` after type" }
 
 | [_* /class_type: optlabel . tuple_type MINUSGREATER class_type]
